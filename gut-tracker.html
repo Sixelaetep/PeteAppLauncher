@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Gut Journal</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -301,7 +302,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v1.1</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -666,22 +667,37 @@ const SB_AUTH_URL = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co/auth/v1/token?gran
 const SB_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
 
 function showDirectLogin() {
+  const isFileOrigin = window.location.protocol === 'file:';
   document.getElementById('pinScreen').innerHTML = `
     <div class="pin-logo">Gut<span>Journal</span></div>
-    <div class="pin-sub">Sign in to continue</div>
+    <div class="pin-sub">${isFileOrigin ? 'Local mode — sign in skipped on file://' : 'Sign in to continue'}</div>
     <div style="display:flex;flex-direction:column;gap:12px;width:260px;margin-top:8px;">
+      ${isFileOrigin ? '' : `
       <input id="dlEmail" type="email" placeholder="Email" autocomplete="email"
         style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:10px 14px;color:white;font-size:14px;outline:none;font-family:inherit;" />
       <input id="dlPassword" type="password" placeholder="Password" autocomplete="current-password"
         style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:10px 14px;color:white;font-size:14px;outline:none;font-family:inherit;" />
-      <div id="dlError" style="font-size:12px;color:#e88;min-height:16px;text-align:center;"></div>
+      <div id="dlError" style="font-size:12px;color:#e88;min-height:16px;text-align:center;"></div>`}
       <button id="dlBtn" onclick="doDirectLogin()"
-        style="background:var(--sage);border:none;border-radius:8px;padding:12px;color:var(--navy);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">Sign in</button>
+        style="background:var(--sage);border:none;border-radius:8px;padding:12px;color:var(--navy);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">
+        ${isFileOrigin ? 'Open app (local data only)' : 'Sign in'}
+      </button>
     </div>`;
-  document.getElementById('dlPassword').addEventListener('keydown', e => { if(e.key==='Enter') doDirectLogin(); });
+  if (!isFileOrigin) {
+    document.getElementById('dlPassword').addEventListener('keydown', e => { if(e.key==='Enter') doDirectLogin(); });
+  }
 }
 
 async function doDirectLogin() {
+  const isFileOrigin = window.location.protocol === 'file:';
+  if (isFileOrigin) {
+    // file:// — skip auth, go straight to app with local data
+    document.getElementById('pinScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    if (!window._palInited) { window._palInited = true; initApp(); }
+    return;
+  }
+
   const email = document.getElementById('dlEmail').value.trim();
   const pass  = document.getElementById('dlPassword').value;
   const btn   = document.getElementById('dlBtn');
@@ -709,28 +725,35 @@ async function doDirectLogin() {
 
 // Boot: try to restore session, else show login
 (async function gjBoot() {
-  // Try restore
-  const stored = localStorage.getItem('gj_session');
-  if (stored) {
-    try {
-      const s = JSON.parse(stored);
-      const res = await fetch('https://gnzxsbbmfwmtkqidxgoj.supabase.co/auth/v1/token?grant_type=refresh_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'apikey': SB_ANON_KEY },
-        body: JSON.stringify({ refresh_token: s.refresh_token })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        _sbAccessToken = data.access_token;
-        localStorage.setItem('gj_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
-        document.getElementById('pinScreen').style.display = 'none';
-        document.getElementById('app').style.display = 'block';
-        window._palInited = true; initApp(); return;
-      }
-    } catch(e) {}
-    localStorage.removeItem('gj_session');
+  // On file:// origins, network requests fail — detect and go straight to local mode
+  const isFileOrigin = window.location.protocol === 'file:';
+
+  if (!isFileOrigin) {
+    // Try restore session from localStorage
+    const stored = localStorage.getItem('gj_session');
+    if (stored) {
+      try {
+        const s = JSON.parse(stored);
+        const res = await fetch('https://gnzxsbbmfwmtkqidxgoj.supabase.co/auth/v1/token?grant_type=refresh_token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': SB_ANON_KEY },
+          body: JSON.stringify({ refresh_token: s.refresh_token })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          _sbAccessToken = data.access_token;
+          localStorage.setItem('gj_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+          document.getElementById('pinScreen').style.display = 'none';
+          document.getElementById('app').style.display = 'block';
+          window._palInited = true; initApp(); return;
+        }
+      } catch(e) {}
+      localStorage.removeItem('gj_session');
+    }
   }
-  // Show login (will be overridden by PAL_SESSION if launched via launcher)
+
+  // file:// origin OR no stored session — show login
+  // (PAL_SESSION postMessage will override this if launched via launcher)
   setTimeout(() => {
     if (!window._palInited) showDirectLogin();
   }, 300);
@@ -862,7 +885,8 @@ function initApp(){
   state = loadState();
   deduplicateLibrary(); // clean up any dupes on load
   ['entryTime','symptomTime','feelingTime','bowelTime'].forEach(id => {
-    document.getElementById(id).value = now();
+    const el = document.getElementById(id);
+    if (el) el.value = now();
   });
   document.getElementById('logSubtitle').textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   setupAutocomplete();
@@ -1859,6 +1883,7 @@ async function supabaseFetch(path,method='GET',body=null){
   return method==='GET'?res.json():true;
 }
 async function autoSyncEntry(){
+  if (window.location.protocol === 'file:') { return; } // file:// — no network
   if(syncPending)return; syncPending=true; updateSyncBadge('syncing');
 
   // Each table syncs independently — one missing table won't block others
@@ -1906,6 +1931,7 @@ async function syncToSupabase(showToast=false){
 }
 
 async function syncFromSupabase(){
+  if (window.location.protocol === 'file:') { updateSyncBadge('ok'); return; } // file:// — local only
   updateSyncBadge('syncing');
 
   // Fetch each table independently so a missing table doesn't abort everything
