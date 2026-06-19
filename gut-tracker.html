@@ -1918,12 +1918,22 @@ async function syncFromSupabase(){
     anySuccess=true;
   } else { console.warn('bowel_movements fetch failed:', bowelsR.reason?.message); }
 
-  if(libraryR.status==='fulfilled' && libraryR.value){
-    state.library=libraryR.value.map(r=>({id:r.id,name:r.name,category:r.category,tags:JSON.parse(r.tags||'[]')}));
+  if(libraryR.status==='fulfilled' && libraryR.value && libraryR.value.length){
+    // Merge cloud library with local (cloud wins on conflict by id, but keep local defaults)
+    const cloudItems = libraryR.value.map(r=>({id:r.id,name:r.name,category:r.category,tags:JSON.parse(r.tags||'[]')}));
+    const cloudIds = new Set(cloudItems.map(i=>i.id));
+    const cloudNames = new Set(cloudItems.map(i=>i.name.toLowerCase()));
+    // Keep local items that aren't in cloud (e.g. defaults not yet synced)
+    const localOnly = state.library.filter(i => !cloudIds.has(i.id) && !cloudNames.has(i.name.toLowerCase()));
+    state.library = [...cloudItems, ...localOnly];
     anySuccess=true;
+  } else if(libraryR.status==='fulfilled' && libraryR.value && libraryR.value.length===0){
+    // Cloud returned empty — Supabase library not populated yet. Keep local defaults.
+    // Don't set anySuccess to false — other tables may have succeeded.
+    console.info('food_library is empty in cloud — keeping local defaults');
   } else { console.warn('food_library fetch failed:', libraryR.reason?.message); }
 
-  if(anySuccess){ saveState(); updateSyncBadge('ok'); renderLibrary(); }
+  if(anySuccess){ deduplicateLibrary(); saveState(); updateSyncBadge('ok'); renderLibrary(); }
   else { updateSyncBadge('error'); }
 }
 
