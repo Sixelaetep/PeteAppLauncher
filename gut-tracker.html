@@ -636,37 +636,94 @@
 
 <script>
 // ═══════════════════════════════════════
-//  PIN
+//  AUTH — Supabase session via postMessage from launcher, or direct login
 // ═══════════════════════════════════════
-function simpleHash(str) {
-  let h=5381; for(let i=0;i<str.length;i++){h=((h<<5)+h)+str.charCodeAt(i);h=h&h;} return (h>>>0).toString(16);
-}
-// ── PeteAppLauncher bypass ──────────────────────────────────────────
-// If loaded inside the launcher (same origin), skip PIN — launcher already authenticated
-(function() {
-  if (sessionStorage.getItem('pal_unlocked') === '1') {
+let _sbAccessToken = null;  // set by PAL_SESSION or direct login
+
+// ── PeteAppLauncher passthrough ──────────────────────────────────────────
+window.addEventListener('message', function(e) {
+  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
+    if (e.data.access_token) _sbAccessToken = e.data.access_token;
     document.getElementById('pinScreen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
-    // initApp() called after it's defined below
-    window._palBypass = true;
+    if (!window._palInited) { window._palInited = true; initApp(); }
   }
-})();
-// ───────────────────────────────────────────────────────────────────
+});
 
-const PIN_HASH = simpleHash('gutjournal:070807');
-let pinEntry = '';
-function pinPress(d) {
-  if(pinEntry.length>=6) return;
-  pinEntry+=d; updatePinDots();
-  if(pinEntry.length===6) setTimeout(checkPin,80);
+// ── Direct login (when not via launcher) ────────────────────────────────
+const SB_AUTH_URL = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co/auth/v1/token?grant_type=password';
+const SB_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
+
+function showDirectLogin() {
+  document.getElementById('pinScreen').innerHTML = `
+    <div class="pin-logo">Gut<span>Journal</span></div>
+    <div class="pin-sub">Sign in to continue</div>
+    <div style="display:flex;flex-direction:column;gap:12px;width:260px;margin-top:8px;">
+      <input id="dlEmail" type="email" placeholder="Email" autocomplete="email"
+        style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:10px 14px;color:white;font-size:14px;outline:none;font-family:inherit;" />
+      <input id="dlPassword" type="password" placeholder="Password" autocomplete="current-password"
+        style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:10px 14px;color:white;font-size:14px;outline:none;font-family:inherit;" />
+      <div id="dlError" style="font-size:12px;color:#e88;min-height:16px;text-align:center;"></div>
+      <button id="dlBtn" onclick="doDirectLogin()"
+        style="background:var(--sage);border:none;border-radius:8px;padding:12px;color:var(--navy);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">Sign in</button>
+    </div>`;
+  document.getElementById('dlPassword').addEventListener('keydown', e => { if(e.key==='Enter') doDirectLogin(); });
 }
-function pinDel() { pinEntry=pinEntry.slice(0,-1); updatePinDots(); document.getElementById('pinError').textContent=''; document.querySelectorAll('.pin-dot').forEach(d=>d.classList.remove('error')); }
-function updatePinDots() { for(let i=0;i<6;i++){const d=document.getElementById('pd'+i);d.classList.toggle('filled',i<pinEntry.length);d.classList.remove('error');} }
-function checkPin() {
-  if(simpleHash('gutjournal:'+pinEntry)===PIN_HASH){document.getElementById('pinScreen').style.display='none';document.getElementById('app').style.display='block';initApp();}
-  else{document.querySelectorAll('.pin-dot').forEach(d=>{d.classList.remove('filled');d.classList.add('error');});document.getElementById('pinError').textContent='Incorrect PIN. Try again.';pinEntry='';setTimeout(()=>{document.querySelectorAll('.pin-dot').forEach(d=>d.classList.remove('error'));document.getElementById('pinError').textContent='';},1200);}
+
+async function doDirectLogin() {
+  const email = document.getElementById('dlEmail').value.trim();
+  const pass  = document.getElementById('dlPassword').value;
+  const btn   = document.getElementById('dlBtn');
+  const err   = document.getElementById('dlError');
+  if (!email || !pass) { err.textContent = 'Enter email and password'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const res  = await fetch(SB_AUTH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SB_ANON_KEY },
+      body: JSON.stringify({ email, password: pass })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error_description || 'Sign in failed');
+    _sbAccessToken = data.access_token;
+    localStorage.setItem('gj_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+    document.getElementById('pinScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    if (!window._palInited) { window._palInited = true; initApp(); }
+  } catch(e) {
+    document.getElementById('dlError').textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Sign in';
+  }
 }
-document.addEventListener('keydown',e=>{if(document.getElementById('pinScreen').style.display!=='none'){if(e.key>='0'&&e.key<='9')pinPress(e.key);if(e.key==='Backspace')pinDel();}});
+
+// Boot: try to restore session, else show login
+(async function gjBoot() {
+  // Try restore
+  const stored = localStorage.getItem('gj_session');
+  if (stored) {
+    try {
+      const s = JSON.parse(stored);
+      const res = await fetch('https://gnzxsbbmfwmtkqidxgoj.supabase.co/auth/v1/token?grant_type=refresh_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SB_ANON_KEY },
+        body: JSON.stringify({ refresh_token: s.refresh_token })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        _sbAccessToken = data.access_token;
+        localStorage.setItem('gj_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+        document.getElementById('pinScreen').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        window._palInited = true; initApp(); return;
+      }
+    } catch(e) {}
+    localStorage.removeItem('gj_session');
+  }
+  // Show login (will be overridden by PAL_SESSION if launched via launcher)
+  setTimeout(() => {
+    if (!window._palInited) showDirectLogin();
+  }, 300);
+})();
 
 // ═══════════════════════════════════════
 //  FOOD TAGS DEFINITION
@@ -1483,7 +1540,8 @@ function updateSyncBadge(status){
   else if(status==='error'){b.className='sync-badge';b.style.cssText='background:rgba(212,97,74,0.15);color:var(--coral);border:1px solid rgba(212,97,74,0.3)';b.innerHTML='<span style="width:6px;height:6px;border-radius:50%;background:var(--coral);display:inline-block"></span>&nbsp;Offline';}
 }
 async function supabaseFetch(path,method='GET',body=null){
-  const opts={method,headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY,'Content-Type':'application/json','Prefer':method==='POST'?'resolution=merge-duplicates':''}};
+  const token = _sbAccessToken || SUPA_KEY;
+  const opts={method,headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':method==='POST'?'resolution=merge-duplicates':''}};
   if(body)opts.body=JSON.stringify(body);
   const res=await fetch(SUPA_URL+'/rest/v1'+path,opts);
   if(!res.ok){const err=await res.text();throw new Error(err);}
@@ -1581,9 +1639,6 @@ async function syncFromSupabase(){
 // MODALS
 function closeModal(e){if(e.target===document.getElementById('modalOverlay'))closeModalBtn();}
 function closeModalBtn(){document.getElementById('modalOverlay').classList.remove('open');}
-
-// PAL bypass deferred call — initApp() now defined, safe to call
-if(window._palBypass) initApp();
 </script>
 </body>
 </html>

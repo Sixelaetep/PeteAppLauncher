@@ -1954,19 +1954,18 @@ function esc(s){if(s==null)return'';const d=document.createElement('div');d.text
 // ══════════════════════════════════════════════
 const SB_URL  = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
 const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-const APP_PIN = '070807';
-const PIN_KEY = 'tp_pin_ok'; // sessionStorage flag
 
-let _sbClient = null;
+let _sbAccessToken = null;
 let _syncQueue = Promise.resolve();
 
-// Lazy-load Supabase REST client (no auth SDK needed)
+// Supabase REST fetch — always uses real auth token when available
 async function sbFetch(method, path, body){
+  const token = _sbAccessToken || SB_KEY;
   const res = await fetch(SB_URL + '/rest/v1/' + path, {
     method,
     headers: {
       'apikey':        SB_KEY,
-      'Authorization': 'Bearer ' + SB_KEY,
+      'Authorization': 'Bearer ' + token,
       'Content-Type':  'application/json',
       'Prefer':        method==='POST'?'resolution=merge-duplicates':'',
     },
@@ -2004,9 +2003,9 @@ function setSyncDot(state){ // idle | syncing | ok | err
   }
 }
 
-// ── PIN screen ──
+// ── Login screen (direct access) ──
 function showPinScreen(){
-  curView = 'pin';
+  curView = 'login';
   setHdr('Trip Planner', false, '');
   showFab(false);
   document.getElementById('hdrUser').style.display = 'none';
@@ -2014,41 +2013,47 @@ function showPinScreen(){
     <div class="auth-screen">
       <div class="auth-logo">✈</div>
       <div class="auth-title">Trip Planner</div>
-      <div class="auth-sub">Enter your PIN to continue.</div>
+      <div class="auth-sub">Sign in to continue.</div>
       <div class="auth-form">
-        <input class="fc" id="pinInput" type="password" inputmode="numeric"
-          placeholder="••••••" maxlength="6"
-          style="text-align:center;font-size:28px;font-weight:700;letter-spacing:8px;padding:14px">
-        <div class="auth-err" id="pinErr"></div>
-        <button class="btn bp bbl" id="pinBtn" onclick="checkPin()" style="margin-top:10px">Unlock</button>
+        <input class="fc" id="loginEmail" type="email" placeholder="Email address" autocomplete="email" style="margin-bottom:10px">
+        <input class="fc" id="loginPassword" type="password" placeholder="Password" autocomplete="current-password">
+        <div class="auth-err" id="loginErr"></div>
+        <button class="btn bp bbl" id="loginBtn" onclick="doTpLogin()" style="margin-top:10px">Sign in</button>
       </div>
     </div>`;
-  const inp = document.getElementById('pinInput');
-  inp?.addEventListener('keydown', e=>{ if(e.key==='Enter') checkPin(); });
-  inp?.focus();
+  document.getElementById('loginPassword')?.addEventListener('keydown', e=>{ if(e.key==='Enter') doTpLogin(); });
+  document.getElementById('loginEmail')?.focus();
 }
 
-function checkPin(){
-  const val = document.getElementById('pinInput')?.value?.trim();
-  if(val === APP_PIN){
-    sessionStorage.setItem(PIN_KEY,'1');
+async function doTpLogin(){
+  const email = document.getElementById('loginEmail')?.value?.trim();
+  const pass  = document.getElementById('loginPassword')?.value;
+  const btn   = document.getElementById('loginBtn');
+  const err   = document.getElementById('loginErr');
+  if (!email || !pass) { if(err) err.textContent='Enter email and password'; return; }
+  if(btn){ btn.disabled=true; btn.textContent='Signing in…'; }
+  try {
+    const res  = await fetch(SB_URL + '/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY },
+      body: JSON.stringify({ email, password: pass })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error_description || 'Sign in failed');
+    _sbAccessToken = data.access_token;
+    localStorage.setItem('tp_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
     onUnlocked();
-  } else {
-    const err = document.getElementById('pinErr');
-    if(err) err.textContent = 'Incorrect PIN. Please try again.';
-    const inp = document.getElementById('pinInput');
-    if(inp){ inp.value=''; inp.focus(); }
+  } catch(e) {
+    if(err) err.textContent = e.message;
+    if(btn){ btn.disabled=false; btn.textContent='Sign in'; }
   }
 }
 
 function onUnlocked(){
   const hu = document.getElementById('hdrUser');
   if(hu) hu.style.display = 'flex';
-  // Show local data immediately so the app isn't blank
   showTrips();
-  // Pull from cloud in background and refresh once done
   pullFromSupabase().then(()=>{
-    // Re-render current view with merged data
     if(curView==='trips') showTrips();
   });
 }
@@ -2100,27 +2105,54 @@ async function pullFromSupabase(){
   }
 }
 
-// ── Account menu (accessible via sync dot / user area) ──
+// ── Account menu ──
 function showAccountMenu(){
   let html = `<div class="mhdl"></div><div class="mtitle">Sync & Data</div>`;
   html += `<button class="btn bg bbl" style="margin-bottom:10px" onclick="closeModal();pullFromSupabase().then(()=>showTrips())">↓ Pull latest from cloud</button>`;
   html += `<button class="btn bg bbl" style="margin-bottom:10px" onclick="closeModal();showDataManager()">💾 Export / Import backup</button>`;
-  html += `<button class="btn bd bbl" onclick="closeModal();sessionStorage.removeItem('${PIN_KEY}');showPinScreen()">🔒 Lock app</button>`;
+  html += `<button class="btn bd bbl" onclick="closeModal();tpSignOut()">🔒 Sign out</button>`;
   showModal(html);
 }
+
+function tpSignOut(){
+  _sbAccessToken = null;
+  localStorage.removeItem('tp_session');
+  showPinScreen();
+}
+
+// ── PeteAppLauncher passthrough ──────────────────────────────────────────
+window.addEventListener('message', function(e) {
+  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
+    if (e.data.access_token) _sbAccessToken = e.data.access_token;
+    if (!window._tpInited) { window._tpInited = true; onUnlocked(); }
+  }
+});
 
 // ══════════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════════
-// ── PeteAppLauncher bypass ──────────────────────────────────────────
-// If loaded inside the launcher, skip PIN — launcher already authenticated
-if (sessionStorage.getItem('pal_unlocked') === '1') {
-  onUnlocked();
-} else if(sessionStorage.getItem(PIN_KEY)==='1') {
-  onUnlocked();
-} else {
-  showPinScreen();
-}
+(async function tpBoot(){
+  const stored = localStorage.getItem('tp_session');
+  if (stored) {
+    try {
+      const s = JSON.parse(stored);
+      const res = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY },
+        body: JSON.stringify({ refresh_token: s.refresh_token })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        _sbAccessToken = data.access_token;
+        localStorage.setItem('tp_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+        if (!window._tpInited) { window._tpInited = true; onUnlocked(); }
+        return;
+      }
+    } catch(e) {}
+    localStorage.removeItem('tp_session');
+  }
+  setTimeout(()=>{ if(!window._tpInited) showPinScreen(); }, 300);
+})();
 </script>
 </body>
 </html>

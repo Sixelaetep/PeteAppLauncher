@@ -1133,7 +1133,7 @@ const STORE_KEY = "reading-tracker-v6";
 // ── Supabase config ───────────────────────────────────────────────────
 const SB_URL = "https://gnzxsbbmfwmtkqidxgoj.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A";
-const SB_HEADERS = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY };
+const SB_HEADERS = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY) };
 
 let _currentUser = null;   // "pete" or "claire"
 let _syncTimer   = null;
@@ -1157,9 +1157,10 @@ function showSync(state, msg) {
 // ── Supabase: load from cloud ─────────────────────────────────────────
 async function loadFromCloud(userId) {
   try {
+    const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY) };
     const res = await fetch(
       `${SB_URL}/rest/v1/reading_data?user_id=eq.${encodeURIComponent(userId)}&select=data`,
-      { headers: SB_HEADERS }
+      { headers }
     );
     if (!res.ok) throw new Error("HTTP " + res.status);
     const rows = await res.json();
@@ -1176,11 +1177,12 @@ async function loadFromCloud(userId) {
 // ── Supabase: save to cloud (upsert) ─────────────────────────────────
 async function saveToCloud(userId, data) {
   try {
+    const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY), "Prefer": "resolution=merge-duplicates" };
     const res = await fetch(
       `${SB_URL}/rest/v1/reading_data`,
       {
         method:  "POST",
-        headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates" },
+        headers,
         body:    JSON.stringify({ user_id: userId, data, updated_at: new Date().toISOString() })
       }
     );
@@ -1194,84 +1196,85 @@ async function saveToCloud(userId, data) {
 // ── User picker ───────────────────────────────────────────────────────
 // ── PIN screen ───────────────────────────────────────────────────────
 // PIN is never stored in plain text — verified by SHA-256 hash only
-const PIN_HASH = "af0707ec7bb8c70c7f4eae0e28d3c28f6f2fee21413624a4e912815df08c9c08";
-const PIN_KEY  = "rt-pin-ok";
-let _pinEntry  = "";
+// ══════════════════════════════════════════════════════════════════
+// AUTH — Supabase session replaces PIN
+// ══════════════════════════════════════════════════════════════════
+let _sbAccessToken = null;
+const RT_SB_URL  = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
+const RT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
 
-async function hashPin(pin) {
-  const encoded = new TextEncoder().encode(pin);
-  const hashBuf = await crypto.subtle.digest("SHA-256", encoded);
-  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,"0")).join("");
-}
-
-function showPinScreen() {
-  _pinEntry = "";
-  updatePinDots();
-  document.getElementById("pinError").textContent = "";
-  document.getElementById("pinOverlay").classList.add("show");
-}
+// Known user IDs → reading tracker user keys
+const RT_USER_MAP = {
+  'd3203136-833d-405b-9a48-13d7045df4fd': 'pete',
+  '0e5607ff-7bc8-420e-92c6-fa82b680a0f0': 'lex'
+};
 
 function hidePinScreen() {
-  document.getElementById("pinOverlay").classList.remove("show");
+  const overlay = document.getElementById("pinOverlay");
+  if (overlay) overlay.classList.remove("show");
 }
 
-function updatePinDots() {
-  for (let i = 0; i < 6; i++) {
-    const dot = document.getElementById("pd" + i);
-    if (!dot) continue;
-    dot.classList.toggle("filled", i < _pinEntry.length);
-    dot.classList.remove("error");
-  }
+function showUserPicker() {
+  document.getElementById("userOverlay").classList.add("show");
 }
 
-function pinKey(digit) {
-  if (_pinEntry.length >= 6) return;
-  _pinEntry += digit;
-  updatePinDots();
-  if (_pinEntry.length === 6) {
-    setTimeout(checkPin, 120);
-  }
+// ── Direct login screen (when not via launcher) ────────────────────
+function showRtDirectLogin() {
+  const overlay = document.getElementById("pinOverlay");
+  if (!overlay) return;
+  overlay.classList.add("show");
+  const box = overlay.querySelector(".pin-box");
+  if (!box) return;
+  box.innerHTML = `
+    <div class="pin-title">Reading Tracker</div>
+    <div class="pin-sub">Sign in to continue</div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:8px;">
+      <input id="rtEmail" type="email" placeholder="Email" autocomplete="email"
+        style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;font-family:inherit;width:100%;" />
+      <input id="rtPassword" type="password" placeholder="Password" autocomplete="current-password"
+        style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;font-family:inherit;width:100%;" />
+      <div id="rtErr" style="font-size:12px;color:var(--danger);min-height:16px;text-align:center;"></div>
+      <button onclick="doRtLogin()"
+        style="background:var(--accent);border:none;border-radius:8px;padding:12px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">Sign in</button>
+    </div>`;
+  document.getElementById('rtPassword').addEventListener('keydown', e => { if(e.key==='Enter') doRtLogin(); });
 }
 
-function pinDel() {
-  if (_pinEntry.length === 0) return;
-  _pinEntry = _pinEntry.slice(0, -1);
-  updatePinDots();
-}
-
-async function checkPin() {
-  const entered = _pinEntry;
-  const enteredHash = await hashPin(entered);
-  if (enteredHash === PIN_HASH) {
-    localStorage.setItem(PIN_KEY, "1");
+async function doRtLogin() {
+  const email = document.getElementById('rtEmail').value.trim();
+  const pass  = document.getElementById('rtPassword').value;
+  const err   = document.getElementById('rtErr');
+  if (!email || !pass) { err.textContent = 'Enter email and password'; return; }
+  err.textContent = 'Signing in…';
+  try {
+    const res  = await fetch(RT_SB_URL + '/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': RT_ANON_KEY },
+      body: JSON.stringify({ email, password: pass })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error_description || 'Sign in failed');
+    _sbAccessToken = data.access_token;
+    localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+    const userId = RT_USER_MAP[data.user?.id] || 'pete';
     hidePinScreen();
-    const savedUser = localStorage.getItem("rt-user");
-    if (savedUser) {
-      selectUser(savedUser);
-    } else {
-      showDashboard();
-      setTimeout(() => showUserPicker(), 300);
-    }
-  } else {
-    for (let i = 0; i < 6; i++) {
-      const dot = document.getElementById("pd" + i);
-      if (dot) { dot.classList.remove("filled"); dot.classList.add("error"); }
-    }
-    document.getElementById("pinError").textContent = "Incorrect PIN — try again";
-    setTimeout(() => {
-      _pinEntry = "";
-      updatePinDots();
-      document.getElementById("pinError").textContent = "";
-    }, 900);
+    afterRtAuth(userId);
+  } catch(e) {
+    if (document.getElementById('rtErr')) document.getElementById('rtErr').textContent = e.message;
   }
 }
 
-// Handle physical keyboard input on desktop
-document.addEventListener("keydown", e => {
-  if (!document.getElementById("pinOverlay").classList.contains("show")) return;
-  if (e.key >= "0" && e.key <= "9") pinKey(e.key);
-  if (e.key === "Backspace") pinDel();
-});
+function afterRtAuth(userId) {
+  const savedUser = localStorage.getItem("rt-user");
+  if (savedUser) {
+    selectUser(savedUser);
+  } else if (userId !== 'pete' || !savedUser) {
+    selectUser(userId);
+  } else {
+    showDashboard();
+    setTimeout(() => showUserPicker(), 300);
+  }
+}
 
 function showUserPicker() {
   document.getElementById("userOverlay").classList.add("show");
@@ -3388,28 +3391,44 @@ function renderAllReviews() {
 load(); // load from localStorage first (instant, works offline)
 showDashboard(); // render something immediately while we check auth
 
-// ── PeteAppLauncher bypass ──────────────────────────────────────────
-// If loaded inside the launcher, skip PIN — launcher already authenticated
-if (sessionStorage.getItem('pal_unlocked') === '1') {
-  // Treat as already PIN-verified; go straight to user context
-  const _palUser = localStorage.getItem("rt-user");
-  if (_palUser) { selectUser(_palUser); } else { selectUser('default'); }
-} else {
-// PIN check — required on every new device session
-const _pinVerified = localStorage.getItem("rt-pin-ok");
-if (!_pinVerified) {
-  // Show PIN screen — it will handle user picker after success
-  setTimeout(() => showPinScreen(), 200);
-} else {
-  // PIN already verified on this device — go straight to user or picker
-  const _savedUser = localStorage.getItem("rt-user");
-  if (_savedUser) {
-    selectUser(_savedUser);
-  } else {
-    setTimeout(() => showUserPicker(), 300);
+// ── PeteAppLauncher passthrough ──────────────────────────────────────────
+window.addEventListener('message', function(e) {
+  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
+    if (e.data.access_token) _sbAccessToken = e.data.access_token;
+    hidePinScreen();
+    const userId = RT_USER_MAP[e.data.user_id] || e.data.user_key || localStorage.getItem('rt-user') || 'pete';
+    if (!window._rtInited) { window._rtInited = true; afterRtAuth(userId); }
   }
-}
-}
+});
+
+// Boot: restore session or show login
+(async function rtBoot() {
+  const stored = localStorage.getItem('rt_session');
+  if (stored) {
+    try {
+      const s = JSON.parse(stored);
+      const res = await fetch(RT_SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': RT_ANON_KEY },
+        body: JSON.stringify({ refresh_token: s.refresh_token })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        _sbAccessToken = data.access_token;
+        localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+        hidePinScreen();
+        const userId = RT_USER_MAP[data.user?.id] || localStorage.getItem('rt-user') || 'pete';
+        if (!window._rtInited) { window._rtInited = true; afterRtAuth(userId); }
+        return;
+      }
+    } catch(e) {}
+    localStorage.removeItem('rt_session');
+  }
+  // Show login unless launcher posts first
+  setTimeout(() => {
+    if (!window._rtInited) showRtDirectLogin();
+  }, 300);
+})();
 
 
 // ── PWA: Inline Manifest ──────────────────────────────────────────────

@@ -377,7 +377,7 @@ var SB_TBL  = SB_URL + '/rest/v1/fortnight_bundles';
 function sbHeaders(extra){
   return Object.assign({
     'apikey':        SB_KEY,
-    'Authorization': 'Bearer ' + SB_KEY,
+    'Authorization': 'Bearer ' + (_sbAccessToken || SB_KEY),
     'Content-Type':  'application/json',
     'Prefer':        'resolution=merge-duplicates'
   }, extra||{});
@@ -407,7 +407,7 @@ function deleteCloudBundle(startDate){
 function loadFromCloud(cb){
   setSyncStatus('syncing');
   fetch(SB_TBL+'?user_key=eq.'+SB_USER+'&order=bundle_start.desc', {
-    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+(_sbAccessToken||SB_KEY)}
   })
   .then(function(r){ return r.json(); })
   .then(function(rows){
@@ -920,91 +920,85 @@ function createBundle(){
   state.bundles.unshift(nb);
   save(nb);closeModal();openPanel=0;openDay=null;render();
 }
-// PIN LOCK
-// PIN is stored as a SHA-256 hash — never in plaintext in running memory
-var PIN_HASH = '3fc7536b9fe0f8d36f9e4e71a4edf62ef25e2e7a29b8e8d2f6e4d3c1b0a9f8e'; // computed below
-var PIN_SESSION_KEY = 'fn_pin_unlocked';
-var pinEntry = '';
+// AUTH — Supabase session via postMessage from launcher, or direct login
+var _sbAccessToken = null;
+var FN_SB_URL = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
+var FN_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
 
-// Compute SHA-256 of the PIN at startup and store as the reference hash
-// Using SubtleCrypto — async, runs once
-(function hashPin(){
-  var pin = '070807';
-  crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
-    .then(function(buf){
-      PIN_HASH = Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-    });
-})();
-
-function pinCheck(){
-  // Session flag: stays unlocked while tab is open
-  return sessionStorage.getItem(PIN_SESSION_KEY) === '1';
-}
-function pinUnlock(){
-  sessionStorage.setItem(PIN_SESSION_KEY, '1');
-  var scr = document.getElementById('pin-screen');
-  if(scr) scr.style.display = 'none';
-  loadFromCloud(function(){ render(); });
-}
-
-function pinKey(d){
-  if(pinEntry.length >= 6) return;
-  pinEntry += d;
-  pinRender();
-  if(pinEntry.length === 6) pinSubmit();
-}
-function pinDel(){
-  pinEntry = pinEntry.slice(0, -1);
-  pinRender();
-}
-function pinRender(){
-  for(var i=0;i<6;i++){
-    var dot = document.getElementById('pd'+i);
-    if(dot){ dot.className = 'pin-dot'+(i < pinEntry.length ? ' filled' : ''); }
+// ── PeteAppLauncher passthrough ──────────────────────────────────────────
+window.addEventListener('message', function(e) {
+  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
+    if (e.data.access_token) _sbAccessToken = e.data.access_token;
+    var scr = document.getElementById('pin-screen');
+    if (scr) scr.style.display = 'none';
+    if (!window._fnInited) { window._fnInited = true; loadFromCloud(function(){ render(); }); }
   }
-}
-function pinSubmit(){
-  crypto.subtle.digest('SHA-256', new TextEncoder().encode(pinEntry))
-    .then(function(buf){
-      var hash = Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-      if(hash === PIN_HASH){
-        pinUnlock();
-      } else {
-        // Wrong PIN — shake and clear
-        var dots = document.getElementById('pin-dots');
-        var box  = document.getElementById('pin-box');
-        for(var i=0;i<6;i++){ var dot=document.getElementById('pd'+i); if(dot) dot.className='pin-dot error'; }
-        if(dots) dots.classList.add('pin-shake');
-        setTimeout(function(){
-          pinEntry = '';
-          pinRender();
-          if(dots) dots.classList.remove('pin-shake');
-        }, 400);
-      }
-    });
+});
+
+// ── Direct login ─────────────────────────────────────────────────────────
+function showFnDirectLogin() {
+  var scr = document.getElementById('pin-screen');
+  if (!scr) return;
+  scr.innerHTML = '<div class="pin-box"><div class="pin-icon">🔐</div><h2>9-Day Fortnight</h2>' +
+    '<p>Sign in to continue</p>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;">' +
+    '<input id="fnEmail" type="email" placeholder="Email" autocomplete="email" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;font-family:inherit;"/>' +
+    '<input id="fnPassword" type="password" placeholder="Password" autocomplete="current-password" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;font-family:inherit;"/>' +
+    '<div id="fnErr" style="font-size:12px;color:var(--red);min-height:16px;text-align:center;"></div>' +
+    '<button onclick="doFnLogin()" style="background:var(--amber);border:none;border-radius:8px;padding:11px;color:#0f1923;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;">Sign in</button>' +
+    '</div></div>';
+  document.getElementById('fnPassword').addEventListener('keydown', function(e){ if(e.key==='Enter') doFnLogin(); });
 }
 
-// Keyboard support for PIN entry
-document.addEventListener('keydown', function(e){
-  var scr = document.getElementById('pin-screen');
-  if(!scr || scr.style.display === 'none') return;
-  if(e.key >= '0' && e.key <= '9') pinKey(e.key);
-  else if(e.key === 'Backspace') pinDel();
-});
+function doFnLogin() {
+  var email = document.getElementById('fnEmail').value.trim();
+  var pass  = document.getElementById('fnPassword').value;
+  var err   = document.getElementById('fnErr');
+  if (!email || !pass) { err.textContent = 'Enter email and password'; return; }
+  err.textContent = 'Signing in…';
+  fetch(FN_SB_URL + '/auth/v1/token?grant_type=password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': FN_ANON_KEY },
+    body: JSON.stringify({ email: email, password: pass })
+  }).then(function(res){ return res.json().then(function(d){ return {ok:res.ok,d:d}; }); })
+  .then(function(r){
+    if (!r.ok) throw new Error(r.d.error_description || 'Sign in failed');
+    _sbAccessToken = r.d.access_token;
+    localStorage.setItem('fn_session', JSON.stringify({ access_token: r.d.access_token, refresh_token: r.d.refresh_token }));
+    document.getElementById('pin-screen').style.display = 'none';
+    if (!window._fnInited) { window._fnInited = true; loadFromCloud(function(){ render(); }); }
+  }).catch(function(e){ document.getElementById('fnErr').textContent = e.message; });
+}
 
 load();
 render();
-// ── PeteAppLauncher bypass ──────────────────────────────────────────
-// If loaded inside the launcher, skip PIN — launcher already authenticated
-if (sessionStorage.getItem('pal_unlocked') === '1') {
-  var _palScr = document.getElementById('pin-screen');
-  if (_palScr) _palScr.style.display = 'none';
-  loadFromCloud(function(){ render(); });
-} else if(!pinCheck()){
-  document.getElementById('pin-screen').style.display = 'flex';
-} else {
-  loadFromCloud(function(){ render(); });
-}
+
+// Boot: restore session or show login (unless launcher posts first)
+(function fnBoot(){
+  var stored = localStorage.getItem('fn_session');
+  if (stored) {
+    try {
+      var s = JSON.parse(stored);
+      fetch(FN_SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': FN_ANON_KEY },
+        body: JSON.stringify({ refresh_token: s.refresh_token })
+      }).then(function(res){ return res.json().then(function(d){ return {ok:res.ok,d:d}; }); })
+      .then(function(r){
+        if (!r.ok) throw new Error('expired');
+        _sbAccessToken = r.d.access_token;
+        localStorage.setItem('fn_session', JSON.stringify({ access_token: r.d.access_token, refresh_token: r.d.refresh_token }));
+        document.getElementById('pin-screen').style.display = 'none';
+        if (!window._fnInited) { window._fnInited = true; loadFromCloud(function(){ render(); }); }
+      }).catch(function(){
+        localStorage.removeItem('fn_session');
+        setTimeout(function(){ if (!window._fnInited) showFnDirectLogin(); }, 300);
+      });
+      return;
+    } catch(e) { localStorage.removeItem('fn_session'); }
+  }
+  setTimeout(function(){ if (!window._fnInited) { document.getElementById('pin-screen').style.display = 'flex'; showFnDirectLogin(); } }, 300);
+})();
 
 </script>
 </body>
