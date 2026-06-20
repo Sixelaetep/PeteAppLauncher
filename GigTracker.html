@@ -236,6 +236,21 @@ input[type="time"].fc{font-size:16px;padding:8px 12px;height:42px;-webkit-appear
 .conflict-banner{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;background:#fff5f5;border:1.5px solid #f87171;border-radius:var(--rsm);margin-top:8px;font-size:12px;color:#b91c1c;font-weight:500;line-height:1.5;cursor:default}
 .conflict-banner .cb-icon{font-size:14px;flex-shrink:0;margin-top:1px}
 .conflict-banner strong{font-weight:700}
+.dayoff-banner{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;background:#fffbeb;border:1.5px solid #f59e0b;border-radius:var(--rsm);margin-top:8px;font-size:12px;color:#92400e;font-weight:500;line-height:1.5;cursor:default}
+.dayoff-banner .cb-icon{font-size:14px;flex-shrink:0;margin-top:1px}
+
+/* ── Select mode ── */
+.select-bar{display:none;align-items:center;gap:10px;padding:10px 16px;background:var(--perf-dim);border-bottom:1px solid #e0d4fd;position:sticky;top:var(--hdr);z-index:80}
+.select-bar.on{display:flex}
+.select-bar-count{font-size:13px;font-weight:600;color:var(--perf);flex:1}
+.gig-card.selectable{cursor:default}
+.gig-card.selectable:active{transform:none}
+.gig-select-chk{width:22px;height:22px;border-radius:6px;border:2px solid var(--bdr);background:var(--card);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;transition:all .15s}
+.gig-select-chk.on{background:var(--perf);border-color:var(--perf);color:#fff}
+.gc-top-sel{display:flex;align-items:flex-start;gap:10px}
+
+/* ── Trip link badge ── */
+.trip-link-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#7c3aed;background:#f3eeff;border:1px solid #ddd6fe;border-radius:20px;padding:2px 8px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -246,6 +261,7 @@ input[type="time"].fc{font-size:16px;padding:8px 12px;height:42px;-webkit-appear
     <span class="hdr-icon">🎸</span>
     <span class="ht">Gig Tracker</span>
     <span class="hdr-ver">v1.0</span>
+    <button class="ha" id="selectModeBtn" onclick="enterSelectMode()" style="display:none">☑</button>
     <button class="ha" onclick="showAccountMenu()">⋯</button>
   </div>
   <div class="hdr-nav">
@@ -269,6 +285,13 @@ input[type="time"].fc{font-size:16px;padding:8px 12px;height:42px;-webkit-appear
 <!-- ── FAB ── -->
 <button class="fab" id="fab" onclick="openAddGig()" style="display:none">+</button>
 
+<!-- ── Select bar ── -->
+<div class="select-bar" id="selectBar">
+  <span class="select-bar-count" id="selectCount">0 selected</span>
+  <button class="btn bg bsm" onclick="exitSelectMode()">Cancel</button>
+  <button class="btn bp bsm" id="addToTripBtn" onclick="openAddToTrip()" disabled style="opacity:.5">Add to Trip</button>
+</div>
+
 <!-- ── Modal overlay ── -->
 <div class="movl" id="movl" onclick="if(event.target===this)closeModal()">
   <div class="modal" id="modal"></div>
@@ -278,7 +301,7 @@ input[type="time"].fc{font-size:16px;padding:8px 12px;height:42px;-webkit-appear
 // ══════════════════════════════════════════════════════════════════
 // VERSION
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.4';
 
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE CONFIG
@@ -418,39 +441,6 @@ function gigTypeInfo(typeKey) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// CONFLICT DETECTION
-// ══════════════════════════════════════════════════════════════════
-function getUpcomingTrips() {
-  try {
-    const raw = localStorage.getItem('tp_v3')
-             || localStorage.getItem('tp_data')
-             || localStorage.getItem('tripPlannerData_v2')
-             || localStorage.getItem('tripPlannerData');
-    if (!raw) return [];
-    const trips = JSON.parse(raw).trips || [];
-    return trips.filter(t => {
-      const s = t.status || 'Planning';
-      return t.startDate && t.endDate && (s === 'Planning' || s === 'Booked');
-    });
-  } catch(e) { return []; }
-}
-
-// Returns array of conflicting trips for a given gig date
-function gigConflicts(gigDate) {
-  if (!gigDate) return [];
-  return getUpcomingTrips().filter(t => gigDate >= t.startDate && gigDate <= t.endDate);
-}
-
-// Returns array of conflicting gigs for a given trip date range
-function tripConflictsForGig(startDate, endDate) {
-  if (!startDate || !endDate) return [];
-  const d = getData();
-  return (d.gigs||[]).filter(g =>
-    !g.done && !g.missed && g.date && g.date >= startDate && g.date <= endDate
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════
 // SYNC DOT
 // ══════════════════════════════════════════════════════════════════
 function setSyncDot(state) {
@@ -524,9 +514,14 @@ let _tab = 'upcoming';
 
 function switchTab(t) {
   _tab = t;
+  // Exit select mode when switching tabs
+  if (_selectMode) exitSelectMode();
   document.querySelectorAll('.ni').forEach(b => b.classList.remove('on'));
   document.getElementById('tab-' + t).classList.add('on');
   document.getElementById('fab').style.display = t === 'venues' ? 'none' : 'flex';
+  // Show select button only on upcoming tab
+  const selBtn = document.getElementById('selectModeBtn');
+  if (selBtn) selBtn.style.display = t === 'upcoming' ? '' : 'none';
   render();
 }
 
@@ -618,6 +613,29 @@ function gigCardHtml(g) {
     reviewSnippet = `<div class="card-stars">${[1,2,3,4,5].map(i=>`<span class="cs ${i<=g.review.rating?'on':''}">${i<=g.review.rating?'★':'☆'}</span>`).join('')}</div>`;
   }
 
+  // Linked trip badge
+  const tripBadge = g.linkedTripName
+    ? `<div class="trip-link-badge">📋 ${esc(g.linkedTripName)}</div>` : '';
+
+  // Conflict banner (only for upcoming gigs)
+  let conflictHtml = '';
+  if (!isDone && !isMissed) {
+    const conflicts = gigConflicts(g.date);
+    conflictHtml = conflicts.map(t =>
+      `<div class="conflict-banner" onclick="event.stopPropagation()">
+        <span class="cb-icon">⚠️</span>
+        <span>Clashes with trip <strong>${esc(t.name||'Trip')}</strong> (${esc(t.startDate)} – ${esc(t.endDate)})</span>
+      </div>`
+    ).join('');
+    // Day-off warning — weekday with a time before 18:00
+    if (needsDayOff(g.date, g.time)) {
+      conflictHtml += `<div class="dayoff-banner" onclick="event.stopPropagation()">
+        <span class="cb-icon">🏖️</span>
+        <span>Daytime weekday gig — <strong>book a day off work!</strong></span>
+      </div>`;
+    }
+  }
+
   let actionHtml = '';
   if (!isDone && !isMissed) {
     actionHtml = `
@@ -634,14 +652,22 @@ function gigCardHtml(g) {
     actionHtml = `<button class="missed-btn missed" onclick="event.stopPropagation();markUndone('${g.id}')">✗ Missed</button>`;
   }
 
+  // In select mode — card taps toggle selection, no edit
+  const isSelected = _selectMode && _selectedGigIds.has(g.id);
+  const cardClick = _selectMode
+    ? `onclick="toggleGigSelect('${g.id}', event)"`
+    : `onclick="openEditGig('${g.id}')"`;
+
   return `
-  <div class="gig-card" style="border-left:3px solid ${borderColor}" onclick="openEditGig('${g.id}')">
+  <div class="gig-card${_selectMode?' selectable':''}" style="border-left:3px solid ${borderColor}${isSelected?';outline:2px solid '+ti.selColor+';outline-offset:-1px':''}" ${cardClick}>
     <div class="gc-body">
-      <div class="gc-top">
+      <div class="gc-top-sel">
+        ${_selectMode ? `<div class="gig-select-chk${isSelected?' on':''}" id="sel-chk-${g.id}" onclick="toggleGigSelect('${g.id}', event)">${isSelected?'✓':''}</div>` : ''}
         <span class="gc-icon">${ti.icon}</span>
         <div class="gc-main">
           <div class="gc-name">${esc(g.name)}</div>
           ${g.venue ? `<div class="gc-venue">📍 ${esc(g.venue)}</div>` : ''}
+          ${tripBadge}
         </div>
         <div class="gc-right">
           <span class="type-pill ${isMissed?'missed':ti.key}">${isMissed?'Missed':ti.label}</span>
@@ -654,24 +680,14 @@ function gigCardHtml(g) {
         ${mapHtml}${ticketHtml}
       </div>
       ${g.notes ? `<div style="font-size:12px;color:var(--ink3);margin-top:8px;line-height:1.5">${esc(g.notes)}</div>` : ''}
-      ${(() => {
-        if (isDone || isMissed) return '';
-        const conflicts = gigConflicts(g.date);
-        if (!conflicts.length) return '';
-        return conflicts.map(t =>
-          `<div class="conflict-banner" onclick="event.stopPropagation()">
-            <span class="cb-icon">⚠️</span>
-            <span>Clashes with trip <strong>${esc(t.name||'Trip')}</strong> (${esc(t.startDate)} – ${esc(t.endDate)})</span>
-          </div>`
-        ).join('');
-      })()}
-      <div class="gc-footer">
+      ${conflictHtml}
+      ${_selectMode ? '' : `<div class="gc-footer">
         ${actionHtml}
         <div class="gc-footer-right">
           <span class="by-pill">${g.addedBy||'Pete'}</span>
           <button class="icon-btn" onclick="event.stopPropagation();deleteGig('${g.id}')" title="Delete">🗑</button>
         </div>
-      </div>
+      </div>`}
     </div>
   </div>`;
 }
@@ -1045,11 +1061,15 @@ function saveGig() {
   const gDate = new Date(date); const now = new Date(); now.setHours(0,0,0,0);
   if (!_editId && gDate >= now) { _tab = 'upcoming'; document.querySelectorAll('.ni').forEach(b=>b.classList.remove('on')); document.getElementById('tab-upcoming').classList.add('on'); }
   render();
-  // Check for trip conflicts and warn
+  // Conflict check
   const conflicts = gigConflicts(date);
-  if (conflicts.length && !d.gigs.find(g=>g.id===_editId)?.done && !d.gigs.find(g=>g.id===_editId)?.missed) {
+  if (conflicts.length) {
     const names = conflicts.map(t => t.name || 'a trip').join(', ');
     showConflictToast(`⚠️ Clashes with: ${names}`);
+  }
+  // Day-off check — separate toast, slight delay so they don't overlap
+  if (needsDayOff(date, time)) {
+    setTimeout(() => showDayOffToast(name, date), conflicts.length ? 3000 : 0);
   }
 }
 
@@ -1169,8 +1189,238 @@ function saveReview(id) {
 // ACCOUNT MENU
 // ══════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════
-// CONFLICT TOAST
+// CONFLICT DETECTION (reads TripPlanner localStorage)
 // ══════════════════════════════════════════════════════════════════
+function getUpcomingTrips() {
+  try {
+    const raw = localStorage.getItem('tp_v3')
+             || localStorage.getItem('tp_data')
+             || localStorage.getItem('tripPlannerData_v2')
+             || localStorage.getItem('tripPlannerData');
+    if (!raw) return [];
+    return (JSON.parse(raw).trips || []).filter(t => {
+      const s = t.status || 'Planning';
+      return t.startDate && t.endDate && (s === 'Planning' || s === 'Booked');
+    });
+  } catch(e) { return []; }
+}
+
+function gigConflicts(gigDate) {
+  if (!gigDate) return [];
+  return getUpcomingTrips().filter(t => gigDate >= t.startDate && gigDate <= t.endDate);
+}
+
+// Returns true if gig is on a weekday (Mon–Fri) with a start time before 18:00
+// Also returns true if no time is set but the date is a weekday (we don't know time = assume could be daytime)
+function needsDayOff(dateStr, timeStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = d.getDay(); // 0=Sun, 6=Sat
+  if (dow === 0 || dow === 6) return false; // weekend — fine
+  if (!timeStr) return false; // no time set — don't warn without info
+  const hr = parseInt(timeStr.split(':')[0], 10);
+  return hr < 18; // before 6pm
+}
+
+function tripConflictsForGig(startDate, endDate) {
+  if (!startDate || !endDate) return [];
+  const d = getData();
+  return (d.gigs||[]).filter(g =>
+    !g.done && !g.missed && g.date && g.date >= startDate && g.date <= endDate
+  );
+}
+
+// Re-render cards when trip data changes in another tab/app
+window.addEventListener('storage', function(e) {
+  if (e.key && (e.key.startsWith('tp_') || e.key.startsWith('tripPlanner'))) {
+    render();
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// SELECT MODE — select gigs and add to a trip
+// ══════════════════════════════════════════════════════════════════
+let _selectMode = false;
+let _selectedGigIds = new Set();
+
+function enterSelectMode() {
+  _selectMode = true;
+  _selectedGigIds.clear();
+  document.getElementById('selectBar').classList.add('on');
+  document.getElementById('fab').style.display = 'none';
+  document.getElementById('selectModeBtn').style.display = 'none';
+  updateSelectBar();
+  render();
+}
+
+function exitSelectMode() {
+  _selectMode = false;
+  _selectedGigIds.clear();
+  document.getElementById('selectBar').classList.remove('on');
+  document.getElementById('fab').style.display = 'flex';
+  document.getElementById('selectModeBtn').style.display = '';
+  render();
+}
+
+function toggleGigSelect(id, e) {
+  e && e.stopPropagation();
+  if (_selectedGigIds.has(id)) _selectedGigIds.delete(id);
+  else _selectedGigIds.add(id);
+  updateSelectBar();
+  // Update just this card's checkbox without full re-render
+  const chk = document.getElementById('sel-chk-' + id);
+  if (chk) {
+    chk.classList.toggle('on', _selectedGigIds.has(id));
+    chk.textContent = _selectedGigIds.has(id) ? '✓' : '';
+  }
+}
+
+function updateSelectBar() {
+  const n = _selectedGigIds.size;
+  document.getElementById('selectCount').textContent = n === 0 ? 'Tap gigs to select' : n + ' selected';
+  const btn = document.getElementById('addToTripBtn');
+  btn.disabled = n === 0;
+  btn.style.opacity = n === 0 ? '.5' : '1';
+}
+
+// ── Add to Trip modal ──────────────────────────────────────────────
+function openAddToTrip() {
+  const d = getData();
+  const selectedGigs = (d.gigs||[]).filter(g => _selectedGigIds.has(g.id));
+  if (!selectedGigs.length) return;
+
+  const trips = getUpcomingTrips();
+  if (!trips.length) {
+    showModal(`
+      <div class="mhdl"></div>
+      <div class="mtitle">Add to Trip</div>
+      <div class="empty" style="padding:24px 0"><span class="empty-icon">✈️</span>
+        <div class="empty-title">No upcoming trips</div>
+        <div class="empty-sub">Add a Planning or Booked trip in Trip Planner first</div>
+      </div>
+      <button class="btn bg bbl" onclick="closeModal()">Close</button>
+    `);
+    return;
+  }
+
+  // Build trip option list
+  const tripOpts = trips.map(t => {
+    const start = t.startDate ? new Date(t.startDate+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '?';
+    const end   = t.endDate   ? new Date(t.endDate+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '?';
+    const isBooked = (t.status||'Planning') === 'Booked';
+    return `<div class="vlib-item" style="cursor:pointer" onclick="confirmAddToTrip('${esc(t.id)}','${esc(t.name||'Trip')}')">
+      <span class="vlib-name">${esc(t.name||'Trip')}</span>
+      <span style="font-size:11px;color:var(--ink3);flex-shrink:0">${start} – ${end}</span>
+      <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;flex-shrink:0;${isBooked?'background:#e3f0ff;color:#1855a3':'background:#fff8e1;color:#92640a'}">${isBooked?'Booked':'Planning'}</span>
+    </div>`;
+  }).join('');
+
+  // Warn about gigs already linked or outside any trip range
+  let warnings = '';
+  selectedGigs.forEach(g => {
+    if (g.linkedTripId) warnings += `<div style="font-size:12px;color:var(--urg);margin-bottom:4px">⚠️ "${esc(g.name)}" is already linked to ${esc(g.linkedTripName||'a trip')}</div>`;
+  });
+
+  showModal(`
+    <div class="mhdl"></div>
+    <div class="mtitle">Add ${selectedGigs.length} gig${selectedGigs.length!==1?'s':''} to Trip</div>
+    ${warnings}
+    <div class="fg"><label>Choose a trip</label></div>
+    <div class="vlib-card">${tripOpts}</div>
+    <button class="btn bg bbl" style="margin-top:8px" onclick="closeModal()">Cancel</button>
+  `);
+}
+
+function confirmAddToTrip(tripId, tripName) {
+  const d = getData();
+  const selectedGigs = (d.gigs||[]).filter(g => _selectedGigIds.has(g.id));
+
+  // Load trip planner data
+  const tpKey = ['tp_v3','tp_data','tripPlannerData_v2','tripPlannerData'].find(k => localStorage.getItem(k));
+  if (!tpKey) { showToast('Could not find Trip Planner data'); return; }
+  let tpData;
+  try { tpData = JSON.parse(localStorage.getItem(tpKey)); } catch(e) { showToast('Error reading trips'); return; }
+
+  const trip = (tpData.trips||[]).find(t => t.id === tripId);
+  if (!trip) { showToast('Trip not found'); return; }
+
+  // Get venue map URLs from our venue library
+  const venues = normaliseVenues(d.venues);
+
+  const results = { added: [], skipped: [] };
+
+  selectedGigs.forEach(g => {
+    // Find the day in the trip that matches this gig's date
+    const day = (trip.days||[]).find(dy => dy.date === g.date);
+    if (!day) {
+      results.skipped.push(g.name || 'Gig');
+      return;
+    }
+
+    // Build venue map URL from venue library
+    const venueObj = venues.find(v => v.name === g.venue);
+    const mapUrl = venueObj?.mapUrl || '';
+
+    // Create the item
+    const item = {
+      id: 'gig_' + g.id,          // deterministic id — prevents duplicates
+      type: 'other',
+      desc: '🎸 ' + (g.name || 'Gig'),
+      cost: 0,
+      costEst: 0,
+      order: (day.items||[]).length,
+      completed: false,
+      completedAt: null,
+      review: null,
+      // Gig-specific fields for detail panel
+      _fromGig: true,
+      _gigId: g.id,
+      _gigName: g.name || '',
+      _gigVenue: g.venue || '',
+      _gigTime: g.time || '',
+      _gigType: g.type || '',
+      _gigTicketUrl: g.ticketUrl || '',
+      _gigTicketNote: g.ticketNote || '',
+      _gigMapUrl: mapUrl,
+    };
+
+    // Avoid duplicating
+    if (!day.items) day.items = [];
+    const existingIdx = day.items.findIndex(i => i.id === item.id);
+    if (existingIdx >= 0) day.items[existingIdx] = item;
+    else day.items.push(item);
+
+    results.added.push(g.name || 'Gig');
+
+    // Mark gig as linked
+    const gigIdx = d.gigs.findIndex(x => x.id === g.id);
+    if (gigIdx >= 0) {
+      d.gigs[gigIdx].linkedTripId = tripId;
+      d.gigs[gigIdx].linkedTripName = tripName;
+    }
+  });
+
+  // Save both stores
+  localStorage.setItem(tpKey, JSON.stringify(tpData));
+  saveData(d);
+  pushToSupabase();
+
+  closeModal();
+  exitSelectMode();
+
+  if (results.skipped.length) {
+    const msg = results.added.length
+      ? `✓ Added ${results.added.length} gig${results.added.length!==1?'s':''} to ${tripName}` +
+        `\n⚠️ Skipped (date not in trip): ${results.skipped.join(', ')}`
+      : `⚠️ No gigs added — none of the selected dates exist in ${tripName}`;
+    alert(msg);
+  } else {
+    showConflictToast(`✓ Added ${results.added.length} gig${results.added.length!==1?'s':''} to ${tripName}`);
+  }
+  render();
+}
+
+// ── Conflict toast ─────────────────────────────────────────────────
 let _conflictToastTimer = null;
 function showConflictToast(msg) {
   let el = document.getElementById('conflictToast');
@@ -1180,18 +1430,38 @@ function showConflictToast(msg) {
     el.style.cssText = 'position:fixed;bottom:80px;left:16px;right:16px;max-width:568px;margin:0 auto;background:#fef2f2;border:1.5px solid #f87171;color:#b91c1c;font-size:13px;font-weight:600;padding:11px 14px;border-radius:10px;z-index:500;box-shadow:0 4px 16px rgba(0,0,0,.12);opacity:0;transition:opacity .2s;line-height:1.4;text-align:center';
     document.body.appendChild(el);
   }
+  // Green bg for success messages
+  if (msg.startsWith('✓')) {
+    el.style.background = '#f0fdf4';
+    el.style.borderColor = '#4ade80';
+    el.style.color = '#166534';
+  } else {
+    el.style.background = '#fef2f2';
+    el.style.borderColor = '#f87171';
+    el.style.color = '#b91c1c';
+  }
   el.textContent = msg;
   el.style.opacity = '1';
   clearTimeout(_conflictToastTimer);
   _conflictToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 5000);
 }
 
-// Re-render cards when trip data changes in another tab/app
-window.addEventListener('storage', function(e) {
-  if (e.key && (e.key.startsWith('tp_') || e.key.startsWith('tripPlanner'))) {
-    render();
+let _dayOffToastTimer = null;
+function showDayOffToast(gigName, date) {
+  let el = document.getElementById('dayOffToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'dayOffToast';
+    el.style.cssText = 'position:fixed;bottom:80px;left:16px;right:16px;max-width:568px;margin:0 auto;background:#fffbeb;border:1.5px solid #f59e0b;color:#92400e;font-size:13px;font-weight:600;padding:11px 14px;border-radius:10px;z-index:500;box-shadow:0 4px 16px rgba(0,0,0,.12);opacity:0;transition:opacity .2s;line-height:1.4;text-align:center';
+    document.body.appendChild(el);
   }
-});
+  const d = new Date(date + 'T00:00:00');
+  const dayName = d.toLocaleDateString('en-GB', { weekday: 'long' });
+  el.textContent = `🏖️ ${gigName} is a daytime ${dayName} — remember to book a day off!`;
+  el.style.opacity = '1';
+  clearTimeout(_dayOffToastTimer);
+  _dayOffToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 7000);
+}
 
 function showAccountMenu() {
   let html = `<div class="mhdl"></div><div class="mtitle">⚙️ Gig Tracker ${APP_VERSION}</div>`;
@@ -1276,6 +1546,9 @@ async function doGtLogin() {
 
 function onUnlocked() {
   document.getElementById('fab').style.display = 'flex';
+  // Show select button since we default to upcoming tab
+  const selBtn = document.getElementById('selectModeBtn');
+  if (selBtn) selBtn.style.display = '';
   render();
   pullFromSupabase().then(() => render());
 }
