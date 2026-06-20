@@ -305,7 +305,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v1.3</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v1.4</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -856,7 +856,11 @@ const COLOUR_LABELS = {
 // ═══════════════════════════════════════
 //  UTILS
 // ═══════════════════════════════════════
-function uid(){return 'e'+(state.nextId++);}
+function uid(){
+  // Use timestamp + random suffix to prevent ID collisions across devices
+  // Format: e{timestamp36}{random4} — unique enough for personal use
+  return 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+}
 function now(){return new Date().toISOString().slice(0,16);}
 function fmt(iso){if(!iso)return'';return new Date(iso).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});}
 function fmtDate(iso){if(!iso)return'';return new Date(iso).toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'});}
@@ -1867,6 +1871,15 @@ async function syncToSupabase(showToast=false){
   if(showToast)toast('Pushed to cloud');
 }
 
+// ── Merge helper: union two arrays by id, cloud entry wins on conflict ──
+function mergeById(localArr, cloudArr) {
+  const merged = new Map();
+  // local first so cloud can overwrite (cloud is source of truth for existing ids)
+  localArr.forEach(item => merged.set(item.id, item));
+  cloudArr.forEach(item => merged.set(item.id, item));
+  return Array.from(merged.values());
+}
+
 async function syncFromSupabase(){
   if (window.location.protocol === 'file:') { updateSyncBadge('ok'); return; } // file:// — local only
   updateSyncBadge('syncing');
@@ -1882,41 +1895,48 @@ async function syncFromSupabase(){
 
   let anySuccess=false;
   if(entriesR.status==='fulfilled' && entriesR.value){
-    state.entries=entriesR.value.map(r=>({id:r.id,kind:'food',items:JSON.parse(r.items||'[]'),meal:r.meal,time:r.log_time,notes:r.notes,created:r.created_at}));
+    const cloudEntries = entriesR.value.map(r=>({id:r.id,kind:'food',items:JSON.parse(r.items||'[]'),meal:r.meal,time:r.log_time,notes:r.notes,created:r.created_at}));
+    // MERGE: union local + cloud by id — never discard local-only entries
+    state.entries = mergeById(state.entries, cloudEntries);
     anySuccess=true;
   } else { console.warn('food_entries fetch failed:', entriesR.reason?.message); }
 
   if(symptomsR.status==='fulfilled' && symptomsR.value){
-    state.symptoms=symptomsR.value.map(r=>({id:r.id,kind:'symptom',types:JSON.parse(r.types||'[]'),severity:r.severity,time:r.log_time,notes:r.notes,created:r.created_at}));
+    const cloudSymptoms = symptomsR.value.map(r=>({id:r.id,kind:'symptom',types:JSON.parse(r.types||'[]'),severity:r.severity,stoolFrequency:r.stool_frequency||null,time:r.log_time,notes:r.notes,created:r.created_at}));
+    state.symptoms = mergeById(state.symptoms, cloudSymptoms);
     anySuccess=true;
   } else { console.warn('gut_symptoms fetch failed (run supabase-setup.sql if new):', symptomsR.reason?.message); }
 
   if(feelingsR.status==='fulfilled' && feelingsR.value){
-    state.feelings=feelingsR.value.map(r=>({id:r.id,kind:'feeling',score:r.score,unusual:JSON.parse(r.unusual||'[]'),time:r.log_time,notes:r.notes,created:r.created_at}));
+    const cloudFeelings = feelingsR.value.map(r=>({id:r.id,kind:'feeling',score:r.score,unusual:JSON.parse(r.unusual||'[]'),time:r.log_time,notes:r.notes,created:r.created_at}));
+    state.feelings = mergeById(state.feelings, cloudFeelings);
     anySuccess=true;
   } else { console.warn('gut_feelings fetch failed:', feelingsR.reason?.message); }
 
   if(bowelsR.status==='fulfilled' && bowelsR.value){
-    state.bowels=bowelsR.value.map(r=>({id:r.id,kind:'bowel',bristolType:r.bristol_type,urgency:r.urgency,time:r.log_time,notes:r.notes,created:r.created_at}));
+    const cloudBowels = bowelsR.value.map(r=>({id:r.id,kind:'bowel',bristolType:r.bristol_type,stoolColour:r.stool_colour||null,urgency:r.urgency,time:r.log_time,notes:r.notes,created:r.created_at}));
+    state.bowels = mergeById(state.bowels, cloudBowels);
     anySuccess=true;
   } else { console.warn('bowel_movements fetch failed:', bowelsR.reason?.message); }
 
   if(libraryR.status==='fulfilled' && libraryR.value && libraryR.value.length){
-    // Merge cloud library with local (cloud wins on conflict by id, but keep local defaults)
+    // Merge cloud library with local (cloud wins on conflict by id, but keep local-only items)
     const cloudItems = libraryR.value.map(r=>({id:r.id,name:r.name,category:r.category,tags:JSON.parse(r.tags||'[]')}));
     const cloudIds = new Set(cloudItems.map(i=>i.id));
     const cloudNames = new Set(cloudItems.map(i=>i.name.toLowerCase()));
-    // Keep local items that aren't in cloud (e.g. defaults not yet synced)
     const localOnly = state.library.filter(i => !cloudIds.has(i.id) && !cloudNames.has(i.name.toLowerCase()));
     state.library = [...cloudItems, ...localOnly];
     anySuccess=true;
   } else if(libraryR.status==='fulfilled' && libraryR.value && libraryR.value.length===0){
-    // Cloud returned empty — Supabase library not populated yet. Keep local defaults.
-    // Don't set anySuccess to false — other tables may have succeeded.
     console.info('food_library is empty in cloud — keeping local defaults');
   } else { console.warn('food_library fetch failed:', libraryR.reason?.message); }
 
-  if(anySuccess){ deduplicateLibrary(); saveState(); updateSyncBadge('ok'); renderLibrary(); }
+  if(anySuccess){
+    // After merging, push any local-only entries back up to cloud so all devices converge
+    deduplicateLibrary(); saveState(); updateSyncBadge('ok'); renderLibrary();
+    // Small delay then push merged state back — ensures local-only items reach cloud
+    setTimeout(()=>autoSyncEntry(), 500);
+  }
   else { updateSyncBadge('error'); }
 }
 
