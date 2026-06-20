@@ -261,8 +261,8 @@
     padding-top: 10px;
     border-top: 1px solid var(--border);
     font-size: 12px;
-    color: var(--ink);
-    min-height: 22px;
+    color: var(--ink2);
+    min-height: 26px;
   }
   .card-stat-dot {
     width: 6px; height: 6px;
@@ -273,26 +273,10 @@
   }
   .card-stat span.val { font-weight: 600; color: var(--ink); }
   .card-stat.warn .card-stat-dot { background: #f78166; }
-  .card-stat.warn { color: #f78166; }
   .card-stat.warn span.val { color: #f78166; }
   .card-stat.ok .card-stat-dot { background: #3fb950; }
-  .card-stat.ok { color: #3fb950; }
   .card-stat.ok span.val { color: #3fb950; }
-  .card-stat.muted { opacity: 0.45; font-style: italic; color: var(--ink2); }
-  .card-stat2 {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 4px;
-    font-size: 11px;
-    color: var(--ink2);
-    min-height: 16px;
-    padding-left: 12px;
-  }
-  .card-stat2.conflict {
-    color: #f78166;
-    font-weight: 600;
-  }
+  .card-stat.muted { opacity: 0.45; font-style: italic; }
 
   .home-title { text-align: center; font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 4px; letter-spacing: -0.01em; }
   .home-sub   { text-align: center; font-size: 13px; color: var(--ink2); margin-bottom: 28px; }
@@ -445,7 +429,6 @@
       <div class="card-desc">Track gigs and events — upcoming, past, and reviews. Add by attending or performing.</div>
       <span class="card-tag">Music</span>
       <div class="card-stat muted" id="stat-gigs"><span class="card-stat-dot"></span><span id="stat-gigs-val">—</span></div>
-      <div class="card-stat2" id="stat-gigs2"></div>
     </div>
 
     <div class="app-card" style="--card-color:#d2a8ff" onclick="switchTo('trip', document.querySelector('[data-target=trip]'))">
@@ -454,7 +437,6 @@
       <div class="card-desc">Plan trips day by day — travel, stays, attractions, food and costs.</div>
       <span class="card-tag">Travel</span>
       <div class="card-stat muted" id="stat-trip"><span class="card-stat-dot"></span><span id="stat-trip-val">—</span></div>
-      <div class="card-stat2" id="stat-trip2"></div>
     </div>
 
   </div>
@@ -719,6 +701,16 @@ function pingFrame(frame) {
   } catch(e) {}
 }
 
+// Relay messages between iframes — GigTracker → TripPlanner
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'RELAY_TO_TRIP') {
+    const tripFrame = document.getElementById('frame-trip');
+    if (tripFrame && tripFrame.contentWindow) {
+      try { tripFrame.contentWindow.postMessage(e.data, '*'); } catch(err) {}
+    }
+  }
+});
+
 // When any iframe loads, send the session
 document.querySelectorAll('.app-frame').forEach(frame => {
   frame.addEventListener('load', () => {
@@ -774,12 +766,17 @@ function setCardStat(id, text, mode) {
 
 function statGut() {
   try {
-    const raw = localStorage.getItem('gutjournal_v2');
+    // Try several known gut tracker keys
+    const keys = ['gutjournal', 'gut_data', 'gut-journal', 'gutjournal-v2', 'gutjournal-v1'];
+    let raw = null;
+    for (const k of keys) { raw = localStorage.getItem(k); if (raw) break; }
     if (!raw) { setCardStat('stat-gut', 'No data yet', 'muted'); return; }
     const d = JSON.parse(raw);
     const today = todayISO();
-    const entries = d.entries || [];
-    const count = entries.filter(e => (e.time||'').slice(0,10) === today).length;
+    // Count meals logged today — entries array, each with a date field
+    const entries = d.entries || d.logs || d.meals || [];
+    const todayMeals = entries.filter(e => (e.date||e.createdAt||'').slice(0,10) === today);
+    const count = todayMeals.length;
     if (count === 0) {
       setCardStat('stat-gut', '<span class="val">No meals</span> logged today', 'warn');
     } else {
@@ -797,62 +794,39 @@ function statReading() {
       || localStorage.getItem('reading-tracker-v4');
     if (!raw) { setCardStat('stat-reading', 'No data yet', 'muted'); return; }
     const appState = JSON.parse(raw);
+    // Get active tracker (first non-complete, or first)
     const trackers = appState.trackers || [];
     if (!trackers.length) { setCardStat('stat-reading', 'No trackers set up', 'muted'); return; }
-
-    // Use the active tracker
-    const tracker = trackers.find(t => t.id === appState.activeTrackerId) || trackers[0];
-    const books   = tracker.books   || [];
+    const tracker = trackers.find(t => t.books && t.books.length) || trackers[0];
+    const books = tracker.books || [];
     const entries = tracker.entries || [];
-
-    // Total pages across all books
+    // Total pages remaining
     const totalPages = books.reduce((s,b) => s + (b.pages||0), 0);
-
-    // Total read = sum of highest pageTo per book (same as highestPageFor in app)
-    // Also credit manualComplete books as fully read
-    const totalRead = books.reduce((sum, b) => {
-      const bookEntries = entries.filter(e => e.bookId === b.id);
-      const highest = bookEntries.length ? Math.max(...bookEntries.map(e => e.pageTo||0)) : 0;
-      if (b.manualComplete && highest < b.pages) return sum + b.pages;
-      return sum + highest;
-    }, 0);
-
+    const totalRead = entries.reduce((s,e) => s + (e.pages||e.pagesRead||0), 0);
     const rem = Math.max(0, totalPages - totalRead);
-
-    if (rem === 0 && totalPages > 0) {
-      setCardStat('stat-reading', '<span class="val">All done</span> — finished! 🎉', 'ok');
-      return;
-    }
-
+    // Daily target: pages remaining / days left to target date
     const targetDate = tracker.targetDate;
-    if (!targetDate) {
-      setCardStat('stat-reading', '<span class="val">' + rem.toLocaleString() + ' pages</span> remaining', '');
+    if (!targetDate || rem === 0) {
+      if (rem === 0 && totalPages > 0) {
+        setCardStat('stat-reading', '<span class="val">All done</span> — finished! 🎉', 'ok');
+      } else {
+        setCardStat('stat-reading', '<span class="val">' + rem.toLocaleString() + ' pages</span> remaining', '');
+      }
       return;
     }
-
-    // Days left (same as daysLeft() in app)
     const today = new Date(); today.setHours(0,0,0,0);
     const target = new Date(targetDate + 'T00:00:00');
     const daysLeft = Math.max(1, Math.ceil((target - today) / 86400000));
-    // Pages required per day
-    const req = Math.ceil(rem / daysLeft);
-
-    // Pages already logged today — use pagesReadInEntry logic:
-    // for each today entry, credit pageTo minus highest prior pageTo for that book
+    const pagesPerDay = Math.ceil(rem / daysLeft);
+    // How many pages read today?
     const todayStr = todayISO();
-    const todayEntries = entries.filter(e => e.date === todayStr);
-    const readToday = todayEntries.reduce((sum, entry) => {
-      const idx = entries.indexOf(entry);
-      const prior = entries.slice(0, idx).filter(e => e.bookId === entry.bookId).map(e => e.pageTo||0);
-      const prevHigh = prior.length ? Math.max(...prior) : 0;
-      return sum + Math.max(0, (entry.pageTo||0) - prevHigh);
-    }, 0);
-
-    const stillDue = Math.max(0, req - readToday);
+    const readToday = entries.filter(e => (e.date||'').slice(0,10) === todayStr)
+                             .reduce((s,e) => s + (e.pages||e.pagesRead||0), 0);
+    const stillDue = Math.max(0, pagesPerDay - readToday);
     if (stillDue === 0) {
       setCardStat('stat-reading', '<span class="val">Daily target met</span> ✓', 'ok');
     } else {
-      setCardStat('stat-reading', '<span class="val">' + stillDue + ' page' + (stillDue!==1?'s':'') + '</span> due today', stillDue > 40 ? 'warn' : '');
+      setCardStat('stat-reading', '<span class="val">' + stillDue + ' page' + (stillDue!==1?'s':'') + '</span> still due today', stillDue > 20 ? 'warn' : '');
     }
   } catch(e) {
     setCardStat('stat-reading', 'Open app to load', 'muted');
@@ -901,88 +875,31 @@ function statFortnight() {
   }
 }
 
-function fmtDateShort(iso) {
-  if (!iso) return '';
-  const d = new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
-}
-
-function getTrips() {
-  const raw = localStorage.getItem('tp_v3')
-           || localStorage.getItem('tp_data')
-           || localStorage.getItem('tripPlannerData_v2')
-           || localStorage.getItem('tripPlannerData');
-  if (!raw) return [];
-  try { return JSON.parse(raw).trips || []; } catch(e) { return []; }
-}
-
-function getGigs() {
-  const raw = localStorage.getItem('gt_data');
-  if (!raw) return [];
-  try { return JSON.parse(raw).gigs || []; } catch(e) { return []; }
-}
-
-function checkConflicts() {
-  // Returns array of conflict description strings
-  // Excludes gigs deliberately assigned to the trip via Gig Tracker
-  const trips = getTrips().filter(t => {
-    const s = t.status || 'Planning';
-    return t.startDate && t.endDate && (s === 'Planning' || s === 'Booked');
-  });
-  const gigs = getGigs().filter(g => !g.done && !g.missed && g.date);
-  const conflicts = [];
-  for (const t of trips) {
-    for (const g of gigs) {
-      if (g.date >= t.startDate && g.date <= t.endDate && g.linkedTripId !== t.id) {
-        conflicts.push({ trip: t.name || 'Trip', gig: g.name || 'Gig', date: g.date });
-      }
-    }
-  }
-  return conflicts;
-}
-
 function statTrip() {
   try {
-    const trips = getTrips();
-    if (!trips.length) { setCardStat('stat-trip', 'No trips planned yet', 'muted'); document.getElementById('stat-trip2').textContent=''; return; }
+    const raw = localStorage.getItem('tp_data');
+    if (!raw) { setCardStat('stat-trip', 'No trips planned', 'muted'); return; }
+    const d = JSON.parse(raw);
+    const trips = d.trips || [];
     const todayStr = todayISO();
+    // Find upcoming trips (start date >= today)
     const upcoming = trips
-      .filter(t => {
-        const s = t.status || 'Planning';
-        return t.startDate && t.startDate >= todayStr && (s === 'Planning' || s === 'Booked');
-      })
+      .filter(t => t.startDate && t.startDate >= todayStr)
       .sort((a,b) => a.startDate.localeCompare(b.startDate));
     if (!upcoming.length) {
-      setCardStat('stat-trip', 'No upcoming trips planned', 'muted');
-      document.getElementById('stat-trip2').textContent = '';
+      setCardStat('stat-trip', 'No upcoming trips', 'muted');
       return;
     }
     const next = upcoming[0];
-    const isBooked = (next.status || 'Planning') === 'Booked';
     const today = new Date(); today.setHours(0,0,0,0);
     const start = new Date(next.startDate + 'T00:00:00');
     const diff = Math.round((start - today) / 86400000);
-    const name = (next.name || 'Trip') + (isBooked ? ' ✈️' : ' 📋');
     if (diff === 0) {
-      setCardStat('stat-trip', '<span class="val">Today!</span> ' + name, 'ok');
+      setCardStat('stat-trip', '<span class="val">Today!</span> ' + (next.name||'Trip'), 'ok');
     } else if (diff === 1) {
-      setCardStat('stat-trip', '<span class="val">Tomorrow</span> — ' + name, '');
+      setCardStat('stat-trip', '<span class="val">Tomorrow</span> — ' + (next.name||'Trip'), '');
     } else {
-      setCardStat('stat-trip', '<span class="val">' + diff + ' days</span> — ' + name, '');
-    }
-    // Detail line: date range
-    const detail2 = document.getElementById('stat-trip2');
-    if (detail2) {
-      const dateRange = fmtDateShort(next.startDate) + (next.endDate && next.endDate !== next.startDate ? ' → ' + fmtDateShort(next.endDate) : '');
-      detail2.textContent = dateRange;
-      detail2.className = 'card-stat2';
-    }
-    // Conflict check
-    const conflicts = checkConflicts();
-    if (conflicts.length && detail2) {
-      const c = conflicts[0];
-      detail2.textContent = '⚠️ Clashes with: ' + c.gig + ' (' + fmtDateShort(c.date) + ')';
-      detail2.className = 'card-stat2 conflict';
+      setCardStat('stat-trip', '<span class="val">' + diff + ' days</span> until ' + (next.name||'next trip'), diff <= 14 ? '' : 'muted');
     }
   } catch(e) {
     setCardStat('stat-trip', 'Open app to load', 'muted');
@@ -991,15 +908,16 @@ function statTrip() {
 
 function statGigs() {
   try {
-    const gigs = getGigs();
-    if (!gigs.length) { setCardStat('stat-gigs', 'No gigs added yet', 'muted'); document.getElementById('stat-gigs2').textContent=''; return; }
+    const raw = localStorage.getItem('gt_data');
+    if (!raw) { setCardStat('stat-gigs', 'No gigs added yet', 'muted'); return; }
+    const d = JSON.parse(raw);
+    const gigs = d.gigs || [];
     const todayStr = todayISO();
     const upcoming = gigs
       .filter(g => !g.done && !g.missed && g.date >= todayStr)
       .sort((a,b) => a.date.localeCompare(b.date));
     if (!upcoming.length) {
       setCardStat('stat-gigs', 'No upcoming gigs', 'muted');
-      document.getElementById('stat-gigs2').textContent = '';
       return;
     }
     const next = upcoming[0];
@@ -1012,23 +930,7 @@ function statGigs() {
     } else if (diff === 1) {
       setCardStat('stat-gigs', '<span class="val">Tomorrow</span> — ' + name, '');
     } else {
-      setCardStat('stat-gigs', '<span class="val">' + diff + ' days</span> — ' + name, '');
-    }
-    // Detail line: date + venue
-    const detail2 = document.getElementById('stat-gigs2');
-    if (detail2) {
-      const parts = [fmtDateShort(next.date)];
-      if (next.time) parts.push(next.time);
-      if (next.venue) parts.push(next.venue);
-      detail2.textContent = parts.join(' · ');
-      detail2.className = 'card-stat2';
-    }
-    // Conflict check
-    const conflicts = checkConflicts();
-    if (conflicts.length && detail2) {
-      const c = conflicts.find(x => x.gig === next.name) || conflicts[0];
-      detail2.textContent = '⚠️ Clashes with trip: ' + c.trip;
-      detail2.className = 'card-stat2 conflict';
+      setCardStat('stat-gigs', '<span class="val">' + diff + ' days</span> — ' + name, diff <= 7 ? '' : 'muted');
     }
   } catch(e) {
     setCardStat('stat-gigs', 'Open app to load', 'muted');
@@ -1036,16 +938,11 @@ function statGigs() {
 }
 
 function refreshCardStats() {
-  // Clear detail lines first
-  ['stat-gigs2','stat-trip2'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.textContent = ''; el.className = 'card-stat2'; }
-  });
-  statGut();
   statReading();
   statFortnight();
   statTrip();
   statGigs();
+  statGut();
 }
 
 // ── Backup triggers ────────────────────────────────────────────────
