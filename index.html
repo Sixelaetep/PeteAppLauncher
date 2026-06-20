@@ -374,7 +374,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v1.6</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v1.7</span></button>
 
   <button class="nav-btn" data-target="gut" style="--app-color:#3fb950" onclick="switchTo('gut', this)" title="Gut Journal">🫁</button>
   <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -709,6 +709,10 @@ window.addEventListener('message', function(e) {
       try { tripFrame.contentWindow.postMessage(e.data, '*'); } catch(err) {}
     }
   }
+  // Refresh launcher card stats when gig or trip data changes inside an iframe
+  if (e.data && (e.data.type === 'GIG_DATA_UPDATED' || e.data.type === 'TRIP_DATA_UPDATED')) {
+    refreshCardStats();
+  }
 });
 
 // When any iframe loads, send the session
@@ -796,16 +800,28 @@ function statReading() {
       || localStorage.getItem('reading-tracker-v4');
     if (!raw) { setCardStat('stat-reading', 'No data yet', 'muted'); return; }
     const appState = JSON.parse(raw);
-    // Get active tracker (first non-complete, or first)
+    // Get active tracker (first with books, or first)
     const trackers = appState.trackers || [];
     if (!trackers.length) { setCardStat('stat-reading', 'No trackers set up', 'muted'); return; }
     const tracker = trackers.find(t => t.books && t.books.length) || trackers[0];
     const books = tracker.books || [];
     const entries = tracker.entries || [];
-    // Total pages remaining
+
+    // Mirror the app's logic: entries store pageTo (page reached), not pages-read-in-session.
+    // totalRead = sum of highestPageFor(bookId) across all books.
+    // For manualComplete books with no full entry, credit full pages.
+    function highestPageFor(bookId) {
+      const vals = entries.filter(e => e.bookId === bookId).map(e => e.pageTo || 0);
+      return vals.length ? Math.max(...vals) : 0;
+    }
     const totalPages = books.reduce((s,b) => s + (b.pages||0), 0);
-    const totalRead = entries.reduce((s,e) => s + (e.pages||e.pagesRead||0), 0);
+    const totalRead  = books.reduce((s,b) => {
+      const logged = highestPageFor(b.id);
+      if (b.manualComplete && logged < (b.pages||0)) return s + (b.pages||0);
+      return s + logged;
+    }, 0);
     const rem = Math.max(0, totalPages - totalRead);
+
     // Daily target: pages remaining / days left to target date
     const targetDate = tracker.targetDate;
     if (!targetDate || rem === 0) {
@@ -820,10 +836,15 @@ function statReading() {
     const target = new Date(targetDate + 'T00:00:00');
     const daysLeft = Math.max(1, Math.ceil((target - today) / 86400000));
     const pagesPerDay = Math.ceil(rem / daysLeft);
-    // How many pages read today?
+
+    // Pages read today: for each book, max(pageTo today) - max(pageTo before today)
     const todayStr = todayISO();
-    const readToday = entries.filter(e => (e.date||'').slice(0,10) === todayStr)
-                             .reduce((s,e) => s + (e.pages||e.pagesRead||0), 0);
+    const readToday = books.reduce((s, b) => {
+      const priorMax  = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'') <  todayStr).map(e => e.pageTo||0), 0);
+      const todayMax  = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'').slice(0,10) === todayStr).map(e => e.pageTo||0), 0);
+      return s + Math.max(0, todayMax - priorMax);
+    }, 0);
+
     const stillDue = Math.max(0, pagesPerDay - readToday);
     if (stillDue === 0) {
       setCardStat('stat-reading', '<span class="val">Daily target met</span> ✓', 'ok');
@@ -879,14 +900,14 @@ function statFortnight() {
 
 function statTrip() {
   try {
-    const raw = localStorage.getItem('tp_data');
+    const raw = localStorage.getItem('tp_v3') || localStorage.getItem('tp_data');
     if (!raw) { setCardStat('stat-trip', 'No trips planned', 'muted'); return; }
     const d = JSON.parse(raw);
     const trips = d.trips || [];
     const todayStr = todayISO();
-    // Find upcoming trips (start date >= today)
+    // Find upcoming trips (start date >= today, or currently ongoing)
     const upcoming = trips
-      .filter(t => t.startDate && t.startDate >= todayStr)
+      .filter(t => t.startDate && t.endDate >= todayStr)
       .sort((a,b) => a.startDate.localeCompare(b.startDate));
     if (!upcoming.length) {
       setCardStat('stat-trip', 'No upcoming trips', 'muted');
@@ -896,13 +917,27 @@ function statTrip() {
     const today = new Date(); today.setHours(0,0,0,0);
     const start = new Date(next.startDate + 'T00:00:00');
     const diff = Math.round((start - today) / 86400000);
+    // Check if any upcoming trip clashes with upcoming gigs
+    let conflictSuffix = '';
+    try {
+      const gigRaw = localStorage.getItem('gt_data');
+      if (gigRaw) {
+        const gigs = (JSON.parse(gigRaw).gigs || []).filter(g => !g.done && !g.missed && g.date);
+        const hasConflict = upcoming.some(t =>
+          gigs.some(g => g.date >= t.startDate && g.date <= t.endDate)
+        );
+        if (hasConflict) conflictSuffix = ' <span style="color:#d97706;font-weight:700">⚠️ gig clash</span>';
+      }
+    } catch(e) {}
+    let txt;
     if (diff === 0) {
-      setCardStat('stat-trip', '<span class="val">Today!</span> ' + (next.name||'Trip'), 'ok');
+      txt = '<span class="val">Today!</span> ' + (next.name||'Trip');
     } else if (diff === 1) {
-      setCardStat('stat-trip', '<span class="val">Tomorrow</span> — ' + (next.name||'Trip'), '');
+      txt = '<span class="val">Tomorrow</span> — ' + (next.name||'Trip');
     } else {
-      setCardStat('stat-trip', '<span class="val">' + diff + ' days</span> until ' + (next.name||'next trip'), diff <= 14 ? '' : 'muted');
+      txt = '<span class="val">' + diff + ' days</span> until ' + (next.name||'next trip');
     }
+    setCardStat('stat-trip', txt + conflictSuffix, diff === 0 ? 'ok' : diff <= 14 ? '' : 'muted');
   } catch(e) {
     setCardStat('stat-trip', 'Open app to load', 'muted');
   }
@@ -927,13 +962,30 @@ function statGigs() {
     const gDate = new Date(next.date + 'T00:00:00');
     const diff = Math.round((gDate - today) / 86400000);
     const name = next.name || 'Next gig';
+    // Check if next gig clashes with any upcoming trip
+    let conflictSuffix = '';
+    try {
+      const tpRaw = localStorage.getItem('tp_v3') || localStorage.getItem('tp_data');
+      if (tpRaw) {
+        const trips = (JSON.parse(tpRaw).trips || []).filter(t => {
+          const s = t.status || 'Planning';
+          return t.startDate && t.endDate && (s === 'Planning' || s === 'Booked');
+        });
+        const hasConflict = upcoming.some(g =>
+          trips.some(t => g.date >= t.startDate && g.date <= t.endDate)
+        );
+        if (hasConflict) conflictSuffix = ' <span style="color:#d97706;font-weight:700">⚠️ trip clash</span>';
+      }
+    } catch(e) {}
+    let txt;
     if (diff === 0) {
-      setCardStat('stat-gigs', '<span class="val">Tonight!</span> ' + name, 'ok');
+      txt = '<span class="val">Tonight!</span> ' + name;
     } else if (diff === 1) {
-      setCardStat('stat-gigs', '<span class="val">Tomorrow</span> — ' + name, '');
+      txt = '<span class="val">Tomorrow</span> — ' + name;
     } else {
-      setCardStat('stat-gigs', '<span class="val">' + diff + ' days</span> — ' + name, diff <= 7 ? '' : 'muted');
+      txt = '<span class="val">' + diff + ' days</span> — ' + name;
     }
+    setCardStat('stat-gigs', txt + conflictSuffix, diff === 0 ? 'ok' : diff <= 7 ? '' : 'muted');
   } catch(e) {
     setCardStat('stat-gigs', 'Open app to load', 'muted');
   }
