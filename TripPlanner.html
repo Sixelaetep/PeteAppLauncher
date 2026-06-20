@@ -366,6 +366,11 @@ select.fc{appearance:auto}
 .tl-hdr-icon.done{opacity:.32}
 .tl-hdr-label{font-size:10px;color:var(--ink3);margin-top:3px;max-width:52px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
 .tl-hdr-line{flex:1;min-width:10px;max-width:24px;height:1px;background:var(--bdr);margin-bottom:22px;flex-shrink:0}
+/* ── Conflict banner ── */
+.conflict-banner{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;background:#fff5f5;border:1.5px solid #f87171;border-radius:6px;margin:8px 0 4px;font-size:12px;color:#b91c1c;font-weight:500;line-height:1.5}
+.conflict-banner .cb-icon{font-size:14px;flex-shrink:0;margin-top:1px}
+.conflict-banner strong{font-weight:700}
+.tc-conflict{border:2px solid #f87171!important}
 </style>
 <body>
 
@@ -434,6 +439,58 @@ function loadData(){
   return {trips:[]};
 }
 function saveData(d){localStorage.setItem(SK,JSON.stringify(d));}
+
+// ── Conflict detection ──────────────────────────────────────────
+function getUpcomingGigs() {
+  try {
+    const raw = localStorage.getItem('gt_data');
+    if (!raw) return [];
+    return (JSON.parse(raw).gigs || []).filter(g => !g.done && !g.missed && g.date);
+  } catch(e) { return []; }
+}
+
+// Returns gigs that fall within a trip's date range
+function conflictsForTrip(trip) {
+  if (!trip || !trip.startDate || !trip.endDate) return [];
+  const s = trip.status || 'Planning';
+  if (s === 'Completed') return [];
+  return getUpcomingGigs().filter(g => g.date >= trip.startDate && g.date <= trip.endDate);
+}
+
+function conflictBannerHtml(gigs) {
+  if (!gigs.length) return '';
+  return gigs.map(g =>
+    `<div class="conflict-banner">
+      <span class="cb-icon">⚠️</span>
+      <span>Clashes with gig <strong>${esc(g.name||'Gig')}</strong> on ${esc(g.date)}${g.venue?' at '+esc(g.venue):''}</span>
+    </div>`
+  ).join('');
+}
+
+let _conflictToastTimer = null;
+function showConflictToast(msg) {
+  let el = document.getElementById('conflictToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'conflictToast';
+    el.style.cssText = 'position:fixed;bottom:24px;left:16px;right:16px;max-width:568px;margin:0 auto;background:#fef2f2;border:1.5px solid #f87171;color:#b91c1c;font-size:13px;font-weight:600;padding:11px 14px;border-radius:10px;z-index:500;box-shadow:0 4px 16px rgba(0,0,0,.12);opacity:0;transition:opacity .2s;line-height:1.4;text-align:center';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(_conflictToastTimer);
+  _conflictToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 5000);
+}
+
+// Re-render when gig data changes in another tab
+window.addEventListener('storage', function(e) {
+  if (e.key === 'gt_data') {
+    // Refresh trip cards to update conflict banners
+    const trips = getData().trips;
+    const el = document.getElementById('tripsList');
+    if (el) el.innerHTML = renderTripCards(trips);
+  }
+});
 function getData(){return loadData();}
 function getTrip(id){return getData().trips.find(t=>t.id===id);}
 function saveTrip(trip){
@@ -640,15 +697,19 @@ function showTrips(){
 
 function renderTripCards(trips){
   if(!trips.length) return '<div class="empty"><p>No trips match.</p></div>';
-  return [...trips].sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||'')).map(t=>{
+  return [...trips].sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||'')).map(t=>{
     const tot=tripTotals(t),s=sym(t);
     const itemCount=(t.days||[]).reduce((n,d)=>n+(d.items||[]).length,0);
     const sc=t.status==='Completed'?'bdg-co':t.status==='Booked'?'bdg-bk':'bdg-pl';
-    return `<div class="card tc card-c" onclick="showTripDetail('${esc(t.id)}')">
+    const conflicts=conflictsForTrip(t);
+    const conflictClass=conflicts.length?' tc-conflict':'';
+    const conflictHtml=conflictBannerHtml(conflicts);
+    return `<div class="card tc card-c${conflictClass}" onclick="showTripDetail('${esc(t.id)}')">
       <div class="tc-in">
         <div class="tc-hd"><div><div class="tn">${esc(t.name)}</div><div class="td">${esc(t.destination||'No destination set')}</div></div>
         <span class="bdg ${sc}">${esc(t.status||'Planning')}</span></div>
         <div class="tdt">${fmtDate(t.startDate)} — ${fmtDate(t.endDate)}</div>
+        ${conflictHtml}
         <div class="tf">
           <span style="font-size:13px;color:var(--ink3)">${itemCount} item${itemCount!==1?'s':''}</span>
           <div style="text-align:right">
@@ -771,6 +832,7 @@ function showTripDetail(id, tab){
         <span>${nd} day${nd!==1?'s':''}</span>
         <span class="bdg ${sc}">${esc(trip.status||'Planning')}</span>
       </div>
+      ${conflictBannerHtml(conflictsForTrip(trip))}
       ${trip.description?`<div class="tdhdesc">${esc(trip.description)}</div>`:''}
       ${trip.photosLink?`<a href="${esc(trip.photosLink)}" target="_blank" rel="noopener" class="plink">📸 Photo album</a>`:''}`;
 
@@ -1650,6 +1712,12 @@ function saveTripForm(id){
   if(sd&&ed&&ed>=sd&&(isNew||ps!==sd||pe!==ed)) added=generateDays(trip)||0;
   saveTrip(trip);closeModal();
   showToast(added>0?`Trip saved · ${added} day${added!==1?'s':''} added`:id?'Trip updated':'Trip saved');
+  // Check for gig conflicts
+  const conflicts = conflictsForTrip(trip);
+  if (conflicts.length) {
+    const names = [...new Set(conflicts.map(g => g.name||'gig'))].join(', ');
+    setTimeout(() => showConflictToast(`⚠️ Clashes with: ${names}`), 400);
+  }
   if(id)showTripDetail(id);else showTrips();
 }
 

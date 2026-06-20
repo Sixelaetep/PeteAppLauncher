@@ -231,6 +231,11 @@ input[type="time"].fc{font-size:16px;padding:8px 12px;height:42px;-webkit-appear
 .vlib-add{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--bdr);background:var(--surf)}
 .vlib-add input{flex:1;padding:8px 10px;border:1.5px solid var(--bdr);border-radius:var(--rsm);font-size:16px;font-family:var(--f);color:var(--ink);background:var(--card)}
 .vlib-add input:focus{outline:none;border-color:var(--perf)}
+
+/* ── Conflict banner ── */
+.conflict-banner{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;background:#fff5f5;border:1.5px solid #f87171;border-radius:var(--rsm);margin-top:8px;font-size:12px;color:#b91c1c;font-weight:500;line-height:1.5;cursor:default}
+.conflict-banner .cb-icon{font-size:14px;flex-shrink:0;margin-top:1px}
+.conflict-banner strong{font-weight:700}
 </style>
 </head>
 <body>
@@ -273,7 +278,7 @@ input[type="time"].fc{font-size:16px;padding:8px 12px;height:42px;-webkit-appear
 // ══════════════════════════════════════════════════════════════════
 // VERSION
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE CONFIG
@@ -410,6 +415,39 @@ const GIG_TYPES = [
 
 function gigTypeInfo(typeKey) {
   return GIG_TYPES.find(t => t.key === typeKey) || GIG_TYPES[0];
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CONFLICT DETECTION
+// ══════════════════════════════════════════════════════════════════
+function getUpcomingTrips() {
+  try {
+    const raw = localStorage.getItem('tp_v3')
+             || localStorage.getItem('tp_data')
+             || localStorage.getItem('tripPlannerData_v2')
+             || localStorage.getItem('tripPlannerData');
+    if (!raw) return [];
+    const trips = JSON.parse(raw).trips || [];
+    return trips.filter(t => {
+      const s = t.status || 'Planning';
+      return t.startDate && t.endDate && (s === 'Planning' || s === 'Booked');
+    });
+  } catch(e) { return []; }
+}
+
+// Returns array of conflicting trips for a given gig date
+function gigConflicts(gigDate) {
+  if (!gigDate) return [];
+  return getUpcomingTrips().filter(t => gigDate >= t.startDate && gigDate <= t.endDate);
+}
+
+// Returns array of conflicting gigs for a given trip date range
+function tripConflictsForGig(startDate, endDate) {
+  if (!startDate || !endDate) return [];
+  const d = getData();
+  return (d.gigs||[]).filter(g =>
+    !g.done && !g.missed && g.date && g.date >= startDate && g.date <= endDate
+  );
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -616,6 +654,17 @@ function gigCardHtml(g) {
         ${mapHtml}${ticketHtml}
       </div>
       ${g.notes ? `<div style="font-size:12px;color:var(--ink3);margin-top:8px;line-height:1.5">${esc(g.notes)}</div>` : ''}
+      ${(() => {
+        if (isDone || isMissed) return '';
+        const conflicts = gigConflicts(g.date);
+        if (!conflicts.length) return '';
+        return conflicts.map(t =>
+          `<div class="conflict-banner" onclick="event.stopPropagation()">
+            <span class="cb-icon">⚠️</span>
+            <span>Clashes with trip <strong>${esc(t.name||'Trip')}</strong> (${esc(t.startDate)} – ${esc(t.endDate)})</span>
+          </div>`
+        ).join('');
+      })()}
       <div class="gc-footer">
         ${actionHtml}
         <div class="gc-footer-right">
@@ -996,6 +1045,12 @@ function saveGig() {
   const gDate = new Date(date); const now = new Date(); now.setHours(0,0,0,0);
   if (!_editId && gDate >= now) { _tab = 'upcoming'; document.querySelectorAll('.ni').forEach(b=>b.classList.remove('on')); document.getElementById('tab-upcoming').classList.add('on'); }
   render();
+  // Check for trip conflicts and warn
+  const conflicts = gigConflicts(date);
+  if (conflicts.length && !d.gigs.find(g=>g.id===_editId)?.done && !d.gigs.find(g=>g.id===_editId)?.missed) {
+    const names = conflicts.map(t => t.name || 'a trip').join(', ');
+    showConflictToast(`⚠️ Clashes with: ${names}`);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1113,6 +1168,31 @@ function saveReview(id) {
 // ══════════════════════════════════════════════════════════════════
 // ACCOUNT MENU
 // ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// CONFLICT TOAST
+// ══════════════════════════════════════════════════════════════════
+let _conflictToastTimer = null;
+function showConflictToast(msg) {
+  let el = document.getElementById('conflictToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'conflictToast';
+    el.style.cssText = 'position:fixed;bottom:80px;left:16px;right:16px;max-width:568px;margin:0 auto;background:#fef2f2;border:1.5px solid #f87171;color:#b91c1c;font-size:13px;font-weight:600;padding:11px 14px;border-radius:10px;z-index:500;box-shadow:0 4px 16px rgba(0,0,0,.12);opacity:0;transition:opacity .2s;line-height:1.4;text-align:center';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(_conflictToastTimer);
+  _conflictToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 5000);
+}
+
+// Re-render cards when trip data changes in another tab/app
+window.addEventListener('storage', function(e) {
+  if (e.key && (e.key.startsWith('tp_') || e.key.startsWith('tripPlanner'))) {
+    render();
+  }
+});
+
 function showAccountMenu() {
   let html = `<div class="mhdl"></div><div class="mtitle">⚙️ Gig Tracker ${APP_VERSION}</div>`;
   html += `<button class="btn bg bbl" style="margin-bottom:10px" onclick="closeModal();pullFromSupabase().then(()=>render())">↓ Pull latest from cloud</button>`;
