@@ -176,6 +176,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 .item-card.done-item{opacity:.45}
 .item-card.dragging{opacity:.35;box-shadow:none}
 .item-card.drag-over{box-shadow:0 0 0 2px var(--acc);background:var(--acc-dim)}
+.item-card.ghost-stay{background:var(--ok-dim);border:1.5px dashed var(--ok);opacity:.8}
 .item-hdr{display:flex;align-items:center;padding:10px 12px;gap:10px;cursor:pointer}
 .drag-handle{color:var(--ink4);font-size:16px;cursor:grab;padding:4px 2px;flex-shrink:0;touch-action:none;-webkit-user-select:none;user-select:none}
 .drag-handle:active{cursor:grabbing;color:var(--acc)}
@@ -320,7 +321,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v1.4</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v1.5</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -737,7 +738,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.4</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.5</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -1323,9 +1324,10 @@ function openTripDetail(id, tab){
         const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
         const dObj=new Date(day.date+'T00:00:00');
 
-        // Timeline items (non-placeholder real items only) + linked gigs for this day
+        // Timeline items — real items + ghost stays from multi-night acc + linked gigs
         const gigsThisDay=linkedGigs.filter(g=>g.date===day.date);
-        const allTlItems=[...realItems,...gigsThisDay.map(g=>({...g,_linkedGig:true}))];
+        const ghostsThisDay=getAccGhosts(trip,day.id);
+        const allTlItems=[...ghostsThisDay,...realItems,...gigsThisDay.map(g=>({...g,_linkedGig:true}))];
 
         html+=`<div class="day-card">
           <div class="day-hdr" onclick="openDayView('${esc(id)}','${esc(day.id)}')">
@@ -1429,15 +1431,23 @@ function openDayView(tripId,dayId,scrollToItems){
     });
   }
 
-  // Ghost accommodation
-  ghosts.forEach(it=>{
-    html+=`<div class="item-card ghost">
-      <div class="item-hdr">
-        <div class="item-type-icon">🏨</div>
-        <div class="item-main"><div class="item-name">${esc(it.name)}</div><div class="item-sub">↳ Night ${it._nightNum} of ${it.nights}</div></div>
-      </div>
-    </div>`;
-  });
+  // Ghost accommodation — multi-night stays originating from another day
+  if(ghosts.length){
+    html+=`<div class="section-hdr">🏨 Continuing stay</div>`;
+    ghosts.forEach(it=>{
+      const perNight=parseFloat(it.costPerNight||0);
+      html+=`<div class="item-card ghost-stay" onclick="openDayView('${esc(tripId)}','${esc(it._sourceDayId||'')}')">
+        <div class="item-hdr">
+          <div class="item-type-icon">🏨</div>
+          <div class="item-main">
+            <div class="item-name">${esc(it.name||'Stay')}</div>
+            <div class="item-sub">Night ${it._nightNum} of ${it.nights} · tap to view check-in day</div>
+          </div>
+          ${perNight>0?`<div class="item-right"><span class="cost-pill">${sym(trip.currency||'GBP')}${perNight.toFixed(2)}/night</span></div>`:''}
+        </div>
+      </div>`;
+    });
+  }
 
   // Real items
   if(realItems.length) html+=`<div class="section-hdr">Items</div>`;
@@ -1462,12 +1472,12 @@ function openDayView(tripId,dayId,scrollToItems){
   html+=`<div class="section-hdr" style="margin-top:12px">Day notes</div>
     <textarea class="fi" id="dayNotes" placeholder="Notes for this day…" rows="3" onblur="saveDayNotes('${esc(tripId)}','${esc(dayId)}',this.value)">${esc(day.notes||'')}</textarea>`;
 
-  // Day total
-  const dayCost=allDisplayItems.filter(it=>!it._ghost||it._ghost).reduce((sum,it)=>{
-    if(it._placeholder||it._ghost) return sum;
+  // Day total — real items + per-night cost from ghost stays (continuing accommodation)
+  const ghostCost=ghosts.reduce((sum,it)=>sum+parseFloat(it.costPerNight||0),0);
+  const dayCost=realItems.filter(it=>!it._placeholder).reduce((sum,it)=>{
     const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
     return sum+c;
-  },0);
+  },0)+ghostCost;
   if(dayCost>0) html+=`<div style="text-align:right;padding:12px 0;font-size:14px;font-weight:700;color:var(--ink2)">Day total: ${s}${dayCost.toFixed(2)}</div>`;
 
   html+=`</div>`;
@@ -1487,7 +1497,7 @@ function getAccGhosts(trip,dayId){
       const ed=new Date(sd); ed.setDate(ed.getDate()+nights-1);
       if(dayDate>sd&&dayDate<=ed){
         const nightNum=Math.round((dayDate-sd)/86400000)+1;
-        ghosts.push({...it,_ghost:true,_nightNum:nightNum});
+        ghosts.push({...it,_ghost:true,_nightNum:nightNum,_sourceDayId:d.id});
       }
     });
   });
@@ -1822,16 +1832,21 @@ function renderTripCosts(trip,s){
   let dayRows='';
   const cats={travel:0,accommodation:0,food:0,attraction:0,other:0};
   days.forEach(day=>{
+    // Include per-night cost from ghost stays (multi-night accommodation originating on another day)
+    const ghostsOnDay=getAccGhosts(trip,day.id);
+    const ghostCost=ghostsOnDay.reduce((sum,it)=>sum+parseFloat(it.costPerNight||0),0);
+    cats.accommodation=(cats.accommodation||0)+ghostCost;
+
     const dayCost=(day.items||[]).filter(it=>!it._placeholder).reduce((sum,it)=>{
       const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
       return sum+c;
-    },0);
+    },0)+ghostCost;
     dayTotal+=dayCost;
     if(dayCost>0){
       const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
       const dObj=new Date(day.date+'T00:00:00');
       dayRows+=`<div class="cost-day-row" onclick="openDayView('${esc(trip.id)}','${esc(day.id)}')">
-        <span class="cost-day-label">Day ${day.dayNumber} · ${dow[dObj.getDay()]} ${fmtDateShort(day.date)}</span>
+        <span class="cost-day-label">Day ${day.dayNumber} · ${dow[dObj.getDay()]} ${fmtDateShort(day.date)}${ghostCost>0?` <span style="font-size:10px;color:var(--ink3)">(incl. ${s}${ghostCost.toFixed(2)} stay)</span>`:''}</span>
         <span class="cost-day-val">${s}${dayCost.toFixed(2)}</span>
       </div>`;
     }
