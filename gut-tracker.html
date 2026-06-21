@@ -305,7 +305,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v2.1</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v2.2</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -2380,7 +2380,23 @@ async function autoSyncEntry(){
   const tasks=[];
   if(state.entries.length)
     tasks.push(supabaseFetch('/food_entries?on_conflict=id','POST',
-      state.entries.map(e=>({id:e.id,items:JSON.stringify(e.items),meal:e.meal||null,log_time:e.time,notes:e.notes||null,created_at:e.created,protein_type:e.proteinType||null,fat_level:e.fatLevel||null,carb_type:e.carbType||null,dairy:e.dairy||null,fibre_level:e.fibreLevel||null,processing_level:e.processingLevel||null}))));
+      state.entries.map(e=>({
+        id:e.id,
+        // Store kind and ml inside items JSON so they survive the round-trip
+        items:JSON.stringify(e.kind==='water'
+          ? [{name:e.name||'Water',tags:[],qty:(e.ml||0)+'ml',_kind:'water',_ml:e.ml||0}]
+          : (e.items||[])),
+        meal:e.meal||null,
+        log_time:e.time,
+        notes:e.notes||null,
+        created_at:e.created,
+        protein_type:e.proteinType||null,
+        fat_level:e.fatLevel||null,
+        carb_type:e.carbType||null,
+        dairy:e.dairy||null,
+        fibre_level:e.fibreLevel||null,
+        processing_level:e.processingLevel||null
+      }))));
   if(state.symptoms.length)
     tasks.push(supabaseFetch('/gut_symptoms?on_conflict=id','POST',
       state.symptoms.map(e=>({id:e.id,types:JSON.stringify(e.types),severity:e.severity,stool_frequency:e.stoolFrequency||null,log_time:e.time,notes:e.notes||null,created_at:e.created}))));
@@ -2444,8 +2460,17 @@ async function syncFromSupabase(){
 
   let anySuccess=false;
   if(entriesR.status==='fulfilled' && entriesR.value){
-    const cloudEntries = entriesR.value.map(r=>({id:r.id,kind:'food',items:JSON.parse(r.items||'[]'),meal:r.meal,time:r.log_time,notes:r.notes,created:r.created_at}));
-    // MERGE: union local + cloud by id — never discard local-only entries
+    const cloudEntries = entriesR.value.map(r=>{
+      const items = JSON.parse(r.items||'[]');
+      // Detect water entries: first item has _kind:'water' marker, or meal='Drink' with _ml field
+      const isWater = items.length>0 && (items[0]._kind==='water' || (r.meal==='Drink' && items[0]._ml!=null));
+      if(isWater){
+        const ml = items[0]._ml || parseInt(String(items[0].qty||'').match(/(\d+)/)?.[1]||0);
+        return {id:r.id, kind:'water', meal:'Drink', ml, name:items[0].name||'Water',
+                items, time:r.log_time, notes:r.notes, created:r.created_at};
+      }
+      return {id:r.id, kind:'food', items, meal:r.meal, time:r.log_time, notes:r.notes, created:r.created_at};
+    });
     state.entries = mergeById(state.entries, cloudEntries);
     anySuccess=true;
   } else { console.warn('food_entries fetch failed:', entriesR.reason?.message); }
