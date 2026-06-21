@@ -305,7 +305,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v1.7</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v1.8</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -354,6 +354,26 @@
     <textarea id="foodNotes" placeholder="Anything worth noting..."></textarea>
     <div class="btn-row">
       <button class="btn btn-primary" onclick="logFoodEntry()">Log Meal</button>
+    </div>
+  </div>
+
+  <!-- WATER INTAKE LOG -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title">💧 Water Intake</div>
+    <div id="waterTodayBar" style="margin-bottom:12px"></div>
+    <label>Amount (ml)</label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px" id="waterQuickBtns">
+      <button class="btn btn-ghost btn-sm" onclick="logWater(150)">150ml</button>
+      <button class="btn btn-ghost btn-sm" onclick="logWater(200)">200ml</button>
+      <button class="btn btn-ghost btn-sm" onclick="logWater(250)">250ml</button>
+      <button class="btn btn-ghost btn-sm" onclick="logWater(330)">330ml</button>
+      <button class="btn btn-ghost btn-sm" onclick="logWater(500)">500ml</button>
+      <button class="btn btn-ghost btn-sm" onclick="logWater(750)">750ml</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="number" id="waterCustom" placeholder="Custom ml" min="1" max="2000" step="50"
+        style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:16px;font-family:inherit;color:var(--text);background:var(--surface2);outline:none">
+      <button class="btn btn-primary btn-sm" onclick="logWaterCustom()" style="flex-shrink:0">Log</button>
     </div>
   </div>
 
@@ -502,6 +522,12 @@
   </div>
 
   <div class="stat-row" id="statsRow"></div>
+
+  <!-- Water intake widget -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title">💧 Today's Hydration</div>
+    <div id="waterWidget"></div>
+  </div>
 
   <!-- Trigger suspects -->
   <div class="card">
@@ -834,17 +860,17 @@ function loadState() {
     const r = localStorage.getItem('gutjournal_v2');
     if (r) {
       const parsed = JSON.parse(r);
-      // Guarantee all arrays exist (backwards compat with older saved states)
       if (!parsed.library || !parsed.library.length) parsed.library = [...DEFAULT_LIBRARY];
       if (!parsed.entries)  parsed.entries  = [];
       if (!parsed.symptoms) parsed.symptoms = [];
       if (!parsed.feelings) parsed.feelings = [];
       if (!parsed.bowels)   parsed.bowels   = [];
+      if (!parsed.water)    parsed.water    = []; // water intake — added v1.8
       if (!parsed.nextId)   parsed.nextId   = 1;
       return parsed;
     }
   } catch(e) { console.warn('loadState failed:', e); }
-  return {entries:[],symptoms:[],feelings:[],bowels:[],library:[...DEFAULT_LIBRARY],nextId:1};
+  return {entries:[],symptoms:[],feelings:[],bowels:[],water:[],library:[...DEFAULT_LIBRARY],nextId:1};
 }
 function saveState() { localStorage.setItem('gutjournal_v2',JSON.stringify(state)); triggerAutoSync(); }
 
@@ -911,7 +937,85 @@ function initApp(){
   setupAutocomplete();
   renderLibTagGrid();
   renderLibrary();
+  renderWaterToday();
   syncFromSupabase().catch(()=>{});
+}
+
+// ═══════════════════════════════════════
+//  WATER INTAKE
+// ═══════════════════════════════════════
+const WATER_TARGET_ML = 2000; // 2 litre daily recommendation
+
+function todayKey(){ return new Date().toISOString().slice(0,10); }
+
+function waterTodayMl(){
+  const today = todayKey();
+  return (state.water||[]).filter(w=>w.date===today).reduce((s,w)=>s+w.ml,0);
+}
+
+function logWater(ml){
+  if(!state.water) state.water=[];
+  state.water.push({id:'w'+Date.now()+'_'+Math.random().toString(36).slice(2,6), date:todayKey(), ml, time:now()});
+  saveState();
+  renderWaterToday();
+  toast('💧 '+ml+'ml logged');
+}
+
+function logWaterCustom(){
+  const inp = document.getElementById('waterCustom');
+  const ml = parseInt(inp?.value||0);
+  if(!ml||ml<1||ml>5000){ toast('Enter a valid amount (1–5000ml)','err'); return; }
+  logWater(ml);
+  if(inp) inp.value='';
+}
+
+function renderWaterToday(){
+  const el = document.getElementById('waterTodayBar');
+  if(!el) return;
+  const total = waterTodayMl();
+  const pct = Math.min(100, Math.round((total/WATER_TARGET_ML)*100));
+  const remaining = Math.max(0, WATER_TARGET_ML-total);
+  const colour = pct>=100?'var(--sage)':pct>=60?'var(--amber)':'var(--coral)';
+  const glasses = (state.water||[]).filter(w=>w.date===todayKey()).slice().reverse();
+  const glassHtml = glasses.slice(0,6).map(w=>`
+    <span style="font-size:11px;background:var(--surface2);border-radius:12px;padding:2px 8px;color:var(--text-mid);cursor:pointer;display:inline-flex;align-items:center;gap:4px"
+      onclick="deleteWaterEntry('${w.id}')">💧${w.ml}ml ✕</span>`).join(' ');
+  el.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+      <span style="font-size:13px;font-weight:600;color:var(--text)">${total}ml <span style="font-weight:400;color:var(--text-soft)">of ${WATER_TARGET_ML}ml</span></span>
+      <span style="font-size:12px;font-weight:600;color:${colour}">${pct}%${pct>=100?' ✓':' ('+remaining+'ml left)'}</span>
+    </div>
+    <div style="height:10px;border-radius:5px;background:var(--border);overflow:hidden;margin-bottom:8px">
+      <div style="height:100%;width:${pct}%;background:${colour};border-radius:5px;transition:width .4s ease"></div>
+    </div>
+    ${glasses.length?`<div style="display:flex;flex-wrap:wrap;gap:4px">${glassHtml}</div>`:'<div style="font-size:12px;color:var(--text-soft)">No intake logged yet today</div>'}`;
+}
+
+function deleteWaterEntry(id){
+  state.water=(state.water||[]).filter(w=>w.id!==id);
+  saveState();
+  renderWaterToday();
+  renderWaterWidget();
+}
+
+function renderWaterWidget(){
+  const el=document.getElementById('waterWidget'); if(!el) return;
+  const total=waterTodayMl();
+  const pct=Math.min(100,Math.round((total/WATER_TARGET_ML)*100));
+  const colour=pct>=100?'var(--sage)':pct>=60?'var(--amber)':'var(--coral)';
+  el.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="font-size:28px">💧</div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">
+          ${total}ml <span style="font-weight:400;color:var(--text-soft)">/ ${WATER_TARGET_ML}ml today</span>
+        </div>
+        <div style="height:8px;border-radius:4px;background:var(--border);overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${colour};border-radius:4px;transition:width .4s ease"></div>
+        </div>
+        <div style="font-size:11px;color:${colour};font-weight:600;margin-top:3px">${pct>=100?'Target reached ✓':Math.max(0,WATER_TARGET_ML-total)+'ml to go'}</div>
+      </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════
@@ -1403,6 +1507,7 @@ function renderInsights(){
   renderTimelineStrip('timelineStripInsights');
   renderGutScore();
   renderStats();
+  renderWaterWidget();
   renderTriggerInsights();
   renderSafeInsights();
   renderExperiments();
