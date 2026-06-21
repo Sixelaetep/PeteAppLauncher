@@ -39,7 +39,9 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .ni.on::after{content:'';position:absolute;bottom:0;left:16px;right:16px;height:2px;background:var(--acc);border-radius:2px 2px 0 0}
 
 /* ── Main scroll area ───────────────────────────────────────────── */
-.main{position:absolute;top:var(--hdr);left:0;right:0;bottom:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 90px}
+.main{position:absolute;top:var(--hdr);left:0;right:0;bottom:0;overflow:hidden}
+#panelList,#panelTrip,#panelDay{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+#panelTrip,#panelDay{display:none}
 
 /* ── FAB ────────────────────────────────────────────────────────── */
 .fab{position:fixed;bottom:calc(22px + env(safe-area-inset-bottom));right:18px;width:54px;height:54px;border-radius:50%;background:var(--acc);color:#fff;font-size:26px;border:none;cursor:pointer;box-shadow:0 4px 16px rgba(124,58,237,.4);display:flex;align-items:center;justify-content:center;z-index:200;transition:transform .15s,background .15s}
@@ -324,9 +326,22 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
   </div>
 </div>
 
-<!-- ── App shell ─────────────────────────────────────────────────── -->
+<!-- ── App shell — three permanent panels, show/hide ─────────────── -->
 <div class="main" id="appMain">
-  <div id="appInner"></div>
+  <!-- Panel 1: list view (upcoming/past/reviews/venues) -->
+  <div id="panelList">
+    <div style="padding:14px 14px 90px" id="appInner"></div>
+  </div>
+  <!-- Panel 2: trip detail (itinerary/costs/review tabs) -->
+  <div id="panelTrip">
+    <div id="tripTabBar"></div>
+    <div id="tripContent" style="padding:14px 14px 90px"></div>
+  </div>
+  <!-- Panel 3: day view -->
+  <div id="panelDay">
+    <div id="dayNavBar"></div>
+    <div id="dayContent" style="padding:0 14px 90px"></div>
+  </div>
 </div>
 
 <!-- ── FAB ───────────────────────────────────────────────────────── -->
@@ -664,12 +679,21 @@ let _curTripId=null;
 let _curDayId=null;
 let _curTripTab='itinerary';
 
+// ── Panel switching — never destroys other panels ─────────────────
+function showPanel(name){
+  document.getElementById('panelList').style.display = name==='list' ? '' : 'none';
+  document.getElementById('panelTrip').style.display = name==='trip' ? '' : 'none';
+  document.getElementById('panelDay').style.display  = name==='day'  ? '' : 'none';
+  const el=document.getElementById(name==='list'?'panelList':name==='trip'?'panelTrip':'panelDay');
+  if(el) el.scrollTop=0;
+}
+
 function switchTab(t,btn){
   _tab=t; _view='list'; _curTripId=null; _curDayId=null;
   document.querySelectorAll('.ni').forEach(b=>b.classList.remove('on'));
   if(btn) btn.classList.add('on');
   showListNav();
-  // FAB only makes sense on upcoming/past list views
+  showPanel('list');
   document.getElementById('fab').style.display=(t==='upcoming'||t==='past')?'flex':'none';
   render();
 }
@@ -679,7 +703,7 @@ function showListNav(){
   document.getElementById('mainNav').style.display='flex';
   document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.1</span>';
   document.getElementById('hdrAction').style.display='none';
-  document.getElementById('fab').style.display='flex';
+  document.getElementById('dataBtn').style.display='';
 }
 
 function showTripNav(trip){
@@ -687,6 +711,7 @@ function showTripNav(trip){
   document.getElementById('mainNav').style.display='none';
   document.getElementById('hdrTitle').innerHTML=esc(trip.name||'Trip')+'<span class="ver"> ✈️</span>';
   document.getElementById('hdrAction').style.display='';
+  document.getElementById('dataBtn').style.display='none';
   document.getElementById('fab').style.display='flex';
 }
 
@@ -697,13 +722,14 @@ function showDayNav(trip,day){
   const d=new Date(day.date+'T00:00:00');
   document.getElementById('hdrTitle').innerHTML=`Day ${day.dayNumber} <span class="ver">${dow[d.getDay()]} ${fmtDateShort(day.date)}</span>`;
   document.getElementById('hdrAction').style.display='';
+  document.getElementById('dataBtn').style.display='none';
   document.getElementById('fab').style.display='flex';
 }
 
 function handleBack(){
   if(_view==='dayView'){ _view='tripDetail'; _curDayId=null; openTripDetail(_curTripId,_curTripTab); }
-  else if(_view==='tripDetail'){ _view='list'; _curTripId=null; showListNav(); render(); }
-  else { _view='list'; showListNav(); render(); }
+  else if(_view==='tripDetail'){ _view='list'; _curTripId=null; showListNav(); showPanel('list'); render(); }
+  else { _view='list'; showListNav(); showPanel('list'); render(); }
 }
 
 function handleFab(){
@@ -733,10 +759,9 @@ function handleHdrAction(){
 // RENDER — LIST VIEW
 // ═══════════════════════════════════════════════════════════════════
 function render(){
-  if(_view==='tripDetail'){ openTripDetail(_curTripId,_curTripTab); return; }
-  if(_view==='dayView'){ openDayView(_curTripId,_curDayId); return; }
-  if(_tab==='reviews'){ renderReviews(); return; }
-  if(_tab==='venues'){ renderVenues(); return; }
+  if(_tab==='reviews'){ showPanel('list'); renderReviews(); return; }
+  if(_tab==='venues'){  showPanel('list'); renderVenues();  return; }
+  showPanel('list');
 
   const today=new Date(); today.setHours(0,0,0,0);
   const todayStr=localDateStr(today);
@@ -1176,18 +1201,22 @@ function confirmDeleteTrip(id){
 // TRIP DETAIL VIEW
 // ═══════════════════════════════════════════════════════════════════
 function openTripDetail(id, tab){
-  const trip=getEvent(id); if(!trip){ _view='list'; showListNav(); render(); return; }
+  const trip=getEvent(id); if(!trip){ _view='list'; showListNav(); showPanel('list'); render(); return; }
   _view='tripDetail'; _curTripId=id; _curTripTab=tab||'itinerary';
   showTripNav(trip);
+  showPanel('trip');
   const s=sym(trip.currency||'GBP');
   const d=getData();
   const linkedGigs=d.events.filter(e=>e.type==='gig'&&e.tripId===id);
 
-  let html=`<div class="trip-tabs">
+  // Tab bar written into its own permanent div
+  document.getElementById('tripTabBar').innerHTML=`<div class="trip-tabs">
     <button class="trip-tab ${_curTripTab==='itinerary'?'on':''}" onclick="openTripDetail('${esc(id)}','itinerary')">📅 Itinerary</button>
     <button class="trip-tab ${_curTripTab==='costs'?'on':''}" onclick="openTripDetail('${esc(id)}','costs')">💰 Costs</button>
     <button class="trip-tab ${_curTripTab==='review'?'on':''}" onclick="openTripDetail('${esc(id)}','review')">⭐ Review</button>
-  </div><div style="padding:14px 14px 90px">`;
+  </div>`;
+
+  let html='';
 
   if(_curTripTab==='itinerary'){
     // Overview card
@@ -1270,9 +1299,8 @@ function openTripDetail(id, tab){
     html+=renderTripReview(trip);
   }
 
-  html+=`</div>`;
-  document.getElementById('appMain').innerHTML=html;
-  document.getElementById('appMain').scrollTop=0;
+  document.getElementById('tripContent').innerHTML=html;
+  document.getElementById('panelTrip').scrollTop=0;
 }
 
 function renderTlStrip(items,tripId,dayId){
@@ -1302,6 +1330,18 @@ function openDayView(tripId,dayId,scrollToItems){
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
   _view='dayView'; _curTripId=tripId; _curDayId=dayId;
   showDayNav(trip,day);
+  showPanel('day');
+
+  // Prev / next day navigation bar
+  const sortedDays=trip.days.slice().sort((a,b)=>a.date.localeCompare(b.date));
+  const dayIdx=sortedDays.findIndex(d=>d.id===dayId);
+  const prevDay=dayIdx>0?sortedDays[dayIdx-1]:null;
+  const nextDay=dayIdx<sortedDays.length-1?sortedDays[dayIdx+1]:null;
+  document.getElementById('dayNavBar').innerHTML=`<div style="display:flex;align-items:center;background:var(--card);border-bottom:1px solid var(--bdr);padding:8px 12px;gap:8px">
+    <button ${prevDay?`onclick="openDayView('${esc(tripId)}','${esc(prevDay.id)}')"`:'disabled'} style="flex:1;padding:8px;border-radius:var(--rsm);border:1.5px solid var(--bdr);background:var(--card);font-size:13px;font-weight:600;font-family:var(--f);color:${prevDay?'var(--ink2)':'var(--ink4)'};cursor:${prevDay?'pointer':'default'}">‹ Day ${prevDay?prevDay.dayNumber:'—'}</button>
+    <button onclick="openTripDetail('${esc(tripId)}','itinerary')" style="padding:8px 12px;border-radius:var(--rsm);border:1.5px solid var(--bdr);background:var(--surf);font-size:13px;font-family:var(--f);color:var(--ink3);cursor:pointer">All days</button>
+    <button ${nextDay?`onclick="openDayView('${esc(tripId)}','${esc(nextDay.id)}')"`:'disabled'} style="flex:1;padding:8px;border-radius:var(--rsm);border:1.5px solid var(--bdr);background:var(--card);font-size:13px;font-weight:600;font-family:var(--f);color:${nextDay?'var(--ink2)':'var(--ink4)'};cursor:${nextDay?'pointer':'default'}">Day ${nextDay?nextDay.dayNumber:'—'} ›</button>
+  </div>`;
 
   const s=sym(trip.currency||'GBP');
   const d=getData();
@@ -1309,7 +1349,6 @@ function openDayView(tripId,dayId,scrollToItems){
   const items=day.items||[];
   const realItems=items.filter(it=>!it._placeholder);
   const placeholders=items.filter(it=>it._placeholder);
-  // Ghosts from multi-night accommodation
   const ghosts=getAccGhosts(trip,dayId);
   const allDisplayItems=[...ghosts,...realItems];
   const allTlItems=[...allDisplayItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))];
@@ -1380,8 +1419,8 @@ function openDayView(tripId,dayId,scrollToItems){
   if(dayCost>0) html+=`<div style="text-align:right;padding:12px 0;font-size:14px;font-weight:700;color:var(--ink2)">Day total: ${s}${dayCost.toFixed(2)}</div>`;
 
   html+=`</div>`;
-  document.getElementById('appMain').innerHTML=html;
-  document.getElementById('appMain').scrollTop=0;
+  document.getElementById('dayContent').innerHTML=html;
+  document.getElementById('panelDay').scrollTop=0;
 }
 
 function getAccGhosts(trip,dayId){
