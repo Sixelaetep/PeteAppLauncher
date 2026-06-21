@@ -321,7 +321,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v1.6</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v1.7</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -558,6 +558,7 @@ function getData(){
 }
 function saveData(d){
   localStorage.setItem(SK,JSON.stringify(d));
+  scheduleVenuesPush();
   // Broadcast to launcher
   try{ const bc=new BroadcastChannel('pal_gat_updated'); bc.postMessage({type:'GAT_DATA_UPDATED'}); bc.close(); } catch(e){}
   try{ window.parent.postMessage({type:'GAT_DATA_UPDATED'},window.location.origin); } catch(e){}
@@ -664,6 +665,7 @@ async function pushAllEvents(){
       data:ev, updated_at:ev.updatedAt||new Date().toISOString()
     }));
     await sbFetch('POST','events?on_conflict=id',rows);
+    await pushVenues();
     setSyncDot('ok');
     setTimeout(()=>setSyncDot('idle'),2000);
     showToast('Synced '+events.length+' events to cloud ✓');
@@ -679,6 +681,33 @@ async function deleteFromSupabase(id){
   catch(e){ console.warn('Delete sync failed:',e); }
 }
 
+// ── Venues sync ───────────────────────────────────────────────────
+// Venues are stored as a single synthetic row in the events table
+// with id='_venues' and type='venues'. No schema change needed.
+let _venuesSyncTimer=null;
+function scheduleVenuesPush(){
+  clearTimeout(_venuesSyncTimer);
+  _venuesSyncTimer=setTimeout(pushVenues,3000);
+}
+
+async function pushVenues(){
+  const d=getData();
+  if(!d.venues||!d.venues.length) return;
+  const user_id=getUserId();
+  if(!user_id) return;
+  try{
+    await sbFetch('POST','events?on_conflict=id',{
+      id:'_venues',
+      user_id,
+      type:'venues',
+      start_date:null,
+      end_date:null,
+      data:{venues:d.venues},
+      updated_at:new Date().toISOString()
+    });
+  } catch(e){ console.warn('Venues push failed:',e); }
+}
+
 async function pullFromSupabase(){
   setSyncDot('syncing');
   try{
@@ -687,14 +716,33 @@ async function pullFromSupabase(){
     const d=getData();
     const map={};
     d.events.forEach(ev=>{ map[ev.id]=ev; });
+
+    let remoteVenues=null;
     rows.forEach(row=>{
-      if(row.data){
-        const remote=row.data;
-        const local=map[remote.id];
-        if(!local||(remote.updatedAt||'')>=(local.updatedAt||'')) map[remote.id]=remote;
+      if(!row.data) return;
+      // Venues are stored as a synthetic row — extract and skip adding to events
+      if(row.id==='_venues'||row.data.venues){
+        if(Array.isArray(row.data.venues)) remoteVenues=row.data.venues;
+        return;
       }
+      const remote=row.data;
+      const local=map[remote.id];
+      if(!local||(remote.updatedAt||'')>=(local.updatedAt||'')) map[remote.id]=remote;
     });
+
     d.events=Object.values(map);
+
+    // Merge venues — union by name, keep best mapUrl from either side
+    if(remoteVenues&&remoteVenues.length){
+      const vmap={};
+      normaliseVenues(d.venues).forEach(v=>{ vmap[v.name.toLowerCase()]=v; });
+      remoteVenues.forEach(v=>{
+        const k=v.name.toLowerCase();
+        if(!vmap[k]) vmap[k]=v;
+        else if(v.mapUrl&&!vmap[k].mapUrl) vmap[k].mapUrl=v.mapUrl;
+      });
+      d.venues=Object.values(vmap).sort((a,b)=>a.name.localeCompare(b.name));
+    }
     saveData(d);
     setSyncDot('ok');
     setTimeout(()=>setSyncDot('idle'),2000);
@@ -738,7 +786,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.6</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.7</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
