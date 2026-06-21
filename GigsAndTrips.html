@@ -171,10 +171,14 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 .tl-gig-node .tl-icon{background:var(--acc-dim)}
 
 /* ── Item cards ─────────────────────────────────────────────────── */
-.item-card{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rsm);margin-bottom:8px;overflow:hidden}
+.item-card{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rsm);margin-bottom:8px;overflow:hidden;transition:opacity .15s,box-shadow .15s}
 .item-card.placeholder{opacity:.55;border-style:dashed}
 .item-card.done-item{opacity:.45}
+.item-card.dragging{opacity:.35;box-shadow:none}
+.item-card.drag-over{box-shadow:0 0 0 2px var(--acc);background:var(--acc-dim)}
 .item-hdr{display:flex;align-items:center;padding:10px 12px;gap:10px;cursor:pointer}
+.drag-handle{color:var(--ink4);font-size:16px;cursor:grab;padding:4px 2px;flex-shrink:0;touch-action:none;-webkit-user-select:none;user-select:none}
+.drag-handle:active{cursor:grabbing;color:var(--acc)}
 .item-check{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all var(--tr);cursor:pointer}
 .item-check.on{background:var(--ok);border-color:var(--ok);color:#fff}
 .item-type-icon{font-size:18px;flex-shrink:0}
@@ -316,7 +320,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v1.1</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v1.2</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -422,7 +426,7 @@ function showSessionExpiredBanner(){
 window.addEventListener('message', function(e){
   if(e.origin !== window.location.origin) return;
   if(e.data && (e.data.type==='PAL_SESSION'||e.data.type==='PAL_UNLOCKED')){
-    if(e.data.access_token) _sbAccessToken = e.data.access_token;
+    if(e.data.access_token){ _sbAccessToken = e.data.access_token; _cachedUserId=''; }
     if(e.data.user_key) _currentUserKey = e.data.user_key;
     document.getElementById('pinScreen').style.display='none';
     if(!window._gatInited){ window._gatInited=true; onUnlocked(); }
@@ -612,23 +616,27 @@ function setSyncDot(state){
   }
 }
 
+// ── Resolve user_id from JWT once and cache it ────────────────────
+let _cachedUserId='';
+function getUserId(){
+  if(_cachedUserId) return _cachedUserId;
+  if(_sbAccessToken){
+    try{ _cachedUserId=JSON.parse(atob(_sbAccessToken.split('.')[1])).sub||''; }catch(e){}
+  }
+  return _cachedUserId;
+}
+
 function pushEvent(ev){
   _syncQ=_syncQ.then(async()=>{
     setSyncDot('syncing');
     try{
-      // Determine user_id from session token (decode JWT payload)
-      let user_id='';
-      if(_sbAccessToken){
-        try{ user_id=JSON.parse(atob(_sbAccessToken.split('.')[1])).sub||''; }catch(e){}
-      }
+      const user_id=getUserId();
+      if(!user_id) throw new Error('No user_id — not authenticated');
       await sbFetch('POST','events?on_conflict=id',{
-        id:ev.id,
-        user_id,
-        type:ev.type,
+        id:ev.id, user_id, type:ev.type,
         start_date:ev.type==='gig'?ev.date:ev.startDate,
         end_date:ev.type==='gig'?ev.date:ev.endDate,
-        data:ev,
-        updated_at:new Date().toISOString()
+        data:ev, updated_at:new Date().toISOString()
       });
       setSyncDot('ok');
       setTimeout(()=>setSyncDot('idle'),2000);
@@ -638,6 +646,31 @@ function pushEvent(ev){
       setTimeout(()=>setSyncDot('idle'),4000);
     }
   });
+}
+
+// Push every event in one batch — used after import and on first sync
+async function pushAllEvents(){
+  const events=getData().events;
+  if(!events.length) return;
+  const user_id=getUserId();
+  if(!user_id){ console.warn('pushAllEvents: no user_id'); return; }
+  setSyncDot('syncing');
+  try{
+    const rows=events.map(ev=>({
+      id:ev.id, user_id, type:ev.type,
+      start_date:ev.type==='gig'?ev.date:ev.startDate,
+      end_date:ev.type==='gig'?ev.date:ev.endDate,
+      data:ev, updated_at:ev.updatedAt||new Date().toISOString()
+    }));
+    await sbFetch('POST','events?on_conflict=id',rows);
+    setSyncDot('ok');
+    setTimeout(()=>setSyncDot('idle'),2000);
+    showToast('Synced '+events.length+' events to cloud ✓');
+  } catch(e){
+    console.error('pushAllEvents failed:',e);
+    setSyncDot('err');
+    setTimeout(()=>setSyncDot('idle'),4000);
+  }
 }
 
 async function deleteFromSupabase(id){
@@ -704,7 +737,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.1</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v1.2</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -1466,8 +1499,9 @@ function renderItemCard(it,tripId,dayId,s){
   }
 
   const detId=`det-${it.id}`;
-  let card=`<div class="item-card${it.completed?' done-item':''}" id="ic-${esc(it.id)}">
+  let card=`<div class="item-card${it.completed?' done-item':''}" id="ic-${esc(it.id)}" draggable="true" data-item-id="${esc(it.id)}" data-trip-id="${esc(tripId)}" data-day-id="${esc(dayId)}" ondragstart="onItemDragStart(event)" ondragover="onItemDragOver(event)" ondragleave="onItemDragLeave(event)" ondrop="onItemDrop(event)" ondragend="onItemDragEnd(event)">
     <div class="item-hdr" onclick="toggleItemDetail('${esc(it.id)}')">
+      <span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>
       <div class="item-check${it.completed?' on':''}" onclick="event.stopPropagation();toggleDone('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">${it.completed?'✓':''}</div>
       <div class="item-type-icon">${typeIcon(it.type)}</div>
       <div class="item-main">
@@ -2212,6 +2246,53 @@ function hoverStar(cid,v){
 function getStarVal(cid){ return parseInt(document.getElementById(cid)?.dataset.val||'0'); }
 
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// DRAG-TO-REORDER — day items
+// ═══════════════════════════════════════════════════════════════════
+let _dragItemId=null, _dragTripId=null, _dragDayId=null;
+
+function onItemDragStart(e){
+  const card=e.currentTarget;
+  _dragItemId=card.dataset.itemId;
+  _dragTripId=card.dataset.tripId;
+  _dragDayId=card.dataset.dayId;
+  card.classList.add('dragging');
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain',_dragItemId);
+}
+function onItemDragOver(e){
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  const card=e.currentTarget;
+  if(card.dataset.itemId!==_dragItemId) card.classList.add('drag-over');
+}
+function onItemDragLeave(e){ e.currentTarget.classList.remove('drag-over'); }
+function onItemDrop(e){
+  e.preventDefault();
+  const targetCard=e.currentTarget;
+  targetCard.classList.remove('drag-over');
+  const targetId=targetCard.dataset.itemId;
+  if(!_dragItemId||targetId===_dragItemId) return;
+  const trip=getEvent(_dragTripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===_dragDayId); if(!day) return;
+  const items=day.items||[];
+  const fromIdx=items.findIndex(i=>i.id===_dragItemId);
+  const toIdx=items.findIndex(i=>i.id===targetId);
+  if(fromIdx<0||toIdx<0) return;
+  const [moved]=items.splice(fromIdx,1);
+  items.splice(toIdx,0,moved);
+  items.forEach((it,i)=>{ it.order=i; });
+  day.items=items;
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  openDayView(_dragTripId,_dragDayId);
+}
+function onItemDragEnd(e){
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.item-card').forEach(c=>c.classList.remove('drag-over'));
+  _dragItemId=null;
+}
+
 // DATA MANAGER — export, import
 // ═══════════════════════════════════════════════════════════════════
 function showDataManager(){
@@ -2230,6 +2311,15 @@ function showDataManager(){
 
       <div class="section-hdr" style="margin-top:0">Export</div>
       <button class="btn btn-pri" style="margin-bottom:10px" onclick="closeModal();exportJSON()">⬇️ Download backup (JSON)</button>
+
+      <div class="section-hdr">Sync</div>
+      <p style="font-size:13px;color:var(--ink3);margin-bottom:10px;line-height:1.6">
+        If events are missing on this device, pull the latest from the cloud. If you've just imported a file, push everything up so other devices can see it.
+      </p>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn btn-ghost" style="flex:1" onclick="closeModal();pullFromSupabase().then(render)">⬆️ Pull from cloud</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="closeModal();pushAllEvents()">⬇️ Push to cloud</button>
+      </div>
 
       <div class="section-hdr">Import</div>
       <p style="font-size:13px;color:var(--ink3);margin-bottom:10px;line-height:1.6">
@@ -2282,6 +2372,8 @@ function handleImport(inp){
         const evCount=(imported.events||[]).length;
         const vCount=Object.values(vmap).length;
         showToast(`Imported ${evCount} events, ${vCount} venues ✓`);
+        // Push all to Supabase so other devices can pull
+        setTimeout(pushAllEvents, 300);
       } else {
         // Legacy gig-tracker.json format — transform and merge
         const newGigs=(imported.gigs||[]).map(g=>({
@@ -2311,6 +2403,8 @@ function handleImport(inp){
         d.venues=Object.values(vmap).sort((a,b)=>a.name.localeCompare(b.name));
         saveData(d);
         showToast(`Imported ${newGigs.length} gigs, ${Object.values(vmap).length} venues ✓`);
+        // Push all to Supabase so other devices can pull
+        setTimeout(pushAllEvents, 300);
       }
       render();
     } catch(err){
