@@ -305,7 +305,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v2.0</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v2.1</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -875,8 +875,29 @@ function loadState() {
       if (!parsed.symptoms) parsed.symptoms = [];
       if (!parsed.feelings) parsed.feelings = [];
       if (!parsed.bowels)   parsed.bowels   = [];
-      if (!parsed.water)    parsed.water    = []; // water intake — added v1.8
       if (!parsed.nextId)   parsed.nextId   = 1;
+      // ── Migrate legacy state.water[] into state.entries as kind:'water' ──
+      // Water was previously stored separately and didn't sync. One-time migration.
+      if (parsed.water && parsed.water.length) {
+        parsed.water.forEach(w => {
+          const alreadyMigrated = parsed.entries.some(e => e.id === w.id);
+          if (!alreadyMigrated) {
+            parsed.entries.push({
+              id: w.id,
+              kind: 'water',
+              meal: 'Drink',
+              ml: w.ml,
+              name: w.name || 'Water',
+              items: [{name: w.name||'Water', tags:[], qty: w.ml+'ml'}],
+              time: w.time || (w.date + 'T12:00'),
+              notes: '',
+              created: w.time || new Date().toISOString(),
+            });
+          }
+        });
+        parsed.water = []; // clear after migration
+      }
+      if (!parsed.water) parsed.water = [];
       return parsed;
     }
   } catch(e) { console.warn('loadState failed:', e); }
@@ -959,22 +980,24 @@ let _selectedDrinkMl = null;
 
 function todayKey(){ return new Date().toISOString().slice(0,10); }
 
-// Count ml from state.water[] PLUS any legacy Drink meal entries (backwards compat)
+// Water entries live in state.entries with kind:'water' so they sync via food_entries table
+function getWaterEntries(dateStr){
+  const d = dateStr || todayKey();
+  return (state.entries||[]).filter(e => e.kind==='water' && (e.time||'').slice(0,10)===d);
+}
+
 function waterTodayMl(){
   const today = todayKey();
-  const fromWater = (state.water||[]).filter(w=>w.date===today).reduce((s,w)=>s+w.ml,0);
-  // Legacy: Drink entries in state.entries count too (entries before this was separated out)
-  const fromDrinkEntries = (state.entries||[]).filter(e=>{
-    if(e.meal!=='Drink') return false;
-    return (e.time||'').slice(0,10)===today;
-  }).reduce((s,e)=>{
-    // Try to parse ml from the qty field of each item
-    return s + (e.items||[]).reduce((sum,i)=>{
-      const m = String(i.qty||'').match(/(\d+)\s*ml/i);
-      return sum + (m ? parseInt(m[1]) : 0);
-    }, 0);
-  }, 0);
-  return fromWater + fromDrinkEntries;
+  // Current entries with kind:'water'
+  const fromEntries = getWaterEntries(today).reduce((s,e)=>s+(e.ml||0),0);
+  // Legacy: Drink meal entries before migration (backwards compat)
+  const fromDrinkEntries = (state.entries||[]).filter(e=>
+    e.kind==='food' && e.meal==='Drink' && (e.time||'').slice(0,10)===today
+  ).reduce((s,e)=>s+(e.items||[]).reduce((sum,i)=>{
+    const m=String(i.qty||'').match(/(\d+)\s*ml/i);
+    return sum+(m?parseInt(m[1]):0);
+  },0),0);
+  return fromEntries + fromDrinkEntries;
 }
 
 // Drink name autocomplete from Drink-category library items
@@ -1025,40 +1048,45 @@ function logDrinkEntry(){
   const mlInput = document.getElementById('waterCustom');
   const ml = parseInt(mlInput?.value||0);
   if(!ml||ml<1){ toast('Enter an amount in ml','err'); return; }
-
-  if(!state.water) state.water=[];
-  state.water.push({
+  const entry = {
     id: 'w'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-    date: todayKey(), ml, name, time: now()
-  });
-
-  // Add to drink library if not already there
+    kind: 'water', meal: 'Drink', ml, name,
+    items: [{name, tags:[], qty: ml+'ml'}],
+    time: now(), notes: '', created: new Date().toISOString(),
+  };
+  state.entries.push(entry);
   if(name && name!=='Water'){
     if(!state.library) state.library=[];
-    if(!state.library.find(i=>i.name.toLowerCase()===name.toLowerCase())){
+    if(!state.library.find(i=>i.name.toLowerCase()===name.toLowerCase()))
       state.library.push({id:'l'+uid(), name, category:'Drink', tags:[]});
-    }
   }
-
   saveState();
   if(inp) inp.value = '';
   if(mlInput) mlInput.value = '';
   _selectedDrinkMl = null;
   renderWaterToday();
-  toast(`💧 ${ml}ml ${name} logged`);
+  toast('\ud83d\udca7 '+ml+'ml '+name+' logged');
 }
-
-// Legacy quick-log (kept for any existing calls)
 function logWater(ml){ logWaterWithName(ml, 'Water'); }
 function logWaterWithName(ml, name){
-  if(!state.water) state.water=[];
-  state.water.push({id:'w'+Date.now()+'_'+Math.random().toString(36).slice(2,6), date:todayKey(), ml, name:name||'Water', time:now()});
+  const entry = {
+    id: 'w'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+    kind: 'water', meal:'Drink', ml, name: name||'Water',
+    items:[{name:name||'Water',tags:[],qty:ml+'ml'}],
+    time: now(), notes:'', created: new Date().toISOString(),
+  };
+  state.entries.push(entry);
   saveState();
   renderWaterToday();
-  toast(`💧 ${ml}ml logged`);
+  toast('\ud83d\udca7 '+ml+'ml logged');
 }
 function logWaterCustom(){ logDrinkEntry(); }
-
+function deleteWaterEntry(id){
+  state.entries=(state.entries||[]).filter(e=>e.id!==id);
+  saveState();
+  renderWaterToday();
+  renderWaterWidget();
+}
 function renderWaterToday(){
   const el = document.getElementById('waterTodayBar');
   if(!el) return;
@@ -1066,28 +1094,21 @@ function renderWaterToday(){
   const pct   = Math.min(100, Math.round((total/WATER_TARGET_ML)*100));
   const remaining = Math.max(0, WATER_TARGET_ML-total);
   const colour = pct>=100?'var(--sage)':pct>=60?'var(--amber)':'var(--coral)';
-  const entries = (state.water||[]).filter(w=>w.date===todayKey()).slice().reverse();
-  const chips = entries.slice(0,8).map(w=>`
-    <span style="font-size:11px;background:var(--surface2);border-radius:12px;padding:2px 8px;color:var(--text-mid);cursor:pointer;display:inline-flex;align-items:center;gap:4px"
-      onclick="deleteWaterEntry('${w.id}')">💧${w.ml}ml${w.name&&w.name!=='Water'?' ('+esc(w.name)+')':''} ✕</span>`).join(' ');
-  el.innerHTML=`
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-      <span style="font-size:13px;font-weight:600;color:var(--text)">${total}ml <span style="font-weight:400;color:var(--text-soft)">of ${WATER_TARGET_ML}ml</span></span>
-      <span style="font-size:12px;font-weight:600;color:${colour}">${pct}%${pct>=100?' ✓':' ('+remaining+'ml left)'}</span>
-    </div>
-    <div style="height:10px;border-radius:5px;background:var(--border);overflow:hidden;margin-bottom:8px">
-      <div style="height:100%;width:${pct}%;background:${colour};border-radius:5px;transition:width .4s ease"></div>
-    </div>
-    ${chips?`<div style="display:flex;flex-wrap:wrap;gap:4px">${chips}</div>`:'<div style="font-size:12px;color:var(--text-soft)">No drinks logged yet today</div>'}`;
+  const entries = getWaterEntries().slice().reverse();
+  const chips = entries.slice(0,8).map(w=>
+    '<span style="font-size:11px;background:var(--surface2);border-radius:12px;padding:2px 8px;color:var(--text-mid);cursor:pointer;display:inline-flex;align-items:center;gap:4px"'
+    +' onclick="deleteWaterEntry(\''+w.id+'\')">'+'\ud83d\udca7'+(w.ml||0)+'ml'+(w.name&&w.name!=='Water'?' ('+esc(w.name)+')':'')+' \u2715</span>'
+  ).join(' ');
+  el.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">'
+    +'<span style="font-size:13px;font-weight:600;color:var(--text)">'+total+'ml <span style="font-weight:400;color:var(--text-soft)">of '+WATER_TARGET_ML+'ml</span></span>'
+    +'<span style="font-size:12px;font-weight:600;color:'+colour+'">'+pct+'%'+(pct>=100?' \u2713':' ('+remaining+'ml left)')+'</span>'
+    +'</div>'
+    +'<div style="height:10px;border-radius:5px;background:var(--border);overflow:hidden;margin-bottom:8px">'
+    +'<div style="height:100%;width:'+pct+'%;background:'+colour+';border-radius:5px;transition:width .4s ease"></div>'
+    +'</div>'
+    +(chips?'<div style="display:flex;flex-wrap:wrap;gap:4px">'+chips+'</div>':'<div style="font-size:12px;color:var(--text-soft)">No drinks logged yet today</div>');
 }
-
-function deleteWaterEntry(id){
-  state.water=(state.water||[]).filter(w=>w.id!==id);
-  saveState();
-  renderWaterToday();
-  renderWaterWidget();
-}
-
 function renderWaterWidget(){
   const el=document.getElementById('waterWidget'); if(!el) return;
   const total=waterTodayMl();
@@ -1507,7 +1528,7 @@ function renderHistory(){
   renderTimelineStrip('timelineStrip');
   const container=document.getElementById('historyList');
   const all=[
-    ...state.entries.map(e=>({...e,_kind:'food'})),
+    ...state.entries.map(e=>({...e,_kind: e.kind==='water'?'water':'food'})),
     ...state.symptoms.map(e=>({...e,_kind:'symptom'})),
     ...state.feelings.map(e=>({...e,_kind:'feeling'})),
     ...state.bowels.map(e=>({...e,_kind:'bowel'})),
@@ -1566,6 +1587,21 @@ function renderEntryItem(e){
       ${e.notes?`<div style="font-size:12px;color:var(--text-soft);margin-top:3px">${esc(e.notes)}</div>`:''}
     </div>`;
   }
+  if(e._kind==='water'){
+    const colour=e.ml>=500?'var(--sage)':e.ml>=250?'var(--amber)':'var(--ink3)';
+    return `<div class="entry-item">
+      <div class="entry-item-header">
+        <div><span class="entry-type-badge" style="background:#e0f2fe;color:#0369a1">💧 Drink</span></div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span class="entry-time">${fmt(e.time)}</span>
+          <button class="entry-delete" onclick="openEditEntry('water','${e.id}')" title="Edit" style="font-size:12px">✏️</button>
+          <button class="entry-delete" onclick="deleteWaterEntry('${e.id}')">🗑</button>
+        </div>
+      </div>
+      <div style="font-size:14px;font-weight:600;color:${colour}">${e.ml}ml${e.name&&e.name!=='Water'?` <span style="font-weight:400;color:var(--text-soft);font-size:13px">— ${esc(e.name)}</span>`:''}</div>
+      ${e.notes?`<div style="font-size:12px;color:var(--text-soft);margin-top:3px">${esc(e.notes)}</div>`:''}
+    </div>`;
+  }
   return '';
 }
 
@@ -1591,14 +1627,41 @@ function openModal(html, title){
 
 function openEditEntry(kind, id){
   _editKind=kind; _editId=id; _editItems=[];
-  const storeMap = {food:'entries',symptom:'symptoms',feeling:'feelings',bowel:'bowels'};
+  const storeMap = {food:'entries',water:'entries',symptom:'symptoms',feeling:'feelings',bowel:'bowels'};
   const entry = state[storeMap[kind]]?.find(e=>e.id===id);
   if(!entry){ toast('Entry not found','err'); return; }
 
   if(kind==='food')      openEditFood(entry);
+  else if(kind==='water')   openEditWater(entry);
   else if(kind==='symptom') openEditSymptom(entry);
   else if(kind==='feeling') openEditFeeling(entry);
   else if(kind==='bowel')   openEditBowel(entry);
+}
+
+// ── Water/drink edit ───────────────────────────────────────────────
+function openEditWater(e){
+  openModal(`
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-soft);display:block;margin-bottom:5px">Drink name</label>
+      <input id="ewName" type="text" value="${esc(e.name||'Water')}" style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:16px;font-family:inherit;color:var(--text);background:var(--surface2);outline:none">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-soft);display:block;margin-bottom:5px">Amount (ml)</label>
+      <input id="ewMl" type="number" min="1" max="3000" step="10" value="${e.ml||0}" style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:16px;font-family:inherit;color:var(--text);background:var(--surface2);outline:none">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-soft);display:block;margin-bottom:5px">Time</label>
+      <input id="eTime" type="datetime-local" value="${e.time||''}" style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;font-family:inherit;color:var(--text);background:var(--surface2)">
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-soft);display:block;margin-bottom:5px">Notes</label>
+      <textarea id="eNotes" rows="2" style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;font-family:inherit;color:var(--text);background:var(--surface2);resize:vertical">${esc(e.notes||'')}</textarea>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1" onclick="saveEditEntry()">Save changes</button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModalBtn()">Cancel</button>
+    </div>
+  `, '\u270F\uFE0F Edit Drink');
 }
 
 // ── Food edit ──────────────────────────────────────────────────────
@@ -1783,7 +1846,7 @@ function openEditBowel(e){
 
 // ── Save handler for all types ─────────────────────────────────────
 function saveEditEntry(){
-  const storeMap = {food:'entries',symptom:'symptoms',feeling:'feelings',bowel:'bowels'};
+  const storeMap = {food:'entries',water:'entries',symptom:'symptoms',feeling:'feelings',bowel:'bowels'};
   const store = storeMap[_editKind];
   const idx = state[store].findIndex(e=>e.id===_editId);
   if(idx<0){ toast('Entry not found','err'); return; }
@@ -1792,7 +1855,16 @@ function saveEditEntry(){
   const time  = document.getElementById('eTime')?.value || entry.time;
   const notes = document.getElementById('eNotes')?.value?.trim() ?? entry.notes;
 
-  if(_editKind==='food'){
+  if(_editKind==='water'){
+    const ml = parseInt(document.getElementById('ewMl')?.value||0);
+    if(!ml||ml<1){ toast('Enter a valid amount','err'); return; }
+    entry.name  = document.getElementById('ewName')?.value.trim()||'Water';
+    entry.ml    = ml;
+    entry.items = [{name:entry.name, tags:[], qty:ml+'ml'}];
+    entry.time  = time;
+    entry.notes = notes;
+  }
+  else if(_editKind==='food'){
     if(!_editItems.length){ toast('Add at least one item','err'); return; }
     entry.meal  = document.getElementById('eMealType')?.value || entry.meal;
     entry.items = _editItems;
@@ -1833,7 +1905,8 @@ function saveEditEntry(){
   saveState();
   closeModalBtn();
   renderHistory();
-  toast('Entry updated ✓');
+  if(_editKind==='water'){ renderWaterToday(); renderWaterWidget(); }
+  toast('Entry updated \u2713');
 }
 // ═══════════════════════════════════════
 function renderTimelineStrip(elemId){
