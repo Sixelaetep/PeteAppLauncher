@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pete's Apps v4.2</title>
+<title>Pete's Apps v4.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
 <style>
   :root {
@@ -931,59 +931,57 @@ async function pullGatFromSupabase(accessToken) {
   try {
     const token = accessToken || sbSession?.access_token;
     if (!token) return;
-    const res = await fetch(`${SB_URL}/rest/v1/events?select=id,data,updated_at&order=start_date.asc`, {
+    // Order by updated_at — start_date is null on the _venues row and can be
+    // excluded by PostgREST when ordering by start_date, causing venues to vanish.
+    const res = await fetch(`${SB_URL}/rest/v1/events?select=id,data,updated_at&order=updated_at.desc`, {
       headers: {
         'apikey': SB_KEY,
         'Authorization': 'Bearer ' + token,
         'Content-Type': 'application/json'
       }
     });
-    if (!res.ok) return; // silent — don't break the launcher if this fails
+    if (!res.ok) return;
     const rows = await res.json();
     if (!Array.isArray(rows) || !rows.length) return;
 
-    // Merge with any existing localStorage data (local wins on conflict if newer)
     const existing = (() => {
       try { return JSON.parse(localStorage.getItem('gat_v1') || '{}'); } catch(e) { return {}; }
     })();
-    const localEvents = existing.events || [];
     const localMap = {};
-    localEvents.forEach(ev => { localMap[ev.id] = ev; });
+    (existing.events || []).forEach(ev => { localMap[ev.id] = ev; });
 
     let remoteVenues = null;
     rows.forEach(row => {
       if (!row.data) return;
-      // Skip the synthetic _venues row — extract venues, don't add to events
       if (row.id === '_venues') {
         if (Array.isArray(row.data.venues)) remoteVenues = row.data.venues;
         return;
       }
       const remote = row.data;
-      const local  = localMap[remote.id];
+      if (!remote || !remote.id) return;
+      const local = localMap[remote.id];
       if (!local || (remote.updatedAt || '') >= (local.updatedAt || '')) {
         localMap[remote.id] = remote;
       }
     });
 
-    // Merge venues: union by name, keep best mapUrl
-    let mergedVenues = existing.venues || [];
-    if (remoteVenues && remoteVenues.length) {
-      const vmap = {};
-      mergedVenues.forEach(v => { vmap[v.name.toLowerCase()] = v; });
-      remoteVenues.forEach(v => {
-        const k = v.name.toLowerCase();
-        if (!vmap[k]) vmap[k] = v;
-        else if (v.mapUrl && !vmap[k].mapUrl) vmap[k].mapUrl = v.mapUrl;
-      });
-      mergedVenues = Object.values(vmap).sort((a, b) => a.name.localeCompare(b.name));
-    }
+    // All events including tombstones (so _deleted stays dead locally)
+    const allEvents = Object.values(localMap);
 
-    const merged = {
-      events: Object.values(localMap),
-      venues: mergedVenues
-    };
-    localStorage.setItem('gat_v1', JSON.stringify(merged));
-    refreshCardStats(); // re-run now data is present
+    // Venues: remote replaces local — matches GigsAndTrips v2.2 behaviour.
+    // No merge, no push-back — remote is authoritative.
+    const venues = (remoteVenues && remoteVenues.length)
+      ? remoteVenues
+      : (existing.venues || []);
+
+    // Write full state (with tombstones) to gat_v1 for GigsAndTrips to use
+    localStorage.setItem('gat_v1', JSON.stringify({ events: allEvents, venues }));
+
+    // Write clean tombstone-free copy for the dashboard card to read
+    const cleanEvents = allEvents.filter(ev => !ev._deleted);
+    localStorage.setItem('gat_v1_clean', JSON.stringify({ events: cleanEvents, venues }));
+
+    refreshCardStats();
   } catch(e) {
     // Silent — card will just show stale data
   }
@@ -998,10 +996,12 @@ function refreshCardStats() {
 
 function statGat() {
   try {
-    const raw = localStorage.getItem('gat_v1');
+    // Prefer the clean (tombstone-free) copy written by GigsAndTrips v2.2+.
+    // Fall back to gat_v1 with manual _deleted filter for older app versions.
+    const raw = localStorage.getItem('gat_v1_clean') || localStorage.getItem('gat_v1');
     if (!raw) { setCardStat('stat-gat', 'Syncing…', 'muted'); return; }
     const d = JSON.parse(raw);
-    const events = d.events || [];
+    const events = (d.events || []).filter(ev => !ev._deleted);
     const todayStr = todayISO();
 
     const upcoming = events.filter(e => {
