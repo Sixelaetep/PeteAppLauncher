@@ -321,7 +321,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.9</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v3.0</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -734,26 +734,34 @@ async function pushVenuesNow(){
   const user_id=getUserId();
   if(!user_id) return;
   const token=_sbAccessToken||SB_KEY;
-  const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
+  // type must be 'gig' or 'trip' — events table CHECK constraint
   const payload={id:'_venues',user_id,type:'gig',start_date:null,end_date:null,data:{venues:d.venues},updated_at:new Date().toISOString()};
   try{
-    // PATCH — update existing row. Trust HTTP status, not response body.
+    // PATCH with return=representation so we get rows back and can detect zero matches
+    const pH={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'return=representation'};
     const patchUrl=SB_URL+'/rest/v1/events?id=eq._venues&user_id=eq.'+encodeURIComponent(user_id);
-    const patchRes=await fetch(patchUrl,{method:'PATCH',headers,body:JSON.stringify(payload)});
+    const patchRes=await fetch(patchUrl,{method:'PATCH',headers:pH,body:JSON.stringify(payload)});
     if(patchRes.ok){
-      syncLog('PATCH OK — '+d.venues.length+' venues updated','ok');
-      showToast('✓ '+d.venues.length+' venues saved to cloud');
-      return;
+      const updated=await patchRes.json().catch(()=>[]);
+      if(Array.isArray(updated)&&updated.length>0){
+        syncLog('PATCH OK — '+d.venues.length+' venues updated','ok');
+        showToast('✓ '+d.venues.length+' venues saved to cloud');
+        return;
+      }
+      // 200 but empty array = zero rows matched = row does not exist yet
+      syncLog('PATCH matched 0 rows — inserting new row…','info');
+    } else {
+      const err=await patchRes.text().catch(()=>'');
+      syncLog('PATCH '+patchRes.status+': '+err.slice(0,120),'info');
     }
-    const patchErr=await patchRes.text().catch(()=>'');
-    syncLog('PATCH '+patchRes.status+': '+patchErr.slice(0,120),'info');
-    // PATCH failed — row may not exist, try INSERT
-    syncLog('Trying INSERT…','working');
-    const postRes=await fetch(SB_URL+'/rest/v1/events',{method:'POST',headers,body:JSON.stringify(payload)});
+    // INSERT
+    const iH={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
+    syncLog('POST (insert)…','working');
+    const postRes=await fetch(SB_URL+'/rest/v1/events',{method:'POST',headers:iH,body:JSON.stringify(payload)});
     if(!postRes.ok){
-      const postErr=await postRes.text().catch(()=>'unknown');
-      syncLog('POST '+postRes.status+': '+postErr.slice(0,200),'err');
-      showToast('❌ '+postRes.status+': '+postErr.slice(0,60));
+      const e2=await postRes.text().catch(()=>'unknown');
+      syncLog('POST '+postRes.status+': '+e2.slice(0,200),'err');
+      showToast('❌ POST '+postRes.status+': '+e2.slice(0,60));
       return;
     }
     syncLog('POST OK — '+d.venues.length+' venues inserted','ok');
@@ -922,7 +930,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.9</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v3.0</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -2714,27 +2722,20 @@ async function dmPull(){
   syncLog('Pulling from cloud…','working');
   try{
     const token=_sbAccessToken||SB_KEY;
-    const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
-    const url=SB_URL+'/rest/v1/events?select=id,type,updated_at&order=updated_at.desc';
-    const res=await fetch(url,{method:'GET',headers});
+    const h={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
+    const res=await fetch(SB_URL+'/rest/v1/events?select=id,type,updated_at&order=updated_at.desc',{method:'GET',headers:h});
     syncLog('Response: '+res.status,'info');
-    if(!res.ok){ syncLog('HTTP error','err'); return; }
+    if(!res.ok){ syncLog('HTTP error: '+res.status,'err'); return; }
     const rows=await res.json();
     syncLog('Rows returned: '+rows.length,'info');
-    const venueRow=rows.find(r=>r.id==='_venues');
-    if(venueRow){
-      syncLog('_venues row found (type='+venueRow.type+')','ok');
-    } else {
-      syncLog('_venues row NOT found in '+rows.length+' rows','err');
-      syncLog('Types present: '+[...new Set(rows.map(r=>r.type))].join(', '),'info');
-    }
+    const vRow=rows.find(r=>r.id==='_venues');
+    if(vRow){ syncLog('_venues row found (type='+vRow.type+')','ok'); }
+    else { syncLog('_venues NOT found. Types: '+[...new Set(rows.map(r=>r.type))].join(', '),'err'); }
     await pullFromSupabase(false);
     const d=getData();
     syncLog('Events: '+(d.events||[]).filter(e=>!e._deleted).length+' | Venues: '+d.venues.length,'ok');
     render();
-  } catch(e){
-    syncLog('Error: '+String(e),'err');
-  }
+  } catch(e){ syncLog('Error: '+String(e),'err'); }
 }
 
 
