@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pete's Apps v3.7</title>
+<title>Pete's Apps v3.8</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
 <style>
   :root {
@@ -374,7 +374,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v3.7</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v3.8</span></button>
 
   <button class="nav-btn" data-target="gut" style="--app-color:#3fb950" onclick="switchTo('gut', this)" title="Gut Journal">🫁</button>
   <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -401,6 +401,7 @@
     <div class="app-card pete-only" style="--card-color:#3fb950" onclick="switchTo('gut', document.querySelector('[data-target=gut]'))">
       <div class="card-icon">🫁</div>
       <div class="card-name">Gut Journal</div>
+      <div class="card-ver" id="ver-gut"></div>
       <div class="card-desc">Log food, symptoms, bowel movements and feelings. Tracks gut patterns over time.</div>
       <span class="card-tag">Health</span>
       <div class="card-stat muted" id="stat-gut"><span class="card-stat-dot"></span><span id="stat-gut-val">—</span></div>
@@ -409,6 +410,7 @@
     <div class="app-card" style="--card-color:#ffa657" onclick="switchTo('reading', document.querySelector('[data-target=reading]'))">
       <div class="card-icon">📚</div>
       <div class="card-name">Reading Tracker</div>
+      <div class="card-ver" id="ver-reading"></div>
       <div class="card-desc">Log books, track progress, manage your reading list and notes.</div>
       <span class="card-tag">Personal</span>
       <div class="card-stat muted" id="stat-reading"><span class="card-stat-dot"></span><span id="stat-reading-val">—</span></div>
@@ -417,6 +419,7 @@
     <div class="app-card pete-only" style="--card-color:#f78166" onclick="switchTo('fortnight', document.querySelector('[data-target=fortnight]'))">
       <div class="card-icon">📅</div>
       <div class="card-name">9-Day Fortnight Tracker</div>
+      <div class="card-ver" id="ver-fortnight"></div>
       <div class="card-desc">Track your 9-day fortnight work pattern, tasks and time entries.</div>
       <span class="card-tag">Work</span>
       <div class="card-stat muted" id="stat-fortnight"><span class="card-stat-dot"></span><span id="stat-fortnight-val">—</span></div>
@@ -425,6 +428,7 @@
     <div class="app-card" style="--card-color:#f97316" onclick="switchTo('gat', document.querySelector('[data-target=gat]'))">
       <div class="card-icon">🎟</div>
       <div class="card-name">Gigs &amp; Trips</div>
+      <div class="card-ver" id="ver-gat"></div>
       <div class="card-desc">Unified gigs and trips — single events or multi-day holidays with full itinerary, costs and reviews.</div>
       <span class="card-tag">Events &amp; Travel</span>
       <div class="card-stat muted" id="stat-gat"><span class="card-stat-dot"></span><span id="stat-gat-val">—</span></div>
@@ -1127,6 +1131,108 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
+// ── App version display ────────────────────────────────────────────
+// Fetches each app's HTML file, parses the version string, caches in
+// localStorage. Refreshes silently in the background once per hour.
+const APP_FILES = {
+  gut:       'gut-tracker.html',
+  reading:   'reading-tracker.html',
+  fortnight: 'fortnight-tracker.html',
+  gat:       'GigsAndTrips.html',
+};
+
+// Each app uses a slightly different version string location — we try
+// a generic regex that matches v<digits>.<digits> near typical markers.
+function parseVersionFromHtml(html, appKey) {
+  // Patterns that appear near the version in each app's HTML:
+  // gut-tracker:       v\d+\.\d+ in title or header
+  // reading-tracker:   v1.x in the dash-title span
+  // fortnight:         v1.x in the logo-sub span
+  // GigsAndTrips:      v\d+.\d+ in a version span
+  // A single regex covers all of them — find first vN.N occurrence
+  const m = html.match(/\bv(\d+\.\d+)\b/);
+  return m ? 'v' + m[1] : null;
+}
+
+function setCardVersion(appKey, ver) {
+  const el = document.getElementById('ver-' + appKey);
+  if (!el) return;
+  if (ver) {
+    el.textContent = ver;
+    el.classList.add('loaded');
+  }
+}
+
+async function fetchAppVersion(appKey, file) {
+  try {
+    // Bust cache with a 1-hour timestamp bucket so we pick up new deploys
+    const bucket = Math.floor(Date.now() / 3600000); // changes every hour
+    const res = await fetch(file + '?_v=' + bucket, { cache: 'force-cache' });
+    if (!res.ok) return null;
+    // Only read first 4KB — version strings are always near the top
+    const reader = res.body.getReader();
+    let text = '';
+    while (text.length < 4096) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+    }
+    reader.cancel();
+    return parseVersionFromHtml(text, appKey);
+  } catch(e) {
+    return null;
+  }
+}
+
+const VER_CACHE_KEY = 'pal_app_versions';
+const VER_CACHE_TTL = 3600000; // 1 hour
+
+function loadCachedVersions() {
+  try {
+    const raw = localStorage.getItem(VER_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (Date.now() - (cached.ts || 0) > VER_CACHE_TTL) return null;
+    return cached.versions;
+  } catch(e) { return null; }
+}
+
+function saveCachedVersions(versions) {
+  try {
+    localStorage.setItem(VER_CACHE_KEY, JSON.stringify({ ts: Date.now(), versions }));
+  } catch(e) {}
+}
+
+async function refreshAppVersions() {
+  // Show cached versions immediately (instant)
+  const cached = loadCachedVersions();
+  if (cached) {
+    Object.entries(cached).forEach(([k, v]) => setCardVersion(k, v));
+  }
+
+  // Fetch fresh versions in the background (parallel)
+  const results = await Promise.all(
+    Object.entries(APP_FILES).map(async ([key, file]) => {
+      const ver = await fetchAppVersion(key, file);
+      return [key, ver];
+    })
+  );
+
+  const versions = {};
+  results.forEach(([key, ver]) => {
+    if (ver) {
+      versions[key] = ver;
+      setCardVersion(key, ver);
+    }
+  });
+
+  if (Object.keys(versions).length) saveCachedVersions(versions);
+}
+
+// Run once the page is interactive
+refreshAppVersions();
+
+
 </script>
 
 </body>
