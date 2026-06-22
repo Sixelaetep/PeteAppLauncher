@@ -685,6 +685,27 @@ async function pushAllEvents(){
   }
 }
 
+async function pushAllEventsLogged(){
+  const events=getData().events.filter(e=>!e._deleted);
+  const user_id=getUserId();
+  if(!user_id){ syncLog('Not signed in','err'); return; }
+  syncLog('Pushing '+events.length+' events…','working');
+  try{
+    const rows=events.map(ev=>({
+      id:ev.id, user_id, type:ev.type,
+      start_date:ev.type==='gig'?ev.date:ev.startDate,
+      end_date:ev.type==='gig'?ev.date:ev.endDate,
+      data:ev, updated_at:ev.updatedAt||new Date().toISOString()
+    }));
+    await sbFetch('POST','events?on_conflict=id,user_id',rows);
+    syncLog('Events OK — '+events.length+' pushed','ok');
+    syncLog('Pushing venues…','working');
+    await pushVenuesNow();
+  } catch(e){
+    syncLog('Push failed: '+String(e).slice(0,150),'err');
+  }
+}
+
 async function deleteFromSupabase(id){
   // Kept for any legacy calls — soft-delete via pushEvent is preferred
   try{ await sbFetch('DELETE','events?id=eq.'+encodeURIComponent(id)); }
@@ -716,25 +737,30 @@ async function pushVenuesNow(){
   const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
   const payload={id:'_venues',user_id,type:'venues',start_date:null,end_date:null,data:{venues:d.venues},updated_at:new Date().toISOString()};
   try{
-    // PATCH with user_id in filter so RLS UPDATE policy is satisfied.
-    // Trust the HTTP status code — do NOT rely on response body.
-    // Supabase may return 200/204 with no body on a successful PATCH.
+    // PATCH — update existing row. Trust HTTP status, not response body.
     const patchUrl=SB_URL+'/rest/v1/events?id=eq._venues&user_id=eq.'+encodeURIComponent(user_id);
     const patchRes=await fetch(patchUrl,{method:'PATCH',headers,body:JSON.stringify(payload)});
     if(patchRes.ok){
-      // 200 or 204 — PATCH worked, row updated. Done.
+      syncLog('PATCH OK — '+d.venues.length+' venues updated','ok');
       showToast('✓ '+d.venues.length+' venues saved to cloud');
       return;
     }
-    // PATCH returned an error status — row may not exist yet, try INSERT
+    const patchErr=await patchRes.text().catch(()=>'');
+    syncLog('PATCH '+patchRes.status+': '+patchErr.slice(0,120),'info');
+    // PATCH failed — row may not exist, try INSERT
+    syncLog('Trying INSERT…','working');
     const postRes=await fetch(SB_URL+'/rest/v1/events',{method:'POST',headers,body:JSON.stringify(payload)});
     if(!postRes.ok){
-      const txt=await postRes.text().catch(()=>'');
-      throw new Error('SB '+postRes.status+': '+txt);
+      const postErr=await postRes.text().catch(()=>'unknown');
+      syncLog('POST '+postRes.status+': '+postErr.slice(0,200),'err');
+      showToast('❌ '+postRes.status+': '+postErr.slice(0,60));
+      return;
     }
+    syncLog('POST OK — '+d.venues.length+' venues inserted','ok');
     showToast('✓ '+d.venues.length+' venues saved to cloud');
   } catch(e){
-    showToast('❌ Venues save failed — check connection');
+    syncLog('Network error: '+String(e),'err');
+    showToast('❌ Network error: '+String(e).slice(0,50));
     console.warn('[GAT] Venues push failed:',e);
   }
 }
@@ -745,25 +771,38 @@ async function pushVenuesNow(){
 async function resetVenuesInSupabase(venueList){
   const user_id=getUserId();
   if(!user_id){ showToast('❌ Not signed in'); return; }
-  showToast('Step 1/3: clearing old venues…');
+  showToast('Resetting venues…');
+}
+
+async function confirmResetVenuesLogged(venueList){
+  const user_id=getUserId();
+  if(!user_id){ syncLog('Not signed in','err'); return; }
+  const token=_sbAccessToken||SB_KEY;
+  const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
+  // Step 1: DELETE
+  syncLog('Step 1: DELETE existing _venues row…','working');
   try{
-    const token=_sbAccessToken||SB_KEY;
-    const h={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
-    const delRes=await fetch(SB_URL+'/rest/v1/events?id=eq._venues&user_id=eq.'+encodeURIComponent(user_id),{method:'DELETE',headers:h});
+    const delUrl=SB_URL+'/rest/v1/events?id=eq._venues&user_id=eq.'+encodeURIComponent(user_id);
+    const delRes=await fetch(delUrl,{method:'DELETE',headers});
     if(delRes.ok){
-      showToast('Step 2/3: saving '+venueList.length+' venues…');
+      syncLog('DELETE OK (status '+delRes.status+')','ok');
     } else {
-      showToast('Step 2/3: saving '+venueList.length+' venues…');
+      const txt=await delRes.text().catch(()=>'');
+      syncLog('DELETE '+delRes.status+': '+txt.slice(0,200),'err');
+      return;
     }
   } catch(e){
-    showToast('Step 2/3: saving '+venueList.length+' venues…');
+    syncLog('DELETE network error: '+String(e),'err');
+    return;
   }
+  // Step 2: update local state
   const d=getData();
   d.venues=venueList;
   _pulling=true; saveData(d); _pulling=false;
-  await pushVenuesNow(); // shows ✓ or ❌ toast itself
-  // If push succeeded, show final instruction
-  setTimeout(()=>showToast('Step 3/3: now pull on your other devices'),3000);
+  // Step 3: INSERT via pushVenuesNow (logs itself)
+  syncLog('Step 2: INSERT '+venueList.length+' venues…','working');
+  await pushVenuesNow();
+  syncLog('Done — pull on other devices now','ok');
   renderVenues();
 }
 
@@ -2632,11 +2671,11 @@ function onItemDragEnd(e){
 // ═══════════════════════════════════════════════════════════════════
 function showDataManager(){
   const d=getData();
-  const gigs=d.events.filter(e=>e.type==='gig').length;
-  const trips=d.events.filter(e=>e.type==='trip').length;
+  const gigs=d.events.filter(e=>e.type==='gig'&&!e._deleted).length;
+  const trips=d.events.filter(e=>e.type==='trip'&&!e._deleted).length;
   const venues=d.venues.length;
   showModal(`<div class="modal-hdr">
-      <div class="modal-title">💾 Backup &amp; Import</div>
+      <div class="modal-title">💾 Backup &amp; Sync</div>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body">
@@ -2644,33 +2683,72 @@ function showDataManager(){
         <strong>${gigs} gig${gigs!==1?'s':''}</strong> · <strong>${trips} trip${trips!==1?'s':''}</strong> · <strong>${venues} venue${venues!==1?'s':''}</strong>
       </div>
 
-      <div class="section-hdr" style="margin-top:0">Export</div>
-      <button class="btn btn-pri" style="margin-bottom:10px" onclick="closeModal();exportJSON()">⬇️ Download backup (JSON)</button>
-
-      <div class="section-hdr">Sync</div>
-      <p style="font-size:13px;color:var(--ink3);margin-bottom:10px;line-height:1.6">
-        If events are missing on this device, pull the latest from the cloud. If you've just imported a file, push everything up so other devices can see it.
-      </p>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <button class="btn btn-ghost" style="flex:1" onclick="closeModal();pullFromSupabase().then(render)">⬆️ Pull from cloud</button>
-        <button class="btn btn-ghost" style="flex:1" onclick="closeModal();pushAllEvents()">⬇️ Push to cloud</button>
+      <div class="section-hdr" style="margin-top:0">Sync</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="btn btn-ghost" style="flex:1" onclick="dmPull()">⬇️ Pull from cloud</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="dmPush()">⬆️ Push to cloud</button>
       </div>
 
+      <div class="section-hdr">Venues</div>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="dmResetVenues()">📍 Reset cloud venues from local</button>
+
+      <div class="section-hdr">Export</div>
+      <button class="btn btn-pri" style="margin-bottom:10px;width:100%" onclick="closeModal();exportJSON()">⬇️ Download backup (JSON)</button>
+
       <div class="section-hdr">Import</div>
-      <p style="font-size:13px;color:var(--ink3);margin-bottom:10px;line-height:1.6">
-        Import a <code>gigs-and-trips.json</code> backup file. New events and venues are merged in — nothing already in the app is deleted.
-      </p>
-      <button class="btn btn-ghost" style="margin-bottom:8px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
+      <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
 
-      <div class="section-hdr" style="margin-top:16px">Venues</div>
-      <p style="font-size:13px;color:var(--ink3);margin-bottom:10px;line-height:1.6">
-        If venues are out of sync across devices, use this to wipe and rebuild the cloud venue list from your current local list. Run once on the device with the correct venues, then pull on other devices.
-      </p>
-      <button class="btn btn-ghost" style="width:100%;margin-bottom:8px" onclick="closeModal();confirmResetVenues()">📍 Reset cloud venues from local</button>
+      <div class="section-hdr" style="margin-top:8px">Status log</div>
+      <div id="syncLogArea" style="background:var(--surf);border-radius:var(--rsm);padding:8px 10px;min-height:48px;max-height:160px;overflow-y:auto;font-size:12px;color:var(--ink3);font-family:monospace;margin-bottom:12px">
+        <div style="color:var(--ink4);font-size:11px">Tap an action above to see results here</div>
+      </div>
 
-      <div class="section-hdr" style="margin-top:8px">Danger zone</div>
+      <div class="section-hdr">Danger zone</div>
       <button class="btn btn-danger" style="width:100%" onclick="confirmClearAll()">🗑 Clear all data</button>
     </div>`);
+}
+
+// Data manager actions — keep modal open, log results in the status area
+function dmPull(){
+  clearSyncLog();
+  syncLog('Pulling from cloud…','working');
+  pullFromSupabase(false).then(()=>{
+    const d=getData();
+    syncLog('Events: '+(d.events||[]).filter(e=>!e._deleted).length+' | Venues: '+d.venues.length,'ok');
+    render();
+  }).catch(e=>syncLog('Pull failed: '+e.message,'err'));
+}
+
+function dmPush(){
+  clearSyncLog();
+  syncLog('Pushing to cloud…','working');
+  pushAllEventsLogged();
+}
+
+function dmResetVenues(){
+  clearSyncLog();
+  const venueList=normaliseVenues(getData().venues);
+  syncLog('Starting venue reset ('+venueList.length+' venues)…','working');
+  confirmResetVenuesLogged(venueList);
+}
+
+// ── Sync log — persistent status panel inside the data manager modal ──
+function syncLog(msg, type){
+  // type: 'info' | 'ok' | 'err' | 'working'
+  const el=document.getElementById('syncLogArea');
+  if(!el) return;
+  const colours={info:'var(--ink3)',ok:'var(--ok)',err:'var(--danger)',working:'var(--acc)'};
+  const icons={info:'',ok:'✓ ',err:'❌ ',working:'⏳ '};
+  const line=document.createElement('div');
+  line.style.cssText='padding:4px 0;border-bottom:1px solid var(--bdr);font-size:12px;color:'+colours[type||'info']+';word-break:break-all;line-height:1.4';
+  line.textContent=(icons[type||'info'])+msg;
+  el.appendChild(line);
+  el.scrollTop=el.scrollHeight;
+}
+
+function clearSyncLog(){
+  const el=document.getElementById('syncLogArea');
+  if(el) el.innerHTML='';
 }
 
 function exportJSON(){
