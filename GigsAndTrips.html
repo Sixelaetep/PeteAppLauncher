@@ -716,24 +716,27 @@ async function pushVenuesNow(){
   const h={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'return=representation'};
   const payload={id:'_venues',user_id,type:'venues',start_date:null,end_date:null,data:{venues:d.venues},updated_at:new Date().toISOString()};
   try{
-    // PATCH first — updates the row if it exists (no on_conflict needed)
+    // Try PATCH first — updates the row if it exists, no on_conflict needed
     const patchRes=await fetch(SB_URL+'/rest/v1/events?id=eq._venues',{method:'PATCH',headers:h,body:JSON.stringify(payload)});
     if(patchRes.ok){
       const patched=await patchRes.json().catch(()=>[]);
       if(Array.isArray(patched)&&patched.length>0){
-        console.log('[GAT] Venues updated via PATCH: '+d.venues.length+' venues');
+        showToast('✓ '+d.venues.length+' venues saved to cloud');
         return;
       }
     }
-    // Row didn't exist — INSERT (plain POST, no on_conflict)
-    const postH={...h}; delete postH['Prefer'];
+    // Row didn’t exist yet — INSERT (plain POST, no on_conflict)
+    const postH={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
     const postRes=await fetch(SB_URL+'/rest/v1/events',{method:'POST',headers:postH,body:JSON.stringify(payload)});
     if(!postRes.ok){
       const txt=await postRes.text().catch(()=>'');
       throw new Error('SB '+postRes.status+': '+txt);
     }
-    console.log('[GAT] Venues inserted via POST: '+d.venues.length+' venues');
-  } catch(e){ console.warn('[GAT] Venues push failed:',e); }
+    showToast('✓ '+d.venues.length+' venues saved to cloud');
+  } catch(e){
+    showToast('❌ Venues save failed — check connection');
+    console.warn('[GAT] Venues push failed:',e);
+  }
 }
 
 // Wipe the _venues row in Supabase and replace with the supplied list.
@@ -742,21 +745,25 @@ async function pushVenuesNow(){
 async function resetVenuesInSupabase(venueList){
   const user_id=getUserId();
   if(!user_id){ showToast('❌ Not signed in'); return; }
-  showToast('Resetting venues…');
+  showToast('Step 1/3: clearing old venues…');
   try{
-    // DELETE existing _venues row so pushVenuesNow will INSERT fresh
     const token=_sbAccessToken||SB_KEY;
     const h={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
     const delRes=await fetch(SB_URL+'/rest/v1/events?id=eq._venues',{method:'DELETE',headers:h});
-    console.log('[GAT] Reset: DELETE status='+delRes.status);
+    if(delRes.ok){
+      showToast('Step 2/3: saving '+venueList.length+' venues…');
+    } else {
+      showToast('Step 2/3: saving '+venueList.length+' venues…');
+    }
   } catch(e){
-    console.log('[GAT] Reset: DELETE error (may not exist):',e.message);
+    showToast('Step 2/3: saving '+venueList.length+' venues…');
   }
   const d=getData();
   d.venues=venueList;
   _pulling=true; saveData(d); _pulling=false;
-  await pushVenuesNow();
-  showToast('✓ '+venueList.length+' venues pushed to cloud — pull on other devices now');
+  await pushVenuesNow(); // shows ✓ or ❌ toast itself
+  // If push succeeded, show final instruction
+  setTimeout(()=>showToast('Step 3/3: now pull on your other devices'),3000);
   renderVenues();
 }
 
@@ -783,10 +790,6 @@ async function pullFromSupabase(silent){
   try{
     const rows=await sbFetch('GET','events?select=id,data,updated_at&order=updated_at.desc');
     if(!rows){ if(!silent){setSyncDot('ok');setTimeout(()=>setSyncDot('idle'),2000);} return; }
-
-    console.log('[GAT] Pull: got '+rows.length+' rows from Supabase');
-    const venueRow=rows.find(r=>r.id==='_venues');
-    console.log('[GAT] Pull: _venues row present='+!!venueRow+(venueRow?' count='+((venueRow.data&&venueRow.data.venues)||[]).length:''));
 
     const d=getData();
     const localMap={};
@@ -818,11 +821,12 @@ async function pullFromSupabase(silent){
       const before=JSON.stringify(d.venues||[]);
       d.venues=remoteVenues;
       const after=JSON.stringify(d.venues);
-      if(before!==after) eventsChanged=true;
-      console.log('[GAT] Pull: remote venues='+remoteVenues.length+' (replaced local)');
+      const venuesUpdated=(before!==after);
+      if(venuesUpdated) eventsChanged=true;
+      // Show venue count in toast so user can confirm correct number arrived
+      if(!silent) showToast(venuesUpdated?'✓ Venues updated: '+remoteVenues.length+' venues':'✓ Venues: '+remoteVenues.length+' (up to date)');
     } else {
-      // No venues row in Supabase at all — push local list up once to seed it
-      console.log('[GAT] Pull: no remote venues row — pushing '+d.venues.length+' local venues to seed Supabase');
+      // No venues row in Supabase — push local list up to seed it
       d.venues=normaliseVenues(d.venues);
       _pulling=true; saveData(d); _pulling=false;
       await pushVenuesNow();
