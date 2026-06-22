@@ -321,7 +321,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.1</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.2</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -560,6 +560,10 @@ let _pulling=false; // prevents venue push being scheduled during a pull
 
 function saveData(d){
   localStorage.setItem(SK,JSON.stringify(d));
+  // Also write a tombstone-free copy under SK+'_clean' for the launcher card.
+  // The launcher reads localStorage directly so it must not see _deleted events.
+  const clean={...d,events:(d.events||[]).filter(ev=>!ev._deleted)};
+  localStorage.setItem(SK+'_clean',JSON.stringify(clean));
   if(!_pulling) scheduleVenuesPush();
   // Broadcast to launcher
   try{ const bc=new BroadcastChannel('pal_gat_updated'); bc.postMessage({type:'GAT_DATA_UPDATED'}); bc.close(); } catch(e){}
@@ -687,25 +691,21 @@ async function deleteFromSupabase(id){
   catch(e){ console.warn('Delete sync failed:',e); }
 }
 
-// ── Venues sync ───────────────────────────────────────────────────
-// Venues are stored as a single synthetic row in the events table.
-// Key design decisions:
-//   1. Row id is '_venues' keyed by user_id — each user has their own row.
-//      This is fine for same-user/multi-device because RLS returns YOUR row.
-//   2. On pull, we do NOT push venues back immediately — this caused a
-//      race condition where the push would overwrite the just-pulled remote
-//      data with stale local data. Instead we only push if local has
-//      additions the remote did not have.
-//   3. saveData() schedules a debounced push (3s). The _pulling flag
-//      suppresses this during a pull so we never push stale data.
+// ── Venues sync ─────────────────────────────────────────────────────
+// Design: Remote ALWAYS wins. No merge, no push-back on pull.
+// Venues are pushed only when you explicitly add/edit/delete one.
+// This eliminates the ping-pong where two devices kept overwriting
+// each other's venue lists during pulls.
+//
+// The _venues row uses id='_venues' + your user_id via RLS.
+// All your devices share the same user_id so they share one row.
 
 let _venuesSyncTimer=null;
 function scheduleVenuesPush(){
   clearTimeout(_venuesSyncTimer);
-  _venuesSyncTimer=setTimeout(pushVenuesNow,3000);
+  _venuesSyncTimer=setTimeout(pushVenuesNow,2000);
 }
 
-// Direct venues push — always writes current local venues to Supabase
 async function pushVenuesNow(){
   clearTimeout(_venuesSyncTimer);
   const d=getData();
@@ -714,21 +714,29 @@ async function pushVenuesNow(){
   if(!user_id) return;
   try{
     await sbFetch('POST','events?on_conflict=id',{
-      id:'_venues',
-      user_id,
-      type:'venues',
-      start_date:null,
-      end_date:null,
+      id:'_venues', user_id, type:'venues',
+      start_date:null, end_date:null,
       data:{venues:d.venues},
       updated_at:new Date().toISOString()
     });
-    console.log('Venues pushed: '+d.venues.length+' venues');
-  } catch(e){ console.warn('Venues push failed:',e); }
+    console.log('[GAT] Venues pushed to Supabase: '+d.venues.length);
+  } catch(e){ console.warn('[GAT] Venues push failed:',e); }
+}
+
+// Wipe the _venues row in Supabase and replace with the supplied list.
+// Called once from the reset tool to establish a clean canonical list.
+async function resetVenuesInSupabase(venueList){
+  const user_id=getUserId();
+  if(!user_id){ showToast('❌ Not signed in'); return; }
+  const d=getData();
+  d.venues=venueList;
+  _pulling=true; saveData(d); _pulling=false;
+  await pushVenuesNow();
+  showToast('✓ Venues reset — '+venueList.length+' venues pushed to cloud');
+  renderVenues();
 }
 
 // ── Periodic background poll ──────────────────────────────────────
-// Pulls from Supabase every 60s while app is in foreground.
-// This is what makes changes on Device A appear on Device B.
 let _pollTimer=null;
 function startPoll(){
   stopPoll();
@@ -736,28 +744,23 @@ function startPoll(){
 }
 function stopPoll(){ clearInterval(_pollTimer); _pollTimer=null; }
 
-// Pull immediately when switching back to the app
 document.addEventListener('visibilitychange',()=>{
   if(!document.hidden && window._gatInited) pullFromSupabase(true);
 });
 
-// silent=true means no spinner unless data actually changed
+// ── Pull from Supabase ────────────────────────────────────────────
+// Events: remote wins if updatedAt >= local.
+// Venues: remote REPLACES local. No merge. No push-back.
+//         Venues are only pushed when user explicitly changes them.
 async function pullFromSupabase(silent){
   if(!silent) setSyncDot('syncing');
-  // Stop any pending venue push — we're about to get fresh data from Supabase
-  clearTimeout(_venuesSyncTimer);
+  clearTimeout(_venuesSyncTimer); // stop any pending venue push during pull
 
   try{
-    // Fetch all rows ordered by updated_at desc so newest wins
-    // IMPORTANT: do not order by start_date — the venues row has start_date=null
-    // and in some PostgREST versions null rows are excluded from start_date ordering
     const rows=await sbFetch('GET','events?select=id,data,updated_at&order=updated_at.desc');
     if(!rows){ if(!silent){setSyncDot('ok');setTimeout(()=>setSyncDot('idle'),2000);} return; }
 
     const d=getData();
-
-    // Build local map including tombstones — we need deleted records to
-    // prevent them resurrecting when a stale device pushes next time
     const localMap={};
     d.events.forEach(ev=>{ localMap[ev.id]=ev; });
 
@@ -766,15 +769,14 @@ async function pullFromSupabase(silent){
 
     rows.forEach(row=>{
       if(!row.data) return;
-      // Venues synthetic row — id='_venues'
       if(row.id==='_venues'){
+        // Venues row — capture it, never add to events map
         if(Array.isArray(row.data.venues)) remoteVenues=row.data.venues;
-        return; // never add to events map
+        return;
       }
       const remote=row.data;
       if(!remote||!remote.id) return;
       const local=localMap[remote.id];
-      // Remote wins if it's newer or we have no local copy
       if(!local||(remote.updatedAt||'')>=(local.updatedAt||'')){
         if(JSON.stringify(local)!==JSON.stringify(remote)){
           localMap[remote.id]=remote;
@@ -783,39 +785,28 @@ async function pullFromSupabase(silent){
       }
     });
 
-    // ── Venue reconciliation ─────────────────────────────────────
-    // Remote is authoritative. We layer in any local-only venues on top.
-    // We only push back if local had additions not in remote.
-    const localVenues=normaliseVenues(d.venues);
-    let needVenuePush=false;
-
+    // ── Venues: remote replaces local. Full stop. ─────────────────
     if(remoteVenues&&remoteVenues.length){
-      const vmap={};
-      remoteVenues.forEach(v=>{ vmap[v.name.toLowerCase()]=v; });
-      localVenues.forEach(v=>{
-        const k=v.name.toLowerCase();
-        if(!vmap[k]){ vmap[k]=v; needVenuePush=true; }           // local-only addition
-        else if(v.mapUrl&&!vmap[k].mapUrl){ vmap[k].mapUrl=v.mapUrl; needVenuePush=true; } // local has richer data
-      });
-      d.venues=Object.values(vmap).sort((a,b)=>a.name.localeCompare(b.name));
-      console.log('Pull: remote venues='+remoteVenues.length+' merged='+d.venues.length+' needPush='+needVenuePush);
+      const before=JSON.stringify(d.venues||[]);
+      d.venues=remoteVenues;
+      const after=JSON.stringify(d.venues);
+      if(before!==after) eventsChanged=true;
+      console.log('[GAT] Pull: remote venues='+remoteVenues.length+' (replaced local)');
     } else {
-      // No venues row in Supabase yet — push local list up
-      d.venues=localVenues;
-      needVenuePush=true;
-      console.log('Pull: no remote venues row, will push '+d.venues.length+' local venues');
+      // No venues row in Supabase at all — push local list up once to seed it
+      console.log('[GAT] Pull: no remote venues row — pushing '+d.venues.length+' local venues to seed Supabase');
+      d.venues=normaliseVenues(d.venues);
+      _pulling=true; saveData(d); _pulling=false;
+      await pushVenuesNow();
+      if(!silent){setSyncDot('ok');setTimeout(()=>setSyncDot('idle'),2000);}
+      render();
+      return;
     }
 
-    // Persist all events (including tombstones) so deletes survive locally
+    // Persist events including tombstones
     d.events=Object.values(localMap);
-
-    // Save without triggering the debounced venue push (_pulling=true suppresses it)
-    _pulling=true;
-    saveData(d);
-    _pulling=false;
-
-    // Only push venues if we had local additions — not on every pull
-    if(needVenuePush) await pushVenuesNow();
+    _pulling=true; saveData(d); _pulling=false;
+    // NO pushVenuesNow() here — remote won, nothing to push back
 
     if(!silent){
       setSyncDot('ok');
@@ -826,7 +817,7 @@ async function pullFromSupabase(silent){
     }
     render();
   } catch(e){
-    console.warn('Pull failed:',e);
+    console.warn('[GAT] Pull failed:',e);
     if(!silent){ setSyncDot('err'); setTimeout(()=>setSyncDot('idle'),4000); }
   }
 }
@@ -863,7 +854,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.1</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.2</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -2642,7 +2633,13 @@ function showDataManager(){
       </p>
       <button class="btn btn-ghost" style="margin-bottom:8px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
 
-      <div class="section-hdr" style="margin-top:16px">Danger zone</div>
+      <div class="section-hdr" style="margin-top:16px">Venues</div>
+      <p style="font-size:13px;color:var(--ink3);margin-bottom:10px;line-height:1.6">
+        If venues are out of sync across devices, use this to wipe and rebuild the cloud venue list from your current local list. Run once on the device with the correct venues, then pull on other devices.
+      </p>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:8px" onclick="closeModal();confirmResetVenues()">📍 Reset cloud venues from local</button>
+
+      <div class="section-hdr" style="margin-top:8px">Danger zone</div>
       <button class="btn btn-danger" style="width:100%" onclick="confirmClearAll()">🗑 Clear all data</button>
     </div>`);
 }
@@ -2652,6 +2649,27 @@ function exportJSON(){
   const exportData={...d,events:(d.events||[]).filter(ev=>!ev._deleted)};
   window.dlJSON(exportData,'gigs-and-trips.json');
   showToast('Backup downloaded ✓');
+}
+
+function confirmResetVenues(){
+  const d=getData();
+  const venues=normaliseVenues(d.venues);
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">📍 Reset cloud venues</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px;color:var(--ink2);line-height:1.6;margin-bottom:16px">
+        This will overwrite the cloud venue list with your <strong>${venues.length} local venues</strong>. All other devices will get this list on their next pull.
+      </p>
+      <p style="font-size:13px;color:var(--ink3);line-height:1.5;margin-bottom:16px">
+        Make sure you're on the device with the most complete venue list before doing this.
+      </p>
+      <div class="form-actions">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-pri" onclick="closeModal();resetVenuesInSupabase(normaliseVenues(getData().venues))">Reset venues</button>
+      </div>
+    </div>`);
 }
 
 function handleImport(inp){
