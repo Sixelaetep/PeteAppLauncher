@@ -321,7 +321,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.0</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.1</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -568,9 +568,9 @@ function saveData(d){
 function uid(){ return 'gat_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7); }
 function genId(){ return 'id_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6); }
 
-function getGigs(){ return getData().events.filter(e=>e.type==='gig'); }
-function getTrips(){ return getData().events.filter(e=>e.type==='trip'); }
-function getEvent(id){ return getData().events.find(e=>e.id===id)||null; }
+function getGigs(){ return getData().events.filter(e=>e.type==='gig'&&!e._deleted); }
+function getTrips(){ return getData().events.filter(e=>e.type==='trip'&&!e._deleted); }
+function getEvent(id){ const ev=getData().events.find(e=>e.id===id); return (ev&&!ev._deleted)?ev:null; }
 
 function saveEvent(ev){
   const d=getData();
@@ -582,9 +582,15 @@ function saveEvent(ev){
 function deleteEvent(id){
   const d=getData();
   const ev=d.events.find(e=>e.id===id);
-  d.events=d.events.filter(e=>e.id!==id);
+  if(!ev) return;
+  // Soft-delete: mark deleted so it vanishes from UI immediately.
+  // Push the tombstone to Supabase — other devices see deletion on next pull.
+  ev._deleted=true;
+  ev.updatedAt=new Date().toISOString();
+  const i=d.events.findIndex(e=>e.id===id);
+  d.events[i]=ev;
   saveData(d);
-  if(ev) deleteFromSupabase(id);
+  pushEvent(ev); // pushes the _deleted:true record to Supabase
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -606,7 +612,7 @@ async function sbFetch(method,path,body){
   return ct.includes('json')?res.json():null;
 }
 
-function setSyncDot(state){
+function setSyncDot(state,customMsg){
   const bar=document.getElementById('syncBar'), msg=document.getElementById('syncBarMsg');
   const main=document.getElementById('appMain');
   if(!bar) return;
@@ -616,7 +622,7 @@ function setSyncDot(state){
   } else {
     bar.className='sync-bar visible '+state;
     if(main) main.style.top='calc(var(--hdr) + 26px)';
-    if(msg) msg.textContent=state==='syncing'?'Syncing…':state==='ok'?'Saved to cloud':'Sync failed';
+    if(msg) msg.textContent=customMsg||(state==='syncing'?'Syncing\u2026':state==='ok'?'Saved to cloud':'Sync failed');
   }
 }
 
@@ -635,7 +641,7 @@ function pushEvent(ev){
     setSyncDot('syncing');
     try{
       const user_id=getUserId();
-      if(!user_id) throw new Error('No user_id — not authenticated');
+      if(!user_id) throw new Error('No user_id \u2014 not authenticated');
       await sbFetch('POST','events?on_conflict=id',{
         id:ev.id, user_id, type:ev.type,
         start_date:ev.type==='gig'?ev.date:ev.startDate,
@@ -670,7 +676,7 @@ async function pushAllEvents(){
     await pushVenues();
     setSyncDot('ok');
     setTimeout(()=>setSyncDot('idle'),2000);
-    showToast('Synced '+events.length+' events to cloud ✓');
+    showToast('Synced '+events.length+' events to cloud \u2713');
   } catch(e){
     console.error('pushAllEvents failed:',e);
     setSyncDot('err');
@@ -678,18 +684,15 @@ async function pushAllEvents(){
   }
 }
 
-async function deleteFromSupabase(id){
-  try{ await sbFetch('DELETE','events?id=eq.'+encodeURIComponent(id)); }
-  catch(e){ console.warn('Delete sync failed:',e); }
-}
-
 // ── Venues sync ───────────────────────────────────────────────────
-// Venues are stored as a single synthetic row in the events table
-// with id='_venues' and type='venues'. No schema change needed.
+// Venues use a FIXED synthetic row id '_venues_shared' regardless of
+// which user writes it. This means Device A and Device B always
+// read/write the same row and venues converge across all devices.
+// The old '_venues' id is still detected on pull for backwards compat.
 let _venuesSyncTimer=null;
 function scheduleVenuesPush(){
   clearTimeout(_venuesSyncTimer);
-  _venuesSyncTimer=setTimeout(pushVenues,5000); // 5s debounce
+  _venuesSyncTimer=setTimeout(pushVenues,3000);
 }
 
 async function pushVenues(){
@@ -699,7 +702,7 @@ async function pushVenues(){
   if(!user_id) return;
   try{
     await sbFetch('POST','events?on_conflict=id',{
-      id:'_venues',
+      id:'_venues_shared',
       user_id,
       type:'venues',
       start_date:null,
@@ -710,61 +713,92 @@ async function pushVenues(){
   } catch(e){ console.warn('Venues push failed:',e); }
 }
 
-async function pullFromSupabase(){
-  setSyncDot('syncing');
-  // Cancel any pending venue push so we don't overwrite cloud with stale local data
+// ── Periodic background poll ──────────────────────────────────────
+// Pulls from Supabase every 60s while app is in foreground.
+// This is what makes changes on Device A appear on Device B.
+let _pollTimer=null;
+function startPoll(){
+  stopPoll();
+  _pollTimer=setInterval(()=>{ if(!document.hidden) pullFromSupabase(true); },60000);
+}
+function stopPoll(){ clearInterval(_pollTimer); _pollTimer=null; }
+
+// Also pull immediately when tab becomes visible again after backgrounding
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden && window._gatInited) pullFromSupabase(true);
+});
+
+async function pullFromSupabase(silent){
+  if(!silent) setSyncDot('syncing');
   clearTimeout(_venuesSyncTimer);
   try{
-    const rows=await sbFetch('GET','events?select=id,data,updated_at&order=start_date.asc');
-    if(!rows||!rows.length){ setSyncDot('ok'); setTimeout(()=>setSyncDot('idle'),2000); return; }
+    const rows=await sbFetch('GET','events?select=id,data,updated_at&order=updated_at.desc');
+    if(!rows){ if(!silent){setSyncDot('ok');setTimeout(()=>setSyncDot('idle'),2000);} return; }
+
     const d=getData();
-    const map={};
-    d.events.forEach(ev=>{ map[ev.id]=ev; });
+    // Build map including soft-deleted tombstones — we need them to
+    // stop deleted events from being resurrected on the next pull
+    const localMap={};
+    d.events.forEach(ev=>{ localMap[ev.id]=ev; });
 
     let remoteVenues=null;
+    let changed=false;
+
     rows.forEach(row=>{
       if(!row.data) return;
-      // Venues synthetic row — detect by id only
-      if(row.id==='_venues'){
+      // Detect venues row — accept both ids for backwards compatibility
+      if(row.id==='_venues_shared'||row.id==='_venues'){
         if(Array.isArray(row.data.venues)) remoteVenues=row.data.venues;
-        return; // do not add to events map
+        return;
       }
       const remote=row.data;
-      const local=map[remote.id];
-      if(!local||(remote.updatedAt||'')>=(local.updatedAt||'')) map[remote.id]=remote;
+      if(!remote.id) return;
+      const local=localMap[remote.id];
+      // Remote wins if newer or unknown locally
+      if(!local||(remote.updatedAt||'')>=(local.updatedAt||'')){
+        if(JSON.stringify(local)!==JSON.stringify(remote)){
+          localMap[remote.id]=remote;
+          changed=true;
+        }
+      }
     });
 
-    d.events=Object.values(map);
-
     // ── Venue reconciliation ─────────────────────────────────────
-    // Always reconcile whether or not remote has a _venues row.
-    // Remote is authoritative base; local additions layer on top.
-    // Push merged result so all devices converge on the same list.
     const localVenues=normaliseVenues(d.venues);
+    let venuesChanged=false;
     if(remoteVenues&&remoteVenues.length){
       const vmap={};
       remoteVenues.forEach(v=>{ vmap[v.name.toLowerCase()]=v; });
       localVenues.forEach(v=>{
         const k=v.name.toLowerCase();
-        if(!vmap[k]) vmap[k]=v;
-        else if(v.mapUrl&&!vmap[k].mapUrl) vmap[k].mapUrl=v.mapUrl;
+        if(!vmap[k]){ vmap[k]=v; venuesChanged=true; }
+        else if(v.mapUrl&&!vmap[k].mapUrl){ vmap[k].mapUrl=v.mapUrl; venuesChanged=true; }
       });
       d.venues=Object.values(vmap).sort((a,b)=>a.name.localeCompare(b.name));
     } else {
-      d.venues=localVenues; // no remote row yet — use local
+      d.venues=localVenues;
     }
+
+    // Store ALL events (including tombstones) so deletions persist locally
+    d.events=Object.values(localMap);
     _pulling=true;
     saveData(d);
     _pulling=false;
-    // Push merged venues back so all devices converge
-    await pushVenues();
-    setSyncDot('ok');
-    setTimeout(()=>setSyncDot('idle'),2000);
+
+    // If local had venues not in remote, push merged list back
+    if(venuesChanged) await pushVenues();
+
+    if(!silent){
+      setSyncDot('ok');
+      setTimeout(()=>setSyncDot('idle'),2000);
+    } else if(changed){
+      setSyncDot('ok','Updated \u2713');
+      setTimeout(()=>setSyncDot('idle'),1500);
+    }
     render();
   } catch(e){
     console.warn('Pull failed:',e);
-    setSyncDot('err');
-    setTimeout(()=>setSyncDot('idle'),4000);
+    if(!silent){ setSyncDot('err'); setTimeout(()=>setSyncDot('idle'),4000); }
   }
 }
 
@@ -865,7 +899,7 @@ function render(){
   const today=new Date(); today.setHours(0,0,0,0);
   const todayStr=localDateStr(today);
   const d=getData();
-  const all=d.events||[];
+  const all=(d.events||[]).filter(ev=>!ev._deleted);
 
   let upcoming=[], past=[];
   all.forEach(ev=>{
@@ -944,7 +978,7 @@ function renderTripCard(t, d){
   const hasReview=t.review&&t.review.rating;
   const stars=hasReview?'★'.repeat(t.review.rating)+'☆'.repeat(5-t.review.rating):'';
   // Gigs linked to this trip
-  const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&e.tripId===t.id);
+  const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===t.id);
   const gigsHtml=linkedGigs.length
     ?`<div class="trip-gigs-row">🎸 <span>${linkedGigs.map(g=>`<span class="trip-gig-badge">${esc(g.name)}</span>`).join(' ')}</span></div>`:'';
 
@@ -1107,7 +1141,7 @@ function openGigDetail(id){
   const r=g.review||{};
   const hasReview=r.rating;
   const d=getData();
-  const linkedTrip=g.tripId?d.events.find(e=>e.id===g.tripId):null;
+  const linkedTrip=g.tripId?d.events.find(e=>e.id===g.tripId&&!e._deleted):null;
 
   showModal(`<div class="modal-hdr">
       <div class="modal-title">${esc(g.name)}</div>
@@ -1322,7 +1356,7 @@ function openTripDetail(id, tab){
   showPanel('trip');
   const s=sym(trip.currency||'GBP');
   const d=getData();
-  const linkedGigs=d.events.filter(e=>e.type==='gig'&&e.tripId===id);
+  const linkedGigs=d.events.filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===id);
 
   // Tab bar written into its own permanent div
   document.getElementById('tripTabBar').innerHTML=`<div class="trip-tabs">
@@ -1461,7 +1495,7 @@ function openDayView(tripId,dayId,scrollToItems){
 
   const s=sym(trip.currency||'GBP');
   const d=getData();
-  const linkedGigs=d.events.filter(e=>e.type==='gig'&&e.tripId===tripId&&e.date===day.date);
+  const linkedGigs=d.events.filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===tripId&&e.date===day.date);
   const items=day.items||[];
   const realItems=items.filter(it=>!it._placeholder);
   const placeholders=items.filter(it=>it._placeholder);
@@ -2193,7 +2227,7 @@ function renderReviews(){
   // Collect all reviewable items: gigs + trip-level + trip stop items
   let reviewed=[], unreviewed=[];
 
-  (d.events||[]).forEach(ev=>{
+  (d.events||[]).filter(ev=>!ev._deleted).forEach(ev=>{
     if(ev.type==='gig'){
       if(filterType==='trip') return;
       const entry={_kind:'gig',ev,date:ev.date,name:ev.name,rating:ev.review?.rating||0};
@@ -2406,7 +2440,7 @@ function saveVenueEdit(idx){
 // ═══════════════════════════════════════════════════════════════════
 function gigsConflictingTrips(gigDate, d){
   if(!gigDate) return [];
-  return (d.events||[]).filter(e=>e.type==='trip'&&e.status!=='Cancelled'&&e.status!=='Completed'&&e.startDate&&e.endDate&&gigDate>=e.startDate&&gigDate<=e.endDate);
+  return (d.events||[]).filter(e=>e.type==='trip'&&!e._deleted&&e.status!=='Cancelled'&&e.status!=='Completed'&&e.startDate&&e.endDate&&gigDate>=e.startDate&&gigDate<=e.endDate);
 }
 function needsDayOff(dateStr,timeStr){
   if(!dateStr||!timeStr) return false;
@@ -2583,8 +2617,11 @@ function showDataManager(){
 }
 
 function exportJSON(){
-  window.dlJSON(getData(),'gigs-and-trips.json');
-  showToast('Backup downloaded ✓');
+  const d=getData();
+  // Exclude soft-deleted tombstones from the backup — clean export only
+  const exportData={...d, events:(d.events||[]).filter(ev=>!ev._deleted)};
+  window.dlJSON(exportData,'gigs-and-trips.json');
+  showToast('Backup downloaded \u2713');
 }
 
 function handleImport(inp){
@@ -2734,8 +2771,8 @@ function timeOptions(selected){
 // ═══════════════════════════════════════════════════════════════════
 function onUnlocked(){
   render();
-  // Pull first. pullFromSupabase will push venues back if local has additions not in remote.
-  pullFromSupabase();
+  pullFromSupabase();   // initial full pull
+  startPoll();          // then poll every 60s
 }
 
 // Expose for launcher backup
