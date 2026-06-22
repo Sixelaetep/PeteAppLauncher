@@ -321,7 +321,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:15px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.4</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v2.5</span></h1>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Import">💾</button>
   </div>
@@ -716,8 +716,11 @@ async function pushVenuesNow(){
   const h={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':'return=representation'};
   const payload={id:'_venues',user_id,type:'venues',start_date:null,end_date:null,data:{venues:d.venues},updated_at:new Date().toISOString()};
   try{
-    // Try PATCH first — updates the row if it exists, no on_conflict needed
-    const patchRes=await fetch(SB_URL+'/rest/v1/events?id=eq._venues',{method:'PATCH',headers:h,body:JSON.stringify(payload)});
+    // PATCH filter includes user_id — RLS requires user_id=auth.uid() on UPDATE.
+    // Without it, RLS silently returns 0 rows matched even though the row exists,
+    // causing a false miss then a failing POST against the already-existing row.
+    const patchUrl=SB_URL+'/rest/v1/events?id=eq._venues&user_id=eq.'+encodeURIComponent(user_id);
+    const patchRes=await fetch(patchUrl,{method:'PATCH',headers:h,body:JSON.stringify(payload)});
     if(patchRes.ok){
       const patched=await patchRes.json().catch(()=>[]);
       if(Array.isArray(patched)&&patched.length>0){
@@ -725,7 +728,7 @@ async function pushVenuesNow(){
         return;
       }
     }
-    // Row didn’t exist yet — INSERT (plain POST, no on_conflict)
+    // Row doesn't exist yet — INSERT
     const postH={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
     const postRes=await fetch(SB_URL+'/rest/v1/events',{method:'POST',headers:postH,body:JSON.stringify(payload)});
     if(!postRes.ok){
@@ -749,7 +752,7 @@ async function resetVenuesInSupabase(venueList){
   try{
     const token=_sbAccessToken||SB_KEY;
     const h={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
-    const delRes=await fetch(SB_URL+'/rest/v1/events?id=eq._venues',{method:'DELETE',headers:h});
+    const delRes=await fetch(SB_URL+'/rest/v1/events?id=eq._venues&user_id=eq.'+encodeURIComponent(user_id),{method:'DELETE',headers:h});
     if(delRes.ok){
       showToast('Step 2/3: saving '+venueList.length+' venues…');
     } else {
@@ -826,13 +829,10 @@ async function pullFromSupabase(silent){
       // Show venue count in toast so user can confirm correct number arrived
       if(!silent) showToast(venuesUpdated?'✓ Venues updated: '+remoteVenues.length+' venues':'✓ Venues: '+remoteVenues.length+' (up to date)');
     } else {
-      // No venues row in Supabase — push local list up to seed it
+      // No venues row in Supabase yet — keep local venues as-is.
+      // Do NOT push from here: any device pulling would try to push,
+      // causing conflicts. Only explicit user actions push venues.
       d.venues=normaliseVenues(d.venues);
-      _pulling=true; saveData(d); _pulling=false;
-      await pushVenuesNow();
-      if(!silent){setSyncDot('ok');setTimeout(()=>setSyncDot('idle'),2000);}
-      render();
-      return;
     }
 
     // Persist events including tombstones
@@ -886,7 +886,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.4</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.5</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
