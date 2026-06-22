@@ -583,14 +583,12 @@ function deleteEvent(id){
   const d=getData();
   const ev=d.events.find(e=>e.id===id);
   if(!ev) return;
-  // Soft-delete: mark deleted so it vanishes from UI immediately.
-  // Push the tombstone to Supabase — other devices see deletion on next pull.
   ev._deleted=true;
   ev.updatedAt=new Date().toISOString();
   const i=d.events.findIndex(e=>e.id===id);
   d.events[i]=ev;
   saveData(d);
-  pushEvent(ev); // pushes the _deleted:true record to Supabase
+  pushEvent(ev);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -622,11 +620,10 @@ function setSyncDot(state,customMsg){
   } else {
     bar.className='sync-bar visible '+state;
     if(main) main.style.top='calc(var(--hdr) + 26px)';
-    if(msg) msg.textContent=customMsg||(state==='syncing'?'Syncing\u2026':state==='ok'?'Saved to cloud':'Sync failed');
+    if(msg) msg.textContent=customMsg||(state==='syncing'?'Syncing…':state==='ok'?'Saved to cloud':'Sync failed');
   }
 }
 
-// ── Resolve user_id from JWT once and cache it ────────────────────
 let _cachedUserId='';
 function getUserId(){
   if(_cachedUserId) return _cachedUserId;
@@ -641,7 +638,7 @@ function pushEvent(ev){
     setSyncDot('syncing');
     try{
       const user_id=getUserId();
-      if(!user_id) throw new Error('No user_id \u2014 not authenticated');
+      if(!user_id) throw new Error('No user_id');
       await sbFetch('POST','events?on_conflict=id',{
         id:ev.id, user_id, type:ev.type,
         start_date:ev.type==='gig'?ev.date:ev.startDate,
@@ -658,7 +655,6 @@ function pushEvent(ev){
   });
 }
 
-// Push every event in one batch — used after import and on first sync
 async function pushAllEvents(){
   const events=getData().events;
   if(!events.length) return;
@@ -673,10 +669,11 @@ async function pushAllEvents(){
       data:ev, updated_at:ev.updatedAt||new Date().toISOString()
     }));
     await sbFetch('POST','events?on_conflict=id',rows);
-    await pushVenues();
     setSyncDot('ok');
     setTimeout(()=>setSyncDot('idle'),2000);
-    showToast('Synced '+events.length+' events to cloud \u2713');
+    showToast('Synced '+events.length+' events to cloud ✓');
+    // Push venues separately after events are done
+    await pushVenuesNow();
   } catch(e){
     console.error('pushAllEvents failed:',e);
     setSyncDot('err');
@@ -684,25 +681,40 @@ async function pushAllEvents(){
   }
 }
 
+async function deleteFromSupabase(id){
+  // Kept for any legacy calls — soft-delete via pushEvent is preferred
+  try{ await sbFetch('DELETE','events?id=eq.'+encodeURIComponent(id)); }
+  catch(e){ console.warn('Delete sync failed:',e); }
+}
+
 // ── Venues sync ───────────────────────────────────────────────────
-// Venues use a FIXED synthetic row id '_venues_shared' regardless of
-// which user writes it. This means Device A and Device B always
-// read/write the same row and venues converge across all devices.
-// The old '_venues' id is still detected on pull for backwards compat.
+// Venues are stored as a single synthetic row in the events table.
+// Key design decisions:
+//   1. Row id is '_venues' keyed by user_id — each user has their own row.
+//      This is fine for same-user/multi-device because RLS returns YOUR row.
+//   2. On pull, we do NOT push venues back immediately — this caused a
+//      race condition where the push would overwrite the just-pulled remote
+//      data with stale local data. Instead we only push if local has
+//      additions the remote did not have.
+//   3. saveData() schedules a debounced push (3s). The _pulling flag
+//      suppresses this during a pull so we never push stale data.
+
 let _venuesSyncTimer=null;
 function scheduleVenuesPush(){
   clearTimeout(_venuesSyncTimer);
-  _venuesSyncTimer=setTimeout(pushVenues,3000);
+  _venuesSyncTimer=setTimeout(pushVenuesNow,3000);
 }
 
-async function pushVenues(){
+// Direct venues push — always writes current local venues to Supabase
+async function pushVenuesNow(){
+  clearTimeout(_venuesSyncTimer);
   const d=getData();
   if(!d.venues||!d.venues.length) return;
   const user_id=getUserId();
   if(!user_id) return;
   try{
     await sbFetch('POST','events?on_conflict=id',{
-      id:'_venues_shared',
+      id:'_venues',
       user_id,
       type:'venues',
       start_date:null,
@@ -710,6 +722,7 @@ async function pushVenues(){
       data:{venues:d.venues},
       updated_at:new Date().toISOString()
     });
+    console.log('Venues pushed: '+d.venues.length+' venues');
   } catch(e){ console.warn('Venues push failed:',e); }
 }
 
@@ -723,76 +736,92 @@ function startPoll(){
 }
 function stopPoll(){ clearInterval(_pollTimer); _pollTimer=null; }
 
-// Also pull immediately when tab becomes visible again after backgrounding
+// Pull immediately when switching back to the app
 document.addEventListener('visibilitychange',()=>{
   if(!document.hidden && window._gatInited) pullFromSupabase(true);
 });
 
+// silent=true means no spinner unless data actually changed
 async function pullFromSupabase(silent){
   if(!silent) setSyncDot('syncing');
+  // Stop any pending venue push — we're about to get fresh data from Supabase
   clearTimeout(_venuesSyncTimer);
+
   try{
+    // Fetch all rows ordered by updated_at desc so newest wins
+    // IMPORTANT: do not order by start_date — the venues row has start_date=null
+    // and in some PostgREST versions null rows are excluded from start_date ordering
     const rows=await sbFetch('GET','events?select=id,data,updated_at&order=updated_at.desc');
     if(!rows){ if(!silent){setSyncDot('ok');setTimeout(()=>setSyncDot('idle'),2000);} return; }
 
     const d=getData();
-    // Build map including soft-deleted tombstones — we need them to
-    // stop deleted events from being resurrected on the next pull
+
+    // Build local map including tombstones — we need deleted records to
+    // prevent them resurrecting when a stale device pushes next time
     const localMap={};
     d.events.forEach(ev=>{ localMap[ev.id]=ev; });
 
     let remoteVenues=null;
-    let changed=false;
+    let eventsChanged=false;
 
     rows.forEach(row=>{
       if(!row.data) return;
-      // Detect venues row — accept both ids for backwards compatibility
-      if(row.id==='_venues_shared'||row.id==='_venues'){
+      // Venues synthetic row — id='_venues'
+      if(row.id==='_venues'){
         if(Array.isArray(row.data.venues)) remoteVenues=row.data.venues;
-        return;
+        return; // never add to events map
       }
       const remote=row.data;
-      if(!remote.id) return;
+      if(!remote||!remote.id) return;
       const local=localMap[remote.id];
-      // Remote wins if newer or unknown locally
+      // Remote wins if it's newer or we have no local copy
       if(!local||(remote.updatedAt||'')>=(local.updatedAt||'')){
         if(JSON.stringify(local)!==JSON.stringify(remote)){
           localMap[remote.id]=remote;
-          changed=true;
+          eventsChanged=true;
         }
       }
     });
 
     // ── Venue reconciliation ─────────────────────────────────────
+    // Remote is authoritative. We layer in any local-only venues on top.
+    // We only push back if local had additions not in remote.
     const localVenues=normaliseVenues(d.venues);
-    let venuesChanged=false;
+    let needVenuePush=false;
+
     if(remoteVenues&&remoteVenues.length){
       const vmap={};
       remoteVenues.forEach(v=>{ vmap[v.name.toLowerCase()]=v; });
       localVenues.forEach(v=>{
         const k=v.name.toLowerCase();
-        if(!vmap[k]){ vmap[k]=v; venuesChanged=true; }
-        else if(v.mapUrl&&!vmap[k].mapUrl){ vmap[k].mapUrl=v.mapUrl; venuesChanged=true; }
+        if(!vmap[k]){ vmap[k]=v; needVenuePush=true; }           // local-only addition
+        else if(v.mapUrl&&!vmap[k].mapUrl){ vmap[k].mapUrl=v.mapUrl; needVenuePush=true; } // local has richer data
       });
       d.venues=Object.values(vmap).sort((a,b)=>a.name.localeCompare(b.name));
+      console.log('Pull: remote venues='+remoteVenues.length+' merged='+d.venues.length+' needPush='+needVenuePush);
     } else {
+      // No venues row in Supabase yet — push local list up
       d.venues=localVenues;
+      needVenuePush=true;
+      console.log('Pull: no remote venues row, will push '+d.venues.length+' local venues');
     }
 
-    // Store ALL events (including tombstones) so deletions persist locally
+    // Persist all events (including tombstones) so deletes survive locally
     d.events=Object.values(localMap);
+
+    // Save without triggering the debounced venue push (_pulling=true suppresses it)
     _pulling=true;
     saveData(d);
     _pulling=false;
 
-    // If local had venues not in remote, push merged list back
-    if(venuesChanged) await pushVenues();
+    // Only push venues if we had local additions — not on every pull
+    if(needVenuePush) await pushVenuesNow();
 
     if(!silent){
       setSyncDot('ok');
       setTimeout(()=>setSyncDot('idle'),2000);
-    } else if(changed){
-      setSyncDot('ok','Updated \u2713');
+    } else if(eventsChanged){
+      setSyncDot('ok','Updated ✓');
       setTimeout(()=>setSyncDot('idle'),1500);
     }
     render();
@@ -834,7 +863,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.0</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v2.1</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -2344,6 +2373,11 @@ function renderVenues(){
   const venues=normaliseVenues(d.venues);
   let html=`<div class="section-hdr">Venue Library — ${venues.length} venues</div>`;
   html+=`<div class="vlib-card">`;
+  // Add input at the TOP
+  html+=`<div class="vlib-add">
+    <input id="newVenueName" placeholder="New venue name…" onkeydown="if(event.key==='Enter')addVenueFromInput()">
+    <button class="btn btn-pri" style="padding:8px 14px;font-size:13px" onclick="addVenueFromInput()">Add</button>
+  </div>`;
   venues.forEach((v,i)=>{
     const hasMap=!!(v.mapUrl);
     html+=`<div class="vlib-item">
@@ -2355,10 +2389,7 @@ function renderVenues(){
       <button class="vlib-del" onclick="deleteVenue(${i})" title="Remove">✕</button>
     </div>`;
   });
-  html+=`<div class="vlib-add">
-    <input id="newVenueName" placeholder="New venue name…" onkeydown="if(event.key==='Enter')addVenueFromInput()">
-    <button class="btn btn-pri" style="padding:8px 14px;font-size:13px" onclick="addVenueFromInput()">Add</button>
-  </div></div>`;
+  html+=`</div>`;
   document.getElementById('appInner').innerHTML=html;
 }
 
@@ -2618,10 +2649,9 @@ function showDataManager(){
 
 function exportJSON(){
   const d=getData();
-  // Exclude soft-deleted tombstones from the backup — clean export only
-  const exportData={...d, events:(d.events||[]).filter(ev=>!ev._deleted)};
+  const exportData={...d,events:(d.events||[]).filter(ev=>!ev._deleted)};
   window.dlJSON(exportData,'gigs-and-trips.json');
-  showToast('Backup downloaded \u2713');
+  showToast('Backup downloaded ✓');
 }
 
 function handleImport(inp){
@@ -2771,8 +2801,8 @@ function timeOptions(selected){
 // ═══════════════════════════════════════════════════════════════════
 function onUnlocked(){
   render();
-  pullFromSupabase();   // initial full pull
-  startPoll();          // then poll every 60s
+  pullFromSupabase();  // initial pull
+  startPoll();         // then poll every 60s in background
 }
 
 // Expose for launcher backup
