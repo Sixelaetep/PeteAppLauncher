@@ -363,7 +363,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v2.6</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v2.7</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -1129,11 +1129,11 @@ function onDrinkNameInput(q){
   const drop = document.getElementById('drinkNameDrop');
   if(!drop) return;
   const drinks = (state.library||[]).filter(i=>i.category==='Drink');
-  const matches = q
+  const matches = (q && q.trim())
     ? drinks.filter(d=>d.name.toLowerCase().includes(q.toLowerCase()))
     : drinks;
   if(!matches.length){ drop.style.display='none'; return; }
-  drop.innerHTML = matches.slice(0,8).map(d=>
+  drop.innerHTML = matches.slice(0,10).map(d=>
     `<div style="padding:9px 12px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--border)"
        onmousedown="event.preventDefault()" onclick="selectDrinkName('${esc(d.name)}')">${esc(d.name)}</div>`
   ).join('');
@@ -1211,6 +1211,10 @@ function deleteWaterEntry(id){
   saveState();
   renderWaterToday();
   renderWaterWidget();
+  renderLogSectionSummaries();
+  // Re-render history if on that tab
+  const histEl = document.getElementById('tab-history');
+  if(histEl && histEl.classList.contains('active')) renderHistory();
 }
 function renderWaterToday(){
   const el = document.getElementById('waterTodayBar');
@@ -1500,53 +1504,64 @@ function openItemModal(name, existingTags, isNew) {
 
   // Category selector (only for new items)
   const catOptions = isNew
-    ? `<label style="margin-top:0">Category</label>
-       <select id="itemCat" style="margin-bottom:12px">
-         ${['Breakfast','Lunch','Dinner','Snack','Supplement','Other']
-           .map(c=>`<option value="${c}"${c===(selectedMeal||'Other')?' selected':''}>${c}</option>`).join('')}
-       </select>`
+    ? '<label style="margin-top:0">Category</label>'
+    + '<select id="itemCat" style="margin-bottom:12px">'
+    + ['Breakfast','Lunch','Dinner','Snack','Supplement','Other']
+        .map(c=>'<option value="'+c+'"'+(c===(selectedMeal||'Other')?' selected':'')+'>'+c+'</option>').join('')
+    + '</select>'
     : '';
 
   // Quantity options
-  const qtyHtml = `
-    <label style="margin-top:0">Quantity</label>
-    <div class="qty-options" id="qtyOptionBtns">
-      ${options.map(o=>`<button class="qty-btn" onclick="selectQtyOption(this,'${o.value}')">${o.label}</button>`).join('')}
-    </div>
-    <div class="qty-custom" style="margin-bottom:14px">
-      <input type="text" id="qtyCustomInput" placeholder="Or type: 200g, 2 slices…" />
-    </div>`;
+  const qtyHtml = '<label style="margin-top:0">Quantity</label>'
+    + '<div class="qty-options" id="qtyOptionBtns">'
+    + options.map(o=>'<button class="qty-btn" onclick="selectQtyOption(this,\''+o.value+'\')">'+o.label+'</button>').join('')
+    + '</div>'
+    + '<div class="qty-custom" style="margin-bottom:14px">'
+    + '<input type="text" id="qtyCustomInput" placeholder="Or type: 200g, 2 slices\u2026" />'
+    + '</div>';
 
   // Tag grid — all groups, pre-checked from existingTags
   const activeTags = new Set(existingTags);
   const tagHtml = TAG_GROUPS.map(g => {
     const tags = ALL_TAGS.filter(t => t.cat === g.cat);
     if (!tags.length) return '';
-    return `<span class="tag-group-label">${g.label}</span>` +
-      tags.map(t =>
-        `<span class="new-item-tag cat-${t.cat}${activeTags.has(t.id)?' active':''}"
-          onclick="this.classList.toggle('active')" data-id="${t.id}">${t.label}</span>`
-      ).join('');
+    return '<span class="tag-group-label">'+g.label+'</span>'
+      + tags.map(t =>
+          '<span class="new-item-tag cat-'+t.cat+(activeTags.has(t.id)?' active':'')+'"'
+          +' onclick="this.classList.toggle(\'active\')" data-id="'+t.id+'">'+t.label+'</span>'
+        ).join('');
   }).join('');
 
   const saveToLibNote = isNew
-    ? `<div style="font-size:12px;color:var(--text-soft);margin-top:12px;padding:8px;background:var(--surface);border-radius:6px">
-         ✨ "<strong>${name}</strong>" is new — it will be saved to your library with these tags.
-       </div>`
-    : `<div style="font-size:11px;color:var(--text-soft);margin-top:10px">
-         Tap tags to adjust for this meal. Changes here don't affect the library.
-       </div>`;
+    ? '<div style="font-size:12px;color:var(--text-soft);margin-top:12px;padding:8px;background:var(--surface);border-radius:6px">'
+      + '\u2728 "<strong>'+esc(name)+'</strong>" is new \u2014 it will be saved to your library with these tags.'
+      + '</div>'
+    : '';
 
-  document.getElementById('itemModalBody').innerHTML = `
-    ${catOptions}
-    ${qtyHtml}
-    <label>Tags &amp; Composition</label>
-    <div id="itemTagGrid" style="margin-bottom:8px">${tagHtml}</div>
-    ${saveToLibNote}
-    <div class="btn-row" style="margin-top:14px">
-      <button class="btn btn-primary" onclick="confirmItemModal()">Add to meal</button>
-      <button class="btn btn-ghost" onclick="cancelItemModal()">Cancel</button>
-    </div>`;
+  const activeSummary = [...activeTags].map(id => tagLabel(id)).join(', ');
+
+  // For existing items: qty first, tags hidden in collapsible <details>
+  // For new items: everything visible
+  const tagsSection = isNew
+    ? '<label>Tags &amp; Composition</label>'
+      + '<div id="itemTagGrid" style="margin-bottom:8px">'+tagHtml+'</div>'
+      + saveToLibNote
+    : '<details style="margin-bottom:8px;border:1.5px solid var(--border);border-radius:var(--radius-sm)">'
+      + '<summary style="padding:9px 12px;cursor:pointer;font-size:11px;font-weight:600;text-transform:uppercase;'
+      + 'letter-spacing:0.06em;color:var(--text-soft);list-style:none;display:flex;justify-content:space-between;align-items:center">'
+      + 'Tags &amp; Composition'
+      + '<span style="font-size:12px;color:var(--text-mid);font-weight:400;text-transform:none;letter-spacing:0">'
+      + (activeSummary || 'none') + ' \u25be</span></summary>'
+      + '<div style="padding:12px;border-top:1px solid var(--border)">'
+      + '<div id="itemTagGrid">'+tagHtml+'</div>'
+      + '<div style="font-size:11px;color:var(--text-soft);margin-top:8px">Changes here don\'t affect the library.</div>'
+      + '</div></details>';
+
+  document.getElementById('itemModalBody').innerHTML = catOptions + qtyHtml + tagsSection
+    + '<div class="btn-row" style="margin-top:14px">'
+    + '<button class="btn btn-primary" onclick="confirmItemModal()">Add to meal</button>'
+    + '<button class="btn btn-ghost" onclick="cancelItemModal()">Cancel</button>'
+    + '</div>';
 
   document.getElementById('itemModalOverlay').classList.add('open');
 }
@@ -2772,6 +2787,8 @@ async function syncFromSupabase(){
   if(anySuccess){
     // After merging, push any local-only entries back up to cloud so all devices converge
     deduplicateLibrary(); saveState(); updateSyncBadge('ok'); renderLibrary();
+    renderLogSectionSummaries(); // Refresh card summaries immediately after pull
+    renderWaterToday();          // Refresh drink bar
     // Small delay then push merged state back — ensures local-only items reach cloud
     setTimeout(()=>autoSyncEntry(), 500);
   }
