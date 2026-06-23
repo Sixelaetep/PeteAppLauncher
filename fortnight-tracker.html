@@ -297,7 +297,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v2.4</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v2.5</span></div></div>
   </div>
   <div class="header-actions">
     <div class="sync-wrap" style="pointer-events:none;user-select:none">
@@ -327,10 +327,9 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
     <div class="data-lbl">Diagnostics</div>
     <div class="data-btn-row">
       <button class="data-btn" onclick="diagReadCloud()">&#128269; Read cloud rows</button>
-      <button class="data-btn" onclick="diagTestWrite()">&#9997; Test write</button>
       <button class="data-btn" onclick="diagClearTombstones()" style="color:var(--amber)">&#128465; Clear tombstones</button>
     </div>
-    <div id="syncLog" style="background:var(--bg);border-radius:8px;padding:.6rem .8rem;font-size:.68rem;color:var(--muted);line-height:1.6;margin-top:.5rem;max-height:220px;overflow-y:auto;font-family:'DM Mono',monospace;display:none;white-space:pre-wrap;word-break:break-all;"></div>
+    <div id="syncLog" style="background:var(--bg);border-radius:8px;padding:.6rem .8rem;font-size:.68rem;color:var(--muted);line-height:1.6;margin-top:.5rem;max-height:200px;overflow-y:auto;font-family:'DM Mono',monospace;display:none;white-space:pre-wrap;word-break:break-all;"></div>
   </div>
 </div>
 <input type="file" id="imp" accept=".json" style="display:none" onchange="importData(event)">
@@ -408,7 +407,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
   var ml=document.getElementById('pwa-manifest-link');
   if(ml)ml.href='data:application/manifest+json,'+encodeURIComponent(JSON.stringify(mf));
   if('serviceWorker' in navigator){
-    var sw="const C='fn4';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('.')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(rs=>{if(rs&&rs.status===200&&rs.type==='basic'){var cl=rs.clone();caches.open(C).then(ca=>ca.put(e.request,cl));}return rs;}).catch(()=>caches.match('.'))));});";
+    var sw="const C='fn5';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('.')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(rs=>{if(rs&&rs.status===200&&rs.type==='basic'){var cl=rs.clone();caches.open(C).then(ca=>ca.put(e.request,cl));}return rs;}).catch(()=>caches.match('.'))));});";
     try{var b=new Blob([sw],{type:'text/javascript'});navigator.serviceWorker.register(URL.createObjectURL(b)).catch(function(){});}catch(e){}
   }
 })();
@@ -461,12 +460,30 @@ function setSyncStatus(s){
 function syncBundle(bundle){
   setSyncStatus('syncing');
   var row = { user_key: SB_USER, bundle_start: bundle.startDate, data: bundle, updated_at: new Date().toISOString() };
-  fetch(SB_TBL, { method:'POST', headers: sbHeaders(), body: JSON.stringify(row) })
-    .then(function(r){
-      if (r.status === 401) showSessionExpiredBanner();
-      setSyncStatus(r.ok?'synced':'error');
-    })
-    .catch(function(){ setSyncStatus('error'); });
+  fetch(SB_TBL+'?user_key=eq.'+SB_USER+'&bundle_start=eq.'+bundle.startDate, {
+    method:'PATCH',
+    headers: Object.assign({}, sbHeaders(), {'Prefer':'return=representation'}),
+    body: JSON.stringify(row)
+  })
+  .then(function(r){
+    if(r.status===401){ showSessionExpiredBanner(); throw new Error('401'); }
+    return r.json().then(function(d){ return {status:r.status, data:d}; });
+  })
+  .then(function(res){
+    if(res.status===200 && Array.isArray(res.data) && res.data.length>0){
+      setSyncStatus('synced'); return; // updated existing row
+    }
+    // No row matched — insert new
+    return fetch(SB_TBL, {
+      method:'POST',
+      headers: Object.assign({}, sbHeaders(), {'Prefer':'return=representation'}),
+      body: JSON.stringify(row)
+    }).then(function(r2){
+      if(r2.status===401) showSessionExpiredBanner();
+      setSyncStatus(r2.ok?'synced':'error');
+    });
+  })
+  .catch(function(){ setSyncStatus('error'); });
 }
 
 function deleteCloudBundle(startDate){
@@ -487,16 +504,16 @@ function loadFromCloud(cb){
     if(!Array.isArray(rows)) throw new Error('bad response');
     var deletedSet=new Set(state.deleted||[]);
 
-    // Cloud rows win for any key they hold; tombstoned rows are silently skipped (local-only filter)
+    // Cloud is source of truth for any row it holds
     var merged={};
     rows.forEach(function(row){
       var b=row.data;
-      if(deletedSet.has(b.startDate)) return; // locally deleted — don't bring back
+      if(deletedSet.has(b.startDate)) return; // locally deleted — skip, do NOT re-delete from cloud
       migrateDays(b);
       merged[b.startDate]=b;
     });
 
-    // Overlay local-only bundles (not yet in cloud) — push them up
+    // Overlay local-only bundles not yet in cloud, and push them up
     state.bundles.forEach(function(b){
       if(deletedSet.has(b.startDate)) return;
       if(!merged[b.startDate]){
@@ -1034,112 +1051,57 @@ function syncLog(msg, colour){
 
 function manualPullCloud(){
   toast('Pulling from cloud\u2026','ok');
-  syncLog('Pull started — local has '+state.bundles.length+' bundle(s)');
-  loadFromCloud(function(){
-    render();
-    toast('Pulled from cloud \u2713','ok');
-    syncLog('Pull done — now have '+state.bundles.length+' bundle(s)', 'var(--green)');
-  });
+  syncLog('Pull — local has '+state.bundles.length+' bundle(s), tombstones: ['+(state.deleted||[]).join(',')+']');
+  loadFromCloud(function(){ render(); toast('Pulled from cloud \u2713','ok'); syncLog('Pull done — now '+state.bundles.length+' bundle(s)','var(--green)'); });
 }
 
 function manualPushCloud(){
   if(!state.bundles||!state.bundles.length){ toast('No bundles to push','err'); return; }
   setSyncStatus('syncing');
   toast('Pushing to cloud\u2026','ok');
-  syncLog('Push started — '+state.bundles.length+' bundle(s)');
+  syncLog('Push — '+state.bundles.length+' bundle(s)');
   var total=state.bundles.length, done=0, errors=0;
   state.bundles.forEach(function(b){
     var row={user_key:SB_USER, bundle_start:b.startDate, data:b, updated_at:new Date().toISOString()};
-    syncLog('PATCH '+b.startDate+'…');
     fetch(SB_TBL+'?user_key=eq.'+SB_USER+'&bundle_start=eq.'+b.startDate,{
-      method:'PATCH',
-      headers:Object.assign({},sbHeaders(),{'Prefer':'return=representation'}),
-      body:JSON.stringify(row)
-    }).then(function(r){
-      var status=r.status;
-      return r.text().then(function(t){ return {status:status, text:t}; });
-    }).then(function(res){
-      syncLog('PATCH '+b.startDate+' → HTTP '+res.status+' body: '+res.text.slice(0,120));
-      var parsed; try{ parsed=JSON.parse(res.text); }catch(e){ parsed=null; }
-      var hit = Array.isArray(parsed) && parsed.length > 0;
-      if(res.status===200 && hit){
-        syncLog('PATCH hit existing row ✓', 'var(--green)');
-        finish(true); return;
-      }
-      // No row matched or non-200 — try POST insert
-      syncLog('PATCH missed ('+( hit?'empty':'no match')+') → POST insert…');
-      return fetch(SB_TBL,{
-        method:'POST',
-        headers:Object.assign({},sbHeaders(),{'Prefer':'return=representation'}),
-        body:JSON.stringify(row)
-      }).then(function(r2){
-        return r2.text().then(function(t2){
-          syncLog('POST '+b.startDate+' → HTTP '+r2.status+' body: '+t2.slice(0,120), r2.ok?'var(--green)':'var(--red)');
-          finish(r2.ok);
-        });
-      });
-    }).catch(function(e){
-      syncLog('ERROR '+b.startDate+': '+e.message, 'var(--red)');
-      finish(false);
-    });
+      method:'PATCH', headers:Object.assign({},sbHeaders(),{'Prefer':'return=representation'}), body:JSON.stringify(row)
+    }).then(function(r){ return r.json().then(function(d){return{status:r.status,data:d};}); })
+    .then(function(res){
+      var hit=res.status===200&&Array.isArray(res.data)&&res.data.length>0;
+      if(hit){ syncLog('PATCH '+b.startDate+' ✓','var(--green)'); finish(true); return; }
+      syncLog('PATCH '+b.startDate+' no match → POST');
+      return fetch(SB_TBL,{method:'POST',headers:Object.assign({},sbHeaders(),{'Prefer':'return=representation'}),body:JSON.stringify(row)})
+        .then(function(r2){ return r2.text().then(function(t){ syncLog('POST '+b.startDate+' HTTP '+r2.status+' '+t.slice(0,80), r2.ok?'var(--green)':'var(--red)'); finish(r2.ok); }); });
+    }).catch(function(e){ syncLog('ERROR '+b.startDate+': '+e.message,'var(--red)'); finish(false); });
   });
-  function finish(ok){
-    if(!ok) errors++;
-    done++;
-    if(done===total){
-      setSyncStatus(errors?'error':'synced');
-      toast(errors?'Push partial — '+errors+' error'+(errors>1?'s':''):'Pushed '+total+' bundle'+(total!==1?'s':'')+' \u2713', errors?'err':'ok');
-      syncLog('Push complete: '+done+' done, '+errors+' errors', errors?'var(--red)':'var(--green)');
-    }
-  }
+  function finish(ok){ if(!ok)errors++; done++; if(done===total){ setSyncStatus(errors?'error':'synced'); toast(errors?'Push partial — '+errors+' error'+(errors>1?'s':''):'Pushed '+total+' bundle'+(total!==1?'s':'')+' \u2713',errors?'err':'ok'); } }
 }
 
 function diagReadCloud(){
-  syncLog('Reading cloud rows…');
-  syncLog('Local tombstones (deleted[]): '+(state.deleted&&state.deleted.length?state.deleted.join(', '):'(none)'), state.deleted&&state.deleted.length?'var(--red)':'var(--muted)');
+  var deletedSet=new Set(state.deleted||[]);
+  syncLog('Tombstones: ['+(state.deleted||[]).join(',')+']', deletedSet.size?'var(--amber)':'var(--muted)');
   fetch(SB_TBL+'?user_key=eq.'+SB_USER+'&order=bundle_start.desc',{
     headers:{'apikey':SB_KEY,'Authorization':'Bearer '+(_sbAccessToken||SB_KEY)}
-  }).then(function(r){
-    return r.text().then(function(t){ return {status:r.status, text:t}; });
-  }).then(function(res){
+  }).then(function(r){ return r.text().then(function(t){return{status:r.status,text:t};}); })
+  .then(function(res){
     syncLog('HTTP '+res.status);
     try{
       var rows=JSON.parse(res.text);
-      if(!Array.isArray(rows)){ syncLog('Response: '+res.text.slice(0,200),'var(--red)'); return; }
-      var deletedSet=new Set(state.deleted||[]);
-      syncLog('Cloud has '+rows.length+' row(s)', rows.length>0?'var(--green)':'var(--amber)');
-      rows.forEach(function(r){ syncLog('  • '+r.bundle_start+(deletedSet.has(r.bundle_start)?' ⚠ TOMBSTONED — would be blocked on pull':'')+' (updated: '+(r.updated_at||'?')+')'); });
-      syncLog('Local has '+state.bundles.length+' bundle(s)');
-      state.bundles.forEach(function(b){ syncLog('  • '+b.startDate); });
-    }catch(e){ syncLog('Parse error: '+e.message,'var(--red)'); syncLog(res.text.slice(0,300)); }
+      syncLog('Cloud: '+rows.length+' row(s)',rows.length?'var(--green)':'var(--amber)');
+      rows.forEach(function(r){ syncLog('  cloud: '+r.bundle_start+(deletedSet.has(r.bundle_start)?' ⚠ TOMBSTONED':'')); });
+      syncLog('Local: '+state.bundles.length+' bundle(s)');
+      state.bundles.forEach(function(b){ syncLog('  local: '+b.startDate); });
+    }catch(e){ syncLog('Parse error: '+e.message,'var(--red)'); }
   }).catch(function(e){ syncLog('Fetch failed: '+e.message,'var(--red)'); });
 }
 
 function diagClearTombstones(){
   var count=(state.deleted||[]).length;
-  if(!count){ syncLog('No tombstones to clear','var(--muted)'); return; }
-  var list=(state.deleted||[]).join(', ');
+  if(!count){ syncLog('No tombstones','var(--muted)'); return; }
+  syncLog('Cleared tombstones: ['+(state.deleted||[]).join(',')+']','var(--amber)');
   state.deleted=[];
   saveLocal();
-  syncLog('Cleared '+count+' tombstone(s): '+list,'var(--amber)');
-  syncLog('Pull from cloud to restore any matching bundles.','var(--muted)');
-}
-  syncLog('Test write: POST a dummy probe row…');
-  var probe={user_key:SB_USER, bundle_start:'PROBE-TEST', data:{probe:true}, updated_at:new Date().toISOString()};
-  fetch(SB_TBL,{
-    method:'POST',
-    headers:Object.assign({},sbHeaders(),{'Prefer':'return=representation'}),
-    body:JSON.stringify(probe)
-  }).then(function(r){
-    return r.text().then(function(t){ return {status:r.status, text:t}; });
-  }).then(function(res){
-    syncLog('POST probe → HTTP '+res.status+' body: '+res.text.slice(0,200), res.status<300?'var(--green)':'var(--red)');
-    if(res.status<300){
-      // clean up probe row
-      fetch(SB_TBL+'?user_key=eq.'+SB_USER+'&bundle_start=eq.PROBE-TEST',{method:'DELETE',headers:sbHeaders()})
-        .then(function(){ syncLog('Probe row cleaned up'); });
-    }
-  }).catch(function(e){ syncLog('Test write failed: '+e.message,'var(--red)'); });
+  syncLog('Pull from cloud to restore affected bundles.','var(--muted)');
 }
 function exportData(){
   var blob=new Blob([JSON.stringify(Object.assign({_app:'9-Day Fortnight Tracker',_version:2,_exported:new Date().toISOString()},state),null,2)],{type:'application/json'});
