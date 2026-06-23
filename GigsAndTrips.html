@@ -333,7 +333,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v3.2</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v3.3</span></h1>
     <div class="gat-sync-badge" id="gatSyncBadge" style="pointer-events:none;user-select:none"><div class="gat-sync-dot" id="gatSyncDot"></div><span id="gatSyncText">Offline</span></div>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Sync">💾</button>
@@ -616,7 +616,7 @@ let _syncQ=Promise.resolve();
 async function sbFetch(method,path,body){
   const token=_sbAccessToken||SB_KEY;
   const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
-  if(method==='POST') headers['Prefer']='resolution=merge-duplicates';
+  if(method==='POST') headers['Prefer']='resolution=merge-duplicates,return=minimal';
   const res=await fetch(SB_URL+'/rest/v1/'+path,{method,headers,body:body?JSON.stringify(body):undefined});
   if(!res.ok){
     if(res.status===401) showSessionExpiredBanner();
@@ -665,7 +665,7 @@ function pushEvent(ev){
     try{
       const user_id=getUserId();
       if(!user_id) throw new Error('No user_id');
-      await sbFetch('POST','events?on_conflict=id,user_id',{
+      await sbFetch('POST','events?on_conflict=id',{
         id:ev.id, user_id, type:ev.type,
         start_date:ev.type==='gig'?ev.date:ev.startDate,
         end_date:ev.type==='gig'?ev.date:ev.endDate,
@@ -694,7 +694,7 @@ async function pushAllEvents(){
       end_date:ev.type==='gig'?ev.date:ev.endDate,
       data:ev, updated_at:ev.updatedAt||new Date().toISOString()
     }));
-    await sbFetch('POST','events?on_conflict=id,user_id',rows);
+    await sbFetch('POST','events?on_conflict=id',rows);
     setSyncDot('ok');
     setTimeout(()=>setSyncDot('idle'),2000);
     showToast('Synced '+events.length+' events to cloud ✓');
@@ -719,7 +719,7 @@ async function pushAllEventsLogged(){
       end_date:ev.type==='gig'?ev.date:ev.endDate,
       data:ev, updated_at:ev.updatedAt||new Date().toISOString()
     }));
-    await sbFetch('POST','events?on_conflict=id,user_id',rows);
+    await sbFetch('POST','events?on_conflict=id',rows);
     syncLog('Events OK — '+events.length+' pushed','ok');
     syncLog('Pushing venues…','working');
     await pushVenuesNow();
@@ -947,7 +947,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v3.2</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v3.3</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -1005,10 +1005,15 @@ function handleHdrAction(){
 // RENDER — LIST VIEW
 // ═══════════════════════════════════════════════════════════════════
 let _collapsedYears=null;
-function toggleYearGroup(yr){
-  if(!_collapsedYears) _collapsedYears=new Set();
-  if(_collapsedYears.has(yr)) _collapsedYears.delete(yr);
-  else _collapsedYears.add(yr);
+let _collapsedYearsUp=null;
+function toggleYearGroup(yr,tab){
+  if(tab==='upcoming'){
+    if(!_collapsedYearsUp) _collapsedYearsUp=new Set();
+    if(_collapsedYearsUp.has(yr)) _collapsedYearsUp.delete(yr); else _collapsedYearsUp.add(yr);
+  } else {
+    if(!_collapsedYears) _collapsedYears=new Set();
+    if(_collapsedYears.has(yr)) _collapsedYears.delete(yr); else _collapsedYears.add(yr);
+  }
   render();
 }
 function render(){
@@ -1044,40 +1049,45 @@ function render(){
 
   let html='';
 
-  if(_tab==='past'){
-    // Group past events by year, most recent year first
+  // Helper: render year-grouped events for both tabs
+  function renderYearGroups(evList, tab, collapsed){
     const byYear={};
-    list.forEach(ev=>{
-      const dateStr=ev.type==='gig'?ev.date:ev.endDate||ev.startDate;
+    evList.forEach(ev=>{
+      const dateStr=ev.type==='gig'?ev.date:(tab==='upcoming'?ev.startDate:ev.endDate)||ev.startDate;
       const yr=dateStr?dateStr.slice(0,4):'Unknown';
       if(!byYear[yr]) byYear[yr]=[];
       byYear[yr].push(ev);
     });
-    const years=Object.keys(byYear).sort((a,b)=>b.localeCompare(a));
-    const collapsedYears=_collapsedYears||(_collapsedYears=new Set());
+    // Upcoming: ascending year order (soonest year first); Past: descending (most recent year first)
+    const years=Object.keys(byYear).sort((a,b)=>tab==='upcoming'?a.localeCompare(b):b.localeCompare(a));
+    let out='';
     years.forEach(yr=>{
-      const isCollapsed=collapsedYears.has(yr);
+      const isCollapsed=collapsed.has(yr);
       const count=byYear[yr].length;
-      html+=`<div class="year-hdr" onclick="toggleYearGroup('${yr}')">
+      out+=`<div class="year-hdr" onclick="toggleYearGroup('${yr}','${tab}')">
         <span class="year-hdr-label">${yr}</span>
         <span class="year-hdr-count">${count} event${count!==1?'s':''}</span>
         <span class="year-hdr-chevron">${isCollapsed?'▶':'▼'}</span>
       </div>`;
       if(!isCollapsed){
-        html+=`<div class="year-group" id="yg-${yr}">`;
+        out+=`<div class="year-group" id="yg-${tab}-${yr}">`;
         byYear[yr].forEach(ev=>{
-          if(ev.type==='gig') html+=renderGigCard(ev,d);
-          else html+=renderTripCard(ev,d);
+          if(ev.type==='gig') out+=renderGigCard(ev,d);
+          else out+=renderTripCard(ev,d);
         });
-        html+=`</div>`;
+        out+=`</div>`;
       }
     });
+    return out;
+  }
+
+  if(_tab==='past'){
+    if(!_collapsedYears) _collapsedYears=new Set();
+    html+=renderYearGroups(list,'past',_collapsedYears);
   } else {
-    // Upcoming — chronological, no grouping
-    list.forEach(ev=>{
-      if(ev.type==='gig') html+=renderGigCard(ev, d);
-      else html+=renderTripCard(ev, d);
-    });
+    // Upcoming — year grouped, closest year first
+    if(!_collapsedYearsUp) _collapsedYearsUp=new Set();
+    html+=renderYearGroups(list,'upcoming',_collapsedYearsUp);
   }
 
   document.getElementById('appInner').innerHTML=html;
