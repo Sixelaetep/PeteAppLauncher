@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Reading">
 <meta name="theme-color" content="#0f1923">
-<title>Reading Tracker v6.1</title>
+<title>Reading Tracker v2.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -598,7 +598,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v1.8</span></div>
+    <div class="rt-logo">My Reading <span>v2.0</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -804,6 +804,48 @@
 <!-- ═══════════════════ REVIEWS PANEL ═══════════════════ -->
 <div id="reviewsPanel">
   <div class="rt-panel-title">★ Reviews</div>
+
+  <!-- ── Review editor ── -->
+  <div id="reviewEditor" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:18px">
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:var(--accent);margin-bottom:12px">Write / Edit a Review</div>
+
+    <div class="field mb-12">
+      <label>Select book</label>
+      <select id="rvBookSelect" onchange="onRvBookSelected()" style="font-size:16px">
+        <option value="">— choose a completed book —</option>
+      </select>
+    </div>
+
+    <div id="rvEditorFields" style="display:none">
+      <!-- Star rating -->
+      <div class="field mb-12">
+        <label>Rating</label>
+        <div class="star-row" id="rvStarRow">
+          <button class="star" onclick="setRvRating(1)" data-n="1">★</button>
+          <button class="star" onclick="setRvRating(2)" data-n="2">★</button>
+          <button class="star" onclick="setRvRating(3)" data-n="3">★</button>
+          <button class="star" onclick="setRvRating(4)" data-n="4">★</button>
+          <button class="star" onclick="setRvRating(5)" data-n="5">★</button>
+        </div>
+      </div>
+
+      <!-- Review text -->
+      <div class="field mb-12">
+        <label>Review <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+        <textarea class="mini-textarea" id="rvTextInput" placeholder="Your thoughts on this book…" rows="4"></textarea>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" onclick="saveRvEditor()">Save review</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearRvEditor()">Clear</button>
+      </div>
+      <div id="rvSaveMsg" style="font-size:11px;color:var(--success);margin-top:8px;display:none">Review saved ✓</div>
+    </div>
+
+    <div id="rvNoBooks" style="font-size:12px;color:var(--muted);display:none">No completed books yet — finish a book to add a review.</div>
+  </div>
+
+  <!-- ── Reviews list ── -->
   <div id="reviewsBody"><div class="empty">No reviews yet.</div></div>
 </div>
 
@@ -1381,6 +1423,7 @@ function showRtReviews() {
   document.getElementById('statsPanel').classList.remove('active');
   document.getElementById('reviewsPanel').classList.add('active');
   if (document.getElementById('backBtn')) document.getElementById('backBtn').classList.remove('visible');
+  populateRvBookSelect();
   renderAllReviews();
 }
 
@@ -3777,6 +3820,108 @@ function renderAllReviews() {
   }
 
   body.innerHTML = html;
+}
+
+// ── Reviews panel editor ───────────────────────────────────────────────
+let _rvSelectedBookId  = null;
+let _rvSelectedTrackerId = null;
+let _rvCurrentRating   = 0;
+
+function populateRvBookSelect() {
+  const sel = document.getElementById('rvBookSelect');
+  if (!sel) return;
+  // Collect completed books from all trackers
+  const options = [];
+  appState.trackers.forEach(t => {
+    t.books.forEach(b => {
+      const logged = t.entries.filter(e => e.bookId === b.id)
+        .reduce((mx, e) => Math.max(mx, Number(e.pageTo) || 0), 0);
+      const complete = logged >= b.pages || !!b.manualComplete;
+      if (!complete) return;
+      options.push({ trackerId: t.id, bookId: b.id, label: b.title + (b.author ? ' — ' + b.author : ''), trackerName: t.trackerName });
+    });
+  });
+  // Rebuild options
+  sel.innerHTML = '<option value="">— choose a completed book —</option>';
+  if (options.length === 0) {
+    document.getElementById('rvNoBooks').style.display = 'block';
+    document.getElementById('rvEditorFields').style.display = 'none';
+    return;
+  }
+  document.getElementById('rvNoBooks').style.display = 'none';
+  options.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.trackerId + '::' + o.bookId;
+    opt.textContent = o.label + (o.trackerName ? ' [' + o.trackerName + ']' : '');
+    sel.appendChild(opt);
+  });
+  // If a book was previously selected, re-select it
+  if (_rvSelectedTrackerId && _rvSelectedBookId) {
+    sel.value = _rvSelectedTrackerId + '::' + _rvSelectedBookId;
+    if (sel.value) onRvBookSelected();
+  }
+}
+
+function onRvBookSelected() {
+  const sel = document.getElementById('rvBookSelect');
+  const val = sel.value;
+  document.getElementById('rvEditorFields').style.display = 'none';
+  document.getElementById('rvSaveMsg').style.display = 'none';
+  _rvSelectedBookId = null;
+  _rvSelectedTrackerId = null;
+  if (!val) return;
+  const [trackerId, bookId] = val.split('::');
+  const tracker = appState.trackers.find(t => t.id === trackerId);
+  if (!tracker) return;
+  const book = tracker.books.find(b => b.id === bookId);
+  if (!book) return;
+  _rvSelectedTrackerId = trackerId;
+  _rvSelectedBookId    = bookId;
+  _rvCurrentRating = (book.review && book.review.rating) || 0;
+  document.getElementById('rvEditorFields').style.display = 'block';
+  document.getElementById('rvTextInput').value = (book.review && book.review.text) || '';
+  updateRvStars();
+}
+
+function updateRvStars() {
+  const stars = document.querySelectorAll('#rvStarRow .star');
+  stars.forEach((s, i) => {
+    s.classList.toggle('lit', i < _rvCurrentRating);
+  });
+}
+
+function setRvRating(n) {
+  _rvCurrentRating = (_rvCurrentRating === n) ? 0 : n; // toggle off if same
+  updateRvStars();
+}
+
+function saveRvEditor() {
+  if (!_rvSelectedTrackerId || !_rvSelectedBookId) return;
+  const tracker = appState.trackers.find(t => t.id === _rvSelectedTrackerId);
+  if (!tracker) return;
+  const book = tracker.books.find(b => b.id === _rvSelectedBookId);
+  if (!book) return;
+  if (!book.review) book.review = { rating: 0, text: '' };
+  book.review.rating = _rvCurrentRating;
+  book.review.text   = document.getElementById('rvTextInput').value.trim();
+  save();
+  const msg = document.getElementById('rvSaveMsg');
+  msg.style.display = 'block';
+  setTimeout(() => { msg.style.display = 'none'; }, 2500);
+  renderAllReviews();
+}
+
+function clearRvEditor() {
+  _rvSelectedBookId    = null;
+  _rvSelectedTrackerId = null;
+  _rvCurrentRating     = 0;
+  const sel = document.getElementById('rvBookSelect');
+  if (sel) sel.value = '';
+  const tf = document.getElementById('rvTextInput');
+  if (tf) tf.value = '';
+  updateRvStars();
+  document.getElementById('rvEditorFields').style.display = 'none';
+  document.getElementById('rvSaveMsg').style.display = 'none';
 }
 
 // ── Init ──────────────────────────────────────────────────────────────
