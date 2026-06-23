@@ -297,7 +297,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v2.1</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v2.2</span></div></div>
   </div>
   <div class="header-actions">
     <div class="sync-wrap" style="pointer-events:none;user-select:none">
@@ -478,13 +478,25 @@ function loadFromCloud(cb){
   })
   .then(function(rows){
     if(!Array.isArray(rows)) throw new Error('bad response');
+    var deletedSet=new Set(state.deleted||[]);
     var local={};
     state.bundles.forEach(function(b){ local[b.startDate]=b; });
-    rows.forEach(function(row){ var b=row.data; migrateDays(b); local[b.startDate]=b; });
+    rows.forEach(function(row){
+      var b=row.data;
+      if(deletedSet.has(b.startDate)){
+        // Re-delete from cloud in case previous DELETE failed
+        deleteCloudBundle(b.startDate);
+        return;
+      }
+      migrateDays(b);
+      local[b.startDate]=b;
+    });
+    // Push any local bundles not in cloud, skipping deleted
     state.bundles.forEach(function(b){
+      if(deletedSet.has(b.startDate)) return;
       if(!rows.find(function(r){ return r.bundle_start===b.startDate; })) syncBundle(b);
     });
-    state.bundles=Object.values(local).sort(function(a,b){ return b.startDate.localeCompare(a.startDate); });
+    state.bundles=Object.values(local).filter(function(b){return!deletedSet.has(b.startDate);}).sort(function(a,b){ return b.startDate.localeCompare(a.startDate); });
     saveLocal(); setSyncStatus('synced'); if(cb) cb();
   })
   .catch(function(err){ console.warn('Cloud load failed:',err); setSyncStatus('error'); if(cb) cb(); });
@@ -492,7 +504,7 @@ function loadFromCloud(cb){
 
 // STORAGE
 var SKEY='fn_tracker_v4';
-var state={bundles:[]};
+var state={bundles:[],deleted:[]};
 
 function migrateDays(b){
   b.days.forEach(function(d,i){
@@ -519,6 +531,7 @@ function load(){
     var r=localStorage.getItem(SKEY)||localStorage.getItem('fn_tracker_v3');
     if(r){
       state=JSON.parse(r);
+      if(!Array.isArray(state.deleted)) state.deleted=[];
       state.bundles.forEach(function(b){ migrateDays(b); });
     }
   }catch(e){}
@@ -963,10 +976,13 @@ function deleteBundle(idx,btn){
     return;
   }
   var b=state.bundles[idx];
-  deleteCloudBundle(b.startDate);
+  // Tombstone first so resurrection is blocked even if cloud DELETE is slow
+  if(!Array.isArray(state.deleted)) state.deleted=[];
+  if(!state.deleted.includes(b.startDate)) state.deleted.push(b.startDate);
   state.bundles.splice(idx,1);
   if(openPanel===idx) openPanel=null;
   saveLocal();
+  deleteCloudBundle(b.startDate);
   render();
   toast('Bundle deleted','ok');
 }
