@@ -66,7 +66,7 @@
   .rt-save-btn:hover { background: rgba(200,169,110,.3); }
   .rt-nav { display: flex; }
   .rt-nav-btn {
-    flex: 1; padding: 8px 4px; font-size: 12px; font-weight: 600;
+    flex: 1; padding: 8px 2px; font-size: 11px; font-weight: 600;
     color: var(--muted); background: none; border: none;
     border-bottom: 2px solid transparent; cursor: pointer;
     font-family: 'Inter', sans-serif; transition: all .15s;
@@ -602,7 +602,8 @@
   <div class="rt-nav">
     <button class="rt-nav-btn on" id="rtnav-trackers" onclick="switchRtNav('trackers')">📚 Trackers</button>
     <button class="rt-nav-btn" id="rtnav-past" onclick="switchRtNav('past')">✓ Past</button>
-    <button class="rt-nav-btn" id="rtnav-reviews" onclick="switchRtNav('reviews')">★ Reviews &amp; Stats</button>
+    <button class="rt-nav-btn" id="rtnav-reviews" onclick="switchRtNav('reviews')">★ Reviews</button>
+    <button class="rt-nav-btn" id="rtnav-stats" onclick="switchRtNav('stats')">📊 Stats</button>
   </div>
 </div>
 
@@ -655,8 +656,6 @@
 
   <div class="dash-action-row">
     <button class="btn btn-primary btn-sm" onclick="toggleDashForm('newTrackerForm')">+ New tracker</button>
-    <button class="btn btn-ghost btn-sm"   onclick="toggleDashForm('statsForm')">📊 Stats</button>
-    <button class="btn btn-ghost btn-sm"   onclick="toggleDashForm('reviewsForm')">★ Reviews</button>
     <button class="btn btn-ghost btn-sm"   onclick="toggleDashForm('importBooksForm')">📋 Import books</button>
   </div>
 
@@ -1268,10 +1267,19 @@ function showSync(state, msg) {
 }
 
 // ── Top bar navigation ────────────────────────────────────────────────
+// ── Top-level tracker completion helper ──────────────────────────────
+function isTrackerCompleteFn(t) {
+  return t.books.length > 0 && t.books.every(function(bk) {
+    const logged = t.entries.filter(e => e.bookId === bk.id)
+      .reduce((mx, e) => Math.max(mx, Number(e.pageTo) || 0), 0);
+    return logged >= bk.pages || bk.manualComplete;
+  });
+}
+
 var _rtNavActive = 'trackers';
 function switchRtNav(tab) {
   _rtNavActive = tab;
-  ['trackers','past','reviews'].forEach(function(t) {
+  ['trackers','past','reviews','stats'].forEach(function(t) {
     var btn = document.getElementById('rtnav-' + t);
     if (btn) btn.classList.toggle('on', t === tab);
   });
@@ -1281,43 +1289,130 @@ function switchRtNav(tab) {
     showRtPast();
   } else if (tab === 'reviews') {
     showRtReviews();
+  } else if (tab === 'stats') {
+    showRtStats();
   }
 }
 
-function showRtPast() {
-  document.getElementById("dashboard").classList.remove("active");
+function _showDashboardView() {
+  document.getElementById("dashboard").classList.add("active");
   document.getElementById("trackerApp").classList.remove("active");
   if (document.getElementById("wishlistApp")) document.getElementById("wishlistApp").classList.remove("active");
-  // Show dashboard but scroll/filter to completed trackers only
-  document.getElementById("dashboard").classList.add("active");
-  renderDashboard();
-  // After render, collapse active trackers and highlight past
-  setTimeout(function() {
-    var cards = document.getElementById('trackerCards');
-    if (cards) cards.style.display = 'none';
-    var lower = document.getElementById('trackerCardsLower');
-    if (lower) lower.style.display = '';
-    var wl = document.getElementById('wishlistCardWrap');
-    if (wl) wl.style.display = 'none';
-  }, 50);
+  if (document.getElementById("backBtn")) document.getElementById("backBtn").classList.remove("visible");
+}
+
+function showRtPast() {
+  _showDashboardView();
+  // Restore full display then hide non-completed sections
+  var cards = document.getElementById('trackerCards');
+  var lower = document.getElementById('trackerCardsLower');
+  var wl    = document.getElementById('wishlistCardWrap');
+  if (cards) cards.style.display = '';
+  if (lower) lower.style.display = '';
+  if (wl)    wl.style.display    = '';
+  // Close any open dash forms
+  ['newTrackerForm','statsForm','reviewsForm','exportForm','importBooksForm'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
+
+  // Render completed trackers into the cards containers
+  const trackers = appState.trackers || [];
+  const completed = trackers.filter(isTrackerCompleteFn);
+
+  // Upper container: completed active trackers
+  const upper = document.getElementById('trackerCards');
+  // Lower container: completed inactive trackers
+  const lower2 = document.getElementById('trackerCardsLower');
+  if (upper) upper.innerHTML = '';
+  if (lower2) lower2.innerHTML = '';
+  if (wl) wl.style.display = 'none';
+
+  const allCompleted = trackers.filter(isTrackerCompleteFn);
+
+  if (allCompleted.length === 0) {
+    if (upper) upper.innerHTML = '<div class="empty" style="padding:24px 0;color:var(--muted);text-align:center;font-size:13px">No completed trackers yet.</div>';
+    return;
+  }
+
+  // Reuse the same card rendering as renderDashboard
+  allCompleted.forEach(function(t) {
+    const tp = t.books.reduce((s,b) => s + b.pages, 0);
+    const tr = t.books.reduce((s,b) => {
+      const logged = t.entries.filter(e => e.bookId === b.id)
+        .reduce((mx, e) => Math.max(mx, Number(e.pageTo) || 0), 0);
+      return s + (b.manualComplete && logged < b.pages ? b.pages : logged);
+    }, 0);
+    const pct = tp > 0 ? Math.min(100, Math.round((tr / tp) * 100)) : 0;
+    const bComplete = t.books.filter(b => {
+      const logged = t.entries.filter(e => e.bookId === b.id)
+        .reduce((mx, e) => Math.max(mx, Number(e.pageTo) || 0), 0);
+      return logged >= b.pages || b.manualComplete;
+    }).length;
+    const tIcon = isAudible(t) ? "🎧" : "📚";
+    const tUnit = isAudible(t) ? "chapter" : "book";
+    const div = document.createElement("div");
+    div.className = "tc done";
+    div.innerHTML = `
+      <span class="tc-type">${tIcon}</span>
+      <div class="tc-top">
+        <div>
+          <div class="tc-name">${esc(t.trackerName)}</div>
+          <div class="tc-meta">${t.books.length} ${tUnit}${t.books.length!==1?"s":""} · ${bComplete} complete${t.targetDate ? " · finished " + ukNumeric(t.targetDate) : ""}${t.active===false?" · inactive":""}</div>
+        </div>
+        <div class="tc-right">
+          <div class="tc-pct" style="color:var(--success)">✓</div>
+          <div class="tc-days">All done!</div>
+        </div>
+      </div>
+      <div class="tc-bar"><div class="tc-fill" style="width:100%;background:var(--success)"></div></div>`;
+    div.addEventListener("click", function() { openTracker(t.id); });
+    if (upper) upper.appendChild(div);
+  });
 }
 
 function showRtReviews() {
-  document.getElementById("dashboard").classList.add("active");
-  document.getElementById("trackerApp").classList.remove("active");
-  if (document.getElementById("wishlistApp")) document.getElementById("wishlistApp").classList.remove("active");
+  _showDashboardView();
+  // Restore containers
+  var cards = document.getElementById('trackerCards');
+  var lower = document.getElementById('trackerCardsLower');
+  var wl    = document.getElementById('wishlistCardWrap');
+  if (cards) { cards.style.display = 'none'; }
+  if (lower) { lower.style.display = 'none'; }
+  if (wl)    { wl.style.display    = 'none'; }
+  // Close other forms, open reviews
+  ['newTrackerForm','statsForm','exportForm','importBooksForm'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
   renderDashboard();
-  setTimeout(function() {
-    toggleDashForm('reviewsForm');
-    toggleDashForm('statsForm');
-  }, 50);
+  // Open reviews form directly via the class mechanism
+  const allForms = ['newTrackerForm','statsForm','reviewsForm','exportForm','importBooksForm'];
+  allForms.forEach(function(fid) {
+    const el = document.getElementById(fid);
+    if (el) el.classList.toggle('open', fid === 'reviewsForm');
+  });
+  renderAllReviews();
 }
 
-// Patch showDashboard to sync nav state
-var _origShowDashboard;
-document.addEventListener('DOMContentLoaded', function() {
-  _origShowDashboard = showDashboard;
-});
+function showRtStats() {
+  _showDashboardView();
+  var cards = document.getElementById('trackerCards');
+  var lower = document.getElementById('trackerCardsLower');
+  var wl    = document.getElementById('wishlistCardWrap');
+  if (cards) { cards.style.display = 'none'; }
+  if (lower) { lower.style.display = 'none'; }
+  if (wl)    { wl.style.display    = 'none'; }
+  ['newTrackerForm','reviewsForm','exportForm','importBooksForm'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
+  renderDashboard();
+  // Open stats form directly via the class mechanism
+  const allForms2 = ['newTrackerForm','statsForm','reviewsForm','exportForm','importBooksForm'];
+  allForms2.forEach(function(fid) {
+    const el = document.getElementById(fid);
+    if (el) el.classList.toggle('open', fid === 'statsForm');
+  });
+  renderStats('week');
+}
 
 // ── Data modal ────────────────────────────────────────────────────────
 function openRtDataModal() {
@@ -2978,7 +3073,7 @@ function showDashboard() {
   if (wl) wl.style.display = '';
   // Sync top nav
   _rtNavActive = 'trackers';
-  ['trackers','past','reviews'].forEach(function(t) {
+  ['trackers','past','reviews','stats'].forEach(function(t) {
     var btn = document.getElementById('rtnav-' + t);
     if (btn) btn.classList.toggle('on', t === 'trackers');
   });
@@ -3273,11 +3368,10 @@ function renderDashboard() {
     });
   }
 
-  // Render sections: active into upper container, inactive into lower
-  renderSection(activeOpen,     null,        false, container);
-  renderSection(activeComplete, "Completed", false, container);
-  renderSection(inactiveOpen,   "Inactive",  true,  lowerContainer || container);
-  renderSection(inactiveComp,   null,        true,  lowerContainer || container);
+  // Render sections: active open into upper, inactive open into lower
+  // Completed trackers (activeComplete + inactiveComp) are shown in the Past tab
+  renderSection(activeOpen,   null,       false, container);
+  renderSection(inactiveOpen, "Inactive", true,  lowerContainer || container);
 
   // Always show wishlist card (sits between upper and lower containers in HTML)
   updateWishlistCard();
