@@ -1101,6 +1101,7 @@ function initApp(){
 // ═══════════════════════════════════════
 const WATER_TARGET_ML = 2000;
 let _selectedDrinkMl = null;
+let _selectedDrinkName = null; // cache so blur can't clear it
 
 function todayKey(){ return new Date().toISOString().slice(0,10); }
 
@@ -1141,8 +1142,9 @@ function onDrinkNameInput(q){
 }
 
 function selectDrinkName(name){
+  _selectedDrinkName = name; // cache before blur clears input on iOS
   const inp = document.getElementById('drinkNameInput');
-  if(inp){ inp.value = name; inp.blur(); } // dismiss keyboard after selection
+  if(inp){ inp.value = name; inp.blur(); }
   const drop = document.getElementById('drinkNameDrop');
   if(drop) drop.style.display = 'none';
 }
@@ -1169,7 +1171,9 @@ function selectDrinkMl(ml){
 function logDrinkEntry(){
   if(document.activeElement) document.activeElement.blur(); // dismiss keyboard
   const inp = document.getElementById('drinkNameInput');
-  const name = (inp?.value||'').trim() || 'Water';
+  // Use cached name if iOS cleared the input after blur
+  const name = (inp?.value||'').trim() || _selectedDrinkName || 'Water';
+  _selectedDrinkName = null; // consume the cache
   const mlInput = document.getElementById('waterCustom');
   const ml = parseInt(mlInput?.value||0);
   if(!ml||ml<1){ toast('Enter an amount in ml','err'); return; }
@@ -1189,6 +1193,7 @@ function logDrinkEntry(){
   if(inp) inp.value = '';
   if(mlInput) mlInput.value = '';
   _selectedDrinkMl = null;
+  _selectedDrinkName = null;
   renderWaterToday();
   renderLogSectionSummaries();
   toast('\ud83d\udca7 '+ml+'ml '+name+' logged');
@@ -1210,6 +1215,7 @@ function logWaterCustom(){ logDrinkEntry(); }
 function deleteWaterEntry(id){
   state.entries=(state.entries||[]).filter(e=>e.id!==id);
   saveState();
+  deleteFromSupabase('food_entries', id); // remove from cloud so it can't resurrect
   renderWaterToday();
   renderWaterWidget();
   renderLogSectionSummaries();
@@ -1434,7 +1440,7 @@ function setupAutocomplete(){
         e.preventDefault();
         list.classList.remove('open');
         input.value = '';
-        input.blur(); // dismiss keyboard before modal opens
+        input.blur();
         document.getElementById('foodTagPreview').innerHTML = '';
         openItemModal(item.name, item.tags || [], false);
       });
@@ -1621,7 +1627,7 @@ function stageItem(){
   const name = inp.value.trim();
   if (!name) { toast('Enter or select an item first'); return; }
   inp.value = '';
-  inp.blur(); // dismiss keyboard before modal opens
+  inp.blur();
   document.getElementById('foodTagPreview').innerHTML = '';
   const lib = getLib(name);
   openItemModal(name, lib ? lib.tags || [] : [], !lib);
@@ -1660,7 +1666,7 @@ function removeStaged(i){ stagedItems.splice(i,1); renderStaged(); }
 //  LOGGING
 // ═══════════════════════════════════════
 function logFoodEntry(){
-  if(document.activeElement) document.activeElement.blur(); // dismiss keyboard
+  if(document.activeElement) document.activeElement.blur();
   const name = document.getElementById('foodInput').value.trim();
   const type = getQtyType();
   let items = [...stagedItems];
@@ -1692,7 +1698,7 @@ function logFoodEntry(){
 }
 
 function logSymptom(){
-  if(document.activeElement) document.activeElement.blur(); // dismiss keyboard
+  if(document.activeElement) document.activeElement.blur();
   if(!selectedSymTypes.size){toast('Select at least one symptom type');return;}
   if(!selectedSeverity){toast('Select severity');return;}
   const entry={
@@ -1714,7 +1720,7 @@ function logSymptom(){
 }
 
 function logFeeling(){
-  if(document.activeElement) document.activeElement.blur(); // dismiss keyboard
+  if(document.activeElement) document.activeElement.blur();
   if(!selectedFeeling){toast('Select a feeling first');return;}
   const entry={id:uid(),kind:'feeling',score:selectedFeeling,unusual:[...selectedUnusual],time:document.getElementById('feelingTime').value||now(),notes:document.getElementById('feelingNotes').value.trim(),created:new Date().toISOString()};
   state.feelings.push(entry); saveState();
@@ -1726,7 +1732,7 @@ function logFeeling(){
 }
 
 function logBowel(){
-  if(document.activeElement) document.activeElement.blur(); // dismiss keyboard
+  if(document.activeElement) document.activeElement.blur();
   if(!selectedBristol){toast('Select a stool type first');return;}
   const entry={
     id:uid(), kind:'bowel', bristolType:selectedBristol,
@@ -1892,10 +1898,18 @@ function toggleLogEntry(uid){
 // Legacy renderEntryItem kept for backwards compatibility if referenced elsewhere
 function renderEntryItem(e){return renderLogEntryCard(e,e._kind);}
 
+const STORE_TABLE = {
+  entries:'food_entries', symptoms:'gut_symptoms',
+  feelings:'gut_feelings', bowels:'bowel_movements'
+};
 function deleteEntry(store,id){
   if(!confirm('Delete this entry?'))return;
   state[store]=state[store].filter(e=>e.id!==id);
-  saveState(); renderHistory(); toast('Deleted');
+  saveState();
+  if(STORE_TABLE[store]) deleteFromSupabase(STORE_TABLE[store], id);
+  renderHistory();
+  renderLogSectionSummaries();
+  toast('Deleted');
 }
 
 // ═══════════════════════════════════════
@@ -2659,6 +2673,17 @@ async function supabaseFetch(path,method='GET',body=null){
   }
   return method==='GET'?res.json():true;
 }
+async function deleteFromSupabase(table, id){
+  if(window.location.protocol === 'file:') return;
+  const token = _sbAccessToken || SB_KEY;
+  try {
+    await fetch(SB_URL+'/rest/v1/'+table+'?id=eq.'+id, {
+      method:'DELETE',
+      headers:{'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+    });
+  } catch(e){ console.warn('Supabase delete failed:', e.message); }
+}
+
 async function autoSyncEntry(){
   if (window.location.protocol === 'file:') { return; } // file:// — no network
   if(syncPending)return; syncPending=true; updateSyncBadge('syncing');
