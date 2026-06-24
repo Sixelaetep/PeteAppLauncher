@@ -380,7 +380,7 @@
 <div id="app" style="display:none">
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v3.1</span></div>
+    <div class="logo">Gut<span>Journal</span> <span style="font-size:10px;opacity:0.4;font-weight:400;font-family:'Inter',sans-serif">v3.2</span></div>
     <div class="header-right">
       <span class="sync-badge sync-cloud" id="syncBadge" style="pointer-events:none;user-select:none"><span class="sync-dot"></span>&nbsp;Synced</span>
       <button class="btn-save-header" onclick="openBackupModal()">💾 Backup</button>
@@ -500,6 +500,16 @@
         <input type="number" id="waterCustom" placeholder="Custom ml" min="1" max="3000" step="50"
           style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:16px;font-family:inherit;color:var(--text);background:var(--surface2);outline:none">
         <button class="btn btn-primary btn-sm" onclick="logDrinkEntry()" style="flex-shrink:0">Log drink</button>
+      </div>
+      <!-- DRINK CALORIE ESTIMATE -->
+      <div style="margin-top:10px;padding:10px;background:var(--amber-light);border:1px solid var(--amber);border-radius:var(--radius-sm)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#7a5010;margin-bottom:7px">🔥 Calories <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
+        <button class="btn btn-ghost btn-sm" onclick="launchDrinkCalorieSearch()" style="margin-bottom:7px;border-color:var(--amber);color:#7a5010">🔍 Search Google for calories</button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="drinkKcalInput" placeholder="kcal (leave blank for water)" min="0" max="2000" step="5"
+            style="flex:1;padding:8px 12px;border:1.5px solid var(--amber);border-radius:var(--radius-sm);font-size:16px;font-family:inherit;color:var(--text);background:white;outline:none">
+          <span style="font-size:12px;color:#7a5010;font-weight:600;white-space:nowrap">kcal</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1270,9 +1280,11 @@ function logDrinkEntry(){
   const mlInput = document.getElementById('waterCustom');
   const ml = parseInt(mlInput?.value||0);
   if(!ml||ml<1){ toast('Enter an amount in ml','err'); return; }
+  const kcalRaw = parseInt(document.getElementById('drinkKcalInput')?.value || 0);
   const entry = {
     id: 'w'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
     kind: 'water', meal: 'Drink', ml, name,
+    kcal: kcalRaw > 0 ? kcalRaw : null,
     items: [{name, tags:[], qty: ml+'ml'}],
     time: now(), notes: '', created: new Date().toISOString(),
   };
@@ -1285,11 +1297,15 @@ function logDrinkEntry(){
   saveState();
   if(inp) inp.value = '';
   if(mlInput) mlInput.value = '';
+  const kcalInp = document.getElementById('drinkKcalInput');
+  if(kcalInp) kcalInp.value = '';
   _selectedDrinkMl = null;
   _selectedDrinkName = null;
   renderWaterToday();
+  renderCalDailyBar();
   renderLogSectionSummaries();
-  toast('\ud83d\udca7 '+ml+'ml '+name+' logged');
+  const kcalStr = kcalRaw > 0 ? ` · ${kcalRaw} kcal` : '';
+  toast('\ud83d\udca7 '+ml+'ml '+name+' logged'+kcalStr);
 }
 function logWater(ml){ logWaterWithName(ml, 'Water'); }
 function logWaterWithName(ml, name){
@@ -2960,7 +2976,7 @@ function getCalTarget(){ return (state.settings && state.settings.calTarget) || 
 function caloriesTodayKcal(){
   const tk = todayKey();
   return (state.entries||[])
-    .filter(e => e.kind==='food' && (e.time||'').slice(0,10)===tk && e.kcal > 0)
+    .filter(e => (e.time||'').slice(0,10)===tk && e.kcal > 0)
     .reduce((s,e) => s + (e.kcal||0), 0);
 }
 
@@ -2972,14 +2988,15 @@ function renderCalDailyBar(){
   const over = total > target;
   const colour = over ? 'var(--coral)' : pct >= 80 ? 'var(--amber)' : 'var(--sage)';
   const remaining = Math.max(0, target - total);
-  // Build meal chips
+  // Build chips — food and drinks separately
   const tk = todayKey();
-  const meals = (state.entries||[]).filter(e=>e.kind==='food'&&(e.time||'').slice(0,10)===tk&&e.kcal>0);
-  const chips = meals.map(e=>
-    `<span class="log-section-today-chip" style="background:var(--amber-light);color:#7a5010;border:1px solid var(--amber)">
-      ${e.meal||'Meal'}: ${e.kcal} kcal
-    </span>`
-  ).join('');
+  const allKcalEntries = (state.entries||[]).filter(e=>(e.time||'').slice(0,10)===tk&&e.kcal>0);
+  const chips = allKcalEntries.map(e=>{
+    const isDrink = e.kind==='water';
+    const icon = isDrink ? '💧' : '🍽️';
+    const label = isDrink ? esc(e.name||'Drink') : (e.meal||'Meal');
+    return `<span class="log-section-today-chip" style="background:var(--amber-light);color:#7a5010;border:1px solid var(--amber)">${icon} ${label}: ${e.kcal} kcal</span>`;
+  }).join('');
   el.innerHTML=`
     <div class="cal-bar-row">
       <span class="cal-bar-label">${total} <span style="font-weight:400;font-size:12px;color:var(--text-soft)">/ ${target} kcal</span></span>
@@ -2993,6 +3010,13 @@ function launchCalorieSearch(){
   const items = stagedItems.map(i => (i.qty ? i.qty + ' ' : '') + i.name).join(' and ');
   if(!items){ toast('Add items first'); return; }
   const query = 'calories in ' + items;
+  window.open('https://www.google.com/search?q=' + encodeURIComponent(query), '_blank');
+}
+
+function launchDrinkCalorieSearch(){
+  const name = document.getElementById('drinkNameInput')?.value?.trim() || 'drink';
+  const ml = document.getElementById('waterCustom')?.value?.trim();
+  const query = 'calories in ' + (ml ? ml + 'ml ' : '') + name;
   window.open('https://www.google.com/search?q=' + encodeURIComponent(query), '_blank');
 }
 
@@ -3014,7 +3038,7 @@ function renderCalorieTrendWidget(){
   for(let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(d.toISOString().slice(0,10)); }
   const dayData = days.map(dk=>{
     const kcal = (state.entries||[])
-      .filter(e=>e.kind==='food'&&(e.time||'').slice(0,10)===dk&&e.kcal>0)
+      .filter(e=>(e.time||'').slice(0,10)===dk&&e.kcal>0)
       .reduce((s,e)=>s+(e.kcal||0),0);
     return { dk, kcal };
   });
