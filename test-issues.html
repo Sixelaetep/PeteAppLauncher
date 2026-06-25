@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Test &amp; Issues v1.2</title>
+<title>Test &amp; Issues v1.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -315,9 +315,10 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.2</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.3</span></div>
   <div class="nav-spacer"></div>
-  <button class="nav-pill" onclick="openImportModal()">⬆ Import Release</button>
+  <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
+  <button class="nav-pill" onclick="openImportModal()">⬆ Import</button>
 </nav>
 
 <!-- ── Tab chrome ── -->
@@ -577,9 +578,13 @@ function nextIssueId(prefix) {
   return `${prefix}-${String(n).padStart(3,'0')}`;
 }
 
+function activeApps() {
+  return Object.values(state.apps).filter(a => !a.archived);
+}
+
 function allTests() {
   const out = [];
-  Object.values(state.apps).forEach(app => {
+  activeApps().forEach(app => {
     (app.versions || []).forEach(ver => {
       (ver.tests || []).forEach(t => {
         out.push({ ...t, appId: app.id, appName: app.name, appEmoji: app.emoji, version: ver.version, verDate: ver.date });
@@ -617,7 +622,7 @@ function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function refreshStats() {
   const tests  = allTests();
   const issues = allIssues();
-  document.getElementById('st-apps').textContent    = Object.keys(state.apps).length;
+  document.getElementById('st-apps').textContent    = activeApps().length;
   document.getElementById('st-pass').textContent    = tests.filter(t=>t.status==='pass').length;
   document.getElementById('st-fail').textContent    = tests.filter(t=>t.status==='fail').length;
   document.getElementById('st-open').textContent    = tests.filter(t=>!t.status||t.status==='open').length;
@@ -669,18 +674,19 @@ function resetTestFilter() {
 // APPS TAB
 // ══════════════════════════════════════════════════════════════════
 function renderApps() {
-  const apps = Object.values(state.apps);
-  const list = document.getElementById('apps-list');
+  const allApps = Object.values(state.apps);
+  const apps    = allApps.filter(a => !a.archived);
+  const archived = allApps.filter(a => a.archived);
+  const list  = document.getElementById('apps-list');
   const empty = document.getElementById('apps-empty');
-  if (!apps.length) { list.innerHTML=''; empty.style.display=''; return; }
+  if (!allApps.length) { list.innerHTML=''; empty.style.display=''; return; }
   empty.style.display='none';
 
-  list.innerHTML = apps.map(app => {
-    const versions = (app.versions||[]).slice().reverse(); // newest first
+  function appCard(app, isArchived) {
+    const versions = (app.versions||[]).slice().reverse();
     const allAppTests = versions.flatMap(v => v.tests||[]);
     const passN  = allAppTests.filter(t=>t.status==='pass').length;
     const failN  = allAppTests.filter(t=>t.status==='fail').length;
-    const openN  = allAppTests.filter(t=>!t.status||t.status==='open').length;
     const openIssues = Object.values(state.issues).filter(i=>i.appId===app.id&&i.status==='open').length;
 
     const verRows = versions.map(ver => {
@@ -695,7 +701,8 @@ function renderApps() {
         vSkip ? `<span class="vs-count skip">~${vSkip}</span>` : '',
         vOpen ? `<span class="vs-count open">?${vOpen}</span>` : '',
       ].filter(Boolean).join('');
-      return `<div class="version-strip" onclick="showTab('tests');setTestAppFilter('${esc(app.id)}');setTestVersionFilter('${esc(ver.version)}')">
+      const clickable = isArchived ? '' : `onclick="showTab('tests');setTestAppFilter('${esc(app.id)}');setTestVersionFilter('${esc(ver.version)}')"`;
+      return `<div class="version-strip" ${clickable} style="${isArchived?'opacity:0.5;cursor:default':''}">
         <span class="vs-ver">v${esc(ver.version)}</span>
         <span class="vs-date">${fmtDate(ver.date)}</span>
         <span class="vs-desc">${esc(ver.heading||ver.description||'')}</span>
@@ -703,22 +710,57 @@ function renderApps() {
       </div>`;
     }).join('');
 
-    return `<div class="card">
-      <div class="card-header" onclick="toggleCard(this)">
+    const archiveBtn = isArchived
+      ? `<button class="t-btn" onclick="unarchiveApp('${esc(app.id)}')" style="margin:10px 0 2px;border-color:var(--green);color:var(--green)">↩ Restore</button>`
+      : `<button class="t-btn" onclick="archiveApp('${esc(app.id)}')" style="margin:10px 0 2px;border-color:var(--red);color:var(--red)">📦 Archive app</button>
+         <p style="font-size:10px;color:var(--ink3);margin-top:4px;line-height:1.5">Archived apps are hidden from all selectors and stats. Data is preserved and can be restored.</p>`;
+
+    const metaStyle = isArchived ? 'opacity:0.55' : '';
+    return `<div class="card" style="${isArchived?'border-style:dashed;opacity:0.75':''}">
+      <div class="card-header" onclick="toggleCard(this)" style="${metaStyle}">
         <div class="ch-icon">${app.emoji||'📦'}</div>
         <div class="ch-main">
-          <div class="ch-name">${esc(app.name)}</div>
-          <div class="ch-meta">${versions.length} version${versions.length!==1?'s':''} · ${esc(app.prefix)} · ${passN}✓ ${failN>0?failN+'✗ ':''}${openIssues>0?`<span style="color:var(--orange)">${openIssues} open issue${openIssues!==1?'s':''}</span>`:''}</div>
+          <div class="ch-name">${esc(app.name)}${isArchived?' <span style="font-size:10px;color:var(--ink3);font-weight:400">(archived)</span>':''}</div>
+          <div class="ch-meta">${versions.length} version${versions.length!==1?'s':''} · ${esc(app.prefix)}${!isArchived&&passN?' · '+passN+'✓':''}${!isArchived&&failN?' '+failN+'✗':''}${!isArchived&&openIssues>0?' · <span style="color:var(--orange)">'+openIssues+' open issue'+(openIssues!==1?'s':'')+'</span>':''}</div>
         </div>
-        <div class="ch-right">
-          <span class="ch-caret">▼</span>
-        </div>
+        <div class="ch-right"><span class="ch-caret">▼</span></div>
       </div>
       <div class="card-body">
         ${verRows}
+        <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:${versions.length?'4':'0'}px">
+          ${archiveBtn}
+        </div>
       </div>
     </div>`;
-  }).join('');
+  }
+
+  let html = apps.map(a => appCard(a, false)).join('');
+
+  if (archived.length) {
+    html += `<div class="section-head" style="margin-top:24px">📦 Archived Apps</div>`;
+    html += archived.map(a => appCard(a, true)).join('');
+  }
+
+  list.innerHTML = html;
+}
+
+function archiveApp(appId) {
+  if (!state.apps[appId]) return;
+  if (!confirm(`Archive "${state.apps[appId].name}"? It will be hidden from all selectors and stats. You can restore it any time.`)) return;
+  state.apps[appId].archived = true;
+  saveState();
+  renderApps();
+  refreshStats();
+  toast('App archived');
+}
+
+function unarchiveApp(appId) {
+  if (!state.apps[appId]) return;
+  state.apps[appId].archived = false;
+  saveState();
+  renderApps();
+  refreshStats();
+  toast('App restored');
 }
 
 function toggleCard(header) {
@@ -735,7 +777,7 @@ let testVersionFilter = null;
 function renderTests() {
   // Build app filter chips
   const afRow = document.getElementById('app-filter-tests');
-  const apps = Object.values(state.apps);
+  const apps = activeApps();
   afRow.innerHTML = [
     `<button class="fchip${!testAppFilter?' active':''}" onclick="setTestAppFilter(null)">All Apps</button>`,
     ...apps.map(a => `<button class="fchip${testAppFilter===a.id?' active':''}" onclick="setTestAppFilter('${esc(a.id)}')">${a.emoji} ${esc(a.name)}</button>`)
@@ -888,7 +930,7 @@ function logIssueFromTest(appId, version, testId) {
 function renderIssues() {
   // App filter
   const afRow = document.getElementById('app-filter-row');
-  const apps = Object.values(state.apps);
+  const apps = activeApps();
   afRow.innerHTML = [
     `<button class="fchip${!issueAppFilter?' active':''}" onclick="setIssueAppFilter(null)">All Apps</button>`,
     ...apps.map(a => `<button class="fchip${issueAppFilter===a.id?' active':''}" onclick="setIssueAppFilter('${esc(a.id)}')">${a.emoji} ${esc(a.name)}</button>`)
@@ -985,7 +1027,7 @@ function clearSelection() {
 // ══════════════════════════════════════════════════════════════════
 function openNewIssueModal() {
   editingIssueId = null;
-  populateIssueModal(issueAppFilter||Object.keys(state.apps)[0]||'', '', '', 'medium');
+  populateIssueModal(issueAppFilter||activeApps()[0]?.id||'', '', '', 'medium');
   document.getElementById('modal-issue-title').textContent = 'Log Issue';
   document.getElementById('ni-delete-btn').style.display = 'none';
   document.getElementById('modal-issue').classList.remove('hidden');
@@ -1005,7 +1047,7 @@ function openEditIssue(id) {
 
 function populateIssueModal(appId, title, desc, priority) {
   const sel = document.getElementById('ni-app');
-  const apps = Object.values(state.apps);
+  const apps = activeApps();
   sel.innerHTML = apps.map(a=>`<option value="${esc(a.id)}"${a.id===appId?' selected':''}>${a.emoji} ${esc(a.name)}</option>`).join('');
   if (!apps.length) sel.innerHTML = '<option value="">No apps loaded</option>';
   document.getElementById('ni-title').value = title;
@@ -1040,6 +1082,7 @@ function saveIssue() {
 
   if (editingIssueId) {
     const issue = state.issues[editingIssueId];
+    issue.appId    = appId;
     issue.title    = title;
     issue.desc     = desc;
     issue.priority = priority;
@@ -1087,7 +1130,7 @@ function renderBrief() {
   genBtn.style.display='';
 
   // Populate app selector
-  const apps = Object.values(state.apps);
+  const apps = activeApps();
   const taSel = document.getElementById('brief-target-app');
   taSel.innerHTML = apps.map(a=>`<option value="${esc(a.id)}">${a.emoji} ${esc(a.name)}</option>`).join('');
   appSel.style.display = apps.length > 1 ? '' : 'none';
