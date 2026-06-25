@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Test &amp; Issues v1.3</title>
+<title>Test &amp; Issues v1.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -315,7 +315,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.3</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.4</span></div>
   <div class="nav-spacer"></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
   <button class="nav-pill" onclick="openImportModal()">⬆ Import</button>
@@ -415,7 +415,32 @@
 
   <!-- IMPORT TAB -->
   <div class="view" id="view-import">
-    <div class="section-head">Import Release Manifest</div>
+
+    <!-- Storage info -->
+    <div class="section-head">Storage</div>
+    <div id="storage-info" style="display:flex;flex-wrap:wrap;gap:14px;padding:10px 0 4px;font-size:11px;color:var(--ink2)">
+      <span style="color:var(--ink3)">Loading…</span>
+    </div>
+
+    <!-- Export -->
+    <div class="section-head" style="margin-top:20px">Export Backup</div>
+    <button class="action-btn primary" onclick="exportData()">⬇ Export test-issues.json</button>
+    <p style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.6">Downloads the full data wrapper (apps, issues, tests). Export regularly — this is your only backup.</p>
+
+    <!-- Restore backup -->
+    <div class="section-head" style="margin-top:20px">Restore Backup</div>
+    <div class="drop-zone" onclick="document.getElementById('backup-input').click()"
+      ondragover="event.preventDefault();this.classList.add('dragover')"
+      ondragleave="this.classList.remove('dragover')"
+      ondrop="event.preventDefault();this.classList.remove('dragover');importBackup(event.dataTransfer.files[0])">
+      <div class="drop-zone-icon">🗄</div>
+      <div class="drop-zone-title">Drop test-issues.json backup here</div>
+      <div style="font-size:12px;color:var(--ink3);margin-top:4px">or click to browse · replaces all current data</div>
+    </div>
+    <input type="file" id="backup-input" accept=".json" style="display:none" onchange="importBackup(event.target.files[0]);this.value=''">
+
+    <!-- Import release manifest -->
+    <div class="section-head" style="margin-top:20px">Import Release Manifest</div>
     <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
       ondragover="event.preventDefault();this.classList.add('dragover')"
       ondragleave="this.classList.remove('dragover')"
@@ -426,15 +451,11 @@
     </div>
     <input type="file" id="file-input" accept=".json" style="display:none" onchange="handleFileSelect(event)">
 
-    <div class="section-head">Or paste JSON</div>
+    <div class="section-head">Or paste manifest JSON</div>
     <textarea id="paste-json" style="width:100%;height:120px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);font-size:16px;font-family:monospace;outline:none;resize:vertical" placeholder='{"schemaVersion":1,"type":"release",...}'></textarea>
-    <button class="action-btn primary" onclick="importFromPaste()" style="margin-top:8px">Import</button>
+    <button class="action-btn primary" onclick="importFromPaste()" style="margin-top:8px">Import Manifest</button>
 
-    <div class="section-head" style="margin-top:24px">Export App Data</div>
-    <button class="action-btn" onclick="exportData()">⬇ Export test-issues.json</button>
-    <p style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.6">All data is stored in localStorage (key: <code style="font-family:monospace;color:var(--ink2)">ti_v1</code>). Export regularly as a backup.</p>
-
-    <div class="section-head">Expected Release Manifest Format</div>
+    <div class="section-head" style="margin-top:24px">Expected Release Manifest Format</div>
     <div class="brief-box">{
   "schemaVersion": 1,
   "type": "release",
@@ -536,37 +557,84 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// STATE
+// STORAGE ABSTRACTION
 // ══════════════════════════════════════════════════════════════════
 const STORAGE_KEY = 'ti_v1';
 
-// Schema:
+// Standardised wrapper schema:
 // {
-//   apps: { [appId]: { id, name, emoji, prefix, versions: [{version, date, heading, description, changes, tests:[{id,title,steps,expected,status,failNote,updatedAt}], resolvesIssues}] } },
-//   issues: { [issueId]: { id, appId, title, desc, priority, status, originatingTest, createdAt, updatedAt, resolvesIn } },
-//   nextSeq: { [prefix]: number }
+//   version: 1,
+//   lastUpdated: ISO string,
+//   lastExported: ISO string | "",
+//   data: {
+//     apps: { [appId]: { id, name, emoji, prefix, archived, versions: [...] } },
+//     issues: { [issueId]: { id, appId, title, desc, priority, status, createdAt, updatedAt, resolvesIn, linkedIssueId? } },
+//     nextSeq: { [prefix]: number }
+//   }
 // }
 
-let state = { apps: {}, issues: {}, nextSeq: {} };
+const EMPTY_DATA = () => ({ apps: {}, issues: {}, nextSeq: {} });
+
+const EMPTY_WRAPPER = () => ({
+  version: 1,
+  lastUpdated: new Date().toISOString(),
+  lastExported: '',
+  data: EMPTY_DATA()
+});
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return EMPTY_WRAPPER();
+    const parsed = JSON.parse(raw);
+    // Migration: detect old flat format (pre-v1.4) and promote it
+    if (parsed && parsed.apps && !parsed.data) {
+      return {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        lastExported: '',
+        data: {
+          apps:     parsed.apps     || {},
+          issues:   parsed.issues   || {},
+          nextSeq:  parsed.nextSeq  || {}
+        }
+      };
+    }
+    // Validate standardised wrapper
+    if (parsed && parsed.data && parsed.data.apps) return parsed;
+    return EMPTY_WRAPPER();
+  } catch(e) {
+    return EMPTY_WRAPPER();
+  }
+}
+
+function save(wrapper) {
+  wrapper.lastUpdated = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(wrapper));
+}
+
+// ══════════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════════
+let _wrapper = EMPTY_WRAPPER();   // full wrapper (version, timestamps, data)
+let state    = _wrapper.data;     // shorthand — always === _wrapper.data
 let _pendingImport = null;
 
 // Current UI state
-let testFilter    = 'open';
-let issueFilter   = 'open';
-let testAppFilter  = null;  // null = all
+let testFilter     = 'open';
+let issueFilter    = 'open';
+let testAppFilter  = null;
 let issueAppFilter = null;
 let selectedIssues = new Set();
 let editingIssueId = null;
 
 function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) { const parsed = JSON.parse(raw); if (parsed && parsed.apps) state = parsed; }
-  } catch(e) {}
+  _wrapper = load();
+  state    = _wrapper.data;
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  save(_wrapper);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -660,6 +728,7 @@ function renderTab(tab) {
   if (tab==='tests')  { resetTestFilter(); renderTests(); }
   if (tab==='issues') renderIssues();
   if (tab==='brief')  renderBrief();
+  if (tab==='import') renderStorageInfo();
 }
 
 function resetTestFilter() {
@@ -1308,12 +1377,62 @@ function confirmImport() {
 // EXPORT
 // ══════════════════════════════════════════════════════════════════
 function exportData() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'});
+  _wrapper.lastExported = new Date().toISOString();
+  save(_wrapper);
+  const blob = new Blob([JSON.stringify(_wrapper, null, 2)], {type:'application/json'});
   const url  = URL.createObjectURL(blob);
   const a    = Object.assign(document.createElement('a'), {href:url, download:'test-issues.json'});
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  renderStorageInfo();
   toast('Exported test-issues.json');
+}
+
+function importBackup(file) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = JSON.parse(ev.target.result);
+      // Accept both wrapper format and legacy flat format
+      let newWrapper;
+      if (parsed && parsed.data && parsed.data.apps) {
+        newWrapper = parsed; // standardised wrapper
+      } else if (parsed && parsed.apps) {
+        newWrapper = { version:1, lastUpdated: new Date().toISOString(), lastExported:'', data: { apps: parsed.apps||{}, issues: parsed.issues||{}, nextSeq: parsed.nextSeq||{} } };
+      } else {
+        toast('⚠ Invalid backup format — not imported'); return;
+      }
+      if (!confirm('This will replace ALL current data with the backup. Continue?')) return;
+      _wrapper = newWrapper;
+      state    = _wrapper.data;
+      save(_wrapper);
+      renderTab(currentTab);
+      refreshStats();
+      renderStorageInfo();
+      toast('✓ Backup restored');
+    } catch(e) {
+      toast('⚠ Could not parse backup file');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// STORAGE INFO
+// ══════════════════════════════════════════════════════════════════
+function renderStorageInfo() {
+  const el = document.getElementById('storage-info');
+  if (!el) return;
+  const raw = localStorage.getItem(STORAGE_KEY) || '';
+  const kb  = (raw.length / 1024).toFixed(1);
+  const exp = _wrapper.lastExported ? fmtDate(_wrapper.lastExported) : 'Never';
+  const upd = _wrapper.lastUpdated  ? fmtDate(_wrapper.lastUpdated)  : '—';
+  el.innerHTML = `
+    <div class="stat-chip"><span>Storage:</span> <b>${kb} KB</b></div>
+    <div class="stat-chip"><span>Updated:</span> <b>${upd}</b></div>
+    <div class="stat-chip ${_wrapper.lastExported?'green':'red'}"><span>Exported:</span> <b>${exp}</b></div>
+    <div class="stat-chip"><span>Schema:</span> <b>v${_wrapper.version||1}</b></div>
+  `;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1344,6 +1463,7 @@ function toast(msg) {
 loadState();
 showTab('apps');
 refreshStats();
+renderStorageInfo();
 </script>
 </body>
 </html>
