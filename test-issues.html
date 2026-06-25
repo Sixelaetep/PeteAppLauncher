@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Test &amp; Issues v1.4</title>
+<title>Test &amp; Issues v1.5</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -67,6 +67,7 @@
   }
   .tab-badge.warn { background: rgba(247,129,102,0.15); color: var(--red); }
   .tab-badge.ok   { background: rgba(63,185,80,0.15); color: var(--green); }
+  .tab-badge.pending { background: rgba(255,166,87,0.15); color: var(--orange); }
 
   /* ── Stat bar (context-aware per tab) ── */
   #stat-bar {
@@ -315,7 +316,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.4</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.5</span></div>
   <div class="nav-spacer"></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
   <button class="nav-pill" onclick="openImportModal()">⬆ Import</button>
@@ -335,7 +336,7 @@
   <span class="stat-chip">Apps: <b id="st-apps">0</b></span>
   <span class="stat-chip green">Pass: <b id="st-pass">0</b></span>
   <span class="stat-chip red">Fail: <b id="st-fail">0</b></span>
-  <span class="stat-chip orange">Open: <b id="st-open">0</b></span>
+  <span class="stat-chip orange">Untested: <b id="st-open">0</b></span>
   <span class="stat-chip">Issues: <b id="st-issues">0</b></span>
   <span class="stat-chip" style="color:var(--purple)">Testing: <b id="st-testing">0</b></span>
 </div>
@@ -405,12 +406,24 @@
       <select id="brief-target-app" style="background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:7px 10px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;width:100%;max-width:280px">
       </select>
     </div>
+    <button class="action-btn primary" onclick="generateBrief()" id="btn-gen-brief" style="display:none">Generate Brief</button>
+
     <div id="brief-output" style="display:none">
-      <div class="section-head">Build Brief — Copy & paste to Claude</div>
+      <!-- 1. Copy to Claude -->
+      <div class="section-head" style="margin-top:16px">1 · Copy to Claude</div>
       <div class="copyable-box" id="brief-text"></div>
       <button class="action-btn primary" onclick="copyBrief()" style="margin-top:10px">Copy Brief</button>
+
+      <!-- 2. When Claude responds: download HTML -->
+      <div class="section-head" style="margin-top:24px">2 · When Claude responds — Download the HTML</div>
+      <p style="font-size:12px;color:var(--ink2);line-height:1.7;margin-bottom:10px">Ask Claude to deliver the updated HTML as a <strong style="color:var(--ink)">downloadable file</strong>. The brief already includes this instruction.</p>
+
+      <!-- 3. Import the release manifest JSON -->
+      <div class="section-head" style="margin-top:20px">3 · Import the Release Manifest JSON</div>
+      <p style="font-size:12px;color:var(--ink2);line-height:1.7;margin-bottom:10px">Claude will also output a release manifest JSON. Copy it and paste it below, or go to the <strong style="color:var(--ink)">Import tab</strong>.</p>
+      <textarea id="brief-paste-manifest" style="width:100%;height:100px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);font-size:16px;font-family:monospace;outline:none;resize:vertical" placeholder='Paste the release manifest JSON from Claude here…'></textarea>
+      <button class="action-btn primary" onclick="importFromBrief()" style="margin-top:8px">Import Manifest</button>
     </div>
-    <button class="action-btn primary" onclick="generateBrief()" id="btn-gen-brief" style="display:none">Generate Brief</button>
   </div>
 
   <!-- IMPORT TAB -->
@@ -703,10 +716,20 @@ function refreshStats() {
   el.textContent = openIssues;
   el.className   = 'tab-badge' + (openIssues > 0 ? ' warn' : '');
 
-  const failTests = tests.filter(t=>t.status==='fail').length;
+  const untestedTests = tests.filter(t=>!t.status||t.status==='open').length;
+  const failTests     = tests.filter(t=>t.status==='fail').length;
   const eb = document.getElementById('badge-tests');
-  eb.textContent = failTests;
-  eb.className   = 'tab-badge' + (failTests > 0 ? ' warn' : '');
+  // Show failing first (red), else untested (orange), else nothing
+  if (failTests > 0) {
+    eb.textContent = failTests;
+    eb.className   = 'tab-badge warn';
+  } else if (untestedTests > 0) {
+    eb.textContent = untestedTests;
+    eb.className   = 'tab-badge' + ' pending';
+  } else {
+    eb.textContent = '';
+    eb.className   = 'tab-badge';
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1225,7 +1248,10 @@ function generateBrief() {
   });
   txt += `### Issue IDs (for resolvesIssues in manifest)\n`;
   txt += issues.map(i=>i.id).join(', ');
-  txt += '\n\n---\nPlease deliver: updated HTML file + release manifest JSON (schema v1).';
+  txt += '\n\n---\n';
+  txt += 'Please deliver:\n';
+  txt += '1. Updated HTML file — as a downloadable file attachment\n';
+  txt += '2. Release manifest JSON (schema v1) — as a code block to copy and paste';
 
   document.getElementById('brief-text').textContent = txt;
   document.getElementById('brief-output').style.display='';
@@ -1239,6 +1265,25 @@ function copyBrief() {
 function copyModalBrief() {
   const txt = document.getElementById('modal-brief-text').textContent;
   navigator.clipboard.writeText(txt).then(()=>toast('Copied!')).catch(()=>toast('Copy failed'));
+}
+
+function importFromBrief() {
+  const txt = document.getElementById('brief-paste-manifest').value.trim();
+  if (!txt) { toast('Paste a manifest JSON first'); return; }
+  processManifestText(txt);
+  // If valid, the import modal will appear — clear the field on confirm
+  const orig = confirmImport.toString();
+  const _orig = window._origConfirmImport || confirmImport;
+  window._origConfirmImport = _orig;
+  // Clear the brief paste area after successful import
+  const field = document.getElementById('brief-paste-manifest');
+  const observer = new MutationObserver(() => {
+    if (document.getElementById('modal-import').classList.contains('hidden')) {
+      field.value = '';
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.getElementById('modal-import'), { attributes: true, attributeFilter: ['class'] });
 }
 
 // ══════════════════════════════════════════════════════════════════
