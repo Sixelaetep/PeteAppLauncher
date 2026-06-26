@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Test &amp; Issues v1.10</title>
+<title>Test &amp; Issues v1.11</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -337,7 +337,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.10</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.11</span></div>
   <div class="nav-spacer"></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
   <button class="nav-pill" onclick="openImportModal()">⬆ Import</button>
@@ -686,7 +686,8 @@ let issueFilter    = 'open';
 let testAppFilter  = null;
 let issueAppFilter = null;
 let selectedIssues = new Set();
-let editingIssueId = null;
+let editingIssueId   = null;
+let _originatingTest = null; // { appId, version, testId } — set when modal opened from a failed test
 
 function loadState() {
   _wrapper = load();
@@ -1227,8 +1228,9 @@ function confirmFailNote() {
 function logIssueFromTest(appId, version, testId) {
   const t = findTestInState(appId, version, testId);
   if (!t) return;
-  const app = state.apps[appId];
   editingIssueId = null;
+  // Store originating test so saveIssue can reset it to untested on save
+  _originatingTest = { appId, version, testId };
   populateIssueModal(appId, `[v${version}] ${t.title}`, t.failNote||`Test ${testId} failed.\nSteps: ${(t.steps||[]).join('; ')}`, 'high');
   document.getElementById('modal-issue').classList.remove('hidden');
 }
@@ -1359,7 +1361,8 @@ function clearSelection() {
 // ISSUE MODAL
 // ══════════════════════════════════════════════════════════════════
 function openNewIssueModal() {
-  editingIssueId = null;
+  editingIssueId   = null;
+  _originatingTest = null;
   populateIssueModal(issueAppFilter||activeApps()[0]?.id||'', '', '', 'medium');
   document.getElementById('modal-issue-title').textContent = 'Log Issue';
   document.getElementById('ni-delete-btn').style.display = 'none';
@@ -1401,7 +1404,8 @@ function updateIssuePrefixPreview() {
 
 function closeIssueModal() {
   document.getElementById('modal-issue').classList.add('hidden');
-  editingIssueId = null;
+  editingIssueId   = null;
+  _originatingTest = null;
 }
 
 function saveIssue() {
@@ -1425,10 +1429,22 @@ function saveIssue() {
     const app = state.apps[appId];
     const id  = nextIssueId(app.prefix);
     state.issues[id] = { id, appId, title, desc, priority, status, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+
+    // TI-032: if this issue was raised from a failed test, reset that test to Untested
+    if (_originatingTest) {
+      const ot = findTestInState(_originatingTest.appId, _originatingTest.version, _originatingTest.testId);
+      if (ot) {
+        ot.status    = 'open';
+        ot.failNote  = '';
+        ot.updatedAt = new Date().toISOString();
+      }
+      _originatingTest = null;
+    }
   }
   saveState();
   closeIssueModal();
   renderIssues();
+  if (currentTab === 'tests') renderTests();
   refreshStats();
   toast(editingIssueId ? 'Issue updated' : 'Issue logged');
 }
