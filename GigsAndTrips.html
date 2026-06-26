@@ -334,7 +334,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v3.9</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v4.0</span></h1>
     <div class="gat-sync-badge" id="gatSyncBadge" style="pointer-events:none;user-select:none"><div class="gat-sync-dot" id="gatSyncDot"></div><span id="gatSyncText"></span></div>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Sync">💾</button>
@@ -952,7 +952,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v3.9</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v4.0</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -1039,8 +1039,30 @@ function render(){
     if(isOver) past.push(ev); else upcoming.push(ev);
   });
 
-  upcoming.sort((a,b)=>(a.type==='gig'?a.date:a.startDate||'').localeCompare(b.type==='gig'?b.date:b.startDate||''));
-  past.sort((a,b)=>(b.type==='gig'?b.date:b.endDate||'').localeCompare(a.type==='gig'?a.date:a.endDate||''));
+  // Sort key: ISO datetime string for precise ordering including time.
+  // Gigs use their time if set, otherwise end-of-day so untimed gigs
+  // sit after timed ones on the same date. Trips use start (upcoming)
+  // or end (past) date at midnight / end-of-day respectively.
+  // Tie-break: trips before gigs (bigger commitment), then name A-Z.
+  function sortKey(ev, forPast){
+    if(ev.type==='gig'){
+      const t=ev.time||'23:59';
+      return (ev.date||'')+'T'+t;
+    } else {
+      return forPast
+        ? (ev.endDate||ev.startDate||'')+'T23:59'
+        : (ev.startDate||ev.endDate||'')+'T00:00';
+    }
+  }
+  function sortCmp(a, b, forPast){
+    const ka=sortKey(a,forPast), kb=sortKey(b,forPast);
+    if(ka!==kb) return forPast ? kb.localeCompare(ka) : ka.localeCompare(kb);
+    // Same datetime: trips first, then alphabetical
+    if(a.type!==b.type) return a.type==='trip'?-1:1;
+    return (a.name||'').localeCompare(b.name||'');
+  }
+  upcoming.sort((a,b)=>sortCmp(a,b,false));
+  past.sort((a,b)=>sortCmp(a,b,true));
 
   const list = _tab==='upcoming' ? upcoming : past;
 
@@ -1103,9 +1125,7 @@ function renderGigCard(g, d){
   const ti=gigTypeInfo(g.gigType||g.type2||'music');
   const hasReview=g.review&&g.review.rating;
   const stars=hasReview?'★'.repeat(g.review.rating)+'☆'.repeat(5-g.review.rating):'';
-  // Conflict: trips that overlap this gig date (excluding linked trip)
   const tripConflicts=gigsConflictingTrips(g.date, g.tripId||null, d);
-  // Conflict: other gigs on the same date
   const gigConflicts=(!g.done&&!g.missed)?gigsOnSameDate(g.id, g.date, d):[];
   let conflictHtml='';
   if(tripConflicts.length){
@@ -1154,17 +1174,14 @@ function renderTripCard(t, d){
   const gigsHtml=linkedGigs.length
     ?`<div class="trip-gigs-row">🎸 <span>${linkedGigs.map(g=>`<span class="trip-gig-badge">${esc(g.name)}</span>`).join(' ')}</span></div>`:'';
 
-  // Conflicts: other overlapping trips + unlinked gigs inside this trip's dates
   let tripConflictHtml='';
   if(t.status!=='Cancelled'&&t.status!=='Completed'){
     const overlapTrips=tripsOverlapping(t.id, t.startDate, t.endDate, d);
     const unlinked=unlinkedGigsInTrip(t.id, t.startDate, t.endDate, d);
-    if(overlapTrips.length){
+    if(overlapTrips.length)
       tripConflictHtml+=`<div class="conflict-banner"><span>⚠️</span><span>Overlaps with trip: <strong>${esc(overlapTrips.map(x=>x.name).join(', '))}</strong></span></div>`;
-    }
-    if(unlinked.length){
+    if(unlinked.length)
       tripConflictHtml+=`<div class="conflict-banner"><span>⚠️</span><span>Unlinked event${unlinked.length>1?'s':''} during trip: <strong>${esc(unlinked.map(g=>g.name).join(', '))}</strong></span></div>`;
-    }
   }
 
   return `<div class="event-card${t.status==='Completed'||t.status==='Cancelled'?' past':''}${hasReview?' reviewed':''}" onclick="openTripDetail('${esc(t.id)}')">
@@ -2633,7 +2650,6 @@ function saveVenueEdit(idx){
 // ═══════════════════════════════════════════════════════════════════
 // CONFLICT DETECTION
 // ═══════════════════════════════════════════════════════════════════
-// Returns trips that conflict with a gig date, excluding the trip the gig is intentionally linked to
 function gigsConflictingTrips(gigDate, gigTripId, d){
   if(!gigDate) return [];
   return (d.events||[]).filter(e=>
@@ -2641,22 +2657,16 @@ function gigsConflictingTrips(gigDate, gigTripId, d){
     e.status!=='Cancelled' && e.status!=='Completed' &&
     e.startDate && e.endDate &&
     gigDate>=e.startDate && gigDate<=e.endDate &&
-    e.id!==gigTripId   // not the trip this gig is deliberately part of
+    e.id!==gigTripId
   );
 }
-
-// Returns other gigs on the same date (excluding itself)
 function gigsOnSameDate(gigId, gigDate, d){
   if(!gigDate) return [];
   return (d.events||[]).filter(e=>
     e.type==='gig' && !e._deleted &&
-    e.id!==gigId &&
-    e.date===gigDate &&
-    !e.missed
+    e.id!==gigId && e.date===gigDate && !e.missed
   );
 }
-
-// Returns trips whose date range overlaps with the given trip (excluding itself and cancelled/completed)
 function tripsOverlapping(tripId, startDate, endDate, d){
   if(!startDate||!endDate) return [];
   return (d.events||[]).filter(e=>
@@ -2664,21 +2674,17 @@ function tripsOverlapping(tripId, startDate, endDate, d){
     e.id!==tripId &&
     e.status!=='Cancelled' && e.status!=='Completed' &&
     e.startDate && e.endDate &&
-    e.startDate<=endDate && e.endDate>=startDate   // date range overlap
+    e.startDate<=endDate && e.endDate>=startDate
   );
 }
-
-// Returns gigs that fall inside a trip's date range but are NOT linked to it
 function unlinkedGigsInTrip(tripId, startDate, endDate, d){
   if(!startDate||!endDate) return [];
   return (d.events||[]).filter(e=>
     e.type==='gig' && !e._deleted &&
-    e.tripId!==tripId &&   // not already linked to this trip
-    e.date>=startDate && e.date<=endDate &&
-    !e.missed
+    e.tripId!==tripId &&
+    e.date>=startDate && e.date<=endDate && !e.missed
   );
 }
-
 function needsDayOff(dateStr,timeStr){
   if(!dateStr||!timeStr) return false;
   const d=new Date(dateStr+'T00:00:00');
