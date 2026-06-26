@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pete's Apps v5.5</title>
+<title>Pete's Apps v5.6</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
@@ -379,7 +379,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v5.5</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v5.6</span></button>
 
   <button class="nav-btn" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
   <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">🎟</button>
@@ -1138,33 +1138,49 @@ function statGat() {
     else if (diff === 1) txt = `<span class="val">${icon} Tomorrow</span> <span style="color:var(--ink)">${name}</span>${dateLine}`;
     else                 txt = `<span class="val">${icon} ${diff} days</span> <span style="color:var(--ink)">${name}</span>${dateLine}`;
 
-    // ── Conflict detection ──────────────────────────────────────────
-    const upcomingGigs  = upcoming.filter(e => e.type === 'gig');
-    const upcomingTrips = upcoming.filter(e => e.type === 'trip');
-    let conflictSuffix  = '';
+    // ── Conflict detection — mirrors GigsAndTrips helper logic ───────
+    // Run against ALL non-deleted events (not just upcoming) to match app behaviour
+    const allEvents  = events; // already filtered _deleted above
+    const allGigs    = allEvents.filter(e => e.type === 'gig');
+    const allTrips   = allEvents.filter(e => e.type === 'trip' && e.status !== 'Cancelled' && e.status !== 'Completed');
+    const conflicts  = [];
 
-    // Gig falling inside a trip window (and not already linked to it)
-    const clashingGigs = upcomingGigs.filter(g =>
-      upcomingTrips.some(t =>
+    // 1. Gig-to-gig: two upcoming non-missed/done gigs on the same date
+    //    Matches gigsOnSameDate(): same date, not missed — done gigs don't clash
+    const gigDates = {};
+    allGigs.forEach(g => {
+      if (!g.date || g.missed || g.done) return;
+      if (!gigDates[g.date]) gigDates[g.date] = [];
+      gigDates[g.date].push(g);
+    });
+    const gigGigClash = Object.values(gigDates).some(gs => gs.length > 1);
+    if (gigGigClash) conflicts.push('⚠️ gig/gig clash');
+
+    // 2. Gig inside a trip window but not linked to it
+    //    Matches gigsConflictingTrips(): gig date within trip start–end, tripId mismatch
+    const gigTripClash = allGigs.some(g =>
+      !g.missed &&
+      allTrips.some(t =>
         t.startDate && t.endDate &&
         g.date >= t.startDate && g.date <= t.endDate &&
         g.tripId !== t.id
       )
     );
-    if (clashingGigs.length) {
-      conflictSuffix = ' <span style="color:#d97706;font-weight:700">⚠️ gig/trip clash</span>';
-    }
+    if (gigTripClash) conflicts.push('⚠️ gig/trip clash');
 
-    // Two trips overlapping each other
-    if (!conflictSuffix) {
-      const tripClash = upcomingTrips.some((t, i) =>
-        upcomingTrips.slice(i + 1).some(t2 =>
-          t.startDate && t.endDate && t2.startDate && t2.endDate &&
-          t.startDate <= t2.endDate && t.endDate >= t2.startDate
-        )
-      );
-      if (tripClash) conflictSuffix = ' <span style="color:#d97706;font-weight:700">⚠️ trips overlap</span>';
-    }
+    // 3. Trip-to-trip overlap
+    //    Matches tripsOverlapping(): date ranges intersect
+    const tripTripClash = allTrips.some((t, i) =>
+      allTrips.slice(i + 1).some(t2 =>
+        t.startDate && t.endDate && t2.startDate && t2.endDate &&
+        t.startDate <= t2.endDate && t.endDate >= t2.startDate
+      )
+    );
+    if (tripTripClash) conflicts.push('⚠️ trips overlap');
+
+    const conflictSuffix = conflicts.length
+      ? ' <span style="color:#d97706;font-weight:700">' + conflicts.join(' · ') + '</span>'
+      : '';
 
     setCardStat('stat-gat', txt + conflictSuffix, diff === 0 ? 'ok' : '');
   } catch(e) {
