@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Claim Tracker v1.2</title>
+<title>Claim Tracker v1.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -183,7 +183,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v1.2</div>
+        <div class="ver">v1.3</div>
       </div>
     </div>
     <div class="header-actions">
@@ -223,6 +223,13 @@
     </div>
     <div class="section-title"><span>Unclaimed Entries</span></div>
     <div id="unclaimedList"></div>
+
+    <div class="section-title" id="expiredSection" style="cursor:pointer;display:none" onclick="toggleExpired()">
+      <span>&#8856; Cannot Claim</span>
+      <span id="expiredToggleIcon" style="font-size:12px;color:var(--ink3)">&#9660; Show</span>
+    </div>
+    <div id="expiredList" style="display:none"></div>
+
     <div class="section-title" style="cursor:pointer" onclick="toggleClaimed()">
       <span>Claimed Entries</span>
       <span id="claimedToggleIcon" style="font-size:12px;color:var(--ink3)">&#9660; Show</span>
@@ -730,7 +737,8 @@ function saveAsStdTrip() {
 // CLAIM MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════
 function promptClaimAll() {
-  const unclaimed = getEntries().filter(e=>!e.claimed&&!e._deleted);
+  // Only claimable (non-expired) unclaimed entries
+  const unclaimed = getEntries().filter(e=>!e.claimed&&!e._deleted&&claimStatus(e)!=='expired');
   document.getElementById('claimAllCount').textContent = unclaimed.length;
   document.getElementById('claimAllDate').value = todayISO();
   const totalExp = unclaimed.filter(e=>e.type==='expense').reduce((s,e)=>s+(e.amount||0),0);
@@ -741,7 +749,8 @@ function promptClaimAll() {
 
 function doClaimAll() {
   const date     = document.getElementById('claimAllDate').value;
-  const unclaimed = getEntries().filter(e=>!e.claimed&&!e._deleted);
+  // Only claim entries that are within the claim window
+  const unclaimed = getEntries().filter(e=>!e.claimed&&!e._deleted&&claimStatus(e)!=='expired');
   const now      = new Date().toISOString();
   unclaimed.forEach(e => {
     e.claimed = true; e.claimed_date = date;
@@ -792,42 +801,61 @@ function renderClaims() {
   document.getElementById('heroAmount').innerHTML  = parts[0]+'<span class="hero-pence">.'+parts[1]+'</span>';
   document.getElementById('heroExpenses').textContent = fmtGBP(expUnc);
   document.getElementById('heroMileage').textContent  = fmtGBP(milUnc);
-  document.getElementById('heroCount').textContent    = unclaimed.length;
+  // Count shows claimable entries only (expired shown separately)
+  const claimableCount = unclaimed.filter(e => claimStatus(e)!=='expired').length;
+  document.getElementById('heroCount').textContent    = claimableCount;
 
   const sub    = nextSubmissionDate();
   const days   = daysUntil(sub);
   const subFmt = sub.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
   document.getElementById('nextSubmission').textContent = subFmt+' (in '+days+' day'+(days===1?'':'s')+')';
-  document.getElementById('claimAllRow').style.display = unclaimed.length > 0 ? 'block' : 'none';
 
-  // ── Expiry alerts ──
-  const expiredEntries = unclaimed.filter(e => claimStatus(e)==='expired');
-  const warningEntries = unclaimed.filter(e => claimStatus(e)==='warning');
+  // ── Split by status ──
+  const expiredEntries  = unclaimed.filter(e => claimStatus(e)==='expired');
+  const warningEntries  = unclaimed.filter(e => claimStatus(e)==='warning');
+  const claimableEntries = unclaimed.filter(e => claimStatus(e)!=='expired');
+
+  // Mark All only applies to claimable entries
+  document.getElementById('claimAllRow').style.display = claimableEntries.length > 0 ? 'block' : 'none';
+
+  // ── Expiry alerts (warnings only — expired have their own section now) ──
   const alertEl = document.getElementById('expiryAlerts');
   let alertHtml = '';
-  if (expiredEntries.length) {
-    const months = getSettings().claimWindowMonths || 3;
-    alertHtml += '<div class="expiry-alert"><strong>&#9888;&#65039; '+expiredEntries.length+' entr'+(expiredEntries.length===1?'y':'ies')+' past the '+months+'-month claim window</strong>These entries can no longer be submitted. They remain visible for your records but cannot be claimed.</div>';
-  }
   if (warningEntries.length) {
     const minDays = Math.min(...warningEntries.map(e=>daysToExpiry(e)));
-    alertHtml += '<div class="expiry-warn"><strong>&#8987; '+warningEntries.length+' entr'+(warningEntries.length===1?'y':'ies')+' expiring soon</strong>Earliest expiry in '+minDays+' day'+(minDays===1?'':'s')+'. Claim these before they pass the '+( getSettings().claimWindowMonths||3)+'-month window.</div>';
+    alertHtml += '<div class="expiry-warn"><strong>&#8987; '+warningEntries.length+' entr'+(warningEntries.length===1?'y':'ies')+' expiring soon</strong>Earliest expiry in '+minDays+' day'+(minDays===1?'':'s')+'. Claim these before they pass the '+(getSettings().claimWindowMonths||3)+'-month window.</div>';
   }
   alertEl.innerHTML = alertHtml;
 
-  // ── Unclaimed list ──
+  // ── Unclaimed list (claimable only — warning + ok, sorted warning first then date desc) ──
   const ul = document.getElementById('unclaimedList');
-  if (!unclaimed.length) {
+  if (!claimableEntries.length) {
     ul.innerHTML = '<div class="empty-state"><div class="empty-icon">\u2705</div><p>Nothing to claim yet</p><div class="empty-sub">Add expenses or mileage using the tabs above</div></div>';
   } else {
-    // Sort: warning first, then expired, then ok — within each group by date desc
-    const sorted = [...unclaimed].sort((a,b) => {
-      const order = {warning:0, expired:1, ok:2};
-      const diff  = (order[claimStatus(a)]||2) - (order[claimStatus(b)]||2);
+    const sorted = [...claimableEntries].sort((a,b) => {
+      const order = {warning:0, ok:1};
+      const diff  = (order[claimStatus(a)]??1) - (order[claimStatus(b)]??1);
       if (diff !== 0) return diff;
       return (b.entry_date||'').localeCompare(a.entry_date||'');
     });
     ul.innerHTML = sorted.map(e=>renderEntry(e)).join('');
+  }
+
+  // ── Cannot Claim section (expired, window missed) ──
+  const expiredSection = document.getElementById('expiredSection');
+  const expiredList    = document.getElementById('expiredList');
+  if (!expiredEntries.length) {
+    expiredSection.style.display = 'none';
+    expiredList.style.display    = 'none';
+  } else {
+    expiredSection.style.display = 'flex';
+    const months = getSettings().claimWindowMonths || 3;
+    // Render expired entries sorted by date desc
+    const sortedExpired = [...expiredEntries].sort((a,b)=>(b.entry_date||'').localeCompare(a.entry_date||''));
+    expiredList.innerHTML =
+      '<div class="expiry-alert" style="margin-bottom:10px"><strong>&#9888;&#65039; '+expiredEntries.length+' entr'+(expiredEntries.length===1?'y':'ies')+' past the '+months+'-month claim window</strong>These cannot be submitted. They remain here for your records.</div>'+
+      sortedExpired.map(e=>renderEntry(e)).join('');
+    // Keep collapsed state — don't auto-open
   }
 
   // ── Claimed list ──
@@ -877,6 +905,14 @@ function renderEntry(e) {
       '<button class="btn btn-secondary btn-sm" onclick="openEditEntry(\''+e.id+'\')\">\u270f\ufe0f Edit</button>'+
       '<button class="btn btn-danger btn-sm" onclick="deleteEntry(\''+e.id+'\')\">\ud83d\uddd1\ufe0f</button>'+
     '</div></div>';
+}
+
+function toggleExpired() {
+  const list = document.getElementById('expiredList');
+  const icon = document.getElementById('expiredToggleIcon');
+  const open = list.style.display === 'block';
+  list.style.display = open ? 'none' : 'block';
+  icon.innerHTML = open ? '\u25bc Show' : '\u25b2 Hide';
 }
 
 function toggleClaimed() {
