@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pete's Apps v5.4</title>
+<title>Pete's Apps v5.5</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
@@ -379,7 +379,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v5.4</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">Pete's <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v5.5</span></button>
 
   <button class="nav-btn" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
   <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">🎟</button>
@@ -1083,30 +1083,54 @@ function statGat() {
     const d = JSON.parse(raw);
     const events = (d.events || []).filter(ev => !ev._deleted);
     const todayStr = todayISO();
+    const now = new Date();
 
-    const upcoming = events.filter(e => {
-      const end  = e.type === 'gig' ? e.date : e.endDate;
-      const done = e.type === 'gig' ? (e.done || e.missed) : (e.status === 'Completed' || e.status === 'Cancelled');
-      return !done && end && end >= todayStr;
-    }).sort((a, b) => {
-      const da = a.type === 'gig' ? a.date : a.startDate;
-      const db = b.type === 'gig' ? b.date : b.startDate;
-      return (da||'').localeCompare(db||'');
-    });
+    // ── Sort key: matches GigsAndTrips sortKey() exactly ──────────────
+    // Gigs: date + time (default 23:59 if no time set, so untimed gigs sort last on the day)
+    // Trips: startDate + 00:00 for upcoming
+    function gatSortKey(ev) {
+      if (ev.type === 'gig') return (ev.date || '') + 'T' + (ev.time || '23:59');
+      return (ev.startDate || ev.endDate || '') + 'T00:00';
+    }
+
+    // ── Filter to events that haven't ended and aren't marked done ────
+    // Additionally: if a gig has a time set and that time has already passed today, treat it as over
+    function isStillUpcoming(ev) {
+      const end  = ev.type === 'gig' ? ev.date : ev.endDate;
+      const done = ev.type === 'gig' ? (ev.done || ev.missed) : (ev.status === 'Completed' || ev.status === 'Cancelled');
+      if (done || !end || end < todayStr) return false;
+      // If the gig is today and has a time, advance past it once the time has passed
+      if (ev.type === 'gig' && ev.time && end === todayStr) {
+        const [hh, mm] = ev.time.split(':').map(Number);
+        const gigTime  = new Date(); gigTime.setHours(hh, mm, 0, 0);
+        if (now >= gigTime) return false;
+      }
+      return true;
+    }
+
+    const upcoming = events
+      .filter(isStillUpcoming)
+      .sort((a, b) => {
+        const ka = gatSortKey(a), kb = gatSortKey(b);
+        if (ka !== kb) return ka.localeCompare(kb);
+        // Same datetime: trips first, then alphabetical — matches GigsAndTrips tie-break
+        if (a.type !== b.type) return a.type === 'trip' ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
 
     if (!upcoming.length) { setCardStat('stat-gat', 'Nothing upcoming', 'muted'); return; }
 
-    const today  = new Date(); today.setHours(0,0,0,0);
-    const next   = upcoming[0];
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const next  = upcoming[0];
     const nextDateStr = next.type === 'gig' ? next.date : next.startDate;
-    const nextD  = new Date((nextDateStr || todayStr) + 'T00:00:00');
-    const diff   = Math.round((nextD - today) / 86400000);
-    const icon   = next.type === 'gig' ? '🎸' : '✈️';
-    const name   = next.name || (next.type === 'gig' ? 'Next gig' : 'Next trip');
+    const nextD = new Date((nextDateStr || todayStr) + 'T00:00:00');
+    const diff  = Math.round((nextD - today) / 86400000);
+    const icon  = next.type === 'gig' ? '🎸' : '✈️';
+    const name  = next.name || (next.type === 'gig' ? 'Next gig' : 'Next trip');
 
     // Format date as "Sat 14 Aug" and include time for gigs
-    const fmtDate = nextD.toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short'});
-    const timeStr = next.type === 'gig' && next.time ? ` · ${next.time}` : '';
+    const fmtDate  = nextD.toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short'});
+    const timeStr  = next.type === 'gig' && next.time ? ` · ${next.time}` : '';
     const dateLine = `<span style="font-size:11px;color:var(--ink);display:block;margin-top:2px">${fmtDate}${timeStr}</span>`;
 
     let txt;
