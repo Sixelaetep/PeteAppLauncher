@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Meal Planner v1.4</title>
+<title>Meal Planner v1.5</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -210,11 +210,11 @@
 <div class="header">
   <div class="header-top">
     <div class="logo">Meal <span>Planner</span></div>
-    <span class="version-badge">v1.4</span>
+    <span class="version-badge">v1.5</span>
   </div>
   <div class="tabs">
-    <button class="tab active" onclick="switchTab('recipes',this)">🍳 Recipes</button>
-    <button class="tab" onclick="switchTab('week',this)">📅 Week</button>
+    <button class="tab active" onclick="switchTab('week',this)">📅 Week</button>
+    <button class="tab" onclick="switchTab('recipes',this)">🍳 Recipes</button>
     <button class="tab" onclick="switchTab('shopping',this)">🛒 Shop</button>
     <button class="tab" onclick="switchTab('history',this)">📋 History</button>
     <button class="tab" onclick="switchTab('settings',this)">⚙️ Settings</button>
@@ -224,7 +224,7 @@
 <div class="main">
 
   <!-- ══ RECIPES TAB ══ -->
-  <div id="tab-recipes" class="section active">
+  <div id="tab-recipes" class="section">
     <div class="card">
       <div class="card-header">
         <span class="card-title" style="margin:0">Recipe Library</span>
@@ -236,7 +236,7 @@
   </div>
 
   <!-- ══ WEEK TAB ══ -->
-  <div id="tab-week" class="section">
+  <div id="tab-week" class="section active">
     <div class="card">
       <div class="week-nav">
         <button class="btn-icon" onclick="changeWeek(-1)">‹</button>
@@ -256,11 +256,12 @@
       <div class="card-header">
         <span class="card-title" style="margin:0">Shopping List</span>
         <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="toggleShopSort()" id="shopSortBtn">A–Z</button>
           <button class="btn btn-ghost btn-sm" onclick="copyShoppingList()">Copy</button>
           <button class="btn btn-ghost btn-sm" onclick="clearChecked()">Clear ✓</button>
         </div>
       </div>
-      <p style="font-size:12px;color:var(--text-soft)">From recipes this week. Tap to check off. Use arrows to reorder.</p>
+      <p style="font-size:12px;color:var(--text-soft)">From recipes this week. Tap name to edit. Use ↑↓ to reorder or A–Z to sort.</p>
     </div>
     <div id="shoppingContent"></div>
   </div>
@@ -312,7 +313,7 @@
 
     <div class="card">
       <p class="card-title">About</p>
-      <p style="font-size:13px;color:var(--text-mid)">Meal Planner v1.4 — part of the P Apps suite. Data stored locally on this device.</p>
+      <p style="font-size:13px;color:var(--text-mid)">Meal Planner v1.5 — part of the P Apps suite. Data stored locally on this device.</p>
     </div>
   </div>
 
@@ -427,6 +428,26 @@
   </div>
 </div>
 
+<!-- ══ EDIT SHOP ITEM MODAL ══ -->
+<div id="editShopModal" class="modal-overlay" onclick="handleModalClick(event,'editShopModal')">
+  <div class="modal" style="padding-bottom:40px">
+    <div class="modal-header">
+      <span class="modal-title">Edit Item</span>
+      <button class="modal-close" onclick="closeModal('editShopModal')">×</button>
+    </div>
+    <input type="hidden" id="editShopKey">
+    <label>Item name</label>
+    <input type="text" id="editShopName" style="font-size:16px">
+    <label>Quantity</label>
+    <input type="text" id="editShopQty" placeholder="e.g. 500 g or 2 fillets" style="font-size:16px">
+    <p style="font-size:11px;color:var(--text-soft);margin-top:6px">Edits apply to this week's list only and won't change the recipe.</p>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveShopItemEdit()">Save</button>
+      <button class="btn btn-ghost" onclick="closeModal('editShopModal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -437,10 +458,11 @@ const STORAGE_KEY = 'meal_planner_v1';
 
 const defaultState = {
   recipes: [],
-  weeks: {},        // weekStart → array[7] of dayPlan objects
+  weeks: {},        // weekStart → { '0'..'6': dayPlan }
   checkedItems: {}, // weekStart → { key: bool }
   removedItems: {}, // weekStart → { key: bool }
   shopOrder: {},    // weekStart → [key, key, …]
+  shopOverrides: {},// weekStart → { key: { name?, qty? } } — per-week item edits
   doneDays: {}      // weekStart → { dayIndex: bool }
 };
 
@@ -450,20 +472,37 @@ function load() {
     if (!raw) return JSON.parse(JSON.stringify(defaultState));
     const parsed = JSON.parse(raw);
     const d = parsed.data || parsed;
+
+    // Migrate weeks: convert any sparse/dense arrays to plain objects keyed by string day index
+    const rawWeeks = d.weeks || {};
+    const weeks = {};
+    Object.keys(rawWeeks).forEach(wk => {
+      const val = rawWeeks[wk];
+      if (Array.isArray(val)) {
+        // Legacy array format — convert to object
+        const obj = {};
+        val.forEach((day, i) => { if (day) obj[String(i)] = day; });
+        weeks[wk] = obj;
+      } else if (val && typeof val === 'object') {
+        weeks[wk] = val; // already object format
+      }
+    });
+
     return {
-      recipes:      d.recipes      || [],
-      weeks:        d.weeks        || {},
-      checkedItems: d.checkedItems || {},
-      removedItems: d.removedItems || {},
-      shopOrder:    d.shopOrder    || {},
-      doneDays:     d.doneDays     || {}
+      recipes:       d.recipes       || [],
+      weeks,
+      checkedItems:  d.checkedItems  || {},
+      removedItems:  d.removedItems  || {},
+      shopOrder:     d.shopOrder     || {},
+      shopOverrides: d.shopOverrides || {},
+      doneDays:      d.doneDays      || {}
     };
   } catch(e) { return JSON.parse(JSON.stringify(defaultState)); }
 }
 
 function save(st) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version: '1.3',
+    version: '1.5',
     lastUpdated: new Date().toISOString(),
     data: st
   }));
@@ -671,13 +710,14 @@ function executeDeleteRecipe() {
   const id = document.getElementById('editRecipeId').value;
   if (!id) return;
   state.recipes = state.recipes.filter(r => r.id !== id);
-  // Remove from all week plans (sparse array — iterate by index)
+  // Remove from all week plans (object keyed by string day index)
   Object.keys(state.weeks).forEach(wk => {
-    Array.from({ length: 7 }, (_, i) => i).forEach(i => {
-      const day = state.weeks[wk][i];
-      if (!day) return;
+    const weekData = state.weeks[wk] || {};
+    for (let di = 0; di < 7; di++) {
+      const day = weekData[String(di)];
+      if (!day) continue;
       SLOTS.forEach(slot => { if (day[slot]?.recipeId === id) day[slot] = null; });
-    });
+    }
   });
   save(state);
   closeModal('recipeModal');
@@ -709,7 +749,6 @@ function renderWeek() {
   const today     = todayISO();
   const weekDates = DAYS.map((_, i) => addDays(currentWeekStart, i));
   const isThisWeek = currentWeekStart === getWeekStart(new Date());
-  const weekPlan  = state.weeks[currentWeekStart] || [];
   const doneDays  = state.doneDays?.[currentWeekStart] || {};
 
   document.getElementById('weekLabel').textContent = isThisWeek ? 'This week' : weekRangeLabel(currentWeekStart);
@@ -727,7 +766,8 @@ function renderWeek() {
   }
 
   grid.innerHTML = visibleDayIndexes.map(({ date, di }) => {
-    const dayPlan  = weekPlan[di] || {};
+    const dk      = String(di);
+    const dayPlan = (state.weeks[currentWeekStart] || {})[dk] || {};
     const isToday  = date === today;
     const isEditing = editingDay === di;
 
@@ -827,7 +867,8 @@ function openAssignModal(weekStart, dayIndex, slot) {
   assigningSlot = { weekStart, dayIndex: Number(dayIndex), slot };
   document.getElementById('assignModalTitle').textContent = `${SLOT_ICONS[slot]} ${SLOT_LABELS[slot]}`;
   document.getElementById('assignModalSub').textContent = `${DAYS[dayIndex]}, ${fmtShortDate(addDays(weekStart, Number(dayIndex)))}`;
-  const current = state.weeks[weekStart]?.[dayIndex]?.[slot];
+  const dk = String(dayIndex);
+  const current = state.weeks[weekStart]?.[dk]?.[slot];
   document.getElementById('assignFreeText').value = current?.text || '';
   document.getElementById('assignSearch').value = '';
   selectedRecipeId = null;
@@ -839,7 +880,7 @@ function renderAssignOptions() {
   const q = (document.getElementById('assignSearch')?.value || '').toLowerCase();
   const filtered = state.recipes.filter(r => !q || r.name.toLowerCase().includes(q));
   const current = assigningSlot
-    ? state.weeks[assigningSlot.weekStart]?.[assigningSlot.dayIndex]?.[assigningSlot.slot]
+    ? state.weeks[assigningSlot.weekStart]?.[String(assigningSlot.dayIndex)]?.[assigningSlot.slot]
     : null;
   document.getElementById('assignOptions').innerHTML = filtered.map(r => {
     const sel = current?.recipeId === r.id ? ' selected' : '';
@@ -862,14 +903,17 @@ function confirmAssign() {
   if (!assigningSlot) return;
   const { weekStart, dayIndex, slot } = assigningSlot;
   const freeText = document.getElementById('assignFreeText').value.trim();
-  if (!state.weeks[weekStart]) state.weeks[weekStart] = [];
-  if (!state.weeks[weekStart][dayIndex]) state.weeks[weekStart][dayIndex] = {};
+  const dk = String(dayIndex); // string key — survives JSON round-trip perfectly
+
+  if (!state.weeks[weekStart]) state.weeks[weekStart] = {};
+  if (!state.weeks[weekStart][dk]) state.weeks[weekStart][dk] = {};
+
   if (selectedRecipeId) {
-    state.weeks[weekStart][dayIndex][slot] = { recipeId: selectedRecipeId };
+    state.weeks[weekStart][dk][slot] = { recipeId: selectedRecipeId };
   } else if (freeText) {
-    state.weeks[weekStart][dayIndex][slot] = { text: freeText };
+    state.weeks[weekStart][dk][slot] = { text: freeText };
   } else {
-    state.weeks[weekStart][dayIndex][slot] = null;
+    state.weeks[weekStart][dk][slot] = null;
   }
   selectedRecipeId = null;
   save(state);
@@ -881,7 +925,8 @@ function confirmAssign() {
 function clearSlot() {
   if (!assigningSlot) return;
   const { weekStart, dayIndex, slot } = assigningSlot;
-  if (state.weeks[weekStart]?.[dayIndex]) state.weeks[weekStart][dayIndex][slot] = null;
+  const dk = String(dayIndex);
+  if (state.weeks[weekStart]?.[dk]) state.weeks[weekStart][dk][slot] = null;
   selectedRecipeId = null;
   save(state);
   closeModal('assignModal');
@@ -978,13 +1023,13 @@ function closeRecipeViewer() {
 // SHOPPING TAB
 // ══════════════════════════════════════════════════════
 function buildShoppingList(weekStart) {
-  const weekPlan = state.weeks[weekStart] || [];
+  const weekData   = state.weeks[weekStart] || {};
   const aggregated = {}; // key → { name, unit, qtyNum, qtyStr }
 
-  // Use Array.from to iterate ALL 7 positions — weekPlan is a sparse array
-  // and Array.forEach skips holes, which causes assigned days to be missed
-  Array.from({ length: 7 }, (_, i) => weekPlan[i]).forEach(dayPlan => {
-    if (!dayPlan) return;
+  // Iterate all 7 days by string key '0'..'6'
+  for (let di = 0; di < 7; di++) {
+    const dayPlan = weekData[String(di)];
+    if (!dayPlan) continue;
     SLOTS.forEach(slot => {
       const entry = dayPlan[slot];
       if (!entry?.recipeId) return;
@@ -995,40 +1040,68 @@ function buildShoppingList(weekStart) {
         if (!aggregated[key]) aggregated[key] = { name: ing.name, unit: ing.unit, qtyNum: 0, qtyStr: '' };
         const num = parseFloat(ing.qty);
         if (!isNaN(num)) aggregated[key].qtyNum += num;
-        else aggregated[key].qtyStr = aggregated[key].qtyStr
-          ? aggregated[key].qtyStr + ', ' + ing.qty : (ing.qty || '');
+        else if (ing.qty) aggregated[key].qtyStr = aggregated[key].qtyStr
+          ? aggregated[key].qtyStr + ', ' + ing.qty : ing.qty;
       });
     });
-  });
+  }
 
   return aggregated;
 }
 
-function getOrderedShopItems(weekStart) {
-  const aggregated = buildShoppingList(weekStart);
-  const removed    = state.removedItems?.[weekStart] || {};
-  const order      = state.shopOrder?.[weekStart] || [];
+let shopSorted = false; // toggle state for A-Z sort
 
-  // All active item keys
+function toggleShopSort() {
+  shopSorted = !shopSorted;
+  const btn = document.getElementById('shopSortBtn');
+  if (btn) btn.textContent = shopSorted ? '↕ Manual' : 'A–Z';
+  renderShopping();
+}
+
+function getOrderedShopItems(weekStart) {
+  const aggregated  = buildShoppingList(weekStart);
+  const removed     = state.removedItems?.[weekStart]  || {};
+  const overrides   = state.shopOverrides?.[weekStart] || {};
+  const order       = state.shopOrder?.[weekStart]     || [];
+
+  // Apply overrides (name/qty edits) and filter removed
   const activeKeys = Object.keys(aggregated).filter(k => !removed[k]);
 
-  // Apply saved order, append any new keys at the end
-  const orderedKeys = [
+  // Apply saved manual order, append any new keys at the end
+  let orderedKeys = [
     ...order.filter(k => activeKeys.includes(k)),
     ...activeKeys.filter(k => !order.includes(k))
   ];
 
-  return orderedKeys.map(k => ({ key: k, ...aggregated[k] }));
+  // If A-Z sort requested, sort by display name
+  if (shopSorted) {
+    orderedKeys = [...orderedKeys].sort((a, b) => {
+      const nameA = (overrides[a]?.name || aggregated[a]?.name || '').toLowerCase();
+      const nameB = (overrides[b]?.name || aggregated[b]?.name || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }
+
+  return orderedKeys.map(k => {
+    const base = aggregated[k];
+    const ov   = overrides[k] || {};
+    return {
+      key:  k,
+      name: ov.name !== undefined ? ov.name : base.name,
+      unit: base.unit,
+      qtyNum:  ov.qty !== undefined ? 0    : base.qtyNum,
+      qtyStr:  ov.qty !== undefined ? ov.qty : base.qtyStr,
+      overridden: !!(ov.name !== undefined || ov.qty !== undefined)
+    };
+  });
 }
 
 function renderShopping() {
-  const weekStart = currentWeekStart;
-  const items     = getOrderedShopItems(weekStart);
-  const el        = document.getElementById('shoppingContent');
-  const checked   = state.checkedItems?.[weekStart] || {};
+  const weekStart  = currentWeekStart;
+  const items      = getOrderedShopItems(weekStart);
+  const el         = document.getElementById('shoppingContent');
+  const checked    = state.checkedItems?.[weekStart] || {};
   const aggregated = buildShoppingList(weekStart);
-  const removed   = state.removedItems?.[weekStart] || {};
-  const totalItems = Object.keys(aggregated).filter(k => !removed[k]).length;
 
   if (!Object.keys(aggregated).length) {
     el.innerHTML = `<div class="empty-state"><div class="es-icon">🛒</div><h3>Nothing on the list</h3><p>Assign recipes to your week plan and the shopping list builds automatically.</p></div>`;
@@ -1039,24 +1112,85 @@ function renderShopping() {
     return;
   }
 
+  // Update sort button label to match current state
+  const sortBtn = document.getElementById('shopSortBtn');
+  if (sortBtn) sortBtn.textContent = shopSorted ? '↕ Manual' : 'A–Z';
+
   el.innerHTML = items.map((item, idx) => {
     const isChecked = !!checked[item.key];
     const qtyParts = [];
-    if (item.qtyNum) qtyParts.push(item.qtyNum % 1 === 0 ? item.qtyNum : item.qtyNum.toFixed(1));
+    if (item.qtyNum) qtyParts.push(item.qtyNum % 1 === 0 ? String(item.qtyNum) : item.qtyNum.toFixed(1));
     if (item.qtyStr) qtyParts.push(item.qtyStr);
-    const qtyDisplay = (qtyParts.filter(Boolean).join(', ') + (item.unit ? ' ' + item.unit : '')).trim();
+    const qtyDisplay = (qtyParts.filter(Boolean).join(' + ') + (item.unit && !item.qtyStr ? ' ' + item.unit : '')).trim();
     const sk = item.key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const editedDot = item.overridden ? ' <span style="color:var(--amber);font-size:10px" title="Edited">✎</span>' : '';
     return `<div class="shop-item${isChecked?' checked':''}">
       <div class="shop-cb" onclick="toggleShopItem('${weekStart}','${sk}')">${isChecked?'✓':''}</div>
-      <span class="shop-item-name" onclick="toggleShopItem('${weekStart}','${sk}')">${esc(item.name)}</span>
+      <span class="shop-item-name" onclick="openEditShopItem('${sk}')">${esc(item.name)}${editedDot}</span>
       ${qtyDisplay ? `<span class="shop-qty">${esc(qtyDisplay)}</span>` : ''}
       <div class="shop-ctrl-wrap">
-        <button class="shop-ctrl" onclick="moveShopItem('${weekStart}','${sk}',${idx},-1)" ${idx===0?'disabled':''}>↑</button>
-        <button class="shop-ctrl" onclick="moveShopItem('${weekStart}','${sk}',${idx},1)"  ${idx===items.length-1?'disabled':''}>↓</button>
+        <button class="shop-ctrl" onclick="moveShopItem('${weekStart}','${sk}',${idx},-1)" ${idx===0||shopSorted?'disabled':''}>↑</button>
+        <button class="shop-ctrl" onclick="moveShopItem('${weekStart}','${sk}',${idx},1)"  ${idx===items.length-1||shopSorted?'disabled':''}>↓</button>
         <button class="shop-ctrl rm" onclick="removeShopItem('${weekStart}','${sk}')">×</button>
       </div>
     </div>`;
   }).join('');
+}
+
+function openEditShopItem(key) {
+  const weekStart  = currentWeekStart;
+  const aggregated = buildShoppingList(weekStart);
+  const overrides  = state.shopOverrides?.[weekStart] || {};
+  const base       = aggregated[key] || {};
+  const ov         = overrides[key]  || {};
+
+  const name = ov.name !== undefined ? ov.name : (base.name || '');
+  // Build qty display
+  const qtyParts = [];
+  if (base.qtyNum) qtyParts.push(base.qtyNum % 1 === 0 ? String(base.qtyNum) : base.qtyNum.toFixed(1));
+  if (base.qtyStr) qtyParts.push(base.qtyStr);
+  const baseQty = (qtyParts.join(' + ') + (base.unit && !base.qtyStr ? ' ' + base.unit : '')).trim();
+  const qty = ov.qty !== undefined ? ov.qty : baseQty;
+
+  document.getElementById('editShopKey').value  = key;
+  document.getElementById('editShopName').value = name;
+  document.getElementById('editShopQty').value  = qty;
+  document.getElementById('editShopModal').classList.add('open');
+  setTimeout(() => document.getElementById('editShopName').focus(), 100);
+}
+
+function saveShopItemEdit() {
+  const weekStart = currentWeekStart;
+  const key       = document.getElementById('editShopKey').value;
+  const name      = document.getElementById('editShopName').value.trim();
+  const qty       = document.getElementById('editShopQty').value.trim();
+
+  if (!state.shopOverrides) state.shopOverrides = {};
+  if (!state.shopOverrides[weekStart]) state.shopOverrides[weekStart] = {};
+
+  const aggregated = buildShoppingList(weekStart);
+  const base       = aggregated[key] || {};
+  // Only store override if actually different from source
+  const baseName = base.name || '';
+  const baseQtyParts = [];
+  if (base.qtyNum) baseQtyParts.push(base.qtyNum % 1 === 0 ? String(base.qtyNum) : base.qtyNum.toFixed(1));
+  if (base.qtyStr) baseQtyParts.push(base.qtyStr);
+  const baseQty = (baseQtyParts.join(' + ') + (base.unit && !base.qtyStr ? ' ' + base.unit : '')).trim();
+
+  const ov = {};
+  if (name !== baseName) ov.name = name;
+  if (qty  !== baseQty)  ov.qty  = qty;
+
+  if (Object.keys(ov).length) {
+    state.shopOverrides[weekStart][key] = ov;
+  } else {
+    delete state.shopOverrides[weekStart][key];
+  }
+
+  save(state);
+  closeModal('editShopModal');
+  renderShopping();
+  toast('Item updated ✓');
 }
 
 function toggleShopItem(weekStart, key) {
@@ -1132,11 +1266,11 @@ function renderHistory() {
       .map(Number)
       .sort((a, b) => a - b);
 
-    const weekPlan = state.weeks[wk] || [];
+    const weekData = state.weeks[wk] || {};
 
     const daysHtml = dayIndexes.map(di => {
       const date    = addDays(wk, di);
-      const dayPlan = weekPlan[di] || {};
+      const dayPlan = weekData[String(di)] || {};
       const meals   = SLOTS.map(slot => {
         const entry = dayPlan[slot];
         if (!entry) return null;
@@ -1183,12 +1317,13 @@ function importJSON(event) {
       const d = parsed.data || parsed;
       if (!d.recipes && !d.weeks) throw new Error('Bad format');
       state = {
-        recipes:      d.recipes      || [],
-        weeks:        d.weeks        || {},
-        checkedItems: d.checkedItems || {},
-        removedItems: d.removedItems || {},
-        shopOrder:    d.shopOrder    || {},
-        doneDays:     d.doneDays     || {}
+        recipes:       d.recipes       || [],
+        weeks:         d.weeks         || {},
+        checkedItems:  d.checkedItems  || {},
+        removedItems:  d.removedItems  || {},
+        shopOrder:     d.shopOrder     || {},
+        shopOverrides: d.shopOverrides || {},
+        doneDays:      d.doneDays      || {}
       };
       save(state); renderRecipes(); toast('Backup restored ✓');
     } catch(err) { toast('Import failed — invalid file'); }
@@ -1268,7 +1403,7 @@ function toast(msg) {
 // ══════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════
-renderRecipes();
+renderWeek();
 </script>
 </body>
 </html>
