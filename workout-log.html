@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Workout Log v1.2</title>
+<title>Workout Log v1.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -283,7 +283,7 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--s
 <header class="header">
   <div style="display:flex;align-items:baseline;gap:4px">
     <span class="header-logo">💪 <span>Workout</span> Log</span>
-    <span class="header-ver">v1.2</span>
+    <span class="header-ver">v1.3</span>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
     <button class="hdr-btn" onclick="showExportMenu()">Export</button>
@@ -313,7 +313,7 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--s
     </div>
     <div id="plans-library">
       <div id="plansList"></div>
-      <button class="btn btn-primary btn-full" onclick="newPlan()">&#＋; Create New Plan</button>
+      <button class="btn btn-primary btn-full" onclick="newPlan()">+ Create New Plan</button>
     </div>
     <div id="plans-builder" style="display:none">
       <div class="card">
@@ -417,7 +417,7 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--s
 <script>
 // ── Storage ──────────────────────────────────────────────────────────
 const STORAGE_KEY = 'workoutlog_v1';
-const APP_VER = '1.2';
+const APP_VER = '1.3';
 
 function loadData() {
   try {
@@ -853,12 +853,13 @@ function completeSession(ws, ds) {
       if(!session.ticks[`${ci}-${ei}`]) return;
       if(!D.exerciseHistory[el.name]) D.exerciseHistory[el.name]=[];
       D.exerciseHistory[el.name]=D.exerciseHistory[el.name].filter(e=>e.date!==ds);
-      // Record planned values as actuals (actuals modal removed per WOR-005)
+      const isTime = el.elType==='time';  // fix: was el.type which is undefined
       D.exerciseHistory[el.name].push({
         date:ds,
-        plannedSets:el.sets, plannedReps: el.type==='time'?null:el.reps, plannedWeight:el.weight,
-        actualSets:el.sets,  actualReps: el.type==='time'?null:el.reps,  actualWeight:el.weight,
-        elType: el.elType||'reps', duration: el.duration||null
+        elType: isTime ? 'time' : 'reps',
+        duration: isTime ? (el.duration||null) : null,
+        plannedSets:el.sets, plannedReps: isTime?null:el.reps, plannedWeight: isTime?null:el.weight,
+        actualSets:el.sets,  actualReps:  isTime?null:el.reps,  actualWeight:  isTime?null:el.weight
       });
       D.exerciseHistory[el.name].sort((a,b)=>a.date.localeCompare(b.date));
     });
@@ -1300,21 +1301,55 @@ function renderProgressExercises(){
   const wrap=document.getElementById('progress-exercises');
   const history=D.exerciseHistory||{};
   const exercises=Object.keys(history).filter(k=>history[k].length>0).sort();
-  if(!exercises.length){wrap.innerHTML=`<div class="empty-state"><div class="empty-icon">&#127947;</div><div class="empty-text">No exercise history yet</div><div class="empty-sub">Complete sessions and log actuals to see progress</div></div>`;return;}
+  if(!exercises.length){wrap.innerHTML=`<div class="empty-state"><div class="empty-icon">&#127947;</div><div class="empty-text">No exercise history yet</div><div class="empty-sub">Complete sessions to see progress here</div></div>`;return;}
   let html='';
   exercises.forEach(name=>{
     const entries=history[name].slice(-10); if(!entries.length) return;
     const latest=entries[entries.length-1];
-    const pb=Math.max(...entries.map(e=>parseFloat(e.actualWeight)||0));
-    const isPB=parseFloat(latest.actualWeight)>=pb;
-    const trend=entries.length>1?(parseFloat(latest.actualWeight)>parseFloat(entries[entries.length-2].actualWeight)?'\u2B06':parseFloat(latest.actualWeight)<parseFloat(entries[entries.length-2].actualWeight)?'\u2B07':'\u2192'):'';
-    const maxW=Math.max(...entries.map(e=>parseFloat(e.actualWeight)||1));
-    html+=`<div class="ex-history-row">
-      <div class="ex-history-name">${name} ${isPB?'<span class="ex-pb">\u2605 PB</span>':''} <span style="font-size:12px">${trend}</span></div>
-      <div style="font-size:11px;color:var(--text-soft)">${latest.actualSets}\u00d7${latest.actualReps} @ ${latest.actualWeight}kg ${isPB?'<span style="color:var(--success);font-weight:600">Personal best!</span>':''}</div>
-      <div class="mini-chart">${entries.map((e,i)=>{const h=Math.max(4,Math.round(((parseFloat(e.actualWeight)||0)/maxW)*32));return`<div class="mini-bar${i===entries.length-1?' latest':''}" style="height:${h}px" title="${e.date}: ${e.actualWeight}kg"></div>`}).join('')}</div>
-      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Last ${entries.length} sessions \u00b7 PB: ${pb}kg</div>
-    </div>`;
+    const isTime=latest.elType==='time';
+
+    let statLine='', pbLine='', trendIcon='', chartHtml='';
+
+    if(isTime){
+      // Time-based: track duration
+      const durations=entries.map(e=>parseFloat(e.duration)||0);
+      const maxD=Math.max(...durations,1);
+      const latestD=durations[durations.length-1];
+      const prevD=durations.length>1?durations[durations.length-2]:null;
+      trendIcon=prevD!==null?(latestD>prevD?'\u2B06':latestD<prevD?'\u2B07':'\u2192'):'';
+      statLine=`${latestD} min`;
+      pbLine='';
+      chartHtml=durations.map((d,i)=>{
+        const h=Math.max(4,Math.round((d/maxD)*32));
+        return`<div class="mini-bar${i===durations.length-1?' latest':''}" style="height:${h}px" title="${entries[i].date}: ${d}min"></div>`;
+      }).join('');
+      html+=`<div class="ex-history-row">
+        <div class="ex-history-name">${name} <span style="font-size:12px">${trendIcon}</span></div>
+        <div style="font-size:11px;color:var(--text-soft)">Last session: ${statLine}</div>
+        <div class="mini-chart">${chartHtml}</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Last ${entries.length} sessions</div>
+      </div>`;
+    } else {
+      // Reps/weight-based: track weight for PB
+      const weights=entries.map(e=>parseFloat(e.actualWeight)||0);
+      const pb=Math.max(...weights);
+      const latestW=weights[weights.length-1];
+      const prevW=weights.length>1?weights[weights.length-2]:null;
+      const isPB=latestW>=pb&&pb>0;
+      trendIcon=prevW!==null?(latestW>prevW?'\u2B06':latestW<prevW?'\u2B07':'\u2192'):'';
+      const maxW=Math.max(...weights,1);
+      statLine=`${latest.actualSets}\u00d7${latest.actualReps} @ ${latestW}kg`;
+      chartHtml=weights.map((w,i)=>{
+        const h=Math.max(4,Math.round((w/maxW)*32));
+        return`<div class="mini-bar${i===weights.length-1?' latest':''}" style="height:${h}px" title="${entries[i].date}: ${w}kg"></div>`;
+      }).join('');
+      html+=`<div class="ex-history-row">
+        <div class="ex-history-name">${name} ${isPB?'<span class="ex-pb">\u2605 PB</span>':''} <span style="font-size:12px">${trendIcon}</span></div>
+        <div style="font-size:11px;color:var(--text-soft)">${statLine} ${isPB?'<span style="color:var(--success);font-weight:600">Personal best!</span>':''}</div>
+        <div class="mini-chart">${chartHtml}</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Last ${entries.length} sessions \u00b7 PB: ${pb}kg</div>
+      </div>`;
+    }
   });
   wrap.innerHTML=`<div class="progress-card">${html||'<div style="color:var(--text-soft)">No data</div>'}</div>`;
 }
