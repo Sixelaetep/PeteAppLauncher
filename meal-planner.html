@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Meal Planner v1.5</title>
+<title>Meal Planner v1.6</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -210,7 +210,7 @@
 <div class="header">
   <div class="header-top">
     <div class="logo">Meal <span>Planner</span></div>
-    <span class="version-badge">v1.5</span>
+    <span class="version-badge">v1.6</span>
   </div>
   <div class="tabs">
     <button class="tab active" onclick="switchTab('week',this)">📅 Week</button>
@@ -256,7 +256,7 @@
       <div class="card-header">
         <span class="card-title" style="margin:0">Shopping List</span>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-ghost btn-sm" onclick="toggleShopSort()" id="shopSortBtn">A–Z</button>
+          <button class="btn btn-ghost btn-sm" id="shopSortBtn" onclick="toggleShopSort()">A–Z</button>
           <button class="btn btn-ghost btn-sm" onclick="copyShoppingList()">Copy</button>
           <button class="btn btn-ghost btn-sm" onclick="clearChecked()">Clear ✓</button>
         </div>
@@ -313,7 +313,7 @@
 
     <div class="card">
       <p class="card-title">About</p>
-      <p style="font-size:13px;color:var(--text-mid)">Meal Planner v1.5 — part of the P Apps suite. Data stored locally on this device.</p>
+      <p style="font-size:13px;color:var(--text-mid)">Meal Planner v1.6 — part of the P Apps suite. Data stored locally on this device.</p>
     </div>
   </div>
 
@@ -458,12 +458,12 @@ const STORAGE_KEY = 'meal_planner_v1';
 
 const defaultState = {
   recipes: [],
-  weeks: {},        // weekStart → { '0'..'6': dayPlan }
-  checkedItems: {}, // weekStart → { key: bool }
-  removedItems: {}, // weekStart → { key: bool }
-  shopOrder: {},    // weekStart → [key, key, …]
-  shopOverrides: {},// weekStart → { key: { name?, qty? } } — per-week item edits
-  doneDays: {}      // weekStart → { dayIndex: bool }
+  weeks: {},         // weekStart → { '0'..'6': dayPlan } — plain object, not array
+  checkedItems: {},  // weekStart → { key: bool }
+  removedItems: {},  // weekStart → { key: bool }
+  shopOrder: {},     // weekStart → [key, key, …]
+  shopOverrides: {}, // weekStart → { key: { name?, qty? } }
+  doneDays: {}       // weekStart → { dayIndex: bool }
 };
 
 function load() {
@@ -473,18 +473,17 @@ function load() {
     const parsed = JSON.parse(raw);
     const d = parsed.data || parsed;
 
-    // Migrate weeks: convert any sparse/dense arrays to plain objects keyed by string day index
+    // Migrate weeks: any array format → plain objects keyed by string day index
     const rawWeeks = d.weeks || {};
     const weeks = {};
     Object.keys(rawWeeks).forEach(wk => {
       const val = rawWeeks[wk];
       if (Array.isArray(val)) {
-        // Legacy array format — convert to object
         const obj = {};
         val.forEach((day, i) => { if (day) obj[String(i)] = day; });
         weeks[wk] = obj;
       } else if (val && typeof val === 'object') {
-        weeks[wk] = val; // already object format
+        weeks[wk] = val;
       }
     });
 
@@ -502,7 +501,7 @@ function load() {
 
 function save(st) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version: '1.5',
+    version: '1.6',
     lastUpdated: new Date().toISOString(),
     data: st
   }));
@@ -710,7 +709,7 @@ function executeDeleteRecipe() {
   const id = document.getElementById('editRecipeId').value;
   if (!id) return;
   state.recipes = state.recipes.filter(r => r.id !== id);
-  // Remove from all week plans (object keyed by string day index)
+  // Remove from all week plans
   Object.keys(state.weeks).forEach(wk => {
     const weekData = state.weeks[wk] || {};
     for (let di = 0; di < 7; di++) {
@@ -749,6 +748,7 @@ function renderWeek() {
   const today     = todayISO();
   const weekDates = DAYS.map((_, i) => addDays(currentWeekStart, i));
   const isThisWeek = currentWeekStart === getWeekStart(new Date());
+  const weekData  = state.weeks[currentWeekStart] || {};
   const doneDays  = state.doneDays?.[currentWeekStart] || {};
 
   document.getElementById('weekLabel').textContent = isThisWeek ? 'This week' : weekRangeLabel(currentWeekStart);
@@ -766,8 +766,7 @@ function renderWeek() {
   }
 
   grid.innerHTML = visibleDayIndexes.map(({ date, di }) => {
-    const dk      = String(di);
-    const dayPlan = (state.weeks[currentWeekStart] || {})[dk] || {};
+    const dayPlan  = weekData[String(di)] || {};
     const isToday  = date === today;
     const isEditing = editingDay === di;
 
@@ -1024,9 +1023,8 @@ function closeRecipeViewer() {
 // ══════════════════════════════════════════════════════
 function buildShoppingList(weekStart) {
   const weekData   = state.weeks[weekStart] || {};
-  const aggregated = {}; // key → { name, unit, qtyNum, qtyStr }
+  const aggregated = {};
 
-  // Iterate all 7 days by string key '0'..'6'
   for (let di = 0; di < 7; di++) {
     const dayPlan = weekData[String(di)];
     if (!dayPlan) continue;
@@ -1049,7 +1047,7 @@ function buildShoppingList(weekStart) {
   return aggregated;
 }
 
-let shopSorted = false; // toggle state for A-Z sort
+let shopSorted = false;
 
 function toggleShopSort() {
   shopSorted = !shopSorted;
@@ -1059,25 +1057,22 @@ function toggleShopSort() {
 }
 
 function getOrderedShopItems(weekStart) {
-  const aggregated  = buildShoppingList(weekStart);
-  const removed     = state.removedItems?.[weekStart]  || {};
-  const overrides   = state.shopOverrides?.[weekStart] || {};
-  const order       = state.shopOrder?.[weekStart]     || [];
+  const aggregated = buildShoppingList(weekStart);
+  const removed    = state.removedItems?.[weekStart]  || {};
+  const overrides  = state.shopOverrides?.[weekStart] || {};
+  const order      = state.shopOrder?.[weekStart]     || [];
 
-  // Apply overrides (name/qty edits) and filter removed
   const activeKeys = Object.keys(aggregated).filter(k => !removed[k]);
 
-  // Apply saved manual order, append any new keys at the end
   let orderedKeys = [
     ...order.filter(k => activeKeys.includes(k)),
     ...activeKeys.filter(k => !order.includes(k))
   ];
 
-  // If A-Z sort requested, sort by display name
   if (shopSorted) {
     orderedKeys = [...orderedKeys].sort((a, b) => {
-      const nameA = (overrides[a]?.name || aggregated[a]?.name || '').toLowerCase();
-      const nameB = (overrides[b]?.name || aggregated[b]?.name || '').toLowerCase();
+      const nameA = (overrides[a]?.name ?? aggregated[a]?.name ?? '').toLowerCase();
+      const nameB = (overrides[b]?.name ?? aggregated[b]?.name ?? '').toLowerCase();
       return nameA.localeCompare(nameB);
     });
   }
@@ -1085,12 +1080,13 @@ function getOrderedShopItems(weekStart) {
   return orderedKeys.map(k => {
     const base = aggregated[k];
     const ov   = overrides[k] || {};
+    const qtyNum = ov.qty !== undefined ? 0 : base.qtyNum;
+    const qtyStr = ov.qty !== undefined ? ov.qty : base.qtyStr;
     return {
       key:  k,
       name: ov.name !== undefined ? ov.name : base.name,
       unit: base.unit,
-      qtyNum:  ov.qty !== undefined ? 0    : base.qtyNum,
-      qtyStr:  ov.qty !== undefined ? ov.qty : base.qtyStr,
+      qtyNum, qtyStr,
       overridden: !!(ov.name !== undefined || ov.qty !== undefined)
     };
   });
@@ -1103,6 +1099,9 @@ function renderShopping() {
   const checked    = state.checkedItems?.[weekStart] || {};
   const aggregated = buildShoppingList(weekStart);
 
+  const sortBtn = document.getElementById('shopSortBtn');
+  if (sortBtn) sortBtn.textContent = shopSorted ? '↕ Manual' : 'A–Z';
+
   if (!Object.keys(aggregated).length) {
     el.innerHTML = `<div class="empty-state"><div class="es-icon">🛒</div><h3>Nothing on the list</h3><p>Assign recipes to your week plan and the shopping list builds automatically.</p></div>`;
     return;
@@ -1112,10 +1111,6 @@ function renderShopping() {
     return;
   }
 
-  // Update sort button label to match current state
-  const sortBtn = document.getElementById('shopSortBtn');
-  if (sortBtn) sortBtn.textContent = shopSorted ? '↕ Manual' : 'A–Z';
-
   el.innerHTML = items.map((item, idx) => {
     const isChecked = !!checked[item.key];
     const qtyParts = [];
@@ -1123,10 +1118,10 @@ function renderShopping() {
     if (item.qtyStr) qtyParts.push(item.qtyStr);
     const qtyDisplay = (qtyParts.filter(Boolean).join(' + ') + (item.unit && !item.qtyStr ? ' ' + item.unit : '')).trim();
     const sk = item.key.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    const editedDot = item.overridden ? ' <span style="color:var(--amber);font-size:10px" title="Edited">✎</span>' : '';
+    const editedMark = item.overridden ? ' <span style="color:var(--amber);font-size:10px">✎</span>' : '';
     return `<div class="shop-item${isChecked?' checked':''}">
       <div class="shop-cb" onclick="toggleShopItem('${weekStart}','${sk}')">${isChecked?'✓':''}</div>
-      <span class="shop-item-name" onclick="openEditShopItem('${sk}')">${esc(item.name)}${editedDot}</span>
+      <span class="shop-item-name" onclick="openEditShopItem('${sk}')">${esc(item.name)}${editedMark}</span>
       ${qtyDisplay ? `<span class="shop-qty">${esc(qtyDisplay)}</span>` : ''}
       <div class="shop-ctrl-wrap">
         <button class="shop-ctrl" onclick="moveShopItem('${weekStart}','${sk}',${idx},-1)" ${idx===0||shopSorted?'disabled':''}>↑</button>
@@ -1145,11 +1140,10 @@ function openEditShopItem(key) {
   const ov         = overrides[key]  || {};
 
   const name = ov.name !== undefined ? ov.name : (base.name || '');
-  // Build qty display
-  const qtyParts = [];
-  if (base.qtyNum) qtyParts.push(base.qtyNum % 1 === 0 ? String(base.qtyNum) : base.qtyNum.toFixed(1));
-  if (base.qtyStr) qtyParts.push(base.qtyStr);
-  const baseQty = (qtyParts.join(' + ') + (base.unit && !base.qtyStr ? ' ' + base.unit : '')).trim();
+  const baseQtyParts = [];
+  if (base.qtyNum) baseQtyParts.push(base.qtyNum % 1 === 0 ? String(base.qtyNum) : base.qtyNum.toFixed(1));
+  if (base.qtyStr) baseQtyParts.push(base.qtyStr);
+  const baseQty = (baseQtyParts.join(' + ') + (base.unit && !base.qtyStr ? ' ' + base.unit : '')).trim();
   const qty = ov.qty !== undefined ? ov.qty : baseQty;
 
   document.getElementById('editShopKey').value  = key;
@@ -1170,8 +1164,7 @@ function saveShopItemEdit() {
 
   const aggregated = buildShoppingList(weekStart);
   const base       = aggregated[key] || {};
-  // Only store override if actually different from source
-  const baseName = base.name || '';
+  const baseName   = base.name || '';
   const baseQtyParts = [];
   if (base.qtyNum) baseQtyParts.push(base.qtyNum % 1 === 0 ? String(base.qtyNum) : base.qtyNum.toFixed(1));
   if (base.qtyStr) baseQtyParts.push(base.qtyStr);
@@ -1186,7 +1179,6 @@ function saveShopItemEdit() {
   } else {
     delete state.shopOverrides[weekStart][key];
   }
-
   save(state);
   closeModal('editShopModal');
   renderShopping();
