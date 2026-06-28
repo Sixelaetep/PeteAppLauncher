@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v6.7</title>
+<title>P Apps v6.8</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
@@ -388,7 +388,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v6.7</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v6.8</span></button>
 
   <div class="nav-icons-group">
     <button class="nav-btn pete-only" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
@@ -1297,21 +1297,31 @@ async function backupAll() {
 }
 
 // ── Money Checker card stat ────────────────────────────────────
+// Mirrors money-checker.html v1.2 logic exactly:
+//   • Working-day-adjusted pay-in date
+//   • Pro-rated final partial week (weeklyBudget ÷ 7 × activeDays)
+//   • Spent-this-week deducted from current week's allocation (week-scoped date key)
 function statMoney() {
   try {
     const raw = localStorage.getItem('money_checker_v1');
     const DEFAULT = { weeklyBudget: 125, monthlyPayin: 700, payinDay: 28 };
-    let settings = { ...DEFAULT };
-    let lastBalance = null;
+    let settings     = { ...DEFAULT };
+    let lastBalance  = null;
+    let spentThisWeek = null;
+    let weekSpentDate = null;
     if (raw) {
       const parsed = JSON.parse(raw);
       const d = parsed.data || parsed;
       if (d.settings) settings = { ...DEFAULT, ...d.settings };
-      if (typeof d.lastBalance === 'number') lastBalance = d.lastBalance;
+      if (typeof d.lastBalance   === 'number') lastBalance   = d.lastBalance;
+      if (typeof d.spentThisWeek === 'number') spentThisWeek = d.spentThisWeek;
+      if (typeof d.weekSpentDate === 'string') weekSpentDate = d.weekSpentDate;
     }
 
-    // Working-day-adjusted pay-in date
-    function getPayinDate(year, month, day) {
+    const today = new Date(); today.setHours(0,0,0,0);
+
+    // Working-day-adjusted pay-in date (Sat→Fri, Sun→Fri)
+    function smGetPayinDate(year, month, day) {
       const d = new Date(year, month, day);
       const dow = d.getDay();
       if (dow === 6) d.setDate(d.getDate() - 1);
@@ -1319,56 +1329,89 @@ function statMoney() {
       return d;
     }
 
-    const today = new Date(); today.setHours(0,0,0,0);
+    // Sunday that contains a given date
+    function smWeekStart(date) {
+      const d = new Date(date); d.setDate(d.getDate() - d.getDay()); d.setHours(0,0,0,0); return d;
+    }
+
+    function smIsoDate(d) {
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+
+    // Pay-in boundaries
     const pd = settings.payinDay;
-    const thisMonthPayin = getPayinDate(today.getFullYear(), today.getMonth(), pd);
-    let nextPayin;
+    const thisMonthPayin = smGetPayinDate(today.getFullYear(), today.getMonth(), pd);
+    let lastPayin, nextPayin;
     if (thisMonthPayin <= today) {
+      lastPayin = thisMonthPayin;
       const nm = today.getMonth() === 11 ? 0 : today.getMonth() + 1;
       const ny = today.getMonth() === 11 ? today.getFullYear() + 1 : today.getFullYear();
-      nextPayin = getPayinDate(ny, nm, pd);
+      nextPayin = smGetPayinDate(ny, nm, pd);
     } else {
+      const pm = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+      const py = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+      lastPayin = smGetPayinDate(py, pm, pd);
       nextPayin = thisMonthPayin;
     }
 
-    // Count weeks remaining (Sun-based, not past)
-    function weekStart(date) {
-      const d = new Date(date); d.setDate(d.getDate() - d.getDay()); d.setHours(0,0,0,0); return d;
-    }
-    const lastPayin = thisMonthPayin <= today ? thisMonthPayin : (() => {
-      const pm = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-      const py = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-      return getPayinDate(py, pm, pd);
-    })();
-    let cursor = weekStart(lastPayin);
-    let weeksLeft = 0;
+    // Spent-this-week — only valid if stored date matches current week's Sunday
+    const currentSunday = smIsoDate(smWeekStart(today));
+    const effectiveSpent = (weekSpentDate === currentSunday && spentThisWeek !== null)
+      ? spentThisWeek : 0;
+
+    // Build budget weeks (mirrors getBudgetWeeks in money-checker v1.2)
+    const dailyRate = settings.weeklyBudget / 7;
+    const weeks = [];
+    let cursor = smWeekStart(lastPayin);
     for (let i = 0; i < 7; i++) {
-      const wEnd = new Date(cursor); wEnd.setDate(wEnd.getDate() + 6);
+      const wStart = new Date(cursor);
+      const wEnd   = new Date(cursor); wEnd.setDate(wEnd.getDate() + 6);
       if (cursor >= nextPayin) break;
-      const visible = wEnd >= lastPayin && cursor < nextPayin;
-      if (visible && wEnd >= today) weeksLeft++;
+      if (wEnd >= lastPayin && wStart < nextPayin) {
+        const isCurrent     = today >= wStart && today <= wEnd;
+        const isPast        = wEnd < today;
+        const isFinalPartial = wEnd >= nextPayin;
+        const activeDays    = isFinalPartial
+          ? Math.round((nextPayin - wStart) / 86400000)
+          : 7;
+        const budgetForWeek = isFinalPartial
+          ? Math.round(dailyRate * activeDays * 100) / 100
+          : settings.weeklyBudget;
+        weeks.push({ isCurrent, isPast, isFinalPartial, activeDays, budgetForWeek });
+      }
       cursor.setDate(cursor.getDate() + 7);
     }
 
-    const required = weeksLeft * settings.weeklyBudget;
+    // Required reserve (mirrors calcRequired in money-checker v1.2)
+    const required = weeks.reduce((total, w) => {
+      if (w.isPast) return total;
+      if (w.isCurrent) return total + Math.max(0, w.budgetForWeek - effectiveSpent);
+      return total + w.budgetForWeek;
+    }, 0);
+
+    const weeksLeft  = weeks.filter(w => !w.isPast).length;
     const daysToNext = Math.round((nextPayin - today) / 86400000);
-    const payinStr = nextPayin.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+    const payinStr   = nextPayin.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+    const reqFmt     = required.toLocaleString('en-GB', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const spentNote  = effectiveSpent > 0 ? ` · £${effectiveSpent} spent` : '';
 
     if (lastBalance !== null) {
-      const diff = lastBalance - required;
-      const absDiff = '£' + Math.abs(diff).toLocaleString('en-GB', {minimumFractionDigits:0, maximumFractionDigits:0});
-      const mode = diff >= 0 ? 'ok' : 'warn';
-      const label = diff >= 0
-        ? `<span class="val">${absDiff} headroom</span> · £${required} needed`
-        : `<span class="val">${absDiff} deficit</span> · £${required} needed`;
+      const diff    = lastBalance - required;
+      const absDiff = '£' + Math.abs(diff).toLocaleString('en-GB', {minimumFractionDigits:2, maximumFractionDigits:2});
+      const mode    = diff >= 0 ? 'ok' : 'warn';
+      const label   = diff >= 0
+        ? `<span class="val">${absDiff} headroom</span> · £${reqFmt} needed`
+        : `<span class="val">${absDiff} deficit</span> · £${reqFmt} needed`;
       setCardStat('stat-money',
-        label + `<span style="display:block;font-size:10px;color:var(--ink2);margin-top:2px">` +
-        weeksLeft + ` week${weeksLeft!==1?'s':''} left · pay-in ${payinStr} (${daysToNext}d)</span>`,
+        label +
+        `<span style="display:block;font-size:10px;color:var(--ink2);margin-top:2px">` +
+        weeksLeft + ` wk${weeksLeft!==1?'s':''} left${spentNote} · pay-in ${payinStr} (${daysToNext}d)</span>`,
         mode);
     } else {
       setCardStat('stat-money',
-        `<span class="val">£${required}</span> reserve needed · ${weeksLeft} week${weeksLeft!==1?'s':''} left` +
-        `<span style="display:block;font-size:10px;color:var(--ink2);margin-top:2px">Pay-in ${payinStr} · ${daysToNext} day${daysToNext!==1?'s':''} away</span>`,
+        `<span class="val">£${reqFmt}</span> reserve needed · ${weeksLeft} wk${weeksLeft!==1?'s':''} left` +
+        `<span style="display:block;font-size:10px;color:var(--ink2);margin-top:2px">` +
+        `Pay-in ${payinStr} · ${daysToNext} day${daysToNext!==1?'s':''} away${spentNote}</span>`,
         '');
     }
   } catch(e) {
