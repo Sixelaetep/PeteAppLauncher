@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v8.1</title>
+<title>P Apps v8.2</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
@@ -402,7 +402,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.1</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.2</span></button>
 
   <div class="nav-icons-group">
     <button class="nav-btn pete-only" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
@@ -832,83 +832,122 @@ function statReading() {
       || localStorage.getItem('reading-tracker-v4');
     if (!raw) { setCardStat('stat-reading', 'No data yet', 'muted'); return; }
     const appState = JSON.parse(raw);
-    // Get active tracker (first with books, or first)
     const trackers = appState.trackers || [];
     if (!trackers.length) { setCardStat('stat-reading', 'No trackers set up', 'muted'); return; }
     const tracker = trackers.find(t => t.books && t.books.length) || trackers[0];
-    const books = tracker.books || [];
+    const books   = tracker.books   || [];
     const entries = tracker.entries || [];
 
-    // Mirror the app's logic: entries store pageTo (page reached), not pages-read-in-session.
-    // totalRead = sum of highestPageFor(bookId) across all books.
-    // For manualComplete books with no full entry, credit full pages.
     function highestPageFor(bookId) {
       const vals = entries.filter(e => e.bookId === bookId).map(e => e.pageTo || 0);
       return vals.length ? Math.max(...vals) : 0;
     }
-    const totalPages = books.reduce((s,b) => s + (b.pages||0), 0);
-    const totalRead  = books.reduce((s,b) => {
+
+    const totalPages = books.reduce((s, b) => s + (b.pages||0), 0);
+    const totalRead  = books.reduce((s, b) => {
       const logged = highestPageFor(b.id);
       if (b.manualComplete && logged < (b.pages||0)) return s + (b.pages||0);
       return s + logged;
     }, 0);
     const rem = Math.max(0, totalPages - totalRead);
 
-    // Daily target: pages remaining / days left to target date
-    const targetDate = tracker.targetDate;
-    if (!targetDate || rem === 0) {
-      if (rem === 0 && totalPages > 0) {
-        setCardStat('stat-reading', '<span class="val">All done</span> — finished! 🎉', 'ok');
-      } else {
-        // Find current book for page display
-        const curBook = books.find(b => !b.manualComplete && highestPageFor(b.id) > 0 && highestPageFor(b.id) < (b.pages||0))
-          || books.find(b => !b.manualComplete && (b.pages||0) > 0) || books[0];
-        const curPg = curBook ? highestPageFor(curBook.id) : 0;
-        const pgLine = curBook
-          ? `<span style="font-size:11px;color:var(--ink);display:block;margin-top:2px">`
-            + `${(curBook.title||'').substring(0,28)+(curBook.title&&curBook.title.length>28?'…':'')} — p.${curPg}/${curBook.pages||'?'}`
-            + `</span>`
-          : '';
-        setCardStat('stat-reading', '<span class="val">' + rem.toLocaleString() + ' pages</span> remaining' + pgLine, '');
-      }
-      return;
-    }
-    const today = new Date(); today.setHours(0,0,0,0);
-    const target = new Date(targetDate + 'T00:00:00');
-    const daysLeft = Math.max(1, Math.ceil((target - today) / 86400000));
-
-    // Pages read today: for each book, max(pageTo today) - max(pageTo before today)
-    const todayStr = todayISO();
-    const readToday = books.reduce((s, b) => {
-      const priorMax  = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'') <  todayStr).map(e => e.pageTo||0), 0);
-      const todayMax  = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'').slice(0,10) === todayStr).map(e => e.pageTo||0), 0);
-      return s + Math.max(0, todayMax - priorMax);
-    }, 0);
-
-    // stillDue = pages still needed today, capped to actual remaining pages so
-    // Math.ceil on the daily rate never reports more than what's left in the book
-    const pagesPerDay = Math.ceil(rem / daysLeft);
-    const stillDue = Math.max(0, Math.min(pagesPerDay, rem) - readToday);
-
-    // Find the book currently being read (has entries, not complete)
+    // Find the active book (in progress, or next unstarted, or first)
     const activeBook = books.find(b => {
       if (b.manualComplete) return false;
       const pg = highestPageFor(b.id);
-      return pg > 0 && pg < (b.pages || 0);
+      return pg > 0 && pg < (b.pages||0);
     }) || books.find(b => !b.manualComplete && highestPageFor(b.id) === 0 && (b.pages||0) > 0)
       || books[0];
 
-    const bookLine = activeBook
-      ? `<span style="font-size:11px;color:var(--ink3);display:block;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">`
-        + `${activeBook.title ? activeBook.title.substring(0,28)+(activeBook.title.length>28?'…':'') : 'Current book'}`
-        + ` — p.${highestPageFor(activeBook.id)}/${activeBook.pages||'?'}`
-        + `</span>`
+    const curPage  = activeBook ? highestPageFor(activeBook.id) : 0;
+    const bookPages = activeBook?.pages || 0;
+    const shortTitle = activeBook
+      ? (activeBook.title||'').substring(0, 26) + (activeBook.title && activeBook.title.length > 26 ? '…' : '')
       : '';
 
+    // Helper: write directly to stat-reading to allow block-level bar at full width
+    function writeReadingStat(html, mode) {
+      const el = document.getElementById('stat-reading');
+      if (el) {
+        el.className = 'card-stat' + (mode ? ' ' + mode : '');
+        el.innerHTML = html;
+      }
+    }
+
+    // ── No target date set or all done ───────────────────────────
+    const targetDate = tracker.targetDate;
+    if (rem === 0 && totalPages > 0) {
+      writeReadingStat('<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span><span><span class="val">All done</span> — finished! 🎉</span></div>', 'ok');
+      return;
+    }
+    if (!targetDate) {
+      // No target — just show current book progress bar
+      const bar = bookPages > 0 ? buildPageBar(curPage, bookPages, curPage, bookPages) : '';
+      writeReadingStat(
+        `<div class="card-stat-row"><span class="card-stat-dot"></span><span>${shortTitle || 'No book started'}</span></div>` +
+        (bookPages > 0
+          ? `<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:4px">p.${curPage} of ${bookPages}</div>` + bar
+          : ''),
+        ''
+      );
+      return;
+    }
+
+    // ── Target date set — calculate daily target page ─────────────
+    const today    = new Date(); today.setHours(0,0,0,0);
+    const target   = new Date(targetDate + 'T00:00:00');
+    const daysLeft = Math.max(1, Math.ceil((target - today) / 86400000));
+
+    const todayStr    = todayISO();
+    const readToday   = books.reduce((s, b) => {
+      const priorMax = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'') < todayStr).map(e => e.pageTo||0), 0);
+      const todayMax = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'').slice(0,10) === todayStr).map(e => e.pageTo||0), 0);
+      return s + Math.max(0, todayMax - priorMax);
+    }, 0);
+
+    const pagesPerDay = Math.ceil(rem / daysLeft);
+    const stillDue    = Math.max(0, Math.min(pagesPerDay, rem) - readToday);
+
+    // Target page for today = curPage + stillDue (within book bounds)
+    const targetPage = activeBook ? Math.min(bookPages, curPage + stillDue) : 0;
+
+    // Progress bar: current position vs target page vs book end
+    function buildPageBar(cur, tot, tgt, bookEnd) {
+      if (!tot || tot <= 0) return '';
+      const curPct = Math.min(100, Math.round((cur / tot) * 100));
+      const tgtPct = Math.min(100, Math.round((tgt / tot) * 100));
+      const colour = cur >= tgt ? '#3fb950' : '#f59e0b';
+      return `<div style="margin-top:6px;position:relative">
+        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden">
+          <div style="height:100%;width:${curPct}%;background:${colour};border-radius:3px;transition:width 0.3s"></div>
+        </div>
+        ${tgt > cur && tgt < bookEnd ? `<div style="position:absolute;top:0;left:${tgtPct}%;width:2px;height:6px;background:rgba(255,255,255,.4);border-radius:1px;transform:translateX(-50%)"></div>` : ''}
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);margin-top:3px">
+          <span>p.${cur}</span>
+          <span>p.${bookEnd}</span>
+        </div>
+      </div>`;
+    }
+
     if (stillDue === 0) {
-      setCardStat('stat-reading', '<span class="val">Daily target met</span> ✓' + bookLine, 'ok');
+      // Daily target met
+      const bar = buildPageBar(curPage, bookPages, targetPage, bookPages);
+      writeReadingStat(
+        `<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span><span><span class="val">Daily target met</span> ✓</span></div>` +
+        (shortTitle ? `<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:4px">${shortTitle}</div>` : '') +
+        bar,
+        'ok'
+      );
     } else {
-      setCardStat('stat-reading', '<span class="val">' + stillDue + ' page' + (stillDue!==1?'s':'') + '</span> still due today' + bookLine, stillDue > 20 ? 'warn' : '');
+      // Show target page as hero
+      const bar = buildPageBar(curPage, bookPages, targetPage, bookPages);
+      const mode = stillDue > 20 ? 'warn' : '';
+      writeReadingStat(
+        `<div class="card-stat-row"><span class="card-stat-dot"></span><span>Reach <span class="val">p.${targetPage}</span> today</span></div>` +
+        (shortTitle ? `<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:4px">${shortTitle} — ${stillDue} page${stillDue!==1?'s':''} to go</div>` : '') +
+        bar,
+        mode
+      );
     }
   } catch(e) {
     setCardStat('stat-reading', 'Open app to load', 'muted');
