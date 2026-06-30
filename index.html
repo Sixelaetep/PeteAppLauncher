@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v8.2</title>
+<title>P Apps v8.3</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
@@ -402,7 +402,7 @@
 
 <!-- ── Navigation ── -->
 <nav id="nav">
-  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.2</span></button>
+  <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.3</span></button>
 
   <div class="nav-icons-group">
     <button class="nav-btn pete-only" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
@@ -1115,8 +1115,6 @@ function refreshCardStats() {
 
 function statGat() {
   try {
-    // Read the clean (tombstone-free) key written by pullGatFromSupabase and GigsAndTrips.
-    // Always filter _deleted as well — belt and braces against any stale cache.
     const raw = localStorage.getItem('gat_v1_clean') || localStorage.getItem('gat_v1');
     if (!raw) { setCardStat('stat-gat', 'Syncing…', 'muted'); return; }
     const d = JSON.parse(raw);
@@ -1124,24 +1122,18 @@ function statGat() {
     const todayStr = todayISO();
     const now = new Date();
 
-    // ── Sort key: matches GigsAndTrips sortKey() exactly ──────────────
-    // Gigs: date + time (default 23:59 if no time set, so untimed gigs sort last on the day)
-    // Trips: startDate + 00:00 for upcoming
     function gatSortKey(ev) {
       if (ev.type === 'gig') return (ev.date || '') + 'T' + (ev.time || '23:59');
       return (ev.startDate || ev.endDate || '') + 'T00:00';
     }
 
-    // ── Filter to events that haven't ended and aren't marked done ────
-    // Additionally: if a gig has a time set and that time has already passed today, treat it as over
     function isStillUpcoming(ev) {
       const end  = ev.type === 'gig' ? ev.date : ev.endDate;
       const done = ev.type === 'gig' ? (ev.done || ev.missed) : (ev.status === 'Completed' || ev.status === 'Cancelled');
       if (done || !end || end < todayStr) return false;
-      // If the gig is today and has a time, advance past it once the time has passed
       if (ev.type === 'gig' && ev.time && end === todayStr) {
         const [hh, mm] = ev.time.split(':').map(Number);
-        const gigTime  = new Date(); gigTime.setHours(hh, mm, 0, 0);
+        const gigTime = new Date(); gigTime.setHours(hh, mm, 0, 0);
         if (now >= gigTime) return false;
       }
       return true;
@@ -1152,78 +1144,126 @@ function statGat() {
       .sort((a, b) => {
         const ka = gatSortKey(a), kb = gatSortKey(b);
         if (ka !== kb) return ka.localeCompare(kb);
-        // Same datetime: trips first, then alphabetical — matches GigsAndTrips tie-break
         if (a.type !== b.type) return a.type === 'trip' ? -1 : 1;
         return (a.name || '').localeCompare(b.name || '');
       });
 
     if (!upcoming.length) { setCardStat('stat-gat', 'Nothing upcoming', 'muted'); return; }
 
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const next  = upcoming[0];
-    const nextDateStr = next.type === 'gig' ? next.date : next.startDate;
-    const nextD = new Date((nextDateStr || todayStr) + 'T00:00:00');
-    const diff  = Math.round((nextD - today) / 86400000);
-    const icon  = next.type === 'gig' ? '🎸' : '✈️';
-    const name  = next.name || (next.type === 'gig' ? 'Next gig' : 'Next trip');
+    const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
 
-    // Format date as "Sat 14 Aug" and include time for gigs
-    const fmtDate  = nextD.toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short'});
-    const timeStr  = next.type === 'gig' && next.time ? ` · ${next.time}` : '';
-    const dateLine = `<span style="font-size:11px;color:var(--ink);display:block;margin-top:2px">${fmtDate}${timeStr}</span>`;
+    function daysUntil(ev) {
+      const ds = ev.type === 'gig' ? ev.date : ev.startDate;
+      if (!ds) return 0;
+      return Math.round((new Date(ds + 'T00:00:00') - todayD) / 86400000);
+    }
 
-    let txt;
-    if (diff === 0)      txt = `<span class="val">${icon} Today!</span> <span style="color:var(--ink);font-weight:500">${name}</span>${dateLine}`;
-    else if (diff === 1) txt = `<span class="val">${icon} Tomorrow</span> <span style="color:var(--ink)">${name}</span>${dateLine}`;
-    else                 txt = `<span class="val">${icon} ${diff} days</span> <span style="color:var(--ink)">${name}</span>${dateLine}`;
+    function fmtShortDate(ev) {
+      const ds = ev.type === 'gig' ? ev.date : ev.startDate;
+      if (!ds) return '';
+      const d = new Date(ds + 'T00:00:00');
+      return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    }
 
-    // ── Conflict detection — ports GigsAndTrips helpers exactly ──────
-    // Scoped to current/future events only (date >= todayStr) so historic
-    // clashes never surface on the dashboard.
-    // Key exclusion rules mirror source helpers precisely:
-    //   gigsOnSameDate:       excludes missed gigs  (done gigs CAN still clash — intentional in app)
-    //   gigsConflictingTrips: excludes missed gigs
-    //   tripsOverlapping:     excludes Cancelled + Completed trips
-    // _deleted already stripped above; guard holds for gat_v1 fallback safety.
-    const activeGigs  = events.filter(e =>
-      e.type === 'gig' && !e.missed && e.date && e.date >= todayStr);
-    const activeTrips = events.filter(e =>
-      e.type === 'trip'
-      && e.status !== 'Cancelled' && e.status !== 'Completed'
-      && e.endDate && e.endDate >= todayStr);
-    const conflicts = [];
+    function evIcon(ev) { return ev.type === 'gig' ? '🎸' : '✈️'; }
 
-    // 1. Gig/gig — two non-missed gigs on the same date
+    // ── Check for active trip (currently on one) ──────────────────
+    const activeTrip = events.find(ev =>
+      ev.type === 'trip' && !ev._deleted
+      && ev.status !== 'Cancelled' && ev.status !== 'Completed'
+      && ev.startDate && ev.endDate
+      && ev.startDate <= todayStr && ev.endDate >= todayStr
+    );
+
+    // ── Next event hero ───────────────────────────────────────────
+    const next = upcoming[0];
+    const diff = daysUntil(next);
+    const name = next.name || (next.type === 'gig' ? 'Gig' : 'Trip');
+    const fmtD = fmtShortDate(next);
+    const timeStr = next.type === 'gig' && next.time ? ` · ${next.time}` : '';
+
+    let countdownLabel;
+    if (diff === 0)      countdownLabel = `<span class="val" style="color:var(--accent)">${evIcon(next)} Today</span>`;
+    else if (diff === 1) countdownLabel = `<span class="val">${evIcon(next)} Tomorrow</span>`;
+    else                 countdownLabel = `<span class="val">${evIcon(next)} ${diff} days</span>`;
+
+    // Hero block — name prominent, date + time on same row
+    let html = `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <span style="font-size:14px;font-weight:700;color:var(--ink);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</span>
+      ${countdownLabel}
+    </div>
+    <div style="font-size:11px;color:var(--ink2);margin-top:2px">${fmtD}${timeStr}</div>`;
+
+    // Venue line for gigs
+    if (next.type === 'gig' && next.venue) {
+      html += `<div style="font-size:11px;color:var(--ink3);margin-top:2px">📍 ${next.venue}</div>`;
+    }
+
+    // Active trip banner
+    if (activeTrip && (!next || activeTrip.id !== next.id)) {
+      const tripEnd = new Date(activeTrip.endDate + 'T00:00:00');
+      const daysLeft = Math.round((tripEnd - todayD) / 86400000);
+      html += `<div style="margin-top:6px;padding:5px 8px;border-radius:6px;background:rgba(249,115,22,.12);font-size:11px;color:#f97316;font-weight:600">
+        ✈️ On trip: ${activeTrip.name || 'Trip'} · ${daysLeft} day${daysLeft!==1?'s':''} left
+      </div>`;
+    }
+
+    // Pipeline — next 2 events after the first
+    const pipeline = upcoming.slice(1, 3);
+    if (pipeline.length) {
+      html += `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;display:flex;flex-direction:column;gap:4px">`;
+      pipeline.forEach(ev => {
+        const d2 = daysUntil(ev);
+        const d2Str = d2 === 0 ? 'Today' : d2 === 1 ? 'Tomorrow' : `${d2}d`;
+        const evName = ev.name || (ev.type === 'gig' ? 'Gig' : 'Trip');
+        const evVenue = ev.type === 'gig' && ev.venue ? ` · ${ev.venue}` : '';
+        const evTime  = ev.type === 'gig' && ev.time ? ` · ${ev.time}` : '';
+        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="font-size:11px;color:var(--ink2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${evIcon(ev)} ${evName}${evVenue}${evTime}</span>
+          <span style="font-size:11px;color:var(--ink3);white-space:nowrap">${fmtShortDate(ev)} <span style="color:var(--ink2);font-weight:600">${d2Str}</span></span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    // Summary footer
+    const gigCount  = upcoming.filter(e => e.type === 'gig').length;
+    const tripCount = upcoming.filter(e => e.type === 'trip').length;
+    const parts = [];
+    if (gigCount)  parts.push(`${gigCount} gig${gigCount!==1?'s':''}`);
+    if (tripCount) parts.push(`${tripCount} trip${tripCount!==1?'s':''}`);
+    if (parts.length) {
+      html += `<div style="font-size:10px;color:var(--ink3);margin-top:6px">${parts.join(' · ')} upcoming</div>`;
+    }
+
+    // ── Conflict detection ────────────────────────────────────────
+    const activeGigs  = events.filter(e => e.type === 'gig'  && !e.missed && e.date  && e.date  >= todayStr);
+    const activeTrips = events.filter(e => e.type === 'trip' && e.status !== 'Cancelled' && e.status !== 'Completed' && e.endDate && e.endDate >= todayStr);
+    const conflicts   = [];
+
     const gigsByDate = {};
-    activeGigs.forEach(g => {
-      if (!g.date) return;
-      (gigsByDate[g.date] = gigsByDate[g.date] || []).push(g);
-    });
-    if (Object.values(gigsByDate).some(gs => gs.length > 1))
-      conflicts.push('⚠️ gig/gig clash');
+    activeGigs.forEach(g => { if (!g.date) return; (gigsByDate[g.date] = gigsByDate[g.date] || []).push(g); });
+    if (Object.values(gigsByDate).some(gs => gs.length > 1)) conflicts.push('⚠️ gig/gig clash');
 
-    // 2. Gig/trip — non-missed gig inside a trip window it isn't linked to
-    if (activeGigs.some(g =>
-      activeTrips.some(t =>
-        t.startDate && t.endDate &&
-        g.date >= t.startDate && g.date <= t.endDate &&
-        g.tripId !== t.id
-      )
-    )) conflicts.push('⚠️ gig/trip clash');
+    if (activeGigs.some(g => activeTrips.some(t =>
+      t.startDate && t.endDate && g.date >= t.startDate && g.date <= t.endDate && g.tripId !== t.id
+    ))) conflicts.push('⚠️ gig/trip clash');
 
-    // 3. Trip/trip — two active trips whose date ranges overlap
-    if (activeTrips.some((t, i) =>
-      activeTrips.slice(i + 1).some(t2 =>
-        t.startDate && t.endDate && t2.startDate && t2.endDate &&
-        t.startDate <= t2.endDate && t.endDate >= t2.startDate
-      )
-    )) conflicts.push('⚠️ trips overlap');
+    if (activeTrips.some((t, i) => activeTrips.slice(i + 1).some(t2 =>
+      t.startDate && t.endDate && t2.startDate && t2.endDate &&
+      t.startDate <= t2.endDate && t.endDate >= t2.startDate
+    ))) conflicts.push('⚠️ trips overlap');
 
-    const conflictSuffix = conflicts.length
-      ? ' <span style="color:#d97706;font-weight:700">' + conflicts.join(' · ') + '</span>'
-      : '';
+    if (conflicts.length) {
+      html += `<div style="margin-top:6px;font-size:11px;color:#d97706;font-weight:700">${conflicts.join(' · ')}</div>`;
+    }
 
-    setCardStat('stat-gat', txt + conflictSuffix, diff === 0 ? 'ok' : '');
+    // Write directly for full-width layout
+    const statEl = document.getElementById('stat-gat');
+    if (statEl) {
+      statEl.className = 'card-stat' + (diff === 0 ? ' ok' : '');
+      statEl.innerHTML = html;
+    }
   } catch(e) {
     setCardStat('stat-gat', 'Open app to load', 'muted');
   }
