@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Reading">
 <meta name="theme-color" content="#0f1923">
-<title>Reading Tracker v2.2</title>
+<title>Reading Tracker v2.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -604,7 +604,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v2.2</span></div>
+    <div class="rt-logo">My Reading <span>v2.3</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -2014,7 +2014,7 @@ function renderNowReading(reqDaily) {
   const priorEntries   = state.entries.filter(e => e.bookId === book.id && e.date < today);
   const startOfDayPage = priorEntries.length > 0
     ? Math.max(...priorEntries.map(e => safePage(e.pageTo)))
-    : currentPage;
+    : 0;  // new to this book today — started from page 0
 
   // Detect tracker type for label
   const _nrCt  = appState.trackers.find(t => t.id === appState.activeTrackerId);
@@ -2046,7 +2046,25 @@ function renderNowReading(reqDaily) {
     if (logInp) logInp.placeholder = `${_nrUnitC} I reached`;
     return;
   }
-  const targetPage = Math.min(book.pages, startOfDayPage + (reqDaily || 0));
+  // Pages already logged today across ALL books in this tracker (not just the active book).
+  // This ensures switching books mid-day doesn't reset the daily target counter.
+  const todayAllBooks = state.entries.filter(e => e.date === today);
+  let pagesReadTodayAllBooks = 0;
+  state.books.forEach(b => {
+    const bookTodayEntries = todayAllBooks.filter(e => e.bookId === b.id);
+    if (bookTodayEntries.length === 0) return;
+    // Highest page reached today for this book
+    const highestToday = Math.max(...bookTodayEntries.map(e => safePage(e.pageTo)));
+    // Start-of-day position for this book
+    const bPrior = state.entries.filter(e => e.bookId === b.id && e.date < today);
+    const bStart = bPrior.length > 0 ? Math.max(...bPrior.map(e => safePage(e.pageTo))) : 0;
+    pagesReadTodayAllBooks += Math.max(0, highestToday - bStart);
+  });
+
+  // Remaining daily requirement after crediting everything already read today
+  const reqRemaining = Math.max(0, (reqDaily || 0) - pagesReadTodayAllBooks);
+
+  const targetPage = Math.min(book.pages, startOfDayPage + reqRemaining);
 
   // Pages read today for this book
   const todayEntries   = state.entries.filter(e => e.bookId === book.id && e.date === today);
@@ -2107,7 +2125,9 @@ function renderNowReading(reqDaily) {
 
   // ── Labels ──
   document.getElementById("nrBarLeft").textContent = doneToday
-    ? `p.${currentPage} — done ✓`
+    ? (pagesRequired === 0
+        ? `Day's target met — keep going!`
+        : `p.${currentPage} — done ✓`)
     : pagesReadTodayActual > 0
       ? `p.${currentPage} — ${pagesRequired - pagesReadTodayActual} more to target`
       : `Reach p.${targetPage} today`;
@@ -2115,11 +2135,14 @@ function renderNowReading(reqDaily) {
 
   // ── Legend ──
   const items = [
-    startOfDayPage > 0      ? ["var(--success)", "Previously read"]              : null,
-    !doneToday && pagesReadTodayActual > 0 ? ["var(--success)", `+${pagesReadTodayActual} today`] : null,
-    !doneToday              ? ["var(--danger)",  `${pagesRequired - pagesReadTodayActual} pages needed`] : null,
-    doneToday && pagesRequired > 0 ? ["var(--success)", `Today's ${pagesRequired} done`] : null,
-    pagesBonus > 0          ? ["#7b5ea7",        `+${pagesBonus} bonus`]          : null,
+    startOfDayPage > 0           ? ["var(--success)", "Previously read"]                                   : null,
+    !doneToday && pagesReadTodayActual > 0 ? ["var(--success)", `+${pagesReadTodayActual} today`]          : null,
+    !doneToday                   ? ["var(--danger)",  `${pagesRequired - pagesReadTodayActual} pages needed`] : null,
+    // Cross-book done: day target was met reading other books, show total across tracker
+    doneToday && pagesRequired === 0 && pagesReadTodayAllBooks > 0
+                                 ? ["var(--success)", `${pagesReadTodayAllBooks} pages read today ✓`]      : null,
+    doneToday && pagesRequired > 0 ? ["var(--success)", `Today's ${pagesRequired} done`]                   : null,
+    pagesBonus > 0               ? ["#7b5ea7",        `+${pagesBonus} bonus`]                              : null,
   ].filter(Boolean);
   document.getElementById("nrLegend").innerHTML = items.map(([c, l]) =>
     `<div class="nr-legend-item"><div class="nr-legend-dot" style="background:${c}"></div><span>${l}</span></div>`
