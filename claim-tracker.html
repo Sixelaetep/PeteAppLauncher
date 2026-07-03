@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Claim Tracker v1.7</title>
+<title>Claim Tracker v1.8</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -201,7 +201,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v1.7</div>
+        <div class="ver">v1.8</div>
       </div>
     </div>
     <div class="header-actions">
@@ -473,7 +473,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION  = '1.7';
+const VERSION  = '1.8';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 const SB_URL   = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
 const SB_ANON  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
@@ -501,8 +501,7 @@ function defaultEnvelope() {
     lastUpdated:  '',
     lastExported: '',
     data: {
-      entries:    [],
-      deletedIds: [],   // IDs deleted locally — prevents pull from re-adding them
+      entries:  [],
       settings: {
         commuteOw:        11.5,
         ratePerMile:      0.55,
@@ -540,8 +539,7 @@ function load() {
     env.lastUpdated  = parsed.lastUpdated  || '';
     env.lastExported = parsed.lastExported || '';
     if (parsed.data) {
-      env.data.entries    = parsed.data.entries    || [];
-      env.data.deletedIds = parsed.data.deletedIds || [];
+      env.data.entries = parsed.data.entries || [];
       if (parsed.data.settings) {
         const s = parsed.data.settings;
         env.data.settings.commuteOw         = s.commuteOw         ?? 11.5;
@@ -690,29 +688,13 @@ async function syncPull() {
   setSyncState('syncing', 'Pulling…');
   addLog('Pull started', 'info');
   try {
-    // Also pull settings row (record_key = '__settings__')
     const res = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&select=record_key,data,updated_at`);
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${res.status} ${err}`);
-    }
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     const rows = await res.json();
     addLog(`Pull received ${rows.length} row(s)`, 'ok');
 
-    // Separate settings row from entry rows
     const settingsRow = rows.find(r => r.record_key === '__settings__');
     const entryRows   = rows.filter(r => r.record_key !== '__settings__');
-
-    // Ensure deletedIds exists
-    if (!_env.data.deletedIds) _env.data.deletedIds = [];
-    const deletedSet = new Set(_env.data.deletedIds);
-
-    // If any deleted IDs still exist in cloud, remove them now
-    const staleCloudRows = entryRows.filter(r => deletedSet.has(r.record_key));
-    for (const row of staleCloudRows) {
-      addLog(`Cleaning stale cloud row: ${row.record_key}`, 'info');
-      await deleteRow(row.record_key);
-    }
 
     // Merge settings: cloud wins if newer
     if (settingsRow) {
@@ -724,31 +706,36 @@ async function syncPull() {
       }
     }
 
-    // Merge entries: cloud wins on matching id, local-only get pushed up
+    // Merge entries respecting tombstones (_deleted:true) from any device
     const localMap = {};
     getEntries().forEach(e => { localMap[e.id] = e; });
 
     entryRows.forEach(row => {
-      // Never re-add an entry the user has deleted locally
-      if (deletedSet.has(row.record_key)) return;
       const remote = row.data;
-      const local  = localMap[remote.id];
+      if (!remote || !remote.id) return;
+      if (remote._deleted) {
+        // Tombstone received from cloud — remove locally
+        delete localMap[remote.id];
+        return;
+      }
+      const local = localMap[remote.id];
+      // Local tombstone wins — don’t overwrite with a live cloud copy
+      if (local && local._deleted) return;
       if (!local || (remote.updated_at||'') > (local.updated_at||'')) {
         localMap[remote.id] = remote;
       }
     });
 
-    // Local-only entries (not in cloud) — push them up
+    // Local-only live entries not yet in cloud — push them up
     const cloudIds = new Set(entryRows.map(r => r.record_key));
-    const localOnly = getEntries().filter(e => !cloudIds.has(e.id));
+    const localOnly = Object.values(localMap).filter(e => !e._deleted && !cloudIds.has(e.id));
     if (localOnly.length) {
       addLog(`${localOnly.length} local-only entr(ies) to push`, 'info');
-      for (const e of localOnly) {
-        await upsertRow(e.id, e);
-      }
+      for (const e of localOnly) await upsertRow(e.id, e);
     }
 
-    _env.data.entries = Object.values(localMap);
+    // Strip any remaining local tombstones from the display list
+    _env.data.entries = Object.values(localMap).filter(e => !e._deleted);
     save(_env);
     renderAll();
     setSyncState('synced');
@@ -767,6 +754,7 @@ async function syncPush() {
   try {
     let count = 0;
     for (const e of getEntries()) {
+      if (e._deleted) continue; // tombstones handled separately
       await upsertRow(e.id, e);
       count++;
     }
@@ -805,18 +793,16 @@ async function upsertRow(recordKey, data) {
   }
 }
 
-// ── Delete one row from cloud ──
-async function deleteRow(recordKey) {
+// ── Tombstone one row in cloud (_deleted:true, updated_at now) ──
+// Keeps the row visible to other devices so their next pull removes it locally.
+async function tombstoneRow(recordKey, entryData) {
   if (!_sbToken || !_sbUserId) return;
   try {
-    const res = await sbFetch(
-      `/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`,
-      'DELETE'
-    );
-    if (!res.ok) throw new Error((await res.text()));
-    addLog(`Deleted from cloud: ${recordKey}`, 'ok');
+    const tombstone = { ...entryData, _deleted: true, updated_at: new Date().toISOString() };
+    await upsertRow(recordKey, tombstone);
+    addLog(`Tombstoned in cloud: ${recordKey}`, 'ok');
   } catch(err) {
-    addLog(`Cloud delete failed [${recordKey}]: ${err.message}`, 'err');
+    addLog(`Tombstone failed [${recordKey}]: ${err.message}`, 'err');
   }
 }
 
@@ -852,16 +838,17 @@ async function mutateEntry(entry) {
   }
 }
 
-// ── Entry-level delete ──
-async function deleteEntryFromCloud(id) {
+// ── Entry-level delete: tombstone in cloud so other devices see the deletion ──
+async function deleteEntryFromCloud(id, entrySnapshot) {
   save(_env);
   if (!_sbToken || !_sbUserId) return;
   setSyncState('syncing');
   try {
-    await deleteRow(id);
+    await tombstoneRow(id, entrySnapshot);
     setSyncState('synced');
   } catch(err) {
     setSyncState('error');
+    addLog('Delete sync failed: ' + err.message, 'err');
   }
 }
 
@@ -1083,13 +1070,10 @@ function unmarkClaimed(id) {
 
 function deleteEntry(id) {
   if (!confirm('Delete this entry?')) return;
-  _env.data.entries = getEntries().filter(e=>e.id!==id);
-  // Track deleted ID so syncPull never re-adds this entry from cloud
-  if (!_env.data.deletedIds) _env.data.deletedIds = [];
-  if (!_env.data.deletedIds.includes(id)) _env.data.deletedIds.push(id);
-  // Cap at 500 to avoid unbounded growth
-  if (_env.data.deletedIds.length > 500) _env.data.deletedIds = _env.data.deletedIds.slice(-500);
-  deleteEntryFromCloud(id); renderAll(); toast('Entry deleted');
+  // Capture snapshot before removing from local list — needed for tombstone payload
+  const snapshot = getEntries().find(e => e.id === id);
+  _env.data.entries = getEntries().filter(e => e.id !== id);
+  deleteEntryFromCloud(id, snapshot || { id }); renderAll(); toast('Entry deleted');
 }
 
 function computeAmount(entry) {
