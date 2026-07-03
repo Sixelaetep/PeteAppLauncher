@@ -305,12 +305,12 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v2.8</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v2.9</span></div></div>
   </div>
   <div class="header-actions">
-    <div class="sync-wrap" style="pointer-events:none;user-select:none">
-      <div class="sync-dot synced" id="sync-dot"></div>
-      <span id="sync-lbl">Saved</span>
+    <div class="sync-wrap" style="cursor:pointer" onclick="openDataModal()" title="Sync status">
+      <div class="sync-dot" id="sync-dot"></div>
+      <span id="sync-lbl">Connecting…</span>
     </div>
     <button class="hbtn primary" onclick="openDataModal()" title="Backup &amp; data" style="font-size:.95rem;padding:.4rem .65rem;">&#128190;</button>
     <button class="hbtn primary" onclick="openModal()">+ Bundle</button>
@@ -327,8 +327,16 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
       <button class="data-btn pri" onclick="exportData()">&#8595; Download backup</button>
       <button class="data-btn" onclick="document.getElementById('imp').click()">&#8593; Restore from backup</button>
     </div>
+    <div class="data-lbl">Cloud Sync</div>
+    <div id="syncStatusPanel" style="background:var(--bg);border-radius:8px;padding:.65rem .85rem;font-size:.75rem;color:var(--muted);line-height:1.9;margin-bottom:1rem;"></div>
+    <div class="data-btn-row">
+      <button class="data-btn" onclick="manualPull()">&#8595; Pull from cloud</button>
+      <button class="data-btn" onclick="manualPush()">&#8593; Push to cloud</button>
+    </div>
     <div class="data-lbl">Storage</div>
-    <div id="storageInfo" style="background:var(--bg);border-radius:8px;padding:.65rem .85rem;font-size:.75rem;color:var(--muted);line-height:1.9;"></div>
+    <div id="storageInfo" style="background:var(--bg);border-radius:8px;padding:.65rem .85rem;font-size:.75rem;color:var(--muted);line-height:1.9;margin-bottom:1rem;"></div>
+    <div class="data-lbl">Sync Log</div>
+    <div id="syncLog" style="background:var(--bg);border-radius:8px;padding:.6rem .75rem;font-size:.67rem;color:var(--muted);line-height:1.7;max-height:160px;overflow-y:auto;font-family:'DM Mono',monospace;white-space:pre-wrap;word-break:break-all;"></div>
   </div>
 </div>
 <input type="file" id="imp" accept=".json" style="display:none" onchange="importData(event)">
@@ -339,6 +347,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
   <button class="tab-btn" id="tab-archive" onclick="switchTab('archive')">Archive <span class="tab-count" id="tc-archive">0</span></button>
 </nav>
 
+<div id="no-pal-banner" style="display:none;background:rgba(239,68,68,.08);border-bottom:1px solid var(--red);padding:.55rem 1.25rem;font-size:.75rem;color:var(--red);text-align:center;">Open via Pete's Apps launcher for cloud sync</div>
 <main>
   <div id="root"></div>
 </main>
@@ -381,7 +390,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
   var ml=document.getElementById('pwa-manifest-link');
   if(ml)ml.href='data:application/manifest+json,'+encodeURIComponent(JSON.stringify(mf));
   if('serviceWorker' in navigator){
-    var sw="const C='fn7';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('.')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(rs=>{if(rs&&rs.status===200&&rs.type==='basic'){var cl=rs.clone();caches.open(C).then(ca=>ca.put(e.request,cl));}return rs;}).catch(()=>caches.match('.'))));});";
+    var sw="const C='fn8';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('.')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(rs=>{if(rs&&rs.status===200&&rs.type==='basic'){var cl=rs.clone();caches.open(C).then(ca=>ca.put(e.request,cl));}return rs;}).catch(()=>caches.match('.'))));});";
     try{var b=new Blob([sw],{type:'text/javascript'});navigator.serviceWorker.register(URL.createObjectURL(b)).catch(function(){});}catch(e){}
   }
 })();
@@ -395,10 +404,138 @@ function fmtDate(d){return d.toLocaleDateString('en-GB',{day:'2-digit',month:'sh
 function dayName(d){return d.toLocaleDateString('en-GB',{weekday:'long'});}
 function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();return addDays(t,dw===1?0:dw===0?1:8-dw);}
 
+// ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
+var SB_URL  = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
+var SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
+var SB_TBL  = SB_URL + '/rest/v1/fortnight_bundles';
+var _sbToken  = null; // set via PAL_SESSION postMessage
+var _sbUserId = null;
+
+function sbHdr(extra) {
+  return Object.assign({
+    'apikey': SB_KEY,
+    'Authorization': 'Bearer ' + (_sbToken || SB_KEY),
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation'
+  }, extra || {});
+}
+
+// ── SYNC LOG ─────────────────────────────────────────────────────────────────
+var _syncLog = [];
+function slog(msg, level) {
+  var ts = new Date().toLocaleTimeString('en-GB');
+  var entry = '[' + ts + '] ' + msg;
+  _syncLog.push({ entry: entry, level: level || 'info' });
+  if (_syncLog.length > 120) _syncLog.shift();
+  var el = document.getElementById('syncLog');
+  if (el) renderSyncLog();
+}
+
+function renderSyncLog() {
+  var el = document.getElementById('syncLog');
+  if (!el) return;
+  if (!_syncLog.length) { el.textContent = 'No activity yet.'; return; }
+  el.innerHTML = _syncLog.slice().reverse().map(function(e) {
+    var col = e.level === 'error' ? 'var(--red)' : e.level === 'ok' ? 'var(--green)' : 'var(--muted)';
+    return '<div style="color:' + col + '">' + e.entry + '</div>';
+  }).join('');
+}
+
+// ── SYNC STATUS ───────────────────────────────────────────────────────────────
+var _syncState = 'local'; // local | connecting | syncing | synced | error
+function setSyncStatus(s, detail) {
+  _syncState = s;
+  var dot = document.getElementById('sync-dot');
+  var lbl = document.getElementById('sync-lbl');
+  if (!dot) return;
+  var cls = s === 'synced' ? 'synced' : s === 'syncing' || s === 'connecting' ? 'syncing' : s === 'error' ? 'error' : 'offline';
+  dot.className = 'sync-dot ' + cls;
+  var txt = s === 'synced' ? 'Synced' : s === 'syncing' ? 'Syncing…' : s === 'connecting' ? 'Connecting…' : s === 'error' ? 'Sync error' : 'Local';
+  lbl.textContent = txt;
+}
+
+// ── SUPABASE OPERATIONS ───────────────────────────────────────────────────────
+function sbUpsert(bundle, cb) {
+  if (!_sbToken || !_sbUserId) { if (cb) cb(false); return; }
+  setSyncStatus('syncing');
+  var row = { user_id: _sbUserId, bundle_start: bundle.startDate, data: bundle, updated_at: new Date().toISOString() };
+  // PATCH first — targets the specific row
+  fetch(SB_TBL + '?user_id=eq.' + _sbUserId + '&bundle_start=eq.' + bundle.startDate, {
+    method: 'PATCH', headers: sbHdr(), body: JSON.stringify(row)
+  })
+  .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+  .then(function(res) {
+    if (res.status === 200 && Array.isArray(res.data) && res.data.length > 0) {
+      slog('Upsert (PATCH) ' + bundle.startDate + ' ✓', 'ok');
+      setSyncStatus('synced'); if (cb) cb(true); return;
+    }
+    // No row matched — POST insert
+    return fetch(SB_TBL, { method: 'POST', headers: sbHdr(), body: JSON.stringify(row) })
+      .then(function(r2) { return r2.json().then(function(d2) { return { status: r2.status, data: d2 }; }); })
+      .then(function(res2) {
+        var ok = res2.status === 201;
+        slog('Upsert (POST) ' + bundle.startDate + (ok ? ' ✓' : ' ✗ HTTP ' + res2.status), ok ? 'ok' : 'error');
+        setSyncStatus(ok ? 'synced' : 'error'); if (cb) cb(ok);
+      });
+  })
+  .catch(function(e) { slog('Upsert error ' + bundle.startDate + ': ' + e.message, 'error'); setSyncStatus('error'); if (cb) cb(false); });
+}
+
+function sbDelete(startDate, cb) {
+  if (!_sbToken || !_sbUserId) { if (cb) cb(false); return; }
+  fetch(SB_TBL + '?user_id=eq.' + _sbUserId + '&bundle_start=eq.' + startDate, {
+    method: 'DELETE', headers: sbHdr()
+  })
+  .then(function(r) {
+    var ok = r.status === 204 || r.status === 200;
+    slog('Delete ' + startDate + (ok ? ' ✓' : ' ✗ HTTP ' + r.status), ok ? 'ok' : 'error');
+    if (cb) cb(ok);
+  })
+  .catch(function(e) { slog('Delete error ' + startDate + ': ' + e.message, 'error'); if (cb) cb(false); });
+}
+
+function pullFromCloud(cb) {
+  if (!_sbToken || !_sbUserId) { slog('Pull skipped — no auth token', 'error'); if (cb) cb(); return; }
+  setSyncStatus('syncing');
+  slog('Pull from cloud…');
+  fetch(SB_TBL + '?user_id=eq.' + _sbUserId + '&order=bundle_start.desc', {
+    headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + _sbToken }
+  })
+  .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(function(rows) {
+    slog('Cloud returned ' + rows.length + ' row(s)');
+    // Cloud wins for any row it holds; local-only bundles get pushed up
+    var merged = {};
+    rows.forEach(function(row) {
+      var b = row.data;
+      migrateDays(b);
+      merged[b.startDate] = b;
+    });
+    state.bundles.forEach(function(b) {
+      if (!merged[b.startDate]) {
+        merged[b.startDate] = b;
+        slog('Pushing local-only bundle ' + b.startDate);
+        sbUpsert(b, null);
+      }
+    });
+    state.bundles = Object.values(merged).sort(function(a, b) { return b.startDate.localeCompare(a.startDate); });
+    saveLocal();
+    setSyncStatus('synced');
+    slog('Pull complete — ' + state.bundles.length + ' bundle(s)', 'ok');
+    if (cb) cb();
+  })
+  .catch(function(e) {
+    slog('Pull failed: ' + e.message, 'error');
+    setSyncStatus('error');
+    if (cb) cb();
+  });
+}
+
 // ── STORAGE ABSTRACTION ──────────────────────────────────────────────────────
 var SKEY = 'fn_tracker_v5';
-
-// Standardised data envelope
 var _store = { version: 1, lastUpdated: '', lastExported: '', data: { bundles: [] } };
 
 function load() {
@@ -408,7 +545,6 @@ function load() {
            || localStorage.getItem('fn_tracker_v3');
     if (!raw) return;
     var parsed = JSON.parse(raw);
-    // Detect old flat format (bundles at top level, no envelope)
     if (Array.isArray(parsed.bundles)) {
       _store.data.bundles = parsed.bundles;
       _store.lastUpdated  = parsed.lastUpdated || '';
@@ -420,17 +556,17 @@ function load() {
   } catch(e) {}
 }
 
-function save() {
+function saveLocal() {
   _store.lastUpdated = new Date().toISOString();
   try { localStorage.setItem(SKEY, JSON.stringify(_store)); } catch(e) {}
-  var dot = document.getElementById('sync-dot');
-  var lbl = document.getElementById('sync-lbl');
-  if (dot) { dot.className = 'sync-dot syncing'; if(lbl) lbl.textContent = 'Saving…'; }
-  clearTimeout(save._t);
-  save._t = setTimeout(function() {
-    if (dot) dot.className = 'sync-dot synced';
-    if (lbl) lbl.textContent = 'Saved';
-  }, 600);
+}
+
+function save(bundle) {
+  // bundle = specific bundle that changed; if omitted, only saves locally
+  saveLocal();
+  if (bundle !== undefined) {
+    sbUpsert(bundle, null);
+  }
 }
 
 // state.bundles proxies into _store so existing code needs no changes
@@ -507,7 +643,8 @@ function switchTab(tab){
 // Set a bundle as active (only one at a time)
 function setActiveBundle(idx){
   state.bundles.forEach(function(b,i){ b.active = (i===idx); });
-  save();
+  saveLocal();
+  state.bundles.forEach(function(b) { sbUpsert(b, null); });
   render();
   toast('Bundle set as active','ok');
 }
@@ -516,7 +653,7 @@ function setActiveBundle(idx){
 function checkAutoComplete(bi){
   var b=state.bundles[bi];
   if(isComplete(b)){
-    if(b.active){ b.active=false; save(); }
+    if(b.active){ b.active=false; saveLocal(); sbUpsert(b, null); }
     render();
     toast('Bundle complete — moved to Archive','ok');
   }
@@ -857,19 +994,19 @@ function updSel(bi,di,field){
   var mEl=document.getElementById(field+'M-'+key);
   if(!hEl||!mEl)return;
   state.bundles[bi].days[di][field]=String(parseInt(hEl.value)||0).padStart(2,'0')+':'+String(parseInt(mEl.value)||0).padStart(2,'0');
-  save();liveUpdate(bi,di);
+  save(state.bundles[bi]);liveUpdate(bi,di);
 }
-function updLunch(bi,di,val){state.bundles[bi].days[di].lunch=parseInt(val)||0;save();liveUpdate(bi,di);}
+function updLunch(bi,di,val){state.bundles[bi].days[di].lunch=parseInt(val)||0;save(state.bundles[bi]);liveUpdate(bi,di);}
 function updExtra(bi,di){
   var key=bi+'-'+di;
   var hEl=document.getElementById('exH-'+key),mEl=document.getElementById('exM-'+key);
   if(!hEl||!mEl)return;
   state.bundles[bi].days[di].extraH=parseInt(hEl.value)||0;
   state.bundles[bi].days[di].extraM=parseInt(mEl.value)||0;
-  save();liveUpdate(bi,di);
+  save(state.bundles[bi]);liveUpdate(bi,di);
 }
 function updNote(bi,di,val){
-  state.bundles[bi].days[di].note=val;save();
+  state.bundles[bi].days[di].note=val;save(state.bundles[bi]);
   var key=bi+'-'+di;
   var ta=document.getElementById('note-'+key);
   var lbl=ta?ta.previousElementSibling:null;
@@ -880,7 +1017,7 @@ function updTimesheet(bi,di){
   var day=state.bundles[bi].days[di];
   if(day.timesheetDone===null)return;
   day.timesheetDone=!day.timesheetDone;
-  save();
+  save(state.bundles[bi]);
   var key=bi+'-'+di;
   var box=document.getElementById('ts-box-'+key);
   var lbl=document.getElementById('ts-lbl-'+key);
@@ -895,7 +1032,7 @@ function updTimesheet(bi,di){
 function setStat(bi,di,status){
   var day=state.bundles[bi].days[di];
   day.status=day.status===status?null:status;
-  save();
+  save(state.bundles[bi]);
   checkAutoComplete(bi);
   if(!isComplete(state.bundles[bi])) render();
 }
@@ -909,9 +1046,11 @@ function deleteBundle(idx,btn){
     setTimeout(function(){ _deletePending[idx]=false; if(btn){btn.textContent='\uD83D\uDDD1 Delete';btn.classList.remove('confirm');} },3000);
     return;
   }
+  var startDate = b.startDate;
   state.bundles.splice(idx,1);
   if(openPanel===idx) openPanel=null;
-  save();
+  saveLocal();
+  sbDelete(startDate, null);
   render();
   toast('Bundle deleted','ok');
 }
@@ -945,9 +1084,46 @@ function openDataModal(){
     'Last saved &nbsp;<strong>'+lastUpd+'</strong><br>' +
     'Last exported &nbsp;<strong>'+lastExp+'</strong><br>' +
     'Data version &nbsp;<strong>'+(_store.version||1)+'</strong>';
+  // Sync status panel
+  var sp = document.getElementById('syncStatusPanel');
+  if (sp) {
+    var connected = !!_sbToken;
+    var stateLabel = _syncState === 'synced' ? '<span style="color:var(--green)">Synced</span>'
+                   : _syncState === 'error'  ? '<span style="color:var(--red)">Error</span>'
+                   : _syncState === 'syncing' ? '<span style="color:var(--amber)">Syncing…</span>'
+                   : '<span style="color:var(--muted)">Local only</span>';
+    sp.innerHTML = 'Status &nbsp;' + stateLabel + '<br>'
+      + 'Token &nbsp;<strong>' + (connected ? 'Received ✓' : 'Not received') + '</strong><br>'
+      + 'User ID &nbsp;<strong>' + (_sbUserId ? _sbUserId.slice(0,8) + '…' : '—') + '</strong>';
+  }
+  renderSyncLog();
   document.getElementById('dataModal').classList.add('open');
 }
 function closeDataModal(){document.getElementById('dataModal').classList.remove('open');}
+
+// MANUAL SYNC
+function manualPull() {
+  if (!_sbToken) { toast('Not connected to cloud', 'err'); return; }
+  pullFromCloud(function() { render(); toast('Pulled from cloud ✓', 'ok'); });
+}
+
+function manualPush() {
+  if (!_sbToken) { toast('Not connected to cloud', 'err'); return; }
+  if (!state.bundles.length) { toast('No bundles to push', 'err'); return; }
+  setSyncStatus('syncing');
+  slog('Manual push — ' + state.bundles.length + ' bundle(s)');
+  var done = 0, errors = 0, total = state.bundles.length;
+  state.bundles.forEach(function(b) {
+    sbUpsert(b, function(ok) {
+      if (!ok) errors++;
+      done++;
+      if (done === total) {
+        setSyncStatus(errors ? 'error' : 'synced');
+        toast(errors ? 'Push had ' + errors + ' error(s)' : 'Pushed ' + total + ' bundle(s) ✓', errors ? 'err' : 'ok');
+      }
+    });
+  });
+}
 
 // EXPORT / IMPORT
 function exportData(){
@@ -994,7 +1170,9 @@ function importData(event){
         }
       });
       state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
-      save(); render();
+      saveLocal();
+      state.bundles.forEach(function(b){ sbUpsert(b, null); });
+      render();
       toast(added>0?'Imported '+added+' bundle'+(added>1?'s':'')+' ✓':'Data restored ✓','ok');
     }catch(err){toast('Import failed: '+err.message,'err');}
     event.target.value='';
@@ -1027,12 +1205,37 @@ function createBundle(){
   var nb={id:Date.now(),label:'Fortnight w/c '+fmtDate(startD),startDate:isoDate(startD),endDate:isoDate(endD),days:buildDays(selMonday),active:!hasActive};
   state.bundles.unshift(nb);
   state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
-  save();closeModal();openPanel=0;openDay=null;render();
+  save(nb);closeModal();openPanel=0;openDay=null;render();
 }
 
 
+// ── PAL_SESSION AUTH ─────────────────────────────────────────────────────────
+var _palReceived = false;
+
+window.addEventListener('message', function(e) {
+  if (!e.data || e.data.type !== 'PAL_SESSION') return;
+  _palReceived = true;
+  _sbToken  = e.data.access_token || null;
+  _sbUserId = e.data.user_id || null;
+  slog('PAL_SESSION received — user ' + (_sbUserId ? _sbUserId.slice(0,8) + '…' : '?'));
+  if (_sbToken) {
+    setSyncStatus('connecting');
+    pullFromCloud(function() { render(); });
+  }
+});
+
+// 3-second fallback: if no PAL_SESSION, work locally and show banner
+setTimeout(function() {
+  if (_palReceived) return;
+  setSyncStatus('local');
+  slog('No PAL_SESSION after 3s — running local only', 'error');
+  var banner = document.getElementById('no-pal-banner');
+  if (banner) banner.style.display = 'block';
+}, 3000);
+
 // BOOT
 load();
+setSyncStatus('connecting');
 render();
 </script>
 </body>
