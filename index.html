@@ -3,9 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v8.9</title>
+<title>P Apps v9.0</title>
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="#0d1117" id="metaThemeColor">
+<script>
+// Apply any explicit global theme preference before first paint, so
+// there's no flash of dark before this runs. Absence of the key means
+// "no explicit preference" — each app (including this launcher) just
+// keeps its own native look, exactly as before this feature existed.
+// v9.0
+(function(){try{var t=localStorage.getItem('pal_theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
+</script>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
 <style>
   :root {
@@ -21,8 +29,29 @@
     --ink:      #e6edf3;
     --ink2:     #8b949e;
     --ink3:     #484f58;
+    --track:    rgba(255,255,255,.10);
+    --tick:     rgba(255,255,255,.4);
+    --neutral-bg:     rgba(255,255,255,.04);
+    --neutral-border: rgba(255,255,255,.10);
     --radius:   10px;
     --nav-h:    56px;
+  }
+  /* ── Light theme (v9.0) ──
+     Applied via [data-theme="light"] on <html>, driven by the global
+     theme toggle. Off by default (data-theme unset = this app's
+     existing dark look, unchanged) — see theme JS below. ── */
+  :root[data-theme="light"] {
+    --bg:       #f4f6f8;
+    --surface:  #ffffff;
+    --surface2: #f0f2f5;
+    --border:   #dde1e7;
+    --ink:      #111827;
+    --ink2:     #6b7280;
+    --ink3:     #9ca3af;
+    --track:    rgba(0,0,0,.08);
+    --tick:     rgba(0,0,0,.35);
+    --neutral-bg:     rgba(0,0,0,.03);
+    --neutral-border: rgba(0,0,0,.08);
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -424,7 +453,7 @@
 <!-- ── Navigation ── -->
 <nav id="nav">
   <div class="nav-left">
-    <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.9</span></button>
+    <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v9.0</span></button>
     <div class="nav-icons-group">
       <button class="nav-btn pete-only" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
       <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
@@ -796,23 +825,45 @@ function pingFrame(frame) {
   } catch(e) {}
 }
 
-// ── Global theme (v8.9) ─────────────────────────────────────────────
+// ── Global theme (v8.9, revised v9.0) ───────────────────────────────
 // Single device-level preference, broadcast to every child app via
-// postMessage — same pattern as PAL_SESSION above. Only On Budget
-// currently understands PAL_THEME (pilot); other apps just ignore it
-// harmlessly, so this is safe to send to all frames unconditionally.
-// Default is 'light' to match On Budget's existing look — nobody's
-// screen changes until the toggle is used. The launcher's own chrome
-// does not yet respond to this — that's a separate future step.
-let palTheme = 'light';
-try { palTheme = localStorage.getItem('pal_theme') || 'light'; } catch(e) {}
+// postMessage — same pattern as PAL_SESSION above.
+//
+// Three effective states:
+//   - unset (no localStorage key)  → every app, including this
+//     launcher, keeps its own native look — exactly the mixed
+//     light/dark suite you have today. Nothing broadcast.
+//   - 'dark'  → forced dark everywhere apps support it
+//   - 'light' → forced light everywhere apps support it
+//
+// This launcher is dark-native; On Budget and GigsAndTrips are
+// light-native. A simple binary default would visibly change
+// whichever app doesn't match that default the moment this ships —
+// "unset" is what avoids that. The first-ever tap goes to 'dark'
+// (only changes the light-native apps — smaller blast radius since
+// most of the suite is already dark); after that it's a plain
+// light/dark toggle.
+let palTheme = null;
+try { palTheme = localStorage.getItem('pal_theme'); } catch(e) {}
+
+function applyOwnTheme() {
+  if (palTheme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme'); // dark or unset = native (dark)
+  const metaColor = document.getElementById('metaThemeColor');
+  if (metaColor) metaColor.setAttribute('content', palTheme === 'light' ? '#f4f6f8' : '#0d1117');
+}
 
 function updateThemeBtn() {
   const btn = document.getElementById('themeBtn');
-  if (btn) btn.textContent = palTheme === 'dark' ? '☀️' : '🌙';
+  if (!btn) return;
+  btn.textContent = palTheme === 'dark' ? '☀️' : palTheme === 'light' ? '🌙' : '🌓';
+  btn.title = palTheme
+    ? `Switch to ${palTheme === 'dark' ? 'light' : 'dark'} theme (all apps)`
+    : 'Set a theme for all apps (currently each app\u2019s own default)';
 }
 
 function pingTheme(frame) {
+  if (!palTheme) return; // unset — don't override the app's native default
   try {
     frame.contentWindow.postMessage({ type: 'PAL_THEME', theme: palTheme }, window.location.origin);
   } catch(e) {}
@@ -825,8 +876,9 @@ function broadcastTheme() {
 }
 
 function toggleTheme() {
-  palTheme = palTheme === 'dark' ? 'light' : 'dark';
+  palTheme = palTheme === 'dark' ? 'light' : 'dark'; // unset or 'light' → 'dark'; 'dark' → 'light'
   try { localStorage.setItem('pal_theme', palTheme); } catch(e) {}
+  applyOwnTheme();
   updateThemeBtn();
   broadcastTheme();
 }
@@ -846,9 +898,8 @@ document.querySelectorAll('.app-frame').forEach(frame => {
     setTimeout(() => pingTheme(frame), 100);
   });
 });
+applyOwnTheme();
 updateThemeBtn();
-
-// ── Tab switching ──────────────────────────────────────────────────
 function switchTo(target, btnEl) {
   // Clear active from all nav buttons AND the logo
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -987,10 +1038,10 @@ function statReading() {
       const tgtPct = Math.min(100, Math.round((tgt / tot) * 100));
       const colour = cur >= tgt ? '#3fb950' : '#f59e0b';
       return `<div style="margin-top:6px;position:relative">
-        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden">
+        <div style="height:6px;border-radius:3px;background:var(--track);overflow:hidden">
           <div style="height:100%;width:${curPct}%;background:${colour};border-radius:3px;transition:width 0.3s"></div>
         </div>
-        ${tgt > cur && tgt < bookEnd ? `<div style="position:absolute;top:0;left:${tgtPct}%;width:2px;height:6px;background:rgba(255,255,255,.4);border-radius:1px;transform:translateX(-50%)"></div>` : ''}
+        ${tgt > cur && tgt < bookEnd ? `<div style="position:absolute;top:0;left:${tgtPct}%;width:2px;height:6px;background:var(--tick);border-radius:1px;transform:translateX(-50%)"></div>` : ''}
         <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);margin-top:3px">
           <span>p.${cur}</span>
           <span>p.${bookEnd}</span>
@@ -1088,7 +1139,7 @@ function statFortnight() {
       return mn > 0 ? `${h}h ${mn}m` : `${h}h`;
     };
     if (!anyDone) {
-      projColour = '#7a90a4'; projBg = 'rgba(255,255,255,.04)'; projBorder = 'rgba(255,255,255,.10)';
+      projColour = '#7a90a4'; projBg = 'var(--neutral-bg)'; projBorder = 'var(--neutral-border)';
       projVal = m2hm(predMins); projSub = `${totalDays - doneCount} days remaining`;
     } else if (predMins >= TARGET_MINS + 5) {
       projColour = '#a78bfa'; projBg = 'rgba(167,139,250,.12)'; projBorder = 'rgba(167,139,250,.25)';
@@ -1130,7 +1181,7 @@ function statFortnight() {
           <span style="font-size:10px;color:var(--ink2)">⏱ Bundle hours</span>
           <span style="font-size:10px;font-weight:700;color:${hColour}">${m2hm(loggedMins)} <span style="font-weight:400;color:var(--ink2)">/ 70h</span></span>
         </div>
-        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden">
+        <div style="height:6px;border-radius:3px;background:var(--track);overflow:hidden">
           <div style="height:100%;width:${hBarPct}%;background:${hColour};border-radius:3px;transition:width 0.3s"></div>
         </div>
         <div style="font-size:10px;color:var(--ink3);margin-top:3px">${doneCount} of ${totalDays} days done${totalDays - doneCount > 0 ? ' · ' + (totalDays - doneCount) + ' remaining' : ''}</div>
@@ -1583,7 +1634,7 @@ function statOnBudget() {
           <span style="font-size:11px;font-weight:600;color:var(--ink)">🛒 Food pot</span>
           <span style="font-size:11px;color:var(--ink2)">£${potFmt} remaining</span>
         </div>
-        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden;margin-bottom:4px">
+        <div style="height:6px;border-radius:3px;background:var(--track);overflow:hidden;margin-bottom:4px">
           <div style="height:100%;width:${headPct}%;background:${barColour};border-radius:3px;transition:width .3s"></div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline">
