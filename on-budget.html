@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#f4f6f8">
-<title>On Budget v2.3</title>
+<title>On Budget v2.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -282,7 +282,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v2.3</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v2.4</div></div>
       </div>
       <div class="badge"><span class="badge-dot"></span>Local</div>
     </div>
@@ -570,15 +570,16 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v2.3
+// On Budget v2.4
 // localStorage key: on_budget_v1
-// Backwards compatible with v1.0–v2.2 JSON backups. v1.9 added a Bills
+// Backwards compatible with v1.0–v2.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
 // merged Bills into one chronological list with a filter. v2.2 added a
-// backup-reminder banner after ~15 real edits. v2.3: that banner (and
-// the Settings "last backup" line) now shows a real Food & Travel vs
-// Bills transaction breakdown, computed fresh from each tx's timestamp
-// against lastBackupAt rather than a second counter that could drift.
+// backup-reminder banner; v2.3 gave it a real per-account breakdown.
+// v2.4: tab switches now reset scroll to top so the sticky header and
+// backup banner can't get scrolled out of view on a shorter tab, and
+// uncleared Bills rows (recurring or planned ad-hoc) now have a direct
+// delete/skip button on the row itself, matching cleared rows.
 // ══════════════════════════════════════════════════════════════
 
 const STORAGE_KEY = 'on_budget_v1';
@@ -625,14 +626,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'2.3', lastUpdated:new Date().toISOString(),
+    version:'2.4', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'2.3', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'2.4', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -837,6 +838,13 @@ function switchTab(t) {
   if (t==='bills')    switchBillsView(_billsView);
   if (t==='history')  renderHist();
   if (t==='settings') populateSettings();
+  // Switching tabs changes the scrollable content's height. Without this,
+  // leftover scroll position from a taller tab can get clamped somewhere
+  // mid-page on the new (shorter) tab, pushing the sticky header and
+  // backup banner above the visible area — "persists on every screen"
+  // only holds if you're actually scrolled to see it.
+  const scroller = document.querySelector('.app-scroll');
+  if (scroller) scroller.scrollTop = 0;
 }
 
 // ── Dashboard ──────────────────────────────────────────────────
@@ -1512,14 +1520,20 @@ function billsRowHtml(it) {
   const onclick = it.kind==='recurring'
     ? `openClearSheet('${it.recurringId}','${it.schedDate}')`
     : `openClearSheetAdhoc('${it.txId}')`;
+  const delCall = it.kind==='recurring'
+    ? `quickDeleteUncleared('recurring','${it.recurringId}','${it.schedDate}')`
+    : `quickDeleteUncleared('adhoc','${it.txId}')`;
   return `<div class="ledger-row ${overdraft?'overdraft':''}" onclick="${onclick}">
     <div class="ledger-body">
       <div class="ledger-name">${it.name}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}</div>
       <div class="ledger-date">${fmtFull(new Date(it.date+'T00:00:00'))}</div>
     </div>
-    <div class="ledger-right">
-      <div class="ledger-amt ${it.type}">${sign}£${it.amount.toFixed(2)}</div>
-      <div class="ledger-bal ${overdraft?'warn':''}">Bal £${it.runningBalance.toFixed(2)}</div>
+    <div class="ledger-right" style="display:flex;align-items:center;gap:8px">
+      <div>
+        <div class="ledger-amt ${it.type}">${sign}£${it.amount.toFixed(2)}</div>
+        <div class="ledger-bal ${overdraft?'warn':''}">Bal £${it.runningBalance.toFixed(2)}</div>
+      </div>
+      <button class="tx-del" onclick="event.stopPropagation();${delCall}">✕</button>
     </div>
   </div>`;
 }
@@ -1766,6 +1780,26 @@ function deleteBillsTx(id) {
   bills.tx = bills.tx.filter(x=>x.id!==id);
   save(true); renderBillsLedger();
   toast('Removed');
+}
+
+// Delete straight from an uncleared row without opening the clear sheet.
+// For an ad-hoc planned entry this just removes it outright (it never
+// touched the cleared balance, so nothing to reverse). For a recurring
+// occurrence there's no tx record to delete yet — it's generated on the
+// fly — so "delete" here means the same thing "Skip this occurrence"
+// does: record a zero-amount skipped tombstone so it stops reappearing.
+function quickDeleteUncleared(kind, a, b) {
+  if (kind === 'adhoc') {
+    bills.tx = bills.tx.filter(t=>t.id!==a);
+    save(true); renderBillsLedger();
+    toast('Removed');
+  } else {
+    const item = bills.recurring.find(r=>r.id===a);
+    if (!item) return;
+    bills.tx.push({ id:billsUid(), date:todayIso(), name:item.name, type:item.type, amount:0, source:'recurring', recurringId:a, schedDate:b, skipped:true, cleared:true, _ts:Date.now() });
+    save(true); renderBillsLedger();
+    toast('Occurrence removed');
+  }
 }
 
 // ── Reconcile cleared balance from Settings ──────────────────────
