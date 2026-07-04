@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#f4f6f8">
-<title>On Budget v2.5</title>
+<title>On Budget v2.6</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -302,7 +302,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v2.5</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v2.6</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -607,21 +607,20 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v2.5
+// On Budget v2.6
 // localStorage key: on_budget_v1
-// Backwards compatible with v1.0–v2.4 JSON backups. v1.9 added a Bills
+// Backwards compatible with v1.0–v2.5 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
 // merged Bills into one chronological list with a filter. v2.2 added a
 // backup-reminder banner; v2.3 gave it a real per-account breakdown.
-// v2.4 fixed banner scroll visibility and added row-level delete.
-// v2.5: added Supabase cloud sync (same project/auth pattern as Claim
-// Tracker/Fortnight/GigsAndTrips, own table `on_budget_entries`),
-// per-record not blob-level, with tombstone-based deletes so a delete
-// on one device can't resurrect on another after a sync. All deletes
-// (Food tx, Bills tx, Bills recurring) are now soft locally (_deleted
-// flag, filtered from every render/calc path) instead of hard-removed,
-// so a failed cloud push can be retried on the next sync rather than
-// silently losing the deletion.
+// v2.4 fixed banner scroll visibility and added row-level delete. v2.5
+// added Supabase cloud sync with tombstone deletes. v2.6: fixed pull
+// not visibly bringing the Bills balance through — syncPull() updated
+// the in-memory data correctly but never refreshed the Settings tab UI
+// (including the Bills reconcile field) if you weren't on Bills when it
+// ran. Also backfills updated_at on load/import for data created before
+// v2.5 (which had none), and loosened merge comparisons to >= so a
+// legitimate cloud value can't lose a tie against a blank local timestamp.
 // ══════════════════════════════════════════════════════════════
 
 const STORAGE_KEY = 'on_budget_v1';
@@ -840,14 +839,14 @@ async function syncPull() {
     // Settings singletons — cloud wins only if genuinely newer
     if (byKey['__settings__']) {
       const remote = byKey['__settings__'].data;
-      if ((remote.updated_at||'') > (settings.updated_at||'')) {
+      if ((remote.updated_at||'') >= (settings.updated_at||'')) {
         settings = { ...DEFAULT_SETTINGS, ...remote };
         addSyncLog('Food & Travel settings merged from cloud','ok');
       }
     }
     if (byKey['__bills_settings__']) {
       const remote = byKey['__bills_settings__'].data;
-      if ((remote.updated_at||'') > (bills.settings.updated_at||'')) {
+      if ((remote.updated_at||'') >= (bills.settings.updated_at||'')) {
         bills.settings = { clearedBalance:0, forecastMode:'next_income', ...remote };
         addSyncLog('Bills settings merged from cloud','ok');
       }
@@ -858,7 +857,7 @@ async function syncPull() {
       const remote = byKey[k].data;
       const mk = remote.monthKey || k.slice(6);
       if (!months[mk]) months[mk] = { startBalance:null, transactions:[] };
-      if ((remote.updated_at||'') > (months[mk].updated_at||'')) {
+      if ((remote.updated_at||'') >= (months[mk].updated_at||'')) {
         months[mk].startBalance = remote.startBalance;
         months[mk].updated_at   = remote.updated_at;
       }
@@ -877,7 +876,7 @@ async function syncPull() {
         return;
       }
       if (idx===-1) list.push(remote);
-      else if ((remote.updated_at||'') > (list[idx].updated_at||'')) list[idx] = remote;
+      else if ((remote.updated_at||'') >= (list[idx].updated_at||'')) list[idx] = remote;
     });
 
     // Bills recurring items — tombstone-aware
@@ -890,7 +889,7 @@ async function syncPull() {
         return;
       }
       if (idx===-1) bills.recurring.push(remote);
-      else if ((remote.updated_at||'') > (bills.recurring[idx].updated_at||'')) bills.recurring[idx] = remote;
+      else if ((remote.updated_at||'') >= (bills.recurring[idx].updated_at||'')) bills.recurring[idx] = remote;
     });
 
     // Bills transactions — tombstone-aware
@@ -903,7 +902,7 @@ async function syncPull() {
         return;
       }
       if (idx===-1) bills.tx.push(remote);
-      else if ((remote.updated_at||'') > (bills.tx[idx].updated_at||'')) bills.tx[idx] = remote;
+      else if ((remote.updated_at||'') >= (bills.tx[idx].updated_at||'')) bills.tx[idx] = remote;
     });
 
     // Anything local that cloud doesn't have yet — push it up (covers a
@@ -936,6 +935,7 @@ async function syncPull() {
 
     save();
     renderDash();
+    populateSettings();
     if (document.getElementById('panel-bills').classList.contains('active')) switchBillsView(_billsView);
     setSyncState('synced');
     addSyncLog('Pull complete','ok');
@@ -982,6 +982,26 @@ function load() {
     }
     if (parsed.meta) meta = { changesSinceBackup:0, lastBackupAt:null, ...parsed.meta };
   } catch(e) {}
+  backfillSyncTimestamps();
+}
+
+// Data created before v2.5 has no updated_at at all. Without this, a
+// comparison like (remote.updated_at||'') > (local.updated_at||'')
+// can tie at '' > '' — meaning a pull could silently fail to bring
+// down a real cloud value onto a device whose local copy predates
+// sync. Stamping every record once on load means every push from here
+// on carries a genuine timestamp, so this only needs to run the once.
+function backfillSyncTimestamps() {
+  const nowIso = () => new Date().toISOString();
+  const tsFrom = (t) => t._ts ? new Date(t._ts).toISOString() : nowIso();
+  if (!settings.updated_at) settings.updated_at = nowIso();
+  if (!bills.settings.updated_at) bills.settings.updated_at = nowIso();
+  Object.values(months).forEach(m => {
+    if (!m.updated_at) m.updated_at = nowIso();
+    (m.transactions||[]).forEach(t => { if (!t.updated_at) t.updated_at = tsFrom(t); });
+  });
+  bills.recurring.forEach(r => { if (!r.updated_at) r.updated_at = nowIso(); });
+  bills.tx.forEach(t => { if (!t.updated_at) t.updated_at = tsFrom(t); });
 }
 
 function save(trackChange) {
@@ -989,14 +1009,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'2.5', lastUpdated:new Date().toISOString(),
+    version:'2.6', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'2.5', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'2.6', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1023,6 +1043,7 @@ function importJSON(e) {
       // A fresh import means the person just handled a backup file, so
       // there's nothing new to nag about yet.
       meta = { changesSinceBackup:0, lastBackupAt:new Date().toISOString() };
+      backfillSyncTimestamps();
       save(); populateSettings(); renderDash(); renderHist();
       hideBackupBanner();
       if (_sbToken) { addSyncLog('Import complete — pushing to cloud','info'); syncPush(); }
