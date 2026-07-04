@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#f4f6f8">
-<title>On Budget v2.2</title>
+<title>On Budget v2.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -282,7 +282,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v2.2</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v2.3</div></div>
       </div>
       <div class="badge"><span class="badge-dot"></span>Local</div>
     </div>
@@ -295,7 +295,7 @@
   </div>
 
   <div class="backup-banner" id="backup-banner">
-    <div class="backup-banner-text">📦 Quite a few changes since your last backup — worth exporting?</div>
+    <div class="backup-banner-text" id="backup-banner-text">📦 Quite a few changes since your last backup — worth exporting?</div>
     <div class="backup-banner-actions">
       <button class="btn btn-primary btn-sm" onclick="exportJSON()">Export</button>
       <button class="btn btn-ghost btn-sm" onclick="dismissBackupPrompt()">Not now</button>
@@ -570,15 +570,15 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v2.2
+// On Budget v2.3
 // localStorage key: on_budget_v1
-// Backwards compatible with v1.0–v2.1 JSON backups. v1.9 added a Bills
-// account. v2.0 added till-style penny entry, forecast modes, and
-// uncleared ad-hoc Bills transactions. v2.1 merged Bills into one
-// chronological list with an All/Uncleared/Cleared filter. v2.2: that
-// filter now defaults to Uncleared and uses smaller pill buttons; added
-// a dismissible backup-reminder banner after ~15 real edits since the
-// last export (tracked via save(trackChange), not a per-click prompt).
+// Backwards compatible with v1.0–v2.2 JSON backups. v1.9 added a Bills
+// account. v2.0 added till-style penny entry and forecast modes. v2.1
+// merged Bills into one chronological list with a filter. v2.2 added a
+// backup-reminder banner after ~15 real edits. v2.3: that banner (and
+// the Settings "last backup" line) now shows a real Food & Travel vs
+// Bills transaction breakdown, computed fresh from each tx's timestamp
+// against lastBackupAt rather than a second counter that could drift.
 // ══════════════════════════════════════════════════════════════
 
 const STORAGE_KEY = 'on_budget_v1';
@@ -625,14 +625,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'2.2', lastUpdated:new Date().toISOString(),
+    version:'2.3', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'2.2', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'2.3', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1204,9 +1204,10 @@ function populateSettings() {
   // Last backup
   const lb = document.getElementById('last-backup-hint');
   if (lb) {
+    const phrase = txCountsPhrase() || 'no transactions';
     lb.textContent = meta.lastBackupAt
-      ? `Last backup: ${fmtFull(new Date(meta.lastBackupAt))} · ${meta.changesSinceBackup||0} change${meta.changesSinceBackup===1?'':'s'} since`
-      : `No backup exported yet · ${meta.changesSinceBackup||0} change${meta.changesSinceBackup===1?'':'s'} so far`;
+      ? `Last backup: ${fmtFull(new Date(meta.lastBackupAt))} · ${phrase} since`
+      : `No backup exported yet · ${phrase} so far`;
   }
 }
 let _billsReconcileSign = 1;
@@ -1791,8 +1792,35 @@ function toggleBreakdown() {
 // now" doesn't cancel it forever — it halves the counter so it comes
 // back after roughly half as many more changes, rather than going
 // silent until the person remembers on their own.
+//
+// The banner's TRIGGER stays a simple edit counter (covers settings/
+// recurring changes too, not just transactions). But what it SHOWS is
+// computed fresh from the actual data every time, by comparing each
+// transaction's timestamp against lastBackupAt — that's self-correcting
+// and can't drift out of sync the way a second manually-incremented
+// counter could. If never backed up, everything counts.
+function txCountsSinceBackup() {
+  const cutoff = meta.lastBackupAt ? new Date(meta.lastBackupAt).getTime() : 0;
+  let food = 0;
+  Object.values(months).forEach(m => {
+    (m.transactions||[]).forEach(t => { if (!t._deleted && (t._ts||0) > cutoff) food++; });
+  });
+  let billsN = 0;
+  bills.tx.forEach(t => { if (!t._deleted && (t._ts||0) > cutoff) billsN++; });
+  return { food, bills: billsN };
+}
+function txCountsPhrase() {
+  const { food, bills: billsN } = txCountsSinceBackup();
+  const parts = [];
+  if (food)   parts.push(`${food} Food & Travel`);
+  if (billsN) parts.push(`${billsN} Bills`);
+  if (!parts.length) return null;
+  return parts.join(' and ') + ' transaction' + ((food+billsN)===1?'':'s');
+}
 function showBackupBanner() {
-  const el = document.getElementById('backup-banner');
+  const el  = document.getElementById('backup-banner');
+  const txt = document.getElementById('backup-banner-text');
+  if (txt) txt.textContent = `📦 ${txCountsPhrase() || 'Some changes'} since your last backup — worth exporting?`;
   if (el) el.classList.add('show');
 }
 function hideBackupBanner() {
