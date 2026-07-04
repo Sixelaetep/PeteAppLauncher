@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v2.6</title>
+<title>Reading Tracker v2.7</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -635,7 +635,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v2.6</span></div>
+    <div class="rt-logo">My Reading <span>v2.7</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -1280,7 +1280,9 @@ function showSync(state, msg) {
     ind.classList.add("show");
     if (state !== "saving") {
       clearTimeout(_syncTimer);
-      _syncTimer = setTimeout(() => ind.classList.remove("show"), 2500);
+      // v2.7: error toasts stay up longer (6s vs 2.5s) — with the added
+      // diagnostic detail (MR-003), there's more to actually read.
+      _syncTimer = setTimeout(() => ind.classList.remove("show"), state === "ok" ? 2500 : 6000);
     }
   }
   // Mirror to persistent top bar badge
@@ -1444,6 +1446,7 @@ function showSessionExpiredBanner() {
 }
 
 // ── Supabase: load from cloud ─────────────────────────────────────────
+let _lastCloudError = null; // v2.7 (MR-003) — captured for diagnostics, shown in sync log
 async function loadFromCloud(userId) {
   try {
     const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY) };
@@ -1453,6 +1456,7 @@ async function loadFromCloud(userId) {
     );
     if (!res.ok) {
       if (res.status === 401) showSessionExpiredBanner();
+      _lastCloudError = "load HTTP " + res.status;
       throw new Error("HTTP " + res.status);
     }
     const rows = await res.json();
@@ -1461,17 +1465,24 @@ async function loadFromCloud(userId) {
     }
     return null;
   } catch(e) {
+    if (!_lastCloudError) _lastCloudError = "load: " + (e && e.message ? e.message : "network error");
     console.warn("Supabase load failed:", e);
     return null;
   }
 }
 
 // ── Supabase: save to cloud (upsert) ─────────────────────────────────
+// v2.7 (MR-003): added on_conflict=user_id. Without it, "Prefer:
+// resolution=merge-duplicates" has no column to merge on, so a POST for
+// a user who already has a cloud row collides with that existing row
+// instead of updating it — failing every time, not just transiently
+// (which matches the v2.6 retry failing identically rather than
+// occasionally, ruling out a one-off network blip).
 async function saveToCloud(userId, data) {
   try {
     const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY), "Prefer": "resolution=merge-duplicates" };
     const res = await fetch(
-      `${SB_URL}/rest/v1/reading_data`,
+      `${SB_URL}/rest/v1/reading_data?on_conflict=user_id`,
       {
         method:  "POST",
         headers,
@@ -1479,8 +1490,16 @@ async function saveToCloud(userId, data) {
       }
     );
     if (!res.ok && res.status === 401) showSessionExpiredBanner();
+    if (!res.ok) {
+      let detail = "";
+      try { detail = (await res.json())?.message || ""; } catch(e2) {}
+      _lastCloudError = "save HTTP " + res.status + (detail ? " — " + detail : "");
+    } else {
+      _lastCloudError = null;
+    }
     return res.ok || res.status === 201 || res.status === 200;
   } catch(e) {
+    _lastCloudError = "save: " + (e && e.message ? e.message : "network error");
     console.warn("Supabase save failed:", e);
     return false;
   }
@@ -1635,7 +1654,10 @@ function syncToCloud() {
       await new Promise(r => setTimeout(r, 1200));
       ok = await saveToCloud(_currentUser, data);
     }
-    showSync(ok ? "ok" : "red", ok ? "Saved ✓" : "Cloud save failed — data saved locally");
+    // v2.7 (MR-003): include the captured reason so if this recurs, the
+    // actual cause is visible instead of a generic message.
+    const failMsg = "Cloud save failed" + (_lastCloudError ? " (" + _lastCloudError + ")" : "") + " — data saved locally";
+    showSync(ok ? "ok" : "red", ok ? "Saved ✓" : failMsg);
   }, 1500); // 1.5s debounce — batches rapid saves
 }
 
