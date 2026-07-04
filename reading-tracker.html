@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v2.7</title>
+<title>Reading Tracker v2.8</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -635,7 +635,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v2.7</span></div>
+    <div class="rt-logo">My Reading <span>v2.8</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -1264,6 +1264,11 @@ const SB_URL = window.PAL_CONFIG ? window.PAL_CONFIG.SB_URL : "https://gnzxsbbmf
 const SB_KEY = window.PAL_CONFIG ? window.PAL_CONFIG.SB_KEY : "";
 // _sbAccessToken declared here so it's available before use
 let _sbAccessToken = null;
+// v2.8 (MR-003): the real Supabase auth UUID, kept separate from
+// _currentUser (which is the friendly 'pete'/'lex' label used for this
+// app's own switch-user display). Cloud requests must be scoped to the
+// real UUID — that's what row-level security checks against.
+let _sbUserId = null;
 
 let _currentUser = null;   // "pete" or "claire"
 let _syncTimer   = null;
@@ -1447,11 +1452,17 @@ function showSessionExpiredBanner() {
 
 // ── Supabase: load from cloud ─────────────────────────────────────────
 let _lastCloudError = null; // v2.7 (MR-003) — captured for diagnostics, shown in sync log
-async function loadFromCloud(userId) {
+async function loadFromCloud(friendlyUserId) {
+  // v2.8 (MR-003): the reading_data table's row-level security scopes
+  // rows to the actual authenticated Supabase user — it doesn't know
+  // about "pete"/"lex" labels, only the real auth UUID. Using the
+  // friendly label here (as before) meant this could never match, so
+  // the row-level security policy silently hid every row on read.
+  if (!_sbUserId) { _lastCloudError = "load: no authenticated user yet"; return null; }
   try {
     const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY) };
     const res = await fetch(
-      `${SB_URL}/rest/v1/reading_data?user_id=eq.${encodeURIComponent(userId)}&select=data`,
+      `${SB_URL}/rest/v1/reading_data?user_id=eq.${encodeURIComponent(_sbUserId)}&select=data`,
       { headers }
     );
     if (!res.ok) {
@@ -1472,13 +1483,18 @@ async function loadFromCloud(userId) {
 }
 
 // ── Supabase: save to cloud (upsert) ─────────────────────────────────
-// v2.7 (MR-003): added on_conflict=user_id. Without it, "Prefer:
-// resolution=merge-duplicates" has no column to merge on, so a POST for
-// a user who already has a cloud row collides with that existing row
-// instead of updating it — failing every time, not just transiently
-// (which matches the v2.6 retry failing identically rather than
-// occasionally, ruling out a one-off network blip).
-async function saveToCloud(userId, data) {
+// v2.7 (MR-003): added on_conflict=user_id so merge-duplicates has a
+// column to merge on.
+// v2.8 (MR-003): root cause of the 403 row-level-security rejection —
+// this was writing the friendly label ("pete"/"lex") as the row's
+// user_id instead of the real Supabase auth UUID. Row-level security
+// checks the row against the authenticated user's real ID, so a label
+// like "pete" could never satisfy that policy — every write was
+// rejected outright, every time, regardless of network conditions.
+// Fixed to use the real UUID (_sbUserId), matching the same pattern
+// already used correctly in Claim Tracker and Fortnight Tracker.
+async function saveToCloud(friendlyUserId, data) {
+  if (!_sbUserId) { _lastCloudError = "save: no authenticated user yet"; return false; }
   try {
     const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY), "Prefer": "resolution=merge-duplicates" };
     const res = await fetch(
@@ -1486,7 +1502,7 @@ async function saveToCloud(userId, data) {
       {
         method:  "POST",
         headers,
-        body:    JSON.stringify({ user_id: userId, data, updated_at: new Date().toISOString() })
+        body:    JSON.stringify({ user_id: _sbUserId, data, updated_at: new Date().toISOString() })
       }
     );
     if (!res.ok && res.status === 401) showSessionExpiredBanner();
@@ -1564,6 +1580,7 @@ async function doRtLogin() {
     if (!res.ok) throw new Error(data.error_description || 'Sign in failed');
     _sbAccessToken = data.access_token;
     localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+    _sbUserId = data.user?.id || null; // v2.8 (MR-003)
     const userId = RT_USER_MAP[data.user?.id] || 'pete';
     hidePinScreen();
     afterRtAuth(userId);
@@ -4003,6 +4020,7 @@ window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme); // v2.4
   if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
     if (e.data.access_token) _sbAccessToken = e.data.access_token;
+    if (e.data.user_id) _sbUserId = e.data.user_id; // v2.8 (MR-003)
     hidePinScreen();
     const userId = RT_USER_MAP[e.data.user_id] || e.data.user_key || localStorage.getItem('rt-user') || 'pete';
     if (!window._rtInited) { window._rtInited = true; afterRtAuth(userId); }
@@ -4023,6 +4041,7 @@ window.addEventListener('message', function(e) {
       if (res.ok) {
         const data = await res.json();
         _sbAccessToken = data.access_token;
+        _sbUserId = data.user?.id || _sbUserId; // v2.8 (MR-003)
         localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
         hidePinScreen();
         const userId = RT_USER_MAP[data.user?.id] || localStorage.getItem('rt-user') || 'pete';
