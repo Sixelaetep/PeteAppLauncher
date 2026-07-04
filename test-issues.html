@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Test &amp; Issues v1.14</title>
+<title>Test &amp; Issues v1.15</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -364,7 +364,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.14</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.15</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncPanel()" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
@@ -1490,6 +1490,9 @@ function saveIssue() {
   if (!title) { toast('Title is required'); return; }
   if (!appId || !state.apps[appId]) { toast('Select an app'); return; }
 
+  let newIssueId = null;
+  let originatingAppId = null;
+
   if (editingIssueId) {
     const issue = state.issues[editingIssueId];
     issue.appId    = appId;
@@ -1501,10 +1504,12 @@ function saveIssue() {
   } else {
     const app = state.apps[appId];
     const id  = nextIssueId(app.prefix);
+    newIssueId = id;
     state.issues[id] = { id, appId, title, desc, priority, status, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
     // TI-032: if this issue was raised from a failed test, reset that test to Untested
     if (_originatingTest) {
+      originatingAppId = _originatingTest.appId;
       const ot = findTestInState(_originatingTest.appId, _originatingTest.version, _originatingTest.testId);
       if (ot) {
         ot.status    = 'open';
@@ -1514,15 +1519,18 @@ function saveIssue() {
       _originatingTest = null;
     }
   }
-  const savedIssueId = editingIssueId || Object.keys(state.issues)[Object.keys(state.issues).length-1];
+
+  const savedIssueId = editingIssueId || newIssueId;
   saveState();
   closeIssueModal();
   renderIssues();
   if (currentTab === 'tests') renderTests();
   refreshStats();
   toast(editingIssueId ? 'Issue updated' : 'Issue logged');
-  // Sync to cloud
-  if (state.issues[savedIssueId]) syncIssue(state.issues[savedIssueId]);
+  // Sync issue to cloud
+  if (savedIssueId && state.issues[savedIssueId]) syncIssue(state.issues[savedIssueId]);
+  // TI-003: if issue came from a failed test, also sync the app (test status changed)
+  if (originatingAppId && state.apps[originatingAppId]) syncApp(state.apps[originatingAppId]);
   syncMeta();
 }
 
@@ -1530,13 +1538,14 @@ function deleteCurrentIssue() {
   if (!editingIssueId) return;
   if (!confirm('Delete this issue?')) return;
   const deletedId = editingIssueId;
+  const snapshot  = { ...state.issues[deletedId] }; // capture before removal
   delete state.issues[deletedId];
   saveState();
   closeIssueModal();
   renderIssues();
   refreshStats();
   toast('Issue deleted');
-  syncDeleteIssue(deletedId);
+  syncDeleteIssue(deletedId, snapshot);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1909,11 +1918,19 @@ async function upsertRow(recordKey, data) {
   if (!post.ok) throw new Error('POST failed: ' + (await post.text()));
 }
 
-// Delete one row by record_key (no tombstone — direct delete per brief)
-async function deleteRow(recordKey) {
+// Tombstone a row — marks _deleted:true so pull won't resurrect it
+// (Direct DELETE fails across devices: the pull loop sees local-only and pushes it back up)
+async function tombstoneRow(recordKey, existingData) {
   if (!_sbToken || !_sbUserId) return;
-  const res = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`, 'DELETE');
-  if (!res.ok) throw new Error('DELETE failed: ' + (await res.text()));
+  const row = { user_id: _sbUserId, record_key: recordKey, data: { ...existingData, _deleted: true, updated_at: new Date().toISOString() }, updated_at: new Date().toISOString() };
+  const patch = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`, 'PATCH', row);
+  if (patch.ok) {
+    const body = await patch.json();
+    if (Array.isArray(body) && body.length > 0) return; // PATCH matched
+  }
+  // Row didn't exist yet — POST the tombstone so other devices get it
+  const post = await sbFetch(`/${SB_TABLE}`, 'POST', row);
+  if (!post.ok) throw new Error('Tombstone POST failed: ' + (await post.text()));
 }
 
 // ── Per-entity sync helpers ─────────────────────────────────────
@@ -1923,10 +1940,10 @@ async function syncIssue(issue) {
   catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+err.message,'err'); }
 }
 
-async function syncDeleteIssue(issueId) {
+async function syncDeleteIssue(issueId, snapshot) {
   if (!_sbToken) return;
-  try { setSyncState('syncing'); await deleteRow('issue_'+issueId); setSyncState('synced'); addSyncLog('Issue '+issueId+' deleted from cloud','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('Issue delete failed: '+err.message,'err'); }
+  try { setSyncState('syncing'); await tombstoneRow('issue_'+issueId, snapshot||{id:issueId}); setSyncState('synced'); addSyncLog('Issue '+issueId+' tombstoned in cloud','ok'); }
+  catch(err) { setSyncState('error'); addSyncLog('Issue delete sync failed: '+err.message,'err'); }
 }
 
 async function syncApp(app) {
@@ -1965,7 +1982,7 @@ async function syncPull() {
     const rows = await res.json();
     const seenAppKeys   = new Set();
     const seenIssueKeys = new Set();
-    let pulled = 0, pushedUp = 0;
+    let pulled = 0, pushedUp = 0, deletedLocally = 0;
 
     for (const row of rows) {
       const key  = row.record_key;
@@ -1973,20 +1990,30 @@ async function syncPull() {
       if (key.startsWith('app_')) {
         const appId = key.slice(4);
         seenAppKeys.add(appId);
-        // Cloud wins — overwrite local
-        state.apps[appId] = data;
-        pulled++;
+        if (data._deleted) {
+          // Tombstoned — remove locally if present
+          if (state.apps[appId]) { delete state.apps[appId]; deletedLocally++; }
+        } else {
+          state.apps[appId] = data;
+          pulled++;
+        }
       } else if (key.startsWith('issue_')) {
         const issueId = key.slice(6);
         seenIssueKeys.add(issueId);
-        state.issues[issueId] = data;
-        pulled++;
+        if (data._deleted) {
+          // Tombstoned — remove locally if present
+          if (state.issues[issueId]) { delete state.issues[issueId]; deletedLocally++; }
+        } else {
+          state.issues[issueId] = data;
+          pulled++;
+        }
       } else if (key === '__meta__') {
         if (data.nextSeq) state.nextSeq = data.nextSeq;
       }
     }
 
-    // Push up any local-only records not in cloud
+    // Push up any local-only records not seen in cloud at all
+    // (seen but tombstoned means deleted — do NOT push back up)
     for (const app of Object.values(state.apps)) {
       if (!seenAppKeys.has(app.id)) { await upsertRow('app_'+app.id, app); pushedUp++; }
     }
@@ -1998,7 +2025,8 @@ async function syncPull() {
     renderTab(currentTab);
     refreshStats();
     setSyncState('synced');
-    addSyncLog(`Pull complete — ${pulled} pulled, ${pushedUp} pushed up`,'ok');
+    const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', deletedLocally ? `${deletedLocally} tombstones applied` : ''].filter(Boolean).join(', ');
+    addSyncLog(`Pull complete — ${parts}`,'ok');
   } catch(err) { setSyncState('error'); addSyncLog('Pull failed: '+err.message,'err'); }
 }
 
