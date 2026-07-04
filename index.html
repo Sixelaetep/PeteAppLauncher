@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v8.7</title>
+<title>P Apps v8.8</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='20' fill='%2358a6ff' text-anchor='middle'>P</text></svg>">
@@ -408,7 +408,7 @@
 <!-- ── Navigation ── -->
 <nav id="nav">
   <div class="nav-left">
-    <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.7</span></button>
+    <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v8.8</span></button>
     <div class="nav-icons-group">
       <button class="nav-btn pete-only" data-target="ti" style="--app-color:#a78bfa" onclick="switchTo('ti', this)" title="Test &amp; Issues">🚦</button>
       <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
@@ -1401,7 +1401,7 @@ function statOnBudget() {
     const parsed = JSON.parse(raw);
     const d = parsed.data || parsed;
 
-    const DEFAULT_SETTINGS = { weeklyFood: 125, monthlyPot: 700, payinDay: 28, weekStart: 0 };
+    const DEFAULT_SETTINGS = { weeklyFood: 125, monthlyPot: 700, payinDay: 28, weekStartDay: 6 };
     const settings = { ...DEFAULT_SETTINGS, ...(d.settings || {}) };
     const months   = d.months || {};
     const bills    = d.bills  || { settings: { clearedBalance: 0 }, recurring: [], tx: [] };
@@ -1422,6 +1422,16 @@ function statOnBudget() {
 
     function obFmtShort(dt) {
       return dt.toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+    }
+
+    // weekAnchor mirrors app exactly — uses weekStartDay (0=Sun,1=Mon,6=Sat)
+    const wsd = settings.weekStartDay ?? 6;
+    function weekAnchor(date) {
+      const d2 = new Date(date); d2.setHours(0,0,0,0);
+      const dow = d2.getDay();
+      const diff = (dow - wsd + 7) % 7;
+      d2.setDate(d2.getDate() - diff);
+      return d2;
     }
 
     // ── Food pot boundaries ───────────────────────────────────────
@@ -1446,61 +1456,71 @@ function statOnBudget() {
     const daysToNext = Math.round((nextPayin - today) / 86400000);
     const payinStr   = obFmtShort(nextPayin);
 
-    // ── Week start helper (respects weekStart setting) ────────────
-    const ws = settings.weekStart ?? 0; // 0=Sun,1=Mon,6=Sat
-    function obWeekStart(dt) {
-      const d2 = new Date(dt); d2.setHours(0,0,0,0);
-      const dow = d2.getDay();
-      const diff = (dow - ws + 7) % 7;
-      d2.setDate(d2.getDate() - diff);
-      return d2;
+    // getWeeks mirrors app exactly — cycle starts day AFTER pay-in
+    function getWeeks(last, next) {
+      const daily = settings.weeklyFood / 7;
+      const weeks = [];
+      const cycleStart = new Date(last.getTime() + 86400000);
+      let cursor = weekAnchor(cycleStart);
+      let num = 0;
+      while (cursor < next && num < 7) {
+        const ws = new Date(cursor);
+        const we = new Date(cursor); we.setDate(we.getDate()+6);
+        if (we >= cycleStart && ws < next) {
+          num++;
+          const isFinal  = we >= next;
+          const isFirst  = ws < cycleStart;
+          const effStart = isFirst ? cycleStart : ws;
+          const effEndEx = isFinal ? next : new Date(we.getTime()+86400000);
+          const days     = (isFirst || isFinal) ? obDaysBetween(effStart, effEndEx) : 7;
+          const budget   = (isFirst || isFinal) ? Math.round(daily*days*100)/100 : settings.weeklyFood;
+          weeks.push({ start:new Date(ws), end:new Date(we), budget,
+            isCurrent: today>=ws && today<=we, isPast: we<today, isFinal, isFirst });
+        }
+        cursor.setDate(cursor.getDate()+7);
+      }
+      return weeks;
+    }
+
+    // calcReserve mirrors app exactly — deducts food spend per week
+    function calcReserve(weeks, tx) {
+      return weeks.reduce((tot, w) => {
+        if (w.isPast) return tot;
+        const ws = obIso(w.start), we = obIso(w.end);
+        const spent = tx.filter(t=>t.category==='food'&&t.date>=ws&&t.date<=we&&!t._deleted)
+                        .reduce((s,t)=>s+(t.amount||0),0);
+        return tot + Math.max(0, w.budget - spent);
+      }, 0);
     }
 
     // ── Food pot section ──────────────────────────────────────────
     let foodHtml = '';
-    if (!monthData) {
+    if (!monthData || monthData.startBalance === null) {
       foodHtml = `<div style="color:var(--ink3);font-size:12px">No data this month · Pay-in ${payinStr} · ${daysToNext}d away</div>`;
     } else {
-      const startBalance = monthData.startBalance || 0;
+      const startBalance = monthData.startBalance;
       const txs = (monthData.transactions || []).filter(t => !t._deleted);
       const totalSpent = txs.reduce((s,t) => s+(t.amount||0), 0);
 
-      // This week food spend
-      const wStart = obWeekStart(today);
-      const wEnd = new Date(wStart); wEnd.setDate(wEnd.getDate()+6);
-      const wStartStr = obIso(wStart), wEndStr = obIso(wEnd);
-      const weekTx = txs.filter(t => t.date >= wStartStr && t.date <= wEndStr);
-      const wFood = weekTx.filter(t=>t.category==='food').reduce((s,t)=>s+(t.amount||0),0);
+      const weeks   = getWeeks(lastPayin, nextPayin);
+      const reserve = calcReserve(weeks, txs);
+      const pot     = startBalance - totalSpent;
+      const headroom = pot - reserve;
 
-      // Reserve needed (remaining weeks pro-rated)
-      const dailyRate = settings.weeklyFood / 7;
-      let reserveNeeded = 0;
-      let cursor = obWeekStart(lastPayin);
-      for (let i=0;i<7;i++) {
-        const ws2 = new Date(cursor);
-        const we2 = new Date(cursor); we2.setDate(we2.getDate()+6);
-        if (cursor >= nextPayin) break;
-        if (we2 >= lastPayin && ws2 < nextPayin) {
-          const isCurrent = today >= ws2 && today <= we2;
-          const isPast    = we2 < today;
-          const isFinalP  = we2 >= nextPayin;
-          if (!isPast) {
-            const days   = isFinalP ? Math.round((nextPayin-ws2)/86400000) : 7;
-            const budget = isFinalP ? Math.round(dailyRate*days*100)/100 : settings.weeklyFood;
-            reserveNeeded += Math.max(0, budget - (isCurrent ? wFood : 0));
-          }
-        }
-        cursor.setDate(cursor.getDate()+7);
-      }
+      // This week food from weeks array (matches app curWeek lookup)
+      const curWeek = weeks.find(w => w.isCurrent);
+      const wFoodBudget = curWeek?.budget || settings.weeklyFood;
+      const wFood = curWeek ? txs.filter(t => {
+        const ws=obIso(curWeek.start), we=obIso(curWeek.end);
+        return t.category==='food' && t.date>=ws && t.date<=we;
+      }).reduce((s,t)=>s+(t.amount||0),0) : 0;
+      const wFoodLeft = Math.max(0, wFoodBudget - wFood);
 
-      const effectivePot = startBalance - totalSpent;
-      const headroom     = effectivePot - reserveNeeded;
       const headFmt  = Math.abs(headroom).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
-      const potFmt   = effectivePot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
-      const wFoodRem = Math.max(0, settings.weeklyFood - wFood);
+      const potFmt   = pot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
       const headColour = headroom >= 0 ? '#3fb950' : '#f87171';
-      const headPct    = Math.min(100, Math.max(0, Math.round((effectivePot / Math.max(1, startBalance)) * 100)));
-      const barColour  = headroom < 0 ? '#f87171' : headroom < settings.weeklyFood ? '#f59e0b' : '#3fb950';
+      const headPct    = startBalance > 0 ? Math.min(100, Math.max(0, Math.round((pot / startBalance) * 100))) : 0;
+      const barColour  = headroom < 0 ? '#f87171' : headroom < reserve*0.15 ? '#f59e0b' : '#3fb950';
 
       foodHtml = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
@@ -1512,7 +1532,7 @@ function statOnBudget() {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline">
           <span style="font-size:12px;font-weight:700;color:${headColour}">${headroom>=0?'£'+headFmt+' headroom':'£'+headFmt+' deficit'}</span>
-          <span style="font-size:10px;color:var(--ink3)">£${wFoodRem.toFixed(0)} food left · pay-in ${payinStr} ${daysToNext}d</span>
+          <span style="font-size:10px;color:var(--ink3)">£${wFoodLeft.toFixed(0)} food left · pay-in ${payinStr} ${daysToNext}d</span>
         </div>`;
     }
 
