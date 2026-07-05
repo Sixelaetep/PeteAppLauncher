@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.2</title>
+<title>Gym Tracker v2.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -211,7 +211,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.2</div></span>
+      <span>Gym Tracker<div class="ver">v2.3</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -443,7 +443,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.2';
+const VERSION = '2.3';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -665,10 +665,17 @@ function sbUpsert(kind, record, cb) {
   setSyncStatus('syncing');
   const row = { user_id: _sbUserId, record_key: record.id, data: record, updated_at: new Date().toISOString() };
   fetch(tbl+'?user_id=eq.'+_sbUserId+'&record_key=eq.'+record.id, { method:'PATCH', headers: sbHdr(), body: JSON.stringify(row) })
-    .then(r => r.json().then(d => ({status:r.status, data:d})))
+    .then(r => {
+      if (r.status === 401) return Promise.resolve({status:401, data:null});
+      return r.json().then(d => ({status:r.status, data:d}));
+    })
     .then(res => {
       if (res.status===200 && Array.isArray(res.data) && res.data.length>0) {
         slog('Upsert (PATCH) '+kind+' '+record.id+' ✓','ok'); setSyncStatus('synced'); if (cb) cb(true); return;
+      }
+      if (res.status === 401) {
+        slog('Upsert failed: '+kind+' '+record.id+' — session token invalid or expired, reopen the app via the launcher','error');
+        setSyncStatus('error'); if (cb) cb(false); return;
       }
       return fetch(tbl, { method:'POST', headers: sbHdr(), body: JSON.stringify(row) })
         .then(r2 => r2.json().then(d2 => ({status:r2.status, data:d2})))
@@ -686,28 +693,46 @@ function pullFromCloud(cb) {
   setSyncStatus('syncing');
   slog('Pull from cloud…');
   const kinds = ['exercise','plan','session'];
-  Promise.all(kinds.map(kind => fetch(SB_TABLES[kind]+'?user_id=eq.'+_sbUserId+'&order=updated_at.desc', { headers: { apikey: SB_KEY, Authorization: 'Bearer '+_sbToken } })
-    .then(r => { if (!r.ok) throw new Error('HTTP '+r.status+' ('+kind+')'); return r.json(); })
-    .then(rows => ({kind, rows}))
+  // GYM-009: this used to be a single Promise.all() over the three raw
+  // fetches. If any one table's fetch rejected (e.g. a 401 on exercises),
+  // Promise.all short-circuits straight to .catch and the OTHER two tables
+  // never get processed either — a session that failed to sync would take
+  // down an otherwise-successful plans/sessions pull with it. Each fetch
+  // below catches its own outcome so one table failing never blocks the
+  // other two, and each failure gets a message pointing at the likely cause.
+  Promise.all(kinds.map(kind =>
+    fetch(SB_TABLES[kind]+'?user_id=eq.'+_sbUserId+'&order=updated_at.desc', { headers: { apikey: SB_KEY, Authorization: 'Bearer '+_sbToken } })
+      .then(r => r.ok ? r.json().then(rows => ({kind, ok:true, rows})) : Promise.resolve({kind, ok:false, status:r.status}))
+      .catch(e => ({kind, ok:false, message:e.message}))
   )).then(results => {
-    results.forEach(({kind, rows}) => {
-      const arrKey = kind==='exercise' ? 'exercises' : kind==='plan' ? 'plans' : 'sessions';
+    let anyError = false;
+    results.forEach(res => {
+      const arrKey = res.kind==='exercise' ? 'exercises' : res.kind==='plan' ? 'plans' : 'sessions';
+      if (!res.ok) {
+        anyError = true;
+        const hint = res.status===401 ? 'session token invalid or expired — reopen the app via the launcher to refresh it'
+          : res.status===404 ? 'table not found — check the Supabase table exists'
+          : res.status===403 ? 'access denied — check the RLS policy'
+          : (res.message || ('HTTP '+res.status));
+        slog('Pull failed: '+res.kind+' — '+hint, 'error');
+        return; // this table's local data is left exactly as it was
+      }
       const localArr = _env.data[arrKey];
-      if (rows.length === 0 && localArr.length > 0) {
+      if (res.rows.length === 0 && localArr.length > 0) {
         // First-time bootstrap: push local up rather than wiping it.
         slog('Cloud '+arrKey+' empty but local has '+localArr.length+' — bootstrapping up','ok');
-        localArr.forEach(rec => sbUpsert(kind, rec, null));
+        localArr.forEach(rec => sbUpsert(res.kind, rec, null));
       } else {
-        _env.data[arrKey] = rows.map(row => row.data);
-        slog('Pulled '+rows.length+' '+arrKey, 'ok');
+        _env.data[arrKey] = res.rows.map(row => row.data);
+        slog('Pulled '+res.rows.length+' '+arrKey, 'ok');
       }
     });
     migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     save(_env);
-    setSyncStatus('synced');
-    slog('Pull complete', 'ok');
+    setSyncStatus(anyError ? 'error' : 'synced');
+    slog(anyError ? 'Pull finished with errors on some tables — see above' : 'Pull complete', 'ok');
     if (cb) cb();
-  }).catch(e => { slog('Pull failed: '+e.message,'error'); setSyncStatus('error'); if (cb) cb(); });
+  });
 }
 
 function manualPull() {
@@ -1485,14 +1510,19 @@ function finishActiveSession() {
   const now = new Date().toISOString();
 
   if (_editingSessionId) {
-    // GYM-005: update the existing record in place — no new session, no
-    // re-triggering the "save as plan" / "update plan targets" prompts,
-    // and the original completedAt/createdAt/startedAt are preserved so
-    // editing a session doesn't quietly rewrite when it actually happened.
+    // GYM-005: update the existing record in place — no new session, and
+    // the original completedAt/createdAt/startedAt are preserved so editing
+    // doesn't quietly rewrite when it actually happened.
+    // GYM-008: editing used to skip the save-as-plan / update-plan-targets
+    // prompts entirely. There's no reason it should — if you've just
+    // tidied up a session's numbers, that's exactly when you might want to
+    // turn it into a plan, or push those numbers into an existing one. Now
+    // shares the same offerPlanPrompt() as a freshly-finished session.
+    let updated = null;
     const idx = _env.data.sessions.findIndex(s => s.id === _editingSessionId);
     if (idx > -1) {
       const original = _env.data.sessions[idx];
-      const updated = Object.assign({}, _activeSession, {
+      updated = Object.assign({}, _activeSession, {
         completedAt: original.completedAt, createdAt: original.createdAt, startedAt: original.startedAt, updatedAt: now
       });
       _env.data.sessions[idx] = updated;
@@ -1504,6 +1534,7 @@ function finishActiveSession() {
     document.getElementById('sessionOverlay').classList.remove('open');
     renderAll();
     toast('Session updated ✓');
+    if (updated) offerPlanPrompt(updated);
     return;
   }
 
@@ -1513,7 +1544,13 @@ function finishActiveSession() {
   save(_env);
   sbUpsert('session', finished, null);
   document.getElementById('sessionOverlay').classList.remove('open');
+  _activeSession = null;
+  renderAll();
+  toast('Session saved ✓');
+  offerPlanPrompt(finished);
+}
 
+function offerPlanPrompt(finished) {
   if (!finished.planId) {
     if (finished.items.length && confirm('Save this as a reusable Plan for next time?')) {
       const name = prompt('Plan name:', finished.name) || '';
@@ -1525,9 +1562,6 @@ function finishActiveSession() {
       updatePlanFromSession(plan.id, finished);
     }
   }
-  _activeSession = null;
-  renderAll();
-  toast('Session saved ✓');
 }
 
 function createPlanFromSession(session, name) {
