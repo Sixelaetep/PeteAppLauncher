@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.1</title>
+<title>On Budget v3.2</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -333,7 +333,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.1</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.2</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -637,9 +637,9 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.1
+// On Budget v3.2
 // localStorage key: on_budget_v1
-// Backwards compatible with v1.0–v3.0 JSON backups. v1.9 added a Bills
+// Backwards compatible with v1.0–v3.1 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
 // merged Bills into one chronological list with a filter. v2.2 added a
 // backup-reminder banner; v2.3 gave it a real per-account breakdown.
@@ -665,6 +665,18 @@
 // v3.1: header and tab-bar content now centers within that same 900px
 // zone on desktop (their backgrounds still span full width — only the
 // content, e.g. logo/badge/tabs, is centered). Additive only.
+// v3.2: audited every Bills balance mutation (create/clear/delete/
+// reconcile) line by line — each one's math is correct and exactly
+// symmetric with its inverse, no bug found there. Added a visible audit
+// trail instead: every balance-affecting action now logs its delta and
+// resulting balance to the Cloud Sync log in Settings, and toasts show
+// the resulting balance instead of a generic confirmation. The most
+// likely real cause of drift on multi-device setups: clearedBalance is
+// a single mutable number synced as one blob-ish value (last-write-
+// wins), so the same action taken independently on two devices before
+// they sync with each other can apply the same delta twice. That's a
+// deeper fix (deriving balance from the ledger instead of storing a
+// counter) — flagged for Pete, not attempted in this pass.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1086,14 +1098,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.1', lastUpdated:new Date().toISOString(),
+    version:'3.2', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.1', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.2', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2080,11 +2092,13 @@ function saveBtx() {
   const entry = { id:billsUid(), date, name:label, type:_btxType, amount:Math.round(amt*100)/100, source:'adhoc', cleared:_btxCleared, _ts:Date.now(), updated_at:new Date().toISOString() };
   bills.tx.push(entry);
   if (_btxCleared) {
-    bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) + (_btxType==='income'?amt:-amt))*100)/100;
+    const delta = _btxType==='income' ? amt : -amt;
+    bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) + delta)*100)/100;
+    addSyncLog(`Added "${label}" ${delta>=0?'+':''}£${delta.toFixed(2)} → balance £${bills.settings.clearedBalance.toFixed(2)}`,'info');
   }
   save(true); closeBtxSheet(); renderBillsLedger();
   syncUpsertBillsTx(entry);
-  toast(_btxCleared ? `${_btxType==='income'?'💰':'💸'} £${amt.toFixed(2)} added ✓` : 'Added as uncleared — tap it in Upcoming to clear');
+  toast(_btxCleared ? `${_btxType==='income'?'💰':'💸'} £${amt.toFixed(2)} added — balance £${bills.settings.clearedBalance.toFixed(2)}` : 'Added as uncleared — tap it in Upcoming to clear');
 }
 
 // ── Add / edit recurring item ────────────────────────────────────
@@ -2237,12 +2251,14 @@ function saveClear() {
       entry = bills.tx[idx];
     }
   }
-  bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) + (type==='income'?amt:-amt))*100)/100;
+  const delta = type==='income' ? amt : -amt;
+  bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) + delta)*100)/100;
   bills.settings.updated_at = new Date().toISOString();
+  addSyncLog(`Cleared "${name}" ${delta>=0?'+':''}£${delta.toFixed(2)} → balance £${bills.settings.clearedBalance.toFixed(2)}`,'info');
   save(true); closeClearSheet(); renderBillsLedger();
   if (entry) syncUpsertBillsTx(entry);
   syncUpsertBillsSettings();
-  toast('Marked cleared ✓');
+  toast(`Marked cleared — balance £${bills.settings.clearedBalance.toFixed(2)}`);
 }
 function skipClear() {
   if (!_clrCtx) return;
@@ -2279,8 +2295,10 @@ function deleteBillsTx(id) {
   if (!t) return;
   if (!t.skipped) {
     const delta = t.type==='income' ? t.amount : -t.amount;
+    const reversal = -delta;
     bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) - delta)*100)/100;
     bills.settings.updated_at = new Date().toISOString();
+    addSyncLog(`Deleted "${t.name}" — reversed ${reversal>=0?'+':''}£${reversal.toFixed(2)} → balance £${bills.settings.clearedBalance.toFixed(2)}`,'info');
   }
   t._deleted = true;
   t.updated_at = new Date().toISOString();
@@ -2288,7 +2306,7 @@ function deleteBillsTx(id) {
   save(true); renderBillsLedger();
   syncTombstoneBillsTx(snapshot);
   syncUpsertBillsSettings();
-  toast('Removed');
+  toast(t.skipped ? 'Removed' : `Removed — balance £${bills.settings.clearedBalance.toFixed(2)}`);
 }
 
 // Delete straight from an uncleared row without opening the clear sheet.
@@ -2324,8 +2342,10 @@ function quickDeleteUncleared(kind, a, b) {
 function saveBillsReconcile() {
   const v = pennyValue('s-bills-bal');
   if (isNaN(v)) { toast('Enter a valid number'); return; }
+  const before = bills.settings.clearedBalance||0;
   bills.settings.clearedBalance = Math.round((v*_billsReconcileSign)*100)/100;
   bills.settings.updated_at = new Date().toISOString();
+  addSyncLog(`Manual reconcile: £${before.toFixed(2)} → £${bills.settings.clearedBalance.toFixed(2)} (overrides any drift, doesn't touch transaction history)`,'info');
   save(true); renderBillsLedger();
   syncUpsertBillsSettings();
   toast('Bills balance updated ✓');
