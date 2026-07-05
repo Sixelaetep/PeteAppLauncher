@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.0</title>
+<title>Gym Tracker v2.1</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -32,6 +32,14 @@
   .header-actions{display:flex;align-items:center;gap:8px}
   .icon-btn{background:var(--surface2);border:1px solid var(--border);color:var(--ink2);border-radius:8px;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;transition:all 0.15s}
   .icon-btn:hover{border-color:var(--ink3);color:var(--ink)}
+  .sync-wrap{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink2);cursor:pointer;padding:6px 8px;border-radius:8px;background:var(--surface2);border:1px solid var(--border)}
+  .sync-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--ink3);transition:background 0.3s}
+  .sync-dot.synced{background:var(--accent2)}
+  .sync-dot.syncing{background:var(--accent4);animation:syncpulse .8s infinite alternate}
+  .sync-dot.error{background:#f78166}
+  .sync-dot.offline{background:var(--ink3)}
+  @keyframes syncpulse{from{opacity:1}to{opacity:0.35}}
+  .no-pal-banner{display:none;background:rgba(247,129,102,0.1);border-bottom:1px solid #f78166;padding:7px 14px;font-size:11.5px;color:#f78166;text-align:center;flex-shrink:0}
 
   .tab-bar{height:var(--tab-h);background:var(--surface);border-bottom:1px solid var(--border);display:flex;overflow-x:auto;scrollbar-width:none}
   .tab-bar::-webkit-scrollbar{display:none}
@@ -202,9 +210,12 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.0</div></span>
+      <span>Gym Tracker<div class="ver">v2.1</div></span>
     </div>
     <div class="header-actions">
+      <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
+        <span class="sync-dot" id="syncDot"></span><span id="syncLbl">Local</span>
+      </div>
       <button class="icon-btn" onclick="openDataDrawer()" title="Data & Backup">💾</button>
     </div>
   </div>
@@ -215,6 +226,7 @@
     <button class="tab-btn" id="tab-insights" onclick="switchTab('insights')"><span class="tab-icon">📊</span>Insights</button>
     <button class="tab-btn" id="tab-history" onclick="switchTab('history')"><span class="tab-icon">📈</span>History</button>
   </div>
+  <div class="no-pal-banner" id="noPalBanner">Open via Pete's Apps launcher for cloud sync</div>
 </div>
 
 <div class="body-scroll">
@@ -399,6 +411,16 @@
     <div class="drawer-row"><span>Data version</span><span id="drDataVersion">—</span></div>
     <div class="drawer-row"><span>Last updated</span><span id="drLastUpdated">—</span></div>
     <div class="drawer-row"><span>Last exported</span><span id="drLastExported">—</span></div>
+
+    <div class="section-title">Cloud Sync</div>
+    <div id="syncStatusPanel" style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--ink2);line-height:1.8;margin-bottom:10px"></div>
+    <div class="btn-row" style="margin-top:0">
+      <button class="btn btn-secondary btn-sm" onclick="manualPull()">⬇ Pull from cloud</button>
+      <button class="btn btn-secondary btn-sm" onclick="manualPush()">⬆ Push to cloud</button>
+    </div>
+    <div class="section-title">Sync Log</div>
+    <div id="syncLogBox" style="background:var(--surface2);border-radius:8px;padding:8px 10px;font-size:10.5px;color:var(--ink2);line-height:1.6;max-height:150px;overflow-y:auto;font-family:monospace;white-space:pre-wrap;word-break:break-all"></div>
+
     <div class="section-title">Backup</div>
     <div class="btn-row" style="margin-top:0">
       <button class="btn btn-primary btn-block" onclick="exportJSON()">⬇ Download Backup (JSON)</button>
@@ -408,8 +430,8 @@
     <div class="section-title">Danger Zone</div>
     <button class="btn btn-danger btn-block" onclick="confirmClearAll()">🗑 Clear All Data</button>
     <p style="font-size:11px;color:var(--ink3);margin-top:18px;line-height:1.5">
-      Cloud sync isn't enabled yet for Gym Tracker — everything is stored locally on this device.
-      Use the backup button above regularly, especially before clearing your browser data.
+      Cloud sync works when this app is opened through Pete's Apps launcher (it needs a login session).
+      Opened standalone, it runs local-only — use the backup button above regularly in that case.
     </p>
   </div>
 </div>
@@ -420,7 +442,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.0';
+const VERSION = '2.1';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -545,10 +567,6 @@ function applyTheme(theme) {
   const metaColor = document.getElementById('metaThemeColor');
   if (metaColor) metaColor.setAttribute('content', dark ? '#0d1117' : '#f4f6f8');
 }
-window.addEventListener('message', function(e) {
-  if (e.origin !== window.location.origin) return;
-  if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
-});
 function reportToLauncher() {
   if (window.parent === window) return;
   try {
@@ -578,11 +596,175 @@ function currentStreakWeeks(sessions) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// CLOUD SYNC — Supabase, mirrors Fortnight Tracker's model
+// ═══════════════════════════════════════════════════════════════════
+// Deviation from Fortnight: Fortnight hard-DELETEs a bundle row when the
+// bundle is removed locally. Gym Tracker already keeps soft-deleted
+// exercises/plans/sessions locally (_deleted:true) so plan/session history
+// can still show the name of something you've since removed from the
+// library. Rather than layer a second delete mechanism on top, deletions
+// here are just an ordinary upsert with _deleted:true baked into the
+// record's data — the tombstone the rest of the suite already uses
+// (Claim Tracker et al). Cloud never gets a hard DELETE call.
+//
+// Bootstrap safeguard: Fortnight's "cloud is authoritative on pull, no
+// local merge" rule is exactly right for a device that's synced before.
+// It is NOT safe the very first time sync is switched on for an app that
+// already has real local data and zero cloud rows — a naive pull would
+// wipe every exercise/plan/session you've already built. So: if a table
+// comes back with 0 rows AND you have local records, this treats it as
+// first-time bootstrap and pushes local up instead of blanking it.
+var SB_URL = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
+var SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
+const SB_TABLES = { exercise: SB_URL+'/rest/v1/gym_exercises', plan: SB_URL+'/rest/v1/gym_plans', session: SB_URL+'/rest/v1/gym_sessions' };
+let _sbToken = null;   // set via PAL_SESSION postMessage
+let _sbUserId = null;  // Supabase auth UUID — never a display name
+
+function sbHdr(extra) {
+  return Object.assign({ 'apikey': SB_KEY, 'Authorization': 'Bearer '+_sbToken, 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, extra||{});
+}
+
+let _syncLog = [];
+function slog(msg, level) {
+  const ts = new Date().toLocaleTimeString('en-GB');
+  _syncLog.push({ entry: '['+ts+'] '+msg, level: level||'info' });
+  if (_syncLog.length > 100) _syncLog.shift();
+  renderSyncLog();
+}
+function renderSyncLog() {
+  const el = document.getElementById('syncLogBox');
+  if (!el) return;
+  el.innerHTML = _syncLog.length ? _syncLog.slice().reverse().map(e => {
+    const col = e.level==='error' ? '#f78166' : e.level==='ok' ? 'var(--accent2)' : 'var(--ink2)';
+    return '<div style="color:'+col+'">'+escHtml(e.entry)+'</div>';
+  }).join('') : 'No activity yet.';
+}
+
+let _syncState = 'local'; // local | connecting | syncing | synced | error
+function setSyncStatus(s) {
+  _syncState = s;
+  const dot = document.getElementById('syncDot'); const lbl = document.getElementById('syncLbl');
+  if (!dot) return;
+  dot.className = 'sync-dot ' + (s==='synced'?'synced':(s==='syncing'||s==='connecting')?'syncing':s==='error'?'error':'offline');
+  lbl.textContent = s==='synced'?'Synced':s==='syncing'?'Syncing…':s==='connecting'?'Connecting…':s==='error'?'Sync error':'Local';
+}
+
+// Push one record (exercise/plan/session) up to its table. Always an
+// upsert — never a delete — because soft-delete tombstones travel inside
+// the record's own data.
+function sbUpsert(kind, record, cb) {
+  if (!_sbToken || !_sbUserId) { if (cb) cb(false); return; }
+  const tbl = SB_TABLES[kind];
+  setSyncStatus('syncing');
+  const row = { user_id: _sbUserId, record_key: record.id, data: record, updated_at: new Date().toISOString() };
+  fetch(tbl+'?user_id=eq.'+_sbUserId+'&record_key=eq.'+record.id, { method:'PATCH', headers: sbHdr(), body: JSON.stringify(row) })
+    .then(r => r.json().then(d => ({status:r.status, data:d})))
+    .then(res => {
+      if (res.status===200 && Array.isArray(res.data) && res.data.length>0) {
+        slog('Upsert (PATCH) '+kind+' '+record.id+' ✓','ok'); setSyncStatus('synced'); if (cb) cb(true); return;
+      }
+      return fetch(tbl, { method:'POST', headers: sbHdr(), body: JSON.stringify(row) })
+        .then(r2 => r2.json().then(d2 => ({status:r2.status, data:d2})))
+        .then(res2 => {
+          const ok = res2.status===201;
+          slog('Upsert (POST) '+kind+' '+record.id+(ok?' ✓':' ✗ HTTP '+res2.status), ok?'ok':'error');
+          setSyncStatus(ok?'synced':'error'); if (cb) cb(ok);
+        });
+    })
+    .catch(e => { slog('Upsert error '+kind+' '+record.id+': '+e.message,'error'); setSyncStatus('error'); if (cb) cb(false); });
+}
+
+function pullFromCloud(cb) {
+  if (!_sbToken || !_sbUserId) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
+  setSyncStatus('syncing');
+  slog('Pull from cloud…');
+  const kinds = ['exercise','plan','session'];
+  Promise.all(kinds.map(kind => fetch(SB_TABLES[kind]+'?user_id=eq.'+_sbUserId+'&order=updated_at.desc', { headers: { apikey: SB_KEY, Authorization: 'Bearer '+_sbToken } })
+    .then(r => { if (!r.ok) throw new Error('HTTP '+r.status+' ('+kind+')'); return r.json(); })
+    .then(rows => ({kind, rows}))
+  )).then(results => {
+    results.forEach(({kind, rows}) => {
+      const arrKey = kind==='exercise' ? 'exercises' : kind==='plan' ? 'plans' : 'sessions';
+      const localArr = _env.data[arrKey];
+      if (rows.length === 0 && localArr.length > 0) {
+        // First-time bootstrap: push local up rather than wiping it.
+        slog('Cloud '+arrKey+' empty but local has '+localArr.length+' — bootstrapping up','ok');
+        localArr.forEach(rec => sbUpsert(kind, rec, null));
+      } else {
+        _env.data[arrKey] = rows.map(row => row.data);
+        slog('Pulled '+rows.length+' '+arrKey, 'ok');
+      }
+    });
+    migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
+    save(_env);
+    setSyncStatus('synced');
+    slog('Pull complete', 'ok');
+    if (cb) cb();
+  }).catch(e => { slog('Pull failed: '+e.message,'error'); setSyncStatus('error'); if (cb) cb(); });
+}
+
+function manualPull() {
+  if (!_sbToken) { toast('Not connected to cloud'); return; }
+  pullFromCloud(() => { renderAll(); toast('Pulled from cloud ✓'); });
+}
+function manualPush() {
+  if (!_sbToken) { toast('Not connected to cloud'); return; }
+  let total = 0; ['exercises','plans','sessions'].forEach(k => total += _env.data[k].length);
+  if (!total) { toast('Nothing to push'); return; }
+  setSyncStatus('syncing');
+  slog('Manual push — '+total+' record(s)');
+  let done = 0, errors = 0;
+  [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions]].forEach(([kind, arr]) => {
+    arr.forEach(rec => sbUpsert(kind, rec, ok => {
+      if (!ok) errors++;
+      done++;
+      if (done===total) { setSyncStatus(errors?'error':'synced'); toast(errors ? errors+' failed, '+(total-errors)+' pushed' : 'Pushed '+total+' record(s) ✓'); }
+    }));
+  });
+}
+
+// ── PAL_SESSION AUTH (with origin guard from the start) ─────────────
+let _palReceived = false;
+window.addEventListener('message', function(e) {
+  if (e.origin !== window.location.origin) return;
+  if (!e.data) return;
+  if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
+  if (e.data.type !== 'PAL_SESSION') return;
+  _palReceived = true;
+  _sbToken = e.data.access_token || null;
+  _sbUserId = e.data.user_id || null; // Supabase auth UUID, not a display name
+  slog('PAL_SESSION received — user '+(_sbUserId ? _sbUserId.slice(0,8)+'…' : '?'));
+  if (_sbToken && _sbUserId) {
+    setSyncStatus('connecting');
+    pullFromCloud(() => renderAll());
+  }
+});
+setTimeout(function() {
+  if (_palReceived) return;
+  setSyncStatus('local');
+  slog('No PAL_SESSION after 3s — running local only','error');
+  const banner = document.getElementById('noPalBanner');
+  if (banner) banner.style.display = 'block';
+}, 3000);
+
+// ═══════════════════════════════════════════════════════════════════
 // RENDER ALL
 // ═══════════════════════════════════════════════════════════════════
 function renderAll() {
   renderHome(); renderPlanList(); renderExerciseList(); renderHistory(); renderInsights();
   reportToLauncher();
+  renderSyncPanel();
+}
+function renderSyncPanel() {
+  const sp = document.getElementById('syncStatusPanel');
+  if (sp) {
+    const stateLabel = _syncState==='synced' ? '<span style="color:var(--accent2)">Synced</span>'
+      : _syncState==='error' ? '<span style="color:#f78166">Error</span>'
+      : _syncState==='syncing'||_syncState==='connecting' ? '<span style="color:var(--accent4)">'+(_syncState==='connecting'?'Connecting…':'Syncing…')+'</span>'
+      : '<span style="color:var(--ink2)">Local only</span>';
+    sp.innerHTML = 'Status &nbsp;'+stateLabel+'<br>Token &nbsp;<strong>'+(_sbToken?'Received ✓':'Not received')+'</strong><br>User ID &nbsp;<strong>'+(_sbUserId?_sbUserId.slice(0,8)+'…':'—')+'</strong>';
+  }
+  renderSyncLog();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -749,14 +931,18 @@ function saveExercise() {
   const now = new Date().toISOString();
   const notes = document.getElementById('exNotes').value.trim();
   let newId = null;
+  let record;
   if (id) {
     const e = exerciseById(id);
     e.name = name; e.type = _exType; e.tags = _exTags.slice(); e.notes = notes; e.updatedAt = now;
+    record = e;
   } else {
     newId = uid('ex');
-    _env.data.exercises.push({ id:newId, name, type:_exType, tags:_exTags.slice(), notes, createdAt:now, updatedAt:now });
+    record = { id:newId, name, type:_exType, tags:_exTags.slice(), notes, createdAt:now, updatedAt:now };
+    _env.data.exercises.push(record);
   }
   save(_env);
+  sbUpsert('exercise', record, null);
   closeModal('modalExercise');
   renderExerciseList();
   renderHistoryExerciseSelect();
@@ -773,6 +959,7 @@ function deleteExercise(id) {
   const e = exerciseById(id);
   e._deleted = true; e.updatedAt = new Date().toISOString();
   save(_env);
+  sbUpsert('exercise', e, null); // tombstone travels as part of the record, not a cloud DELETE
   renderExerciseList();
   toast('Exercise deleted');
 }
@@ -850,14 +1037,18 @@ function loadStarterLibrary() {
   const existingNames = new Set(_env.data.exercises.map(e => e.name.toLowerCase()));
   const now = new Date().toISOString();
   let added = 0;
+  const newRecords = [];
   STARTER_LIBRARY.forEach(item => {
     if (existingNames.has(item.name.toLowerCase())) return;
-    _env.data.exercises.push({ id: uid('ex'), name:item.name, type:item.type, tags:item.tags.slice(), notes:'', createdAt:now, updatedAt:now });
+    const record = { id: uid('ex'), name:item.name, type:item.type, tags:item.tags.slice(), notes:'', createdAt:now, updatedAt:now };
+    _env.data.exercises.push(record);
+    newRecords.push(record);
     existingNames.add(item.name.toLowerCase());
     added++;
   });
   _env.data.starterDismissed = true;
   save(_env);
+  newRecords.forEach(r => sbUpsert('exercise', r, null));
   renderExerciseList(); renderHistoryExerciseSelect();
   const skipped = STARTER_LIBRARY.length - added;
   toast(added ? `Added ${added} exercise${added===1?'':'s'}${skipped?' · '+skipped+' already existed':''} ✓` : 'All starter exercises already in your library');
@@ -866,13 +1057,14 @@ function loadStarterLibrary() {
 function backfillStarterTags() {
   const byName = {}; STARTER_LIBRARY.forEach(i => byName[i.name.toLowerCase()] = i);
   let updated = 0;
+  const changed = [];
   _env.data.exercises.forEach(e => {
     if (e._deleted) return;
     if ((e.tags||[]).length) return; // don't clobber exercises that already have tags
     const match = byName[e.name.toLowerCase()];
-    if (match) { e.tags = match.tags.slice(); if (!e.type) e.type = match.type; e.updatedAt = new Date().toISOString(); updated++; }
+    if (match) { e.tags = match.tags.slice(); if (!e.type) e.type = match.type; e.updatedAt = new Date().toISOString(); updated++; changed.push(e); }
   });
-  if (updated) { save(_env); renderExerciseList(); }
+  if (updated) { save(_env); changed.forEach(r => sbUpsert('exercise', r, null)); renderExerciseList(); }
   toast(updated ? `Backfilled tags on ${updated} exercise${updated===1?'':'s'} ✓` : 'Nothing to backfill — all matching exercises already have tags');
 }
 
@@ -1005,9 +1197,11 @@ function savePlan() {
   const id = document.getElementById('planEditId').value;
   const now = new Date().toISOString();
   const notes = document.getElementById('planNotes').value.trim();
-  if (id) { const p = planById(id); p.name=name; p.notes=notes; p.items=_planItems; p.updatedAt=now; }
-  else { _env.data.plans.push({ id: uid('plan'), name, notes, items:_planItems, createdAt:now, updatedAt:now }); }
+  let record;
+  if (id) { record = planById(id); record.name=name; record.notes=notes; record.items=_planItems; record.updatedAt=now; }
+  else { record = { id: uid('plan'), name, notes, items:_planItems, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
   save(_env);
+  sbUpsert('plan', record, null);
   closeModal('modalPlan');
   renderPlanList(); renderHome();
   toast('Plan saved ✓');
@@ -1016,6 +1210,7 @@ function deletePlan(id) {
   if (!confirm('Delete this plan? Its session history will be kept.')) return;
   const p = planById(id); p._deleted = true; p.updatedAt = new Date().toISOString();
   save(_env);
+  sbUpsert('plan', p, null);
   renderPlanList(); renderHome();
   toast('Plan deleted');
 }
@@ -1040,6 +1235,7 @@ function updatePlanFromSession(planId, session) {
   });
   plan.updatedAt = now;
   save(_env);
+  sbUpsert('plan', plan, null);
   renderPlanList();
 }
 
@@ -1223,6 +1419,7 @@ function finishActiveSession() {
   const finished = Object.assign({createdAt:now, updatedAt:now}, _activeSession);
   _env.data.sessions.push(finished);
   save(_env);
+  sbUpsert('session', finished, null);
   document.getElementById('sessionOverlay').classList.remove('open');
 
   if (!finished.planId) {
@@ -1245,8 +1442,10 @@ function createPlanFromSession(session, name) {
   const now = new Date().toISOString();
   const items = session.items.filter(i=>i.actualSets.some(hasAnyValue)).map(i => ({ id: uid('pi'), exerciseId: i.exerciseId, trackType: i.trackType, targetSets: i.actualSets.filter(hasAnyValue).map(stripDone) }));
   if (!items.length) return;
-  _env.data.plans.push({ id: uid('plan'), name, notes:'', items, createdAt:now, updatedAt:now });
+  const record = { id: uid('plan'), name, notes:'', items, createdAt:now, updatedAt:now };
+  _env.data.plans.push(record);
   save(_env);
+  sbUpsert('plan', record, null);
   renderPlanList(); renderHome();
   toast('Plan "'+name+'" saved ✓');
 }
@@ -1288,7 +1487,9 @@ function deleteSession(id) {
   if (!confirm('Delete this logged session? This cannot be undone.')) return;
   const s = _env.data.sessions.find(x=>x.id===id);
   s._deleted = true; s.updatedAt = new Date().toISOString();
-  save(_env); renderAll();
+  save(_env);
+  sbUpsert('session', s, null);
+  renderAll();
   toast('Session deleted');
 }
 function renderHistoryExerciseSelect() {
@@ -1377,6 +1578,7 @@ function openDataDrawer() {
   document.getElementById('drDataVersion').textContent  = 'v'+(_env.version||2);
   document.getElementById('drLastUpdated').textContent  = fmtDateTime(_env.lastUpdated);
   document.getElementById('drLastExported').textContent = fmtDateTime(_env.lastExported);
+  renderSyncPanel();
   document.getElementById('dataDrawer').classList.add('open');
 }
 function closeDataDrawer() { document.getElementById('dataDrawer').classList.remove('open'); document.getElementById('importFile').value=''; }
@@ -1456,6 +1658,7 @@ document.addEventListener('click', function(e) {
 // BOOT
 // ═══════════════════════════════════════════════════════════════════
 init();
+setSyncStatus('connecting');
 </script>
 </body>
 </html>
