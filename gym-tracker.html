@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.4</title>
+<title>Gym Tracker v2.5</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -211,7 +211,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.4</div></span>
+      <span>Gym Tracker<div class="ver">v2.5</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -446,7 +446,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.4';
+const VERSION = '2.5';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -1320,35 +1320,51 @@ function summarizeSets(sets, type) {
     : type==='time' ? mmss(s.seconds)
     : (s.reps||0)+'×'+(s.weight||0)+'kg').join(', ');
 }
-// Progression heuristic: if every set was completed last time, nudge up
-// (weight +2.5kg, or +1 rep for bodyweight moves, or a bit longer/faster
-// for time/distance). If sets were missed last time, suggest repeating
-// the same numbers rather than piling on more before they're consistent.
-// This is a starting point, not a training program — every value stays
-// fully editable before you log anything.
+// GYM-010: progression is now a mode ('reps'/'weight' for reps-type,
+// 'seconds' for time, 'distance'/'pace' for distance) + an amount, both
+// user-adjustable via the picker on the session card. A sensible default
+// is computed the first time; once you change it for an exercise, that
+// choice is remembered on the exercise record and reused next time.
+function defaultProgressionFor(type, lastSets) {
+  if (type === 'reps') {
+    const usesWeight = lastSets.some(s => (s.weight||0) > 0);
+    return usesWeight ? {mode:'weight', amount:2.5} : {mode:'reps', amount:1};
+  }
+  if (type === 'time') return {mode:'seconds', amount: Math.max(5, Math.round((lastSets[0] && lastSets[0].seconds||0)*0.1))};
+  return {mode:'pace', amount:3}; // distance: % faster, default mode
+}
+function applyProgression(lastSets, type, mode, amount) {
+  const amt = Number(amount)||0;
+  if (type === 'reps') {
+    return lastSets.map(s => mode==='weight'
+      ? { reps: s.reps, weight: Math.round(((s.weight||0) + amt) * 2) / 2 }
+      : { reps: (s.reps||0) + Math.round(amt), weight: s.weight||0 });
+  }
+  if (type === 'time') return lastSets.map(s => ({ seconds: Math.max(0, (s.seconds||0) + Math.round(amt)) }));
+  // distance
+  if (mode === 'distance') return lastSets.map(s => ({ metres: (s.metres||0) + Math.round(amt), seconds: s.seconds, weight: s.weight||0 }));
+  return lastSets.map(s => ({ metres: s.metres, seconds: Math.max(1, Math.round((s.seconds||0) * (1 - amt/100))), weight: s.weight||0 }));
+}
 function suggestProgression(exerciseId, type) {
+  const ex = exerciseById(exerciseId);
   const found = lastPerformedItem(exerciseId);
-  if (!found) return { suggestedSets: [buildDefaultSet(type)], lastSets: null, note: '🆕 First time logging this — no history to suggest from yet.' };
+  if (!found) return { suggestedSets: [buildDefaultSet(type)], lastSets: null, referenceLabel: null, note: '🆕 First time logging this — no history to suggest from yet.' };
   const lastSets = found.item.actualSets.filter(hasAnyValue);
   const allDone = lastSets.length > 0 && lastSets.every(s => s.done);
   const cleanLast = lastSets.map(stripDone);
-  let suggestedSets, note;
   if (!allDone) {
-    suggestedSets = cleanLast.map(s => ({...s}));
-    note = '🔁 Repeat last time\'s numbers ('+fmtDate(found.date)+') — not every set was completed then.';
-  } else if (type === 'reps') {
-    suggestedSets = cleanLast.map(s => s.weight > 0
-      ? { reps: s.reps, weight: Math.round((s.weight + 2.5) * 2) / 2 }
-      : { reps: (s.reps||0) + 1, weight: s.weight||0 });
-    note = '💪 All sets completed last time ('+fmtDate(found.date)+') — suggesting a small step up.';
-  } else if (type === 'time') {
-    suggestedSets = cleanLast.map(s => ({ seconds: (s.seconds||0) + Math.max(5, Math.round((s.seconds||0)*0.1)) }));
-    note = '💪 Completed last time ('+fmtDate(found.date)+') — suggesting a bit longer.';
-  } else {
-    suggestedSets = cleanLast.map(s => ({ metres: s.metres, seconds: Math.max(1, Math.round((s.seconds||0)*0.97)), weight: s.weight||0 }));
-    note = '💪 Completed last time ('+fmtDate(found.date)+') — suggesting a slightly quicker pace.';
+    return { suggestedSets: cleanLast.map(s=>({...s})), lastSets: cleanLast, referenceLabel: 'last', canProgress: false,
+      note: '🔁 Repeat last time\'s numbers ('+fmtDate(found.date)+') — not every set was completed then.' };
   }
-  return { suggestedSets, lastSets: cleanLast, note, lastDate: found.date };
+  const def = defaultProgressionFor(type, cleanLast);
+  const mode = (ex && ex.progressionMode) || def.mode;
+  const amount = (ex && ex.progressionAmount != null) ? ex.progressionAmount : def.amount;
+  const suggestedSets = applyProgression(cleanLast, type, mode, amount);
+  return {
+    suggestedSets, lastSets: cleanLast, referenceLabel: 'target', canProgress: true,
+    progressionMode: mode, progressionAmount: amount,
+    note: '💪 Completed last time ('+fmtDate(found.date)+'): '+summarizeSets(cleanLast,type)+'. Adjust the progression below if you want a different step.'
+  };
 }
 
 function editSession(id) {
@@ -1426,8 +1442,10 @@ function addExerciseToSession(exerciseId) {
   const sugg = suggestProgression(exerciseId, ex.type);
   const actualSets = sugg.suggestedSets.map(s => ({...s, done:false}));
   const item = { id: uid('si'), exerciseId, exerciseName: ex.name, trackType: ex.type,
-    referenceLabel: sugg.lastSets ? 'last' : null,
-    referenceSets: sugg.lastSets ? JSON.parse(JSON.stringify(sugg.lastSets)) : null,
+    referenceLabel: sugg.referenceLabel,
+    referenceSets: sugg.referenceLabel ? JSON.parse(JSON.stringify(sugg.suggestedSets)) : null,
+    lastSetsForCompare: sugg.lastSets ? JSON.parse(JSON.stringify(sugg.lastSets)) : null,
+    canProgress: !!sugg.canProgress, progressionMode: sugg.progressionMode||null, progressionAmount: sugg.progressionAmount!=null?sugg.progressionAmount:null,
     actualSets, status:'skipped', contextNote: sugg.note };
   _activeSession.items.push(item);
   document.getElementById('sessionSearch').value = '';
@@ -1448,7 +1466,7 @@ function renderSessionItems() {
   const el = document.getElementById('sessionItemsList');
   if (!_activeSession.items.length) { el.innerHTML = '<div class="empty-state"><div class="big">🔍</div>Search above to add your first exercise</div>'; return; }
   el.innerHTML = _activeSession.items.map((item, ii) => {
-    const refLabel = item.referenceLabel==='plan' ? 'plan' : item.referenceLabel==='last' ? 'last' : null;
+    const refLabel = item.referenceLabel==='plan' ? 'plan' : item.referenceLabel==='last' ? 'last' : item.referenceLabel==='target' ? 'target' : null;
     const rows = item.actualSets.map((a, si) => {
       const ref = item.referenceSets ? item.referenceSets[si] : null;
       if (item.trackType === 'distance') {
@@ -1498,9 +1516,69 @@ function renderSessionItems() {
       ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
       ${rows}
       <button class="add-set-mini" onclick="addSessionSet(${ii})">+ Add Extra Set</button>
+      ${item.canProgress ? renderProgressionPicker(item, ii) : ''}
       ${typeToggle}
     </div>`;
   }).join('');
+}
+
+// GYM-010: instead of a fixed hardcoded bump, this lets you choose which
+// dimension to progress and by how much, per exercise. Changing either
+// control recalculates the target and re-fills the actual sets to match,
+// and remembers the choice on the exercise for next time.
+function renderProgressionPicker(item, ii) {
+  if (item.trackType === 'time') {
+    return `<div class="set-builder" style="margin-top:8px">
+      <div class="tag-group-label" style="margin-top:0">Progress by</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="number" class="tsr-input" value="${item.progressionAmount||0}" oninput="setProgressionAmount(${ii}, this.value)" style="width:60px !important">
+        <span style="font-size:11px;color:var(--ink2)">extra seconds</span>
+      </div>
+    </div>`;
+  }
+  const isReps = item.trackType === 'reps';
+  const modeA = isReps ? 'reps' : 'distance';
+  const modeB = isReps ? 'weight' : 'pace';
+  const labelA = isReps ? '+ Reps' : '+ Distance';
+  const labelB = isReps ? '+ Weight' : '− Time';
+  const unit = item.progressionMode==='weight' ? 'kg' : item.progressionMode==='reps' ? 'reps' : item.progressionMode==='distance' ? 'metres' : '% faster';
+  return `<div class="set-builder" style="margin-top:8px">
+    <div class="tag-group-label" style="margin-top:0">Progress by</div>
+    <div class="type-row" style="grid-template-columns:1fr 1fr">
+      <button class="type-btn sm ${item.progressionMode===modeA?'active':''}" onclick="setProgressionMode(${ii},'${modeA}')">${labelA}</button>
+      <button class="type-btn sm ${item.progressionMode===modeB?'active':''}" onclick="setProgressionMode(${ii},'${modeB}')">${labelB}</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <span style="font-size:11px;color:var(--ink2)">Amount</span>
+      <input type="number" class="tsr-input" step="${item.progressionMode==='weight'?'0.5':'1'}" value="${item.progressionAmount||0}" oninput="setProgressionAmount(${ii}, this.value)" style="width:60px !important">
+      <span style="font-size:11px;color:var(--ink2)">${unit}</span>
+    </div>
+  </div>`;
+}
+function setProgressionMode(ii, mode) {
+  const item = _activeSession.items[ii];
+  item.progressionMode = mode;
+  recomputeProgressionTarget(ii);
+}
+function setProgressionAmount(ii, val) {
+  const item = _activeSession.items[ii];
+  item.progressionAmount = val===''?0:Number(val);
+  recomputeProgressionTarget(ii);
+}
+function recomputeProgressionTarget(ii) {
+  const item = _activeSession.items[ii];
+  if (!item.lastSetsForCompare) return;
+  const newTarget = applyProgression(item.lastSetsForCompare, item.trackType, item.progressionMode, item.progressionAmount);
+  item.referenceSets = JSON.parse(JSON.stringify(newTarget));
+  item.actualSets = newTarget.map(s => ({...s, done:false}));
+  item.status = 'skipped';
+  const ex = exerciseById(item.exerciseId);
+  if (ex) {
+    ex.progressionMode = item.progressionMode; ex.progressionAmount = item.progressionAmount; ex.updatedAt = new Date().toISOString();
+    save(_env);
+    sbUpsert('exercise', ex, null);
+  }
+  renderSessionItems();
 }
 
 function updateSessionSet(ii, si, field, val) { _activeSession.items[ii].actualSets[si][field] = val===''?0:Number(val); }
@@ -1678,7 +1756,10 @@ function renderExerciseProgress() {
   if (!exId) { el.innerHTML = '<div class="empty-state">No exercises yet</div>'; return; }
   const sessions = getSessions().slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const entries = [];
-  sessions.forEach(s => { s.items.filter(i=>i.exerciseId===exId).forEach(i => { const done=(i.actualSets||[]).filter(a=>a.done); if (done.length) entries.push({date:s.date, type:i.trackType, sets:done}); }); });
+  sessions.forEach(s => { s.items.filter(i=>i.exerciseId===exId).forEach(i => {
+    const done=(i.actualSets||[]).filter(a=>a.done);
+    if (done.length) entries.push({date:s.date, type:i.trackType, sets:done, target: (i.referenceLabel==='target'||i.referenceLabel==='plan') ? i.referenceSets : null});
+  }); });
   if (!entries.length) { el.innerHTML = '<div class="empty-state"><div class="big">📊</div>No completed sets logged for this exercise yet</div>'; return; }
   let prevBest = null;
   el.innerHTML = entries.map(en => {
@@ -1689,7 +1770,10 @@ function renderExerciseProgress() {
     prevBest = best;
     const setsStr = en.sets.map(s => en.type==='distance' ? (s.metres||0)+'m/'+mmss(s.seconds)+' ('+(s.seconds?((s.metres||0)/s.seconds).toFixed(2):'0')+' m/s)'
       : en.type==='time' ? mmss(s.seconds) : (s.reps||0)+'×'+(s.weight||0)+'kg').join(', ');
-    return `<div class="list-item"><div class="li-top"><div><div class="li-name">${fmtDate(en.date)}</div><div class="li-meta">${setsStr}</div></div><span class="tsr-trend" style="font-size:15px">${trend}</span></div></div>`;
+    const targetStr = en.target ? summarizeSets(en.target, en.type) : null;
+    const hitTarget = targetStr && targetStr === setsStr;
+    const targetLine = targetStr ? `<div class="li-meta" style="margin-top:2px">${hitTarget ? '✅ hit target' : '🎯 target was'} ${escHtml(targetStr)}</div>` : '';
+    return `<div class="list-item"><div class="li-top"><div><div class="li-name">${fmtDate(en.date)}</div><div class="li-meta">${setsStr}</div>${targetLine}</div><span class="tsr-trend" style="font-size:15px">${trend}</span></div></div>`;
   }).reverse().join('');
 }
 
