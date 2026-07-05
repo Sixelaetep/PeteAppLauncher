@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.3</title>
+<title>Gym Tracker v2.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -211,7 +211,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.3</div></span>
+      <span>Gym Tracker<div class="ver">v2.4</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -285,13 +285,16 @@
 
   <!-- ═══ INSIGHTS ═══ -->
   <div class="tab-panel" id="panel-insights">
+    <div class="section-title" style="margin-top:0">🎯 What To Train Next</div>
+    <div id="nextUpList"></div>
+
+    <div class="section-title" style="margin-top:20px">Body Areas Worked</div>
     <div class="type-row" style="grid-template-columns:1fr 1fr 1fr">
       <button class="type-btn sm active" id="insWin7" onclick="setInsightsWindow(7)">7 Days</button>
       <button class="type-btn sm" id="insWin30" onclick="setInsightsWindow(30)">30 Days</button>
       <button class="type-btn sm" id="insWinAll" onclick="setInsightsWindow(null)">All Time</button>
     </div>
-    <div class="section-title" style="margin-top:16px">Body Areas Worked</div>
-    <div id="insightsList"></div>
+    <div id="insightsList" style="margin-top:12px"></div>
   </div>
 
   <!-- ═══ HISTORY ═══ -->
@@ -443,7 +446,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.3';
+const VERSION = '2.4';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -1304,13 +1307,48 @@ function updatePlanFromSession(planId, session) {
 // ═══════════════════════════════════════════════════════════════════
 // ACTIVE SESSION (session-first quick-add workflow)
 // ═══════════════════════════════════════════════════════════════════
-function lastPerformedSets(exerciseId) {
+function lastPerformedItem(exerciseId) {
   const sessions = getSessions().filter(s=>s.date).sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.completedAt||'').localeCompare(a.completedAt||''));
   for (const s of sessions) {
     const item = s.items.find(i=>i.exerciseId===exerciseId && i.actualSets.some(hasAnyValue));
-    if (item) return item.actualSets.filter(hasAnyValue).map(stripDone);
+    if (item) return { date: s.date, item };
   }
   return null;
+}
+function summarizeSets(sets, type) {
+  return sets.map(s => type==='distance' ? (s.metres||0)+'m/'+mmss(s.seconds)
+    : type==='time' ? mmss(s.seconds)
+    : (s.reps||0)+'×'+(s.weight||0)+'kg').join(', ');
+}
+// Progression heuristic: if every set was completed last time, nudge up
+// (weight +2.5kg, or +1 rep for bodyweight moves, or a bit longer/faster
+// for time/distance). If sets were missed last time, suggest repeating
+// the same numbers rather than piling on more before they're consistent.
+// This is a starting point, not a training program — every value stays
+// fully editable before you log anything.
+function suggestProgression(exerciseId, type) {
+  const found = lastPerformedItem(exerciseId);
+  if (!found) return { suggestedSets: [buildDefaultSet(type)], lastSets: null, note: '🆕 First time logging this — no history to suggest from yet.' };
+  const lastSets = found.item.actualSets.filter(hasAnyValue);
+  const allDone = lastSets.length > 0 && lastSets.every(s => s.done);
+  const cleanLast = lastSets.map(stripDone);
+  let suggestedSets, note;
+  if (!allDone) {
+    suggestedSets = cleanLast.map(s => ({...s}));
+    note = '🔁 Repeat last time\'s numbers ('+fmtDate(found.date)+') — not every set was completed then.';
+  } else if (type === 'reps') {
+    suggestedSets = cleanLast.map(s => s.weight > 0
+      ? { reps: s.reps, weight: Math.round((s.weight + 2.5) * 2) / 2 }
+      : { reps: (s.reps||0) + 1, weight: s.weight||0 });
+    note = '💪 All sets completed last time ('+fmtDate(found.date)+') — suggesting a small step up.';
+  } else if (type === 'time') {
+    suggestedSets = cleanLast.map(s => ({ seconds: (s.seconds||0) + Math.max(5, Math.round((s.seconds||0)*0.1)) }));
+    note = '💪 Completed last time ('+fmtDate(found.date)+') — suggesting a bit longer.';
+  } else {
+    suggestedSets = cleanLast.map(s => ({ metres: s.metres, seconds: Math.max(1, Math.round((s.seconds||0)*0.97)), weight: s.weight||0 }));
+    note = '💪 Completed last time ('+fmtDate(found.date)+') — suggesting a slightly quicker pace.';
+  }
+  return { suggestedSets, lastSets: cleanLast, note, lastDate: found.date };
 }
 
 function editSession(id) {
@@ -1337,7 +1375,9 @@ function startSession(planId) {
       id: uid('sess'), planId: plan.id, name: plan.name, date: todayISO(), startedAt: new Date().toISOString(), completedAt: null, notes: '',
       items: plan.items.map(pi => {
         const ref = JSON.parse(JSON.stringify(pi.targetSets));
-        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped' };
+        const found = lastPerformedItem(pi.exerciseId);
+        const contextNote = found ? '📅 Last actual ('+fmtDate(found.date)+'): '+summarizeSets(found.item.actualSets.filter(hasAnyValue), pi.trackType) : null;
+        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote };
       })
     };
   } else {
@@ -1383,9 +1423,12 @@ function quickCreateExercise() {
 function addExerciseToSession(exerciseId) {
   const ex = exerciseById(exerciseId);
   if (!ex || !_activeSession) return;
-  const prev = lastPerformedSets(exerciseId);
-  const actualSets = (prev && prev.length ? prev : [buildDefaultSet(ex.type)]).map(s => ({...s, done:false}));
-  const item = { id: uid('si'), exerciseId, exerciseName: ex.name, trackType: ex.type, referenceLabel: prev ? 'last' : null, referenceSets: prev ? JSON.parse(JSON.stringify(prev)) : null, actualSets, status:'skipped' };
+  const sugg = suggestProgression(exerciseId, ex.type);
+  const actualSets = sugg.suggestedSets.map(s => ({...s, done:false}));
+  const item = { id: uid('si'), exerciseId, exerciseName: ex.name, trackType: ex.type,
+    referenceLabel: sugg.lastSets ? 'last' : null,
+    referenceSets: sugg.lastSets ? JSON.parse(JSON.stringify(sugg.lastSets)) : null,
+    actualSets, status:'skipped', contextNote: sugg.note };
   _activeSession.items.push(item);
   document.getElementById('sessionSearch').value = '';
   document.getElementById('sessionSearchDropdown').style.display = 'none';
@@ -1452,6 +1495,7 @@ function renderSessionItems() {
     </div>`;
     return `<div class="track-ex-card">
       <div class="tec-head"><span class="tec-name">${escHtml(item.exerciseName)}</span>${statusBadge}<button class="tec-remove" onclick="removeSessionItem(${ii})">✕</button></div>
+      ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
       ${rows}
       <button class="add-set-mini" onclick="addSessionSet(${ii})">+ Add Extra Set</button>
       ${typeToggle}
@@ -1682,7 +1726,67 @@ function computeInsights(days) {
   });
   return {areaTotals, areaTags};
 }
+
+// ── "What to train next" — all-time recency per area, independent of the
+// 7/30/All window above, because "you haven't hit Back in 9 days" needs the
+// real last-worked date even while looking at a 7-day snapshot. ──────────
+function computeAreaRecency() {
+  const lastDateByTag = {};
+  getSessions().forEach(s => {
+    s.items.forEach(item => {
+      if (!item.actualSets.some(a=>a.done)) return;
+      const ex = exerciseById(item.exerciseId);
+      if (!ex) return;
+      (ex.tags||[]).forEach(t => { if (!lastDateByTag[t] || s.date > lastDateByTag[t]) lastDateByTag[t] = s.date; });
+    });
+  });
+  const areaLast = {};
+  Object.keys(TAG_GROUPS).forEach(area => {
+    let best = null;
+    TAG_GROUPS[area].forEach(t => { if (lastDateByTag[t] && (!best || lastDateByTag[t] > best)) best = lastDateByTag[t]; });
+    areaLast[area] = best;
+  });
+  return areaLast;
+}
+function daysSince(dateStr) {
+  if (!dateStr) return Infinity;
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const then = new Date(y,m-1,d);
+  const now = new Date(); now.setHours(0,0,0,0);
+  return Math.round((now-then)/86400000);
+}
+function suggestedExercisesForArea(area, limit) {
+  const tags = TAG_GROUPS[area];
+  return getExercises().filter(e => (e.tags||[]).some(t=>tags.includes(t))).slice(0, limit||3);
+}
+function renderNextUpCard() {
+  const el = document.getElementById('nextUpList');
+  if (!el) return;
+  if (!getSessions().length) { el.innerHTML = '<div class="empty-state"><div class="big">🎯</div>Log a session or two and this will start suggesting what to train next</div>'; return; }
+  const areaLast = computeAreaRecency();
+  const candidates = Object.keys(TAG_GROUPS)
+    .map(area => ({ area, lastDate: areaLast[area], days: daysSince(areaLast[area]), exercises: suggestedExercisesForArea(area, 3) }))
+    .filter(c => c.exercises.length > 0) // nothing to suggest if the library has no exercises tagged there
+    .sort((a,b) => b.days - a.days);
+  if (!candidates.length) { el.innerHTML = '<div class="empty-state">Tag some exercises by body area to get suggestions here.</div>'; return; }
+  const top = candidates.slice(0,3);
+  el.innerHTML = top.map(c => {
+    const label = c.lastDate ? 'last worked '+c.days+' day'+(c.days===1?'':'s')+' ago ('+fmtDate(c.lastDate)+')' : 'never logged yet';
+    const exIds = JSON.stringify(c.exercises.map(e=>e.id));
+    return `<div class="area-card ${c.days>6||!c.lastDate?'zero':''}">
+      <div class="area-top"><span class="area-name">${escHtml(c.area)}</span></div>
+      <div class="area-tags">${label}<br>Try: ${escHtml(c.exercises.map(e=>e.name).join(', '))}</div>
+      <div class="li-actions"><button class="btn btn-primary btn-sm" onclick='quickStartArea(${exIds})'>▶ Quick Start with these</button></div>
+    </div>`;
+  }).join('');
+}
+function quickStartArea(exerciseIds) {
+  startSession(null);
+  exerciseIds.forEach(id => addExerciseToSession(id));
+}
+
 function renderInsights() {
+  renderNextUpCard();
   const {areaTotals, areaTags} = computeInsights(_insightsWindow);
   const areas = Object.keys(areaTotals).filter(a => a!=='Other' || areaTags['Other'].length).sort((a,b)=>areaTotals[b]-areaTotals[a]);
   const el = document.getElementById('insightsList');
