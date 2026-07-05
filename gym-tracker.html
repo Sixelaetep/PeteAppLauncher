@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.9</title>
+<title>Gym Tracker v2.10</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -175,6 +175,9 @@
   .timer-start-btn:hover{background:rgba(88,166,255,0.08)}
   .timer-active{display:flex;align-items:center;gap:8px;margin-top:6px;background:rgba(56,189,248,0.1);border:1.5px solid var(--accent);border-radius:8px;padding:6px 10px}
   .timer-display{font-size:20px;font-weight:700;color:var(--accent);font-family:monospace;flex:1}
+  .timer-wake{font-size:10.5px;margin-top:4px;padding:0 2px}
+  .timer-wake.ok{color:var(--accent2)}
+  .timer-wake.warn{color:var(--accent4)}
 
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;display:none;align-items:flex-end;justify-content:center}
   .modal-overlay.open{display:flex}
@@ -216,7 +219,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.9</div></span>
+      <span>Gym Tracker<div class="ver">v2.10</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -458,7 +461,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.9';
+const VERSION = '2.10';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -561,6 +564,8 @@ let _planItems = [];
 let _activeSession = null;
 let _activeTimer = null;   // { ii, si, endTime, durationSec, paused, remainingMs } — only one runs at a time
 let _timerInterval = null;
+let _wakeLock = null;      // active WakeLockSentinel while a timer is running and unpaused
+let _wakeLockFailed = false; // true if unsupported or the browser refused the request
 let _editingSessionId = null; // set when re-opening a saved session for editing (GYM-005)
 let _historyMode = 'sessions';
 let _exAreaFilter = 'All';
@@ -1553,6 +1558,36 @@ function trendArrow(actual, ref) {
 // if the phone is locked or the tab isn't in the foreground, the browser
 // can suspend the timer and the alert won't fire reliably. Keep the
 // screen on and the tab open for this to be dependable.
+// Wake Lock API — keeps the screen from auto-locking due to inactivity
+// while a timer is running (Safari 16.4+, so any iPhone on a current iOS
+// supports this). It does NOT survive you pressing the side button or
+// switching apps — that's an OS-level action the API has no power over,
+// and only a native app or a PWA with push notifications could cover it.
+// This narrows the timer's known limitation, it doesn't remove it.
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) { _wakeLockFailed = true; renderSessionItems(); return; }
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLockFailed = false;
+    _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+  } catch (e) {
+    _wakeLock = null;
+    _wakeLockFailed = true;
+  }
+  renderSessionItems();
+}
+function releaseWakeLock() {
+  if (_wakeLock) { try { _wakeLock.release(); } catch(e){} }
+  _wakeLock = null;
+}
+document.addEventListener('visibilitychange', () => {
+  // Covers brief backgrounding (e.g. Control Centre) where the lock gets
+  // released but the timer itself is still legitimately running.
+  if (document.visibilityState === 'visible' && _activeTimer && !_activeTimer.paused && !_wakeLock) {
+    acquireWakeLock();
+  }
+});
+
 function startSetTimer(ii, si) {
   const item = _activeSession.items[ii];
   const seconds = item.actualSets[si].seconds || 0;
@@ -1561,6 +1596,7 @@ function startSetTimer(ii, si) {
   _activeTimer = { ii, si, endTime: Date.now() + seconds*1000, durationSec: seconds, paused:false, remainingMs:0 };
   if (_timerInterval) clearInterval(_timerInterval);
   _timerInterval = setInterval(tickSetTimer, 250);
+  acquireWakeLock();
   renderSessionItems();
 }
 function pauseResumeSetTimer() {
@@ -1568,15 +1604,18 @@ function pauseResumeSetTimer() {
   if (_activeTimer.paused) {
     _activeTimer.endTime = Date.now() + _activeTimer.remainingMs;
     _activeTimer.paused = false;
+    acquireWakeLock();
   } else {
     _activeTimer.remainingMs = Math.max(0, _activeTimer.endTime - Date.now());
     _activeTimer.paused = true;
+    releaseWakeLock();
   }
   renderSessionItems();
 }
 function cancelSetTimer() { stopSetTimer(true); renderSessionItems(); }
 function stopSetTimer(showToast) {
   if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  releaseWakeLock();
   if (showToast && _activeTimer) toast('Timer cancelled');
   _activeTimer = null;
 }
@@ -1591,6 +1630,7 @@ function completeSetTimer() {
   if (!_activeTimer) return;
   const {ii, si} = _activeTimer;
   if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  releaseWakeLock();
   playTimerAlert();
   const item = _activeSession && _activeSession.items[ii];
   if (item && item.actualSets[si]) {
@@ -1620,11 +1660,14 @@ function renderTimerControl(ii, si) {
   const isActive = _activeTimer && _activeTimer.ii===ii && _activeTimer.si===si;
   if (!isActive) return `<button class="timer-start-btn" onclick="startSetTimer(${ii},${si})">⏱ Start Timer</button>`;
   const remaining = _activeTimer.paused ? _activeTimer.remainingMs : Math.max(0, _activeTimer.endTime - Date.now());
+  const wakeLine = _wakeLock ? '<div class="timer-wake ok">🔒 Screen will stay awake</div>'
+    : _wakeLockFailed ? '<div class="timer-wake warn">⚠ Can\'t hold the screen awake here — keep it on manually</div>'
+    : '';
   return `<div class="timer-active">
     <span id="timerDisplay" class="timer-display">${mmss(Math.ceil(remaining/1000))}</span>
     <button class="btn btn-secondary btn-sm" onclick="pauseResumeSetTimer()">${_activeTimer.paused?'▶':'⏸'}</button>
     <button class="btn btn-danger btn-sm" onclick="cancelSetTimer()">✕</button>
-  </div>`;
+  </div>${wakeLine}`;
 }
 
 function renderSessionItems() {
