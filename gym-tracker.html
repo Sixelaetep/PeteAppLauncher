@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.8</title>
+<title>Gym Tracker v2.9</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -171,6 +171,10 @@
   .tsr-remove{background:none;border:none;color:var(--ink3);font-size:14px;cursor:pointer;flex-shrink:0;padding:4px}
   .add-set-mini{background:none;border:1px dashed var(--border);border-radius:8px;color:var(--ink2);font-size:12px;padding:6px;width:100%;margin-top:6px;cursor:pointer}
   .add-set-mini:hover{border-color:var(--accent);color:var(--accent)}
+  .timer-start-btn{background:none;border:1px dashed var(--accent3);color:var(--accent3);font-size:11px;padding:4px 10px;border-radius:12px;cursor:pointer;margin-top:6px;font-family:inherit}
+  .timer-start-btn:hover{background:rgba(88,166,255,0.08)}
+  .timer-active{display:flex;align-items:center;gap:8px;margin-top:6px;background:rgba(56,189,248,0.1);border:1.5px solid var(--accent);border-radius:8px;padding:6px 10px}
+  .timer-display{font-size:20px;font-weight:700;color:var(--accent);font-family:monospace;flex:1}
 
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;display:none;align-items:flex-end;justify-content:center}
   .modal-overlay.open{display:flex}
@@ -212,7 +216,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.8</div></span>
+      <span>Gym Tracker<div class="ver">v2.9</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -239,6 +243,7 @@
       <h3>Ready to train?</h3>
       <p>Start a blank session and search-add exercises as you go</p>
       <button class="btn btn-primary btn-block" onclick="startSession(null)">▶ Start Blank Session</button>
+      <button class="btn btn-secondary btn-block" style="margin-top:8px" onclick="startSpaSession()">🧖 Start Spa Session</button>
     </div>
 
     <div class="hero">
@@ -284,7 +289,7 @@
     <label style="margin-top:14px">Search</label>
     <input type="text" id="exerciseSearch" placeholder="Search name or tag…" oninput="renderExerciseList()">
     <div class="chip-list" id="areaChips"></div>
-    <button class="cat-link" onclick="loadStarterLibrary()">🌱 Load starter exercise library (65 exercises)</button>
+    <button class="cat-link" onclick="loadStarterLibrary()">🌱 Load starter exercise library (73 exercises)</button>
     <button class="cat-link" onclick="backfillStarterTags()">🔄 Backfill tags for existing exercises from starter library</button>
     <div class="section-title" style="margin-top:12px">Exercise Library</div>
     <div id="exerciseList"></div>
@@ -453,7 +458,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.8';
+const VERSION = '2.9';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -464,7 +469,8 @@ const TAG_GROUPS = {
   'Legs':      ['Legs','Quads','Hamstrings','Glutes','Calves','Posterior Chain','Hip Flexors'],
   'Core':      ['Core','Abs','Lower Abs','Obliques'],
   'Cardio':    ['Cardiovascular','Full Body'],
-  'Mobility':  ['Spine Mobility','Upper Spine']
+  'Mobility':  ['Spine Mobility','Upper Spine'],
+  'Spa':       ['Sauna','Hot Sauna','Cold Room','Steam Room','Hot & Cold Room','Hydro Pool','Cold Plunge','Hot Chairs']
 };
 const TAG_TO_GROUP = {};
 Object.keys(TAG_GROUPS).forEach(g => TAG_GROUPS[g].forEach(t => TAG_TO_GROUP[t] = g));
@@ -553,6 +559,8 @@ let _exTags = [];
 let _exAfterSave = null; // null | 'plan' -> where to route a newly-created exercise
 let _planItems = [];
 let _activeSession = null;
+let _activeTimer = null;   // { ii, si, endTime, durationSec, paused, remainingMs } — only one runs at a time
+let _timerInterval = null;
 let _editingSessionId = null; // set when re-opening a saved session for editing (GYM-005)
 let _historyMode = 'sessions';
 let _exAreaFilter = 'All';
@@ -934,7 +942,7 @@ function renderExerciseList() {
   if (!all.length && !_env.data.starterDismissed) {
     html += `<div class="starter-card" style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.3);border-radius:var(--radius);padding:16px;margin-bottom:14px">
       <h4 style="font-size:14px;margin-bottom:6px">🌱 New here? Load a starter library</h4>
-      <p style="font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:12px">Preload 65 tagged exercises (strength, machines, cardio, mobility, swimming) ready for search-and-add and Insights tracking.</p>
+      <p style="font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:12px">Preload 73 tagged exercises (strength, machines, cardio, mobility, swimming, spa) ready for search-and-add and Insights tracking.</p>
       <div class="btn-row" style="margin-top:0">
         <button class="btn btn-primary btn-sm" onclick="loadStarterLibrary()">Load Starter Library</button>
         <button class="btn btn-secondary btn-sm" onclick="dismissStarterSuggestion()">No thanks</button>
@@ -1128,7 +1136,15 @@ const STARTER_LIBRARY = [
   {name:'Butterfly', type:'distance', tags:['Shoulders','Core','Chest']},
   {name:'Continuous Swim', type:'distance', tags:['Cardiovascular']},
   {name:'Interval Swimming', type:'distance', tags:['Cardiovascular']},
-  {name:'Drill Work (kickboard, pull buoy)', type:'time', tags:['Full Body']}
+  {name:'Drill Work (kickboard, pull buoy)', type:'time', tags:['Full Body']},
+  {name:'Sauna', type:'time', tags:['Sauna']},
+  {name:'Hot Sauna', type:'time', tags:['Hot Sauna']},
+  {name:'Cold Room', type:'time', tags:['Cold Room']},
+  {name:'Steam Room', type:'time', tags:['Steam Room']},
+  {name:'Hot & Cold Room', type:'time', tags:['Hot & Cold Room']},
+  {name:'Hydro Pool', type:'time', tags:['Hydro Pool']},
+  {name:'Cold Plunge', type:'time', tags:['Cold Plunge']},
+  {name:'Hot Chairs', type:'time', tags:['Hot Chairs']}
 ];
 
 function loadStarterLibrary() {
@@ -1419,6 +1435,7 @@ function suggestProgression(exerciseId, type) {
 function editSession(id) {
   const s = _env.data.sessions.find(x=>x.id===id);
   if (!s) return;
+  stopSetTimer(false); // opening a different session invalidates any running timer's item/set indices
   _activeSession = JSON.parse(JSON.stringify(s)); // edit a clone; only commits on Finish
   _editingSessionId = id;
   document.getElementById('sessionNameInput').value = _activeSession.name;
@@ -1432,6 +1449,7 @@ function editSession(id) {
 }
 
 function startSession(planId) {
+  stopSetTimer(false);
   _editingSessionId = null;
   if (planId) {
     const plan = planById(planId);
@@ -1462,6 +1480,16 @@ function startSession(planId) {
 function updateActiveSessionDate(val) {
   if (!val || !_activeSession) return;
   _activeSession.date = val;
+}
+
+// GYM-014: a Spa Session is just a normal blank session pre-named — spa
+// rooms live in the exercise library like anything else (search "sauna",
+// "steam", etc.), so this reuses 100% of the existing session machinery
+// rather than a parallel system.
+function startSpaSession() {
+  startSession(null);
+  _activeSession.name = 'Spa Session';
+  document.getElementById('sessionNameInput').value = 'Spa Session';
 }
 
 function renderSessionSearch() {
@@ -1502,13 +1530,101 @@ function addExerciseToSession(exerciseId) {
   renderSessionItems();
 }
 
-function removeSessionItem(ii) { if (!confirm('Remove this exercise from the session?')) return; _activeSession.items.splice(ii,1); renderSessionItems(); }
+function removeSessionItem(ii) {
+  if (!confirm('Remove this exercise from the session?')) return;
+  if (_activeTimer && _activeTimer.ii === ii) stopSetTimer(true); // index would be left dangling otherwise
+  _activeSession.items.splice(ii,1);
+  renderSessionItems();
+}
 
 function trendArrow(actual, ref) {
   if (!actual || ref===null || ref===undefined || !ref) return '';
   if (actual > ref) return '<span class="trend-up">▲</span>';
   if (actual < ref) return '<span class="trend-down">▼</span>';
   return '<span class="trend-flat">=</span>';
+}
+
+// GYM-014: countdown timer for a time/distance set — reads the duration
+// currently sitting in that set's min/sec fields, counts down against a
+// fixed end-timestamp (not a simple decrementing counter, so it stays
+// accurate even if the tab is briefly backgrounded/throttled), then beeps,
+// vibrates if supported, and auto-marks the set done.
+// Real limitation, not a bug: this is a browser tab, not a native app —
+// if the phone is locked or the tab isn't in the foreground, the browser
+// can suspend the timer and the alert won't fire reliably. Keep the
+// screen on and the tab open for this to be dependable.
+function startSetTimer(ii, si) {
+  const item = _activeSession.items[ii];
+  const seconds = item.actualSets[si].seconds || 0;
+  if (seconds <= 0) { toast('Set a time above first'); return; }
+  if (_activeTimer) stopSetTimer(false); // only one timer at a time
+  _activeTimer = { ii, si, endTime: Date.now() + seconds*1000, durationSec: seconds, paused:false, remainingMs:0 };
+  if (_timerInterval) clearInterval(_timerInterval);
+  _timerInterval = setInterval(tickSetTimer, 250);
+  renderSessionItems();
+}
+function pauseResumeSetTimer() {
+  if (!_activeTimer) return;
+  if (_activeTimer.paused) {
+    _activeTimer.endTime = Date.now() + _activeTimer.remainingMs;
+    _activeTimer.paused = false;
+  } else {
+    _activeTimer.remainingMs = Math.max(0, _activeTimer.endTime - Date.now());
+    _activeTimer.paused = true;
+  }
+  renderSessionItems();
+}
+function cancelSetTimer() { stopSetTimer(true); renderSessionItems(); }
+function stopSetTimer(showToast) {
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  if (showToast && _activeTimer) toast('Timer cancelled');
+  _activeTimer = null;
+}
+function tickSetTimer() {
+  if (!_activeTimer || _activeTimer.paused) return;
+  const remaining = _activeTimer.endTime - Date.now();
+  if (remaining <= 0) { completeSetTimer(); return; }
+  const el = document.getElementById('timerDisplay');
+  if (el) el.textContent = mmss(Math.ceil(remaining/1000));
+}
+function completeSetTimer() {
+  if (!_activeTimer) return;
+  const {ii, si} = _activeTimer;
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  playTimerAlert();
+  const item = _activeSession && _activeSession.items[ii];
+  if (item && item.actualSets[si]) {
+    item.actualSets[si].done = true;
+    const doneCount = item.actualSets.filter(a=>a.done).length;
+    item.status = doneCount===0 ? 'skipped' : (doneCount===item.actualSets.length ? 'completed' : 'partial');
+  }
+  toast('⏰ Time\'s up — set marked done ✓');
+  _activeTimer = null;
+  renderSessionItems();
+}
+function playTimerAlert() {
+  try {
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const beep = (freq, start, dur) => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      osc.connect(gain); gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime+start);
+      osc.start(ctx.currentTime+start); osc.stop(ctx.currentTime+start+dur);
+    };
+    beep(880, 0, 0.15); beep(880, 0.25, 0.15); beep(880, 0.5, 0.35);
+  } catch(e) {}
+  if (navigator.vibrate) navigator.vibrate([200,100,200,100,400]);
+}
+function renderTimerControl(ii, si) {
+  const isActive = _activeTimer && _activeTimer.ii===ii && _activeTimer.si===si;
+  if (!isActive) return `<button class="timer-start-btn" onclick="startSetTimer(${ii},${si})">⏱ Start Timer</button>`;
+  const remaining = _activeTimer.paused ? _activeTimer.remainingMs : Math.max(0, _activeTimer.endTime - Date.now());
+  return `<div class="timer-active">
+    <span id="timerDisplay" class="timer-display">${mmss(Math.ceil(remaining/1000))}</span>
+    <button class="btn btn-secondary btn-sm" onclick="pauseResumeSetTimer()">${_activeTimer.paused?'▶':'⏸'}</button>
+    <button class="btn btn-danger btn-sm" onclick="cancelSetTimer()">✕</button>
+  </div>`;
 }
 
 function renderSessionItems() {
@@ -1531,6 +1647,7 @@ function renderSessionItems() {
             <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
             <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
           </div>
+          ${renderTimerControl(ii,si)}
         </div>`;
       }
       if (item.trackType === 'time') {
@@ -1543,6 +1660,7 @@ function renderSessionItems() {
             <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
             <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
           </div>
+          ${renderTimerControl(ii,si)}
         </div>`;
       }
       return `<div class="track-set-block">
@@ -1649,6 +1767,7 @@ function addSessionSet(ii) {
 function removeSessionSet(ii, si) {
   const item = _activeSession.items[ii];
   if (item.actualSets.length<=1) { toast('Exercise needs at least one set — remove the whole exercise instead'); return; }
+  if (_activeTimer && _activeTimer.ii === ii) stopSetTimer(true); // removing a set shifts indices below it
   item.actualSets.splice(si,1);
   renderSessionItems();
 }
@@ -1664,6 +1783,7 @@ function setSessionItemType(ii, newType) {
   if (item.trackType === newType) return;
   const hasData = item.actualSets.some(hasAnyValue);
   if (hasData && !confirm('Switch tracking type? This will reset the sets you\'ve entered for this exercise.')) return;
+  if (_activeTimer && _activeTimer.ii === ii) stopSetTimer(true);
   item.trackType = newType;
   item.referenceLabel = null; item.referenceSets = null;
   item.actualSets = [{...buildDefaultSet(newType), done:false}];
@@ -1673,12 +1793,14 @@ function setSessionItemType(ii, newType) {
 
 function cancelActiveSession() {
   if (!confirm(_editingSessionId ? 'Discard these changes? Nothing will be saved.' : 'Discard this session? Nothing will be saved.')) return;
+  stopSetTimer(false);
   _activeSession = null;
   _editingSessionId = null;
   document.getElementById('sessionOverlay').classList.remove('open');
 }
 
 function finishActiveSession() {
+  stopSetTimer(false); // a running timer would otherwise reference a session that no longer exists
   _activeSession.name = document.getElementById('sessionNameInput').value.trim() || _activeSession.name;
   _activeSession.notes = document.getElementById('sessionNotes').value.trim();
   const now = new Date().toISOString();
