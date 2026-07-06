@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.2</title>
+<title>Reading Tracker v3.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -654,7 +654,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.2</span></div>
+    <div class="rt-logo">My Reading <span>v3.3</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -1292,6 +1292,10 @@ let _sbUserId = null;
 
 let _currentUser = null;   // "pete" or "claire"
 let _syncTimer   = null;
+let _syncBadgeTimer = null; // v3.3 (MR-BUG): was sharing _syncTimer with the
+// debounced cloud-save timer below — if showSync() fired for any reason
+// while a save was queued, clearTimeout(_syncTimer) silently cancelled the
+// pending save instead of just hiding the badge. Separate timers now.
 let _pendingSync = false;
 
 // ── Top bar sync badge (mirrors showSync to persistent badge) ─────────
@@ -1304,10 +1308,10 @@ function showSync(state, msg) {
     text.textContent = msg;
     ind.classList.add("show");
     if (state !== "saving") {
-      clearTimeout(_syncTimer);
+      clearTimeout(_syncBadgeTimer);
       // v2.7: error toasts stay up longer (6s vs 2.5s) — with the added
       // diagnostic detail (MR-003), there's more to actually read.
-      _syncTimer = setTimeout(() => ind.classList.remove("show"), state === "ok" ? 2500 : 6000);
+      _syncBadgeTimer = setTimeout(() => ind.classList.remove("show"), state === "ok" ? 2500 : 6000);
     }
   }
   // Mirror to persistent top bar badge
@@ -1647,6 +1651,7 @@ async function selectUser(userId) {
     }
   }
   showDashboard();
+  startCloudPoll(); // v3.3: begin quiet periodic re-pull for this user
 }
 
 // ── Debounced cloud sync (called after every save) ────────────────────
@@ -1696,6 +1701,43 @@ function syncToCloud() {
     const failMsg = "Cloud save failed" + (_lastCloudError ? " (" + _lastCloudError + ")" : "") + " — data saved locally";
     showSync(ok ? "ok" : "red", ok ? "Saved ✓" : failMsg);
   }, 1500); // 1.5s debounce — batches rapid saves
+}
+
+// ── Periodic background pull (v3.3 / MR-BLOB) ──────────────────────────
+// My Reading syncs as a single whole-library blob rather than per-record,
+// and previously only pulled from the cloud once, at sign-in (or via the
+// manual Pull button). A long-open tab could drift stale, and its next
+// edit would push that stale full copy over anything added elsewhere in
+// the meantime — silently, with no conflict warning. This doesn't change
+// that underlying model (a proper fix is per-record sync, a bigger job),
+// it just narrows the window a long-lived session can drift.
+let _pollTimer = null;
+const RT_POLL_INTERVAL_MS = 60000; // matches GigsAndTrips' existing poll cadence
+
+function startCloudPoll() {
+  stopCloudPoll();
+  _pollTimer = setInterval(backgroundPullFromCloud, RT_POLL_INTERVAL_MS);
+}
+function stopCloudPoll() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+async function backgroundPullFromCloud() {
+  // Skip quietly rather than fight the user: a local edit is queued
+  // (about to push), or the tab isn't visible so there's no point
+  // spending the request.
+  if (!_currentUser || _pendingSync || document.hidden) return;
+  try {
+    const cloudData = await loadFromCloud(_currentUser);
+    if (cloudData && cloudData.trackers && !_pendingSync) {
+      appState.trackers = cloudData.trackers;
+      appState.wishlist = cloudData.wishlist || [];
+      save(); renderAll();
+    }
+  } catch(e) {
+    // Silent by design — this runs unattended. A real, persistent problem
+    // will still surface through the manual pull/push or a failed save.
+  }
 }
 
 function save() {
