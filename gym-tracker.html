@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.13</title>
+<title>Gym Tracker v2.14</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -222,7 +222,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.13</div></span>
+      <span>Gym Tracker<div class="ver">v2.14</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -463,7 +463,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.13';
+const VERSION = '2.14';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -752,6 +752,18 @@ function pullFromCloud(cb) {
       .catch(e => ({kind, ok:false, message:e.message}))
   )).then(results => {
     let anyError = false;
+    // GYM-BUG (v2.14): pull used to fully replace the local array with
+    // whatever cloud returned, with a special-case fallback only when
+    // cloud was completely empty. Any record created locally (or still
+    // mid-upsert) that cloud hadn't seen yet was silently wiped the
+    // moment a pull ran — which happens on every app open via the
+    // launcher, not just the first sync. This is now a genuine per-record
+    // merge, the same shape as Claim Tracker/On Budget: cloud tombstones
+    // win locally, live cloud rows win only if newer than the local copy,
+    // and anything local that cloud hasn't seen at all gets pushed up
+    // afterwards instead of being dropped. The old "cloud empty" bootstrap
+    // case falls out of this for free — nothing to special-case any more.
+    const toPushUp = []; // [{kind, rec}], pushed once the merge below is done
     results.forEach(res => {
       const arrKey = res.kind==='exercise' ? 'exercises' : res.kind==='plan' ? 'plans' : 'sessions';
       if (!res.ok) {
@@ -763,16 +775,42 @@ function pullFromCloud(cb) {
         slog('Pull failed: '+res.kind+' — '+hint, 'error');
         return; // this table's local data is left exactly as it was
       }
-      const localArr = _env.data[arrKey];
-      if (res.rows.length === 0 && localArr.length > 0) {
-        // First-time bootstrap: push local up rather than wiping it.
-        slog('Cloud '+arrKey+' empty but local has '+localArr.length+' — bootstrapping up','ok');
-        localArr.forEach(rec => sbUpsert(res.kind, rec, null));
-      } else {
-        _env.data[arrKey] = res.rows.map(row => row.data);
-        slog('Pulled '+res.rows.length+' '+arrKey, 'ok');
-      }
+
+      const localMap = {};
+      _env.data[arrKey].forEach(rec => { localMap[rec.id] = rec; });
+      const seenIds = new Set();
+
+      res.rows.forEach(row => {
+        const remote = row.data;
+        if (!remote || !remote.id) return;
+        seenIds.add(remote.id);
+        const local = localMap[remote.id];
+        if (remote._deleted) {
+          // Cloud tombstone — keep it (Gym Tracker keeps tombstoned
+          // records locally so plan/session history can still show the
+          // name of something since removed from the library).
+          if (!local || !local._deleted) localMap[remote.id] = remote;
+          return;
+        }
+        if (local && local._deleted) return; // local tombstone wins over a stale live remote
+        if (!local || (remote.updatedAt||'') >= (local.updatedAt||'')) {
+          localMap[remote.id] = remote;
+        }
+      });
+
+      Object.values(localMap).forEach(rec => {
+        if (!seenIds.has(rec.id)) toPushUp.push({kind:res.kind, rec});
+      });
+
+      _env.data[arrKey] = Object.values(localMap);
+      slog('Pulled '+res.rows.length+' '+arrKey, 'ok');
     });
+
+    if (toPushUp.length) {
+      slog(toPushUp.length+' local-only record(s) — pushing up','ok');
+      toPushUp.forEach(({kind, rec}) => sbUpsert(kind, rec, null));
+    }
+
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     save(_env);
     if (exChanged.length) {
