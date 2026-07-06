@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.10</title>
+<title>Gym Tracker v2.11</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -219,7 +219,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.10</div></span>
+      <span>Gym Tracker<div class="ver">v2.11</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -246,7 +246,6 @@
       <h3>Ready to train?</h3>
       <p>Start a blank session and search-add exercises as you go</p>
       <button class="btn btn-primary btn-block" onclick="startSession(null)">▶ Start Blank Session</button>
-      <button class="btn btn-secondary btn-block" style="margin-top:8px" onclick="startSpaSession()">🧖 Start Spa Session</button>
     </div>
 
     <div class="hero">
@@ -461,7 +460,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.10';
+const VERSION = '2.11';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -473,7 +472,7 @@ const TAG_GROUPS = {
   'Core':      ['Core','Abs','Lower Abs','Obliques'],
   'Cardio':    ['Cardiovascular','Full Body'],
   'Mobility':  ['Spine Mobility','Upper Spine'],
-  'Spa':       ['Sauna','Hot Sauna','Cold Room','Steam Room','Hot & Cold Room','Hydro Pool','Cold Plunge','Hot Chairs']
+  'Spa':       ['Spa']
 };
 const TAG_TO_GROUP = {};
 Object.keys(TAG_GROUPS).forEach(g => TAG_GROUPS[g].forEach(t => TAG_TO_GROUP[t] = g));
@@ -505,14 +504,29 @@ function load() {
       env.data.sessions  = parsed.data.sessions || [];
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
-    migrateExercises(env);
+    const exChanged = migrateExercises(env);
     migratePlans(env);
     migrateSessions(env);
+    if (exChanged.length) {
+      // Persist the spa-tag fix locally straight away; if sync is already
+      // live by the time PAL_SESSION arrives, reportToLauncher/pull will
+      // pick these up, but pullFromCloud also re-pushes any it migrates
+      // itself so the fix reaches the cloud without waiting on an edit.
+      localStorage.setItem(LS_KEY, JSON.stringify(env));
+    }
     return env;
   } catch(e) { return defaultEnvelope(); }
 }
 
+// GYM-015: v2.9 mistakenly gave each spa room its own tag (Sauna, Cold
+// Room, etc.) instead of one shared "Spa" tag. This rewrites any of those
+// legacy per-room tags to "Spa" on load, non-destructively — it only
+// touches those exact 8 names and dedupes, so any other tags you've added
+// stay untouched. Returns the exercises it changed so callers with an
+// active sync connection can push the correction to the cloud.
+const LEGACY_SPA_TAGS = ['Sauna','Hot Sauna','Cold Room','Steam Room','Hot & Cold Room','Hydro Pool','Cold Plunge','Hot Chairs'];
 function migrateExercises(env) {
+  const changed = [];
   env.data.exercises.forEach(e => {
     if (!e.tags) {
       const tags = [];
@@ -520,7 +534,13 @@ function migrateExercises(env) {
       if (e.category && e.category !== 'Other') tags.push(e.category);
       e.tags = tags;
     }
+    if (e.tags.some(t => LEGACY_SPA_TAGS.includes(t))) {
+      e.tags = [...new Set(e.tags.map(t => LEGACY_SPA_TAGS.includes(t) ? 'Spa' : t))];
+      e.updatedAt = new Date().toISOString();
+      changed.push(e);
+    }
   });
+  return changed;
 }
 function migratePlans(env) {
   const exById = {}; env.data.exercises.forEach(e => exById[e.id] = e);
@@ -750,8 +770,12 @@ function pullFromCloud(cb) {
         slog('Pulled '+res.rows.length+' '+arrKey, 'ok');
       }
     });
-    migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
+    const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     save(_env);
+    if (exChanged.length) {
+      slog('Pushing '+exChanged.length+' exercise(s) with corrected Spa tags','ok');
+      exChanged.forEach(ex => sbUpsert('exercise', ex, null));
+    }
     setSyncStatus(anyError ? 'error' : 'synced');
     slog(anyError ? 'Pull finished with errors on some tables — see above' : 'Pull complete', 'ok');
     if (cb) cb();
@@ -864,9 +888,10 @@ function renderHome() {
     qs.innerHTML = plans.map(p => {
       const done = sessions.filter(s=>s.planId===p.id);
       const last = done[0];
+      const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
       return `<div class="list-item">
         <div class="li-top"><div>
-          <div class="li-name">${escHtml(p.name)}</div>
+          <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
           <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
         </div></div>
         <div class="li-actions"><button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button></div>
@@ -1142,14 +1167,14 @@ const STARTER_LIBRARY = [
   {name:'Continuous Swim', type:'distance', tags:['Cardiovascular']},
   {name:'Interval Swimming', type:'distance', tags:['Cardiovascular']},
   {name:'Drill Work (kickboard, pull buoy)', type:'time', tags:['Full Body']},
-  {name:'Sauna', type:'time', tags:['Sauna']},
-  {name:'Hot Sauna', type:'time', tags:['Hot Sauna']},
-  {name:'Cold Room', type:'time', tags:['Cold Room']},
-  {name:'Steam Room', type:'time', tags:['Steam Room']},
-  {name:'Hot & Cold Room', type:'time', tags:['Hot & Cold Room']},
-  {name:'Hydro Pool', type:'time', tags:['Hydro Pool']},
-  {name:'Cold Plunge', type:'time', tags:['Cold Plunge']},
-  {name:'Hot Chairs', type:'time', tags:['Hot Chairs']}
+  {name:'Sauna', type:'time', tags:['Spa']},
+  {name:'Hot Sauna', type:'time', tags:['Spa']},
+  {name:'Cold Room', type:'time', tags:['Spa']},
+  {name:'Steam Room', type:'time', tags:['Spa']},
+  {name:'Hot & Cold Room', type:'time', tags:['Spa']},
+  {name:'Hydro Pool', type:'time', tags:['Spa']},
+  {name:'Cold Plunge', type:'time', tags:['Spa']},
+  {name:'Hot Chairs', type:'time', tags:['Spa']}
 ];
 
 function loadStarterLibrary() {
@@ -1202,9 +1227,10 @@ function renderPlanList() {
   el.innerHTML = list.map(p => {
     const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     const last = done[0];
+    const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
     return `<div class="list-item">
       <div class="li-top"><div>
-        <div class="li-name">${escHtml(p.name)}</div>
+        <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
         <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
       </div></div>
       <div class="li-actions">
@@ -1422,9 +1448,16 @@ function suggestProgression(exerciseId, type) {
   const lastSets = found.item.actualSets.filter(hasAnyValue);
   const allDone = lastSets.length > 0 && lastSets.every(s => s.done);
   const cleanLast = lastSets.map(stripDone);
-  if (!allDone) {
+  const isSpa = ex && (ex.tags||[]).includes('Spa');
+  // GYM-016: the "add a bit more each time" progression logic makes sense
+  // for a plank or a hold you're trying to build — it doesn't for a sauna
+  // sit, which is why reusing a 6-minute spa exercise was quietly turning
+  // into 6:36. Spa-tagged exercises always repeat their last duration
+  // instead of auto-progressing.
+  if (!allDone || isSpa) {
     return { suggestedSets: cleanLast.map(s=>({...s})), lastSets: cleanLast, referenceLabel: 'last', canProgress: false,
-      note: '🔁 Repeat last time\'s numbers ('+fmtDate(found.date)+') — not every set was completed then.' };
+      note: isSpa ? '🧖 Repeating your usual time ('+fmtDate(found.date)+') — spa sessions don\'t auto-progress.'
+        : '🔁 Repeat last time\'s numbers ('+fmtDate(found.date)+') — not every set was completed then.' };
   }
   const def = defaultProgressionFor(type, cleanLast);
   const mode = (ex && ex.progressionMode) || def.mode;
@@ -1485,16 +1518,6 @@ function startSession(planId) {
 function updateActiveSessionDate(val) {
   if (!val || !_activeSession) return;
   _activeSession.date = val;
-}
-
-// GYM-014: a Spa Session is just a normal blank session pre-named — spa
-// rooms live in the exercise library like anything else (search "sauna",
-// "steam", etc.), so this reuses 100% of the existing session machinery
-// rather than a parallel system.
-function startSpaSession() {
-  startSession(null);
-  _activeSession.name = 'Spa Session';
-  document.getElementById('sessionNameInput').value = 'Spa Session';
 }
 
 function renderSessionSearch() {
@@ -1928,15 +1951,24 @@ function setHistoryMode(mode) {
 }
 function renderHistory() { renderHistorySessionsList(); renderHistoryExerciseSelect(); }
 
+// GYM-015: a session or plan made up entirely of Spa-tagged exercises gets
+// a 🧖 icon so it's visually distinct at a glance — same shape works for
+// both sessions and plans since both store items as {exerciseId, ...}.
+function isSpaOnlyItemSet(items) {
+  if (!items || !items.length) return false;
+  return items.every(i => { const ex = exerciseById(i.exerciseId); return ex && (ex.tags||[]).includes('Spa'); });
+}
+
 function sessionSummaryCard(s) {
   const completed = s.items.filter(i=>i.status==='completed').length;
   const partial = s.items.filter(i=>i.status==='partial').length;
   const overall = partial===0 && completed===s.items.length && s.items.length>0 ? 'completed' : (completed===0 && partial===0 ? 'skipped' : 'partial');
   const badge = overall==='completed' ? '<span class="li-badge badge-completed">Completed</span>' : overall==='partial' ? '<span class="li-badge badge-partial">Partial</span>' : '<span class="li-badge badge-skipped">Skipped</span>';
   const exRows = s.items.map(i => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px"><span>${escHtml(i.exerciseName)}</span><span style="color:var(--ink2)">${i.status}</span></div>`).join('');
+  const spaIcon = isSpaOnlyItemSet(s.items) ? '🧖 ' : '';
   return `<div class="list-item">
     <div class="li-top"><div>
-      <div class="li-name">${escHtml(s.name)}</div>
+      <div class="li-name">${spaIcon}${escHtml(s.name)}</div>
       <div class="li-meta">${fmtDate(s.date)} · ${s.items.length} exercise${s.items.length===1?'':'s'}${s.notes?' · has notes':''}</div>
     </div>${badge}</div>
     <div style="margin-top:8px">${exRows}</div>
@@ -2142,7 +2174,8 @@ function importJSON(event) {
         _env.data.plans     = _env.data.plans || _env.data.templates || [];
         _env.data.sessions  = _env.data.sessions  || [];
         _env.data.starterDismissed = _env.data.starterDismissed || false;
-        migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
+        const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
+        if (exChanged.length && _sbToken && _sbUserId) exChanged.forEach(ex => sbUpsert('exercise', ex, null));
       } else { throw new Error('Unrecognised backup format'); }
       save(_env);
       closeDataDrawer();
