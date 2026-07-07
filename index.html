@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v9.8</title>
+<title>P Apps v9.9</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -77,6 +77,8 @@
     gap: 0;
   }
   #lockScreen.hidden { display: none; }
+  /* Suppress lock screen flash while session refresh is in flight */
+  [data-booting='true'] #lockScreen { visibility: hidden; }
 
   .lock-logo {
     font-size: 13px;
@@ -458,6 +460,18 @@
   }
   #toast.show { transform: translateX(-50%) translateY(0); }
 </style>
+<!-- Pre-paint: suppress lock screen flash if a stored session exists.
+     Runs synchronously before first paint so the login form never
+     flickers into view for returning users. -->
+<script>
+(function(){
+  try {
+    if (localStorage.getItem('sb_session')) {
+      document.documentElement.setAttribute('data-booting', 'true');
+    }
+  } catch(e){}
+})();
+</script>
 </head>
 <body>
 
@@ -480,7 +494,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v9.8</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v9.9</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -494,7 +508,7 @@
 
     <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme (all apps)">🌙</button>
 
-    <button class="user-pill" id="userPill" onclick="lockApp()" title="Lock app">
+    <button class="user-pill" id="userPill" onclick="confirmSignOut()" title="Sign out">
       <span id="pillAvatar">👤</span>
       <span id="pillName">—</span>
     </button>
@@ -702,19 +716,26 @@ const loaded    = {};
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
-      // Verify session is still valid by refreshing it
+      // Refresh token in background — lock screen is visually suppressed
+      // via [data-booting] CSS so the user never sees the login form
       const refreshed = await sbRefreshSession(parsed.refresh_token);
       if (refreshed) {
         sbSession = refreshed;
+        localStorage.setItem('sb_session', JSON.stringify(refreshed));
         const uid = refreshed.user.id;
         const userInfo = KNOWN_USERS[uid];
-        if (userInfo) { onSignedIn(userInfo, refreshed); return; }
+        if (userInfo) {
+          document.documentElement.removeAttribute('data-booting');
+          onSignedIn(userInfo, refreshed);
+          return;
+        }
       }
     } catch(e) {}
-    // Session invalid — clear it
+    // Session invalid — clear it and drop through to show login
     localStorage.removeItem('sb_session');
   }
-  // No valid session — show login
+  // No valid session — reveal the login screen
+  document.documentElement.removeAttribute('data-booting');
 })();
 
 // ── Supabase Auth calls ────────────────────────────────────────────
@@ -850,6 +871,12 @@ function applyUserView(userInfo) {
 }
 
 // ── Sign out / Lock ────────────────────────────────────────────────
+function confirmSignOut() {
+  if (confirm('Sign out of P Apps?\n\nYou\'ll need to enter your email and password to sign back in.')) {
+    lockApp();
+  }
+}
+
 async function lockApp() {
   if (sbSession?.access_token) await sbSignOut(sbSession.access_token);
   sbSession   = null;
