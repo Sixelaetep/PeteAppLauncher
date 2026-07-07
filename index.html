@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v9.9</title>
+<title>P Apps v10.0</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -494,7 +494,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v9.9</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.0</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -1819,17 +1819,18 @@ function statOnBudget() {
     }
 
     // ── Bills account section ─────────────────────────────────────
+    // Exact port of billsForecastData() + billsNextIncomeDate() from on-budget.html.
     let billsHtml = '';
     const clearedBalance = bSet.clearedBalance || 0;
     const bBalFmt = Math.abs(clearedBalance).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
     const bBalColour = clearedBalance < 0 ? '#f87171' : '#3fb950';
 
-    // Forecast low — replicate billsForecastData().lowest
     let forecastLow = null, forecastLowDate = null, nextIncomeStr = '';
     try {
       const recurring = bills.recurring || [];
       const btx = (bills.tx || []).filter(t => !t._deleted);
 
+      // ── genOccurrences — exact port from on-budget.html ──────────
       function obGenOccurrences(item, rangeStart, rangeEnd) {
         const out = [];
         const anchor = new Date(item.anchorDate+'T00:00:00');
@@ -1837,60 +1838,106 @@ function statOnBudget() {
           const interval = item.frequency==='weekly' ? 1 : Math.max(1,parseInt(item.interval,10)||1);
           const step = interval*7;
           let cur = new Date(anchor);
-          if (cur < rangeStart) { const diff=obDaysBetween(cur,rangeStart); cur.setDate(cur.getDate()+Math.floor(diff/step)*step); }
-          while (cur <= rangeEnd) { if (cur>=anchor&&cur>=rangeStart) out.push(new Date(cur)); cur.setDate(cur.getDate()+step); }
+          if (cur < rangeStart) {
+            const diff = obDaysBetween(cur, rangeStart);
+            cur.setDate(cur.getDate() + Math.floor(diff/step)*step);
+          }
+          while (cur <= rangeEnd) {
+            if (cur >= anchor && cur >= rangeStart) out.push(new Date(cur));
+            cur.setDate(cur.getDate()+step);
+          }
         } else if (item.frequency === 'monthly') {
           const day = anchor.getDate();
-          let cursor = new Date((anchor>rangeStart?anchor:rangeStart).getFullYear(),(anchor>rangeStart?anchor:rangeStart).getMonth(),1);
-          while (cursor<=rangeEnd) { const dim=obDaysInMonth(cursor.getFullYear(),cursor.getMonth()); const dd=new Date(cursor.getFullYear(),cursor.getMonth(),Math.min(day,dim)); if(dd>=anchor&&dd>=rangeStart&&dd<=rangeEnd)out.push(dd); cursor.setMonth(cursor.getMonth()+1); }
+          const mStart = anchor > rangeStart ? anchor : rangeStart;
+          let cursor = new Date(mStart.getFullYear(), mStart.getMonth(), 1);
+          while (cursor <= rangeEnd) {
+            const dim = obDaysInMonth(cursor.getFullYear(), cursor.getMonth());
+            const dd = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(day,dim));
+            if (dd >= anchor && dd >= rangeStart && dd <= rangeEnd) out.push(dd);
+            cursor.setMonth(cursor.getMonth()+1);
+          }
         } else if (item.frequency === 'yearly') {
-          const mo=anchor.getMonth(), day=anchor.getDate(); let y=anchor>rangeStart?anchor.getFullYear():rangeStart.getFullYear();
-          while(true){const dim=obDaysInMonth(y,mo);const dd=new Date(y,mo,Math.min(day,dim));if(dd>rangeEnd)break;if(dd>=anchor&&dd>=rangeStart)out.push(dd);y++;}
+          const mo = anchor.getMonth(), day = anchor.getDate();
+          let y = anchor > rangeStart ? anchor.getFullYear() : rangeStart.getFullYear();
+          while (true) {
+            const dim = obDaysInMonth(y, mo);
+            const dd = new Date(y, mo, Math.min(day,dim));
+            if (dd > rangeEnd) break;
+            if (dd >= anchor && dd >= rangeStart) out.push(dd);
+            y++;
+          }
         }
         return out;
       }
 
       function obShiftWeekend(date, mode) {
-        const d2=new Date(date); const dow=d2.getDay();
-        if(mode==='before'){if(dow===6)d2.setDate(d2.getDate()-1);if(dow===0)d2.setDate(d2.getDate()-2);}
-        else if(mode==='after'){if(dow===6)d2.setDate(d2.getDate()+2);if(dow===0)d2.setDate(d2.getDate()+1);}
+        const d2 = new Date(date); const dow = d2.getDay();
+        if (mode==='before') { if(dow===6) d2.setDate(d2.getDate()-1); if(dow===0) d2.setDate(d2.getDate()-2); }
+        else if (mode==='after') { if(dow===6) d2.setDate(d2.getDate()+2); if(dow===0) d2.setDate(d2.getDate()+1); }
         return d2;
       }
 
-      const genEnd = new Date(today.getTime()+90*86400000);
+      // ── billsNextIncomeDate — exact port ──────────────────────────
+      // Uses today+400d search window (matches app's nextDueRaw) and
+      // skips already-cleared occurrences (excludes _deleted, matching app).
+      const farFuture = new Date(today.getTime()+400*86400000);
+      let earliestIncome = null;
+      recurring.filter(r => r.active!==false && r.type==='income').forEach(item => {
+        const occ = obGenOccurrences(item, today, farFuture);
+        for (const dd of occ) {
+          const schedIso = obIso(dd);
+          // Skip if already cleared (not deleted) — matches app nextDueRaw
+          if (!btx.some(t => t.recurringId===item.id && t.schedDate===schedIso)) {
+            const shown = obShiftWeekend(dd, item.weekendShift||'none');
+            if (!earliestIncome || shown < earliestIncome) earliestIncome = shown;
+            break;
+          }
+        }
+      });
+      if (earliestIncome) nextIncomeStr = obFmtShort(earliestIncome);
+
+      // ── billsForecastData — exact port ────────────────────────────
+      // forecastMode from settings (default '90d'), read same key as app.
+      const forecastMode = bSet.forecastMode || '90d';
+      let cutoff;
+      if (forecastMode === 'next_income' && earliestIncome) {
+        cutoff = new Date(earliestIncome.getTime()-86400000); // day before income
+      } else {
+        cutoff = new Date(today.getTime()+90*86400000);
+      }
+      // genEnd matches app: max(cutoff, today+90d) so items list always
+      // covers at least 90 days even when cutoff is sooner.
+      const genEnd = new Date(Math.max(cutoff.getTime(), today.getTime()+90*86400000));
+      const cutoffIso = obIso(cutoff);
+
       const items = [];
-      recurring.filter(r=>r.active!==false).forEach(item => {
+      // Upcoming scheduled recurring items not yet cleared
+      recurring.filter(r => r.active!==false).forEach(item => {
         obGenOccurrences(item, today, genEnd).forEach(dd => {
           const schedIso = obIso(dd);
-          if (!btx.some(t=>t.recurringId===item.id&&t.schedDate===schedIso)) {
+          // matches app: skip if already cleared (and not deleted)
+          const already = btx.some(t => t.recurringId===item.id && t.schedDate===schedIso);
+          if (!already) {
             const shown = obShiftWeekend(dd, item.weekendShift||'none');
             items.push({ date:obIso(shown), name:item.name, type:item.type, amount:item.amount });
           }
         });
       });
-      btx.filter(t=>t.cleared===false).forEach(t => items.push({ date:t.date, name:t.name, type:t.type, amount:t.amount }));
-      items.sort((a,b)=>a.date.localeCompare(b.date));
-
-      // Find next income date
-      let earliestIncome = null;
-      recurring.filter(r=>r.active!==false&&r.type==='income').forEach(item=>{
-        const occ=obGenOccurrences(item,today,new Date(today.getTime()+400*86400000));
-        for(const dd of occ){const si=obIso(dd);if(!btx.some(t=>t.recurringId===item.id&&t.schedDate===si)){if(!earliestIncome||dd<earliestIncome)earliestIncome=obShiftWeekend(dd,item.weekendShift||'none');break;}}
+      // Ad-hoc uncleared planned transactions
+      btx.filter(t => t.cleared===false).forEach(t => {
+        items.push({ date:t.date, name:t.name, type:t.type, amount:t.amount });
       });
+      items.sort((a,b) => a.date.localeCompare(b.date));
 
-      const cutoffIso = earliestIncome
-        ? obIso(new Date(earliestIncome.getTime()-86400000))
-        : obIso(genEnd);
-      if (earliestIncome) nextIncomeStr = obFmtShort(earliestIncome);
-
-      let running = clearedBalance, lowest = running, lowestDate = null;
-      items.forEach(it=>{
+      // Running balance — matches app exactly
+      let running = clearedBalance, lowest = running, lowestDt = null;
+      items.forEach(it => {
         running += it.type==='income' ? it.amount : -it.amount;
-        running = Math.round(running*100)/100;
-        if(it.date<=cutoffIso&&running<lowest){lowest=running;lowestDate=it.date;}
+        const rb = Math.round(running*100)/100;
+        if (it.date <= cutoffIso && rb < lowest) { lowest = rb; lowestDt = it.date; }
       });
       forecastLow = lowest;
-      if (lowestDate) { const d3=new Date(lowestDate+'T00:00:00'); forecastLowDate=obFmtShort(d3); }
+      if (lowestDt) { forecastLowDate = obFmtShort(new Date(lowestDt+'T00:00:00')); }
     } catch(e2) {}
 
     const lowFmt = forecastLow !== null ? Math.abs(forecastLow).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2}) : null;
