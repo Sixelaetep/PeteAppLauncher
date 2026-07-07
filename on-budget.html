@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.4</title>
+<title>On Budget v3.5</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -292,6 +292,7 @@
   .ledger-row{display:flex;align-items:center;padding:11px 14px;gap:10px;border-bottom:1px solid var(--divider);cursor:pointer;-webkit-tap-highlight-color:transparent}
   .ledger-row:last-child{border-bottom:none}
   .ledger-row.overdraft{background:var(--red-dim)}
+  .ledger-row.overdue{border-left:3px solid var(--amber)}
   .ledger-row.cleared{opacity:0.7;cursor:default}
   .ledger-row.cleared:active{opacity:0.9}
   .ledger-body{flex:1;min-width:0}
@@ -317,6 +318,7 @@
   .recur-amt.income{color:var(--accent)}
   .recur-amt.outgoing{color:var(--ink)}
   .recur-badge{font-size:9px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:4px;background:var(--surface2);color:var(--ink3)}
+  .recur-badge.overdue-badge{background:var(--amber-dim);color:var(--amber)}
 
   .pill-toggle{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink2);cursor:pointer;-webkit-tap-highlight-color:transparent}
   .pill-switch{width:34px;height:20px;border-radius:10px;background:var(--border);position:relative;transition:background 0.15s;flex-shrink:0}
@@ -333,7 +335,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.4</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.5</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -645,7 +647,7 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.4
+// On Budget v3.5
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -701,6 +703,15 @@
 // point. Fully backed by its own sync record type (billsoverride_*)
 // with the same tombstone pattern as everything else. Neither edit
 // path touches clearedBalance, since neither has affected it yet.
+// v3.5: fixed ON--004 — billsForecastData()/nextDueRaw() generated
+// recurring occurrences starting from "today", so an occurrence that
+// went unresolved past its own due date simply stopped being generated
+// at all and silently vanished from Upcoming. Both now generate from
+// the recurring item's own anchor date instead, so an overdue-and-
+// unresolved occurrence keeps showing (flagged with an Overdue badge
+// and a left-edge highlight) for as long as it stays unresolved — only
+// clearing, skipping, or deleting it removes it. No performance concern:
+// tested a 3-year-old weekly item, generation completed in ~1ms.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1157,14 +1168,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.4', lastUpdated:new Date().toISOString(),
+    version:'3.5', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.4', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.5', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1924,7 +1935,13 @@ function billsForecastData() {
 
   const items = [];
   bills.recurring.filter(r=>r.active!==false && !r._deleted).forEach(item => {
-    genOccurrences(item, today, genEnd).forEach(d => {
+    // Generate from the item's own anchor date, not from today — an
+    // occurrence that's overdue and still unresolved must keep showing
+    // up regardless of how much time has passed. The `already` check
+    // below (matched against real tx records) is what actually removes
+    // it from view, and only once it's been cleared/skipped/deleted.
+    const genStart = new Date(item.anchorDate+'T00:00:00');
+    genOccurrences(item, genStart, genEnd).forEach(d => {
       const schedIso = iso(d);
       const already = bills.tx.some(t=>t.recurringId===item.id && t.schedDate===schedIso && !t._deleted);
       if (!already) {
@@ -1936,13 +1953,14 @@ function billsForecastData() {
           name: ov?.name || item.name,
           type: item.type,
           amount: ov ? ov.amount : item.amount,
-          overridden: !!ov
+          overridden: !!ov,
+          overdue: d < today
         });
       }
     });
   });
   bills.tx.filter(t=>!t._deleted && t.cleared===false).forEach(t => {
-    items.push({ kind:'adhoc', txId:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount });
+    items.push({ kind:'adhoc', txId:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount, overdue: new Date(t.date+'T00:00:00') < today });
   });
   items.sort((a,b)=>a.date.localeCompare(b.date));
 
@@ -1958,9 +1976,14 @@ function billsForecastData() {
 
 // Next not-yet-cleared raw occurrence for a single item — used on the
 // Recurring tab to show "Next due".
+// Oldest not-yet-resolved occurrence for a single item — used on the
+// Recurring tab to show "Next due". Generates from the item's own
+// anchor date rather than today, so an overdue-and-unresolved
+// occurrence surfaces here too instead of being skipped past.
 function nextDueRaw(item) {
   const today = new Date(); today.setHours(0,0,0,0);
-  const occ = genOccurrences(item, today, new Date(today.getTime()+400*86400000));
+  const genStart = new Date(item.anchorDate+'T00:00:00');
+  const occ = genOccurrences(item, genStart, new Date(today.getTime()+400*86400000));
   for (const d of occ) {
     const schedIso = iso(d);
     if (!bills.tx.some(t=>t.recurringId===item.id && t.schedDate===schedIso && !t._deleted)) return d;
@@ -2101,9 +2124,9 @@ function billsRowHtml(it) {
   const delCall = it.kind==='recurring'
     ? `quickDeleteUncleared('recurring','${it.recurringId}','${it.schedDate}')`
     : `quickDeleteUncleared('adhoc','${it.txId}')`;
-  return `<div class="ledger-row ${overdraft?'overdraft':''}" onclick="${onclick}">
+  return `<div class="ledger-row ${overdraft?'overdraft':''} ${it.overdue?'overdue':''}" onclick="${onclick}">
     <div class="ledger-body">
-      <div class="ledger-name">${it.name}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.overridden?' <span class="recur-badge">Edited</span>':''}</div>
+      <div class="ledger-name">${it.name}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.overridden?' <span class="recur-badge">Edited</span>':''}${it.overdue?' <span class="recur-badge overdue-badge">Overdue</span>':''}</div>
       <div class="ledger-date">${fmtFull(new Date(it.date+'T00:00:00'))}</div>
     </div>
     <div class="ledger-right" style="display:flex;align-items:center;gap:8px">
