@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.15</title>
+<title>Gym Tracker v2.16</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -224,7 +224,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.15</div></span>
+      <span>Gym Tracker<div class="ver">v2.16</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -503,7 +503,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.15';
+const VERSION = '2.16';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -761,6 +761,15 @@ function requestFreshSession() {
 }
 setInterval(() => { if (_syncRetryQueue.length) requestFreshSession(); }, 5*60*1000);
 
+// Shared diagnostic mapping so any sync failure — pull or upsert, any
+// table — gives the same actionable hint instead of a bare status code.
+function syncErrorHint(status, message) {
+  if (status === 401) return 'session token invalid or expired — reopen the app via the launcher to refresh it';
+  if (status === 404) return 'table not found — the matching Supabase table may not have been created yet (check the SQL setup)';
+  if (status === 403) return 'access denied — check the RLS policy on this table';
+  return message || ('HTTP '+status);
+}
+
 function sbHdr(extra) {
   return Object.assign({ 'apikey': SB_KEY, 'Authorization': 'Bearer '+_sbToken, 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, extra||{});
 }
@@ -817,7 +826,7 @@ function sbUpsert(kind, record, cb) {
         .then(res2 => {
           const ok = res2.status===201;
           if (res2.status === 401) queueRetry(kind, record);
-          slog('Upsert (POST) '+kind+' '+record.id+(ok?' ✓':' ✗ HTTP '+res2.status), ok?'ok':'error');
+          slog('Upsert '+kind+' '+record.id+(ok?' ✓':' ✗ '+syncErrorHint(res2.status)), ok?'ok':'error');
           setSyncStatus(ok?'synced':'error'); if (cb) cb(ok);
         });
     })
@@ -846,10 +855,7 @@ function pullFromCloud(cb) {
       const arrKey = res.kind==='exercise' ? 'exercises' : res.kind==='plan' ? 'plans' : res.kind==='weight' ? 'weightEntries' : 'sessions';
       if (!res.ok) {
         anyError = true;
-        const hint = res.status===401 ? 'session token invalid or expired — reopen the app via the launcher to refresh it'
-          : res.status===404 ? 'table not found — check the Supabase table exists'
-          : res.status===403 ? 'access denied — check the RLS policy'
-          : (res.message || ('HTTP '+res.status));
+        const hint = syncErrorHint(res.status, res.message);
         slog('Pull failed: '+res.kind+' — '+hint, 'error');
         return; // this table's local data is left exactly as it was
       }
