@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.3</title>
+<title>Reading Tracker v3.4</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -303,6 +303,11 @@
   /* ── Drag to reorder ── */
   .drag-handle { color: var(--border); cursor: grab; font-size: 16px; padding: 0 6px 0 0; flex-shrink: 0; align-self: center; transition: color .2s; user-select: none; line-height: 1; }
   .drag-handle:hover { color: var(--muted); }
+  /* Reorder arrow buttons — used on books, trackers, wishlist */
+  .reorder-btns { display:flex; flex-direction:column; gap:1px; flex-shrink:0; align-self:center; }
+  .reorder-btn { background:none; border:none; color:var(--border); cursor:pointer; font-size:10px; line-height:1; padding:1px 3px; border-radius:3px; transition:color .15s, background .15s; }
+  .reorder-btn:hover:not(:disabled) { color:var(--accent); background:rgba(200,169,110,.1); }
+  .reorder-btn:disabled { opacity:.2; cursor:default; }
   .book-row.dragging { opacity: .4; border-style: dashed; }
   .book-row.drag-over { border-color: var(--accent); border-style: solid; box-shadow: 0 0 0 2px rgba(200,169,110,.2); }
   .book-row.complete-locked { opacity: .75; }
@@ -654,7 +659,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.3</span></div>
+    <div class="rt-logo">My Reading <span>v3.4</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -2005,9 +2010,17 @@ function renderBooks() {
           </div>`).join("")
       : `<div style="font-size:12px;color:var(--muted);padding:4px 0">No notes yet.</div>`;
 
+    const isFirst = !isFinished && state.books.filter(b => !isComplete(b.id)).indexOf(b) === 0;
+    const isLast  = !isFinished && state.books.filter(b => !isComplete(b.id)).indexOf(b) === state.books.filter(b => !isComplete(b.id)).length - 1;
+
     div.innerHTML = `
       <div class="book-top">
         ${!isFinished ? `<span class="drag-handle" title="Drag to reorder">⠿</span>` : `<span style="width:22px;flex-shrink:0"></span>`}
+        ${!isFinished ? `
+        <div class="reorder-btns">
+          <button class="reorder-btn" onclick="reorderBook('${b.id}',-1)" ${isFirst?"disabled":""} title="Move up">▲</button>
+          <button class="reorder-btn" onclick="reorderBook('${b.id}',1)"  ${isLast ?"disabled":""} title="Move down">▼</button>
+        </div>` : `<span style="width:22px;flex-shrink:0"></span>`}
         ${!isFinished ? `<button class="pin-btn${state.activeBookId===b.id?' pinned':''}" onclick="setActiveBook('${b.id}')" title="${state.activeBookId===b.id?'Unpin':'Set as current read'}">📖</button>` : `<span style="width:18px;flex-shrink:0"></span>`}
         <div class="book-info">
           <div class="book-title" title="${esc(b.title)}">${esc(b.title)}</div>
@@ -2358,6 +2371,45 @@ function onDragEnd(e) {
   e.currentTarget.classList.remove("dragging");
   document.querySelectorAll(".book-row").forEach(r => r.classList.remove("drag-over"));
   dragSrcId = null;
+}
+
+// ── Generic reorder helper ────────────────────────────────────────────
+// Moves item with matching id field up (-1) or down (+1) in arr.
+// Returns true if a move happened.
+function moveItem(arr, id, dir, idField) {
+  idField = idField || "id";
+  const idx = arr.findIndex(x => x[idField] === id);
+  if (idx === -1) return false;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= arr.length) return false;
+  const tmp = arr[idx];
+  arr[idx] = arr[newIdx];
+  arr[newIdx] = tmp;
+  return true;
+}
+
+function reorderBook(bookId, dir) {
+  // Only reorder within the incomplete books — preserve completed books at the end
+  const incomplete = state.books.filter(b => !isComplete(b.id));
+  const complete   = state.books.filter(b =>  isComplete(b.id));
+  if (moveItem(incomplete, bookId, dir)) {
+    state.books = [...incomplete, ...complete];
+    render();
+  }
+}
+
+function reorderTracker(trackerId, dir) {
+  if (moveItem(appState.trackers, trackerId, dir)) {
+    save();
+    renderDashboard();
+  }
+}
+
+function reorderWishlist(itemId, dir) {
+  if (moveItem(appState.wishlist, itemId, dir)) {
+    save();
+    renderWishlistView();
+  }
 }
 
 
@@ -3550,9 +3602,16 @@ function renderDashboard() {
     div.className = "tc" + (done ? " done" : "");
     const tIcon = isAudible(t) ? "🎧" : "📚";
     const tUnit = isAudible(t) ? "chapter" : "book";
+    const tIdxInAll  = appState.trackers.findIndex(x => x.id === t.id);
+    const isFirstTrk = tIdxInAll === 0;
+    const isLastTrk  = tIdxInAll === appState.trackers.length - 1;
     div.innerHTML = `
       <span class="tc-type">${tIcon}</span>
       <button class="tc-del" title="Delete tracker" id="del-${t.id}">×</button>
+      <div class="reorder-btns" style="position:absolute;bottom:10px;left:14px;flex-direction:row;gap:2px" onclick="event.stopPropagation()">
+        <button class="reorder-btn" onclick="reorderTracker('${t.id}',-1)" ${isFirstTrk?"disabled":""} title="Move up">▲</button>
+        <button class="reorder-btn" onclick="reorderTracker('${t.id}',1)"  ${isLastTrk ?"disabled":""} title="Move down">▼</button>
+      </div>
       <div class="tc-top">
         <div>
           <div class="tc-name">${esc(t.trackerName)}</div>
@@ -3780,6 +3839,11 @@ function renderWishlistView() {
       const unitLbl = wType === "audiobook" ? "chapters" : "pages";
       const isManual = sort === "manual";
 
+      // Arrow position within the wishlist array (for disabled state)
+      const wIdxInAll = appState.wishlist.findIndex(x => x.id === w.id);
+      const isFirstWl = wIdxInAll === 0;
+      const isLastWl  = wIdxInAll === appState.wishlist.length - 1;
+
       const compatTrackers = appState.trackers.filter(t => (wType === "audiobook") === isAudible(t));
       const typeLabel = wType === "audiobook" ? "🎧 Audible" : "📚 Books";
       const trackerOpts = [
@@ -3797,6 +3861,11 @@ function renderWishlistView() {
       div.innerHTML = `
         <div style="display:flex;align-items:flex-start;gap:6px">
           ${isManual ? `<span class="wi-drag" title="Drag to reorder">⠿</span>` : `<span style="width:16px;flex-shrink:0"></span>`}
+          ${isManual ? `
+          <div class="reorder-btns">
+            <button class="reorder-btn" onclick="reorderWishlist('${w.id}',-1)" ${isFirstWl?"disabled":""} title="Move up">▲</button>
+            <button class="reorder-btn" onclick="reorderWishlist('${w.id}',1)"  ${isLastWl ?"disabled":""} title="Move down">▼</button>
+          </div>` : ""}
           <div class="wi-info" style="flex:1;min-width:0">
             <div class="wi-title">${wIcon} ${esc(w.title)}</div>
             ${w.author ? `<div class="wi-author">${esc(w.author)}</div>` : ""}
