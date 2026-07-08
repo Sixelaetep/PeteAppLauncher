@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.14</title>
+<title>Gym Tracker v2.15</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -129,7 +129,7 @@
   .set-block:last-child{margin-bottom:0}
   .set-idx{font-size:11px;color:var(--ink2);margin-bottom:3px;display:block}
   .set-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  .set-row input{padding:7px 8px;font-size:16px;width:auto;flex:1;min-width:56px}
+  .set-row input,.set-row select{padding:7px 8px;font-size:16px;width:auto;flex:1;min-width:56px}
   .set-remove{background:none;border:none;color:var(--ink3);font-size:16px;cursor:pointer;padding:2px 6px;flex-shrink:0}
   .set-remove:hover{color:#f78166}
   .exercise-picker-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;background:var(--surface2)}
@@ -224,7 +224,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.14</div></span>
+      <span>Gym Tracker<div class="ver">v2.15</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -267,6 +267,14 @@
           <div class="hero-stat-val green" id="homeStreak">0 wks</div>
         </div>
       </div>
+    </div>
+
+    <div class="list-item" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div>
+        <div class="li-meta" style="text-transform:uppercase;letter-spacing:0.05em;font-size:10px">Body Weight</div>
+        <div id="homeWeightLatest" style="font-size:17px;font-weight:700;margin-top:2px">No entries yet</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="openWeightModal()">⚖️ Log Weight</button>
     </div>
 
     <div class="section-title" onclick="toggleQuickStart()" style="cursor:pointer;user-select:none">
@@ -314,6 +322,11 @@
       <button class="type-btn sm" id="insWinAll" onclick="setInsightsWindow(null)">All Time</button>
     </div>
     <div id="insightsList" style="margin-top:12px"></div>
+
+    <div class="section-title" style="margin-top:20px">⚖️ Body Weight</div>
+    <div id="weightChartWrap"></div>
+    <button class="btn btn-secondary btn-block" style="margin-top:10px" onclick="openWeightModal()">+ Log Weight</button>
+    <div id="weightEntryList" style="margin-top:10px"></div>
   </div>
 
   <!-- ═══ HISTORY ═══ -->
@@ -426,6 +439,31 @@
   </div>
 </div>
 
+<!-- ═══ WEIGHT LOG MODAL ═══ -->
+<div class="modal-overlay" id="modalWeight">
+  <div class="modal">
+    <div class="modal-title"><span id="weightModalTitle">Log Weight</span><button class="modal-close" onclick="closeModal('modalWeight')">✕</button></div>
+    <input type="hidden" id="weightEditId">
+    <label>Date</label>
+    <input type="date" id="weightDate">
+    <label>Weight (kg)</label>
+    <input type="number" id="weightKg" step="0.1" min="0" placeholder="e.g. 82.4">
+    <label>Notes <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional)</span></label>
+    <textarea id="weightNotes" placeholder="Anything worth remembering…"></textarea>
+    <div class="btn-row">
+      <button class="btn btn-primary" style="flex:1" onclick="saveWeightEntry()">Save</button>
+    </div>
+
+    <div class="section-title" style="margin-top:18px">Send to Apple Health</div>
+    <p style="font-size:11.5px;color:var(--ink3);line-height:1.5;margin-bottom:8px">
+      Copies the weight to your clipboard and opens an iOS Shortcut by name — you need to have already built a Shortcut yourself that reads the clipboard and logs it to Health (e.g. "Get Clipboard" → "Log Weight"). This only works on iOS Safari; I can't create the Shortcut itself from here, and I can't test this end-to-end from where I'm building it — try it once before relying on it.
+    </p>
+    <label>Your Shortcut's name</label>
+    <input type="text" id="healthShortcutName" placeholder="e.g. Log Weight to Health">
+    <button class="btn btn-secondary btn-block" style="margin-top:10px" onclick="sendWeightToHealthShortcut()">📋 Copy &amp; Run Shortcut</button>
+  </div>
+</div>
+
 <!-- ═══ DATA DRAWER ═══ -->
 <div class="drawer-overlay" id="dataDrawer">
   <div class="drawer">
@@ -465,7 +503,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.14';
+const VERSION = '2.15';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -490,7 +528,7 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], starterDismissed: false }
   };
 }
 
@@ -507,6 +545,7 @@ function load() {
       env.data.exercises = parsed.data.exercises || [];
       env.data.plans     = parsed.data.plans || parsed.data.templates || []; // v1.x used 'templates'
       env.data.sessions  = parsed.data.sessions || [];
+      env.data.weightEntries = parsed.data.weightEntries || [];
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
@@ -580,6 +619,7 @@ let _env = defaultEnvelope();
 const getExercises = () => _env.data.exercises.filter(e => !e._deleted);
 const getPlans      = () => _env.data.plans.filter(p => !p._deleted);
 const getSessions   = () => _env.data.sessions.filter(s => !s._deleted);
+const getWeightEntries = () => _env.data.weightEntries.filter(w => !w._deleted).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
 const exerciseById  = id => _env.data.exercises.find(e => e.id === id);
 
 let _exType = 'reps';
@@ -607,6 +647,24 @@ function stripDone(s) { const c = {...s}; delete c.done; return c; }
 // minutes:seconds presentation layer for entry and display.
 function secToMinSec(total) { const t=total||0; return { min: Math.floor(t/60), sec: t%60 }; }
 function mmss(total) { const t=total||0; return Math.floor(t/60)+':'+String(t%60).padStart(2,'0'); }
+// GYM-022: minutes/seconds as <select> instead of free-typed numbers — on
+// iOS Safari a <select> opens the native wheel picker, much faster to use
+// mid-session than the keyboard. Minutes step by 1, seconds step by 5.
+// If a stored value doesn't land on the 5-second grid (e.g. an older entry,
+// or a progression calc that landed on an odd number), that exact value is
+// still injected as an extra option so nothing gets silently rounded away.
+function minSelectOptions(selected) {
+  const vals = []; for (let m=0;m<=90;m++) vals.push(m);
+  if (!vals.includes(selected)) vals.push(selected);
+  vals.sort((a,b)=>a-b);
+  return vals.map(m => `<option value="${m}" ${m===selected?'selected':''}>${m}</option>`).join('');
+}
+function secSelectOptions(selected) {
+  const vals = []; for (let s=0;s<60;s+=5) vals.push(s);
+  if (!vals.includes(selected)) vals.push(selected);
+  vals.sort((a,b)=>a-b);
+  return vals.map(s => `<option value="${s}" ${s===selected?'selected':''}>${String(s).padStart(2,'0')}</option>`).join('');
+}
 function buildDefaultSet(type) {
   return type==='distance' ? {metres:0,seconds:0,weight:0} : type==='time' ? {seconds:0} : {reps:0,weight:0};
 }
@@ -671,9 +729,37 @@ function currentStreakWeeks(sessions) {
 // first-time bootstrap and pushes local up instead of blanking it.
 var SB_URL = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
 var SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-const SB_TABLES = { exercise: SB_URL+'/rest/v1/gym_exercises', plan: SB_URL+'/rest/v1/gym_plans', session: SB_URL+'/rest/v1/gym_sessions' };
+const SB_TABLES = { exercise: SB_URL+'/rest/v1/gym_exercises', plan: SB_URL+'/rest/v1/gym_plans', session: SB_URL+'/rest/v1/gym_sessions', weight: SB_URL+'/rest/v1/gym_weight' };
 let _sbToken = null;   // set via PAL_SESSION postMessage
 let _sbUserId = null;  // Supabase auth UUID — never a display name
+
+// GYM-021: sessions can run long enough that the Supabase access token
+// (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
+// and every push from then on fails with 401. Local saves already never
+// depended on this — save(_env) always succeeds regardless — but pushes
+// were just being logged as errors and dropped. Failed 401 pushes now
+// queue here and flush automatically the next time a fresh PAL_SESSION
+// arrives (e.g. reopening the tab). requestFreshSession() also proactively
+// asks the launcher for a new one every few minutes if anything is queued;
+// this is a no-op today unless the launcher is updated to answer it, but
+// it's harmless to send and costs nothing to have ready.
+let _syncRetryQueue = []; // [{kind, record}]
+function queueRetry(kind, record) {
+  _syncRetryQueue = _syncRetryQueue.filter(q => !(q.kind===kind && q.record.id===record.id));
+  _syncRetryQueue.push({kind, record});
+  renderSyncPanel();
+}
+function flushSyncRetryQueue() {
+  if (!_syncRetryQueue.length || !_sbToken || !_sbUserId) return;
+  const queue = _syncRetryQueue; _syncRetryQueue = [];
+  slog('Retrying '+queue.length+' queued change(s) after reconnect','ok');
+  queue.forEach(q => sbUpsert(q.kind, q.record, null));
+}
+function requestFreshSession() {
+  if (window.parent === window) return;
+  try { window.parent.postMessage({ type: 'PAL_REQUEST_SESSION' }, window.location.origin); } catch(e) {}
+}
+setInterval(() => { if (_syncRetryQueue.length) requestFreshSession(); }, 5*60*1000);
 
 function sbHdr(extra) {
   return Object.assign({ 'apikey': SB_KEY, 'Authorization': 'Bearer '+_sbToken, 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, extra||{});
@@ -722,13 +808,15 @@ function sbUpsert(kind, record, cb) {
         slog('Upsert (PATCH) '+kind+' '+record.id+' ✓','ok'); setSyncStatus('synced'); if (cb) cb(true); return;
       }
       if (res.status === 401) {
-        slog('Upsert failed: '+kind+' '+record.id+' — session token invalid or expired, reopen the app via the launcher','error');
+        slog('Upsert failed: '+kind+' '+record.id+' — session token expired, queued for retry','error');
+        queueRetry(kind, record);
         setSyncStatus('error'); if (cb) cb(false); return;
       }
       return fetch(tbl, { method:'POST', headers: sbHdr(), body: JSON.stringify(row) })
-        .then(r2 => r2.json().then(d2 => ({status:r2.status, data:d2})))
+        .then(r2 => r2.json().then(d2 => ({status:r2.status, data:d2})).catch(()=>({status:r2.status,data:null})))
         .then(res2 => {
           const ok = res2.status===201;
+          if (res2.status === 401) queueRetry(kind, record);
           slog('Upsert (POST) '+kind+' '+record.id+(ok?' ✓':' ✗ HTTP '+res2.status), ok?'ok':'error');
           setSyncStatus(ok?'synced':'error'); if (cb) cb(ok);
         });
@@ -740,7 +828,7 @@ function pullFromCloud(cb) {
   if (!_sbToken || !_sbUserId) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session'];
+  const kinds = ['exercise','plan','session','weight'];
   // GYM-009: this used to be a single Promise.all() over the three raw
   // fetches. If any one table's fetch rejected (e.g. a 401 on exercises),
   // Promise.all short-circuits straight to .catch and the OTHER two tables
@@ -755,7 +843,7 @@ function pullFromCloud(cb) {
   )).then(results => {
     let anyError = false;
     results.forEach(res => {
-      const arrKey = res.kind==='exercise' ? 'exercises' : res.kind==='plan' ? 'plans' : 'sessions';
+      const arrKey = res.kind==='exercise' ? 'exercises' : res.kind==='plan' ? 'plans' : res.kind==='weight' ? 'weightEntries' : 'sessions';
       if (!res.ok) {
         anyError = true;
         const hint = res.status===401 ? 'session token invalid or expired — reopen the app via the launcher to refresh it'
@@ -789,16 +877,16 @@ function pullFromCloud(cb) {
 
 function manualPull() {
   if (!_sbToken) { toast('Not connected to cloud'); return; }
-  pullFromCloud(() => { renderAll(); toast('Pulled from cloud ✓'); });
+  pullFromCloud(() => { flushSyncRetryQueue(); renderAll(); toast('Pulled from cloud ✓'); });
 }
 function manualPush() {
   if (!_sbToken) { toast('Not connected to cloud'); return; }
-  let total = 0; ['exercises','plans','sessions'].forEach(k => total += _env.data[k].length);
+  let total = 0; ['exercises','plans','sessions','weightEntries'].forEach(k => total += _env.data[k].length);
   if (!total) { toast('Nothing to push'); return; }
   setSyncStatus('syncing');
   slog('Manual push — '+total+' record(s)');
   let done = 0, errors = 0;
-  [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions]].forEach(([kind, arr]) => {
+  [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries]].forEach(([kind, arr]) => {
     arr.forEach(rec => sbUpsert(kind, rec, ok => {
       if (!ok) errors++;
       done++;
@@ -825,7 +913,7 @@ window.addEventListener('message', function(e) {
   adjustBodyScrollTop();
   if (_sbToken && _sbUserId) {
     setSyncStatus('connecting');
-    pullFromCloud(() => renderAll());
+    pullFromCloud(() => { flushSyncRetryQueue(); renderAll(); });
   }
 });
 setTimeout(function() {
@@ -862,11 +950,13 @@ function renderAll() {
 function renderSyncPanel() {
   const sp = document.getElementById('syncStatusPanel');
   if (sp) {
-    const stateLabel = _syncState==='synced' ? '<span style="color:var(--accent2)">Synced</span>'
+    const stateLabel = _syncRetryQueue.length ? '<span style="color:var(--accent4)">⏳ '+_syncRetryQueue.length+' pending sync</span>'
+      : _syncState==='synced' ? '<span style="color:var(--accent2)">Synced</span>'
       : _syncState==='error' ? '<span style="color:#f78166">Error</span>'
       : _syncState==='syncing'||_syncState==='connecting' ? '<span style="color:var(--accent4)">'+(_syncState==='connecting'?'Connecting…':'Syncing…')+'</span>'
       : '<span style="color:var(--ink2)">Local only</span>';
-    sp.innerHTML = 'Status &nbsp;'+stateLabel+'<br>Token &nbsp;<strong>'+(_sbToken?'Received ✓':'Not received')+'</strong><br>User ID &nbsp;<strong>'+(_sbUserId?_sbUserId.slice(0,8)+'…':'—')+'</strong>';
+    const pendingNote = _syncRetryQueue.length ? '<br><span style="font-size:10.5px;color:var(--ink3)">Your data is saved locally and will sync automatically once reconnected.</span>' : '';
+    sp.innerHTML = 'Status &nbsp;'+stateLabel+'<br>Token &nbsp;<strong>'+(_sbToken?'Received ✓':'Not received')+'</strong><br>User ID &nbsp;<strong>'+(_sbUserId?_sbUserId.slice(0,8)+'…':'—')+'</strong>'+pendingNote;
   }
   renderSyncLog();
 }
@@ -875,6 +965,7 @@ function renderSyncPanel() {
 // HOME
 // ═══════════════════════════════════════════════════════════════════
 function renderHome() {
+  renderHomeWeight();
   const sessions = getSessions().slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.completedAt||'').localeCompare(a.completedAt||''));
   const wk = sessionsThisWeek(sessions);
   document.getElementById('homeWeekCount').textContent = wk.length;
@@ -1283,8 +1374,8 @@ function renderPlanItemsList() {
           <span class="set-idx">Set ${si+1}</span>
           <div class="set-row">
             <input type="number" min="0" placeholder="metres" value="${s.metres||''}" oninput="updatePlanSet(${idx},${si},'metres',this.value)">
-            <input type="number" min="0" placeholder="min" style="max-width:52px" value="${ms.min||''}" oninput="updatePlanSetTime(${idx},${si},'min',this.value)">
-            <input type="number" min="0" max="59" placeholder="sec" style="max-width:52px" value="${ms.sec||''}" oninput="updatePlanSetTime(${idx},${si},'sec',this.value)">
+            <select style="max-width:70px" onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
+            <select style="max-width:70px" onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
             <input type="number" min="0" step="0.5" placeholder="kg (opt)" value="${s.weight||''}" oninput="updatePlanSet(${idx},${si},'weight',this.value)">
             <button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>
           </div>
@@ -1295,8 +1386,8 @@ function renderPlanItemsList() {
         return `<div class="set-block">
           <span class="set-idx">Set ${si+1}</span>
           <div class="set-row">
-            <input type="number" min="0" placeholder="min" value="${ms.min||''}" oninput="updatePlanSetTime(${idx},${si},'min',this.value)">
-            <input type="number" min="0" max="59" placeholder="sec" value="${ms.sec||''}" oninput="updatePlanSetTime(${idx},${si},'sec',this.value)">
+            <select onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
+            <select onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
             <button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>
           </div>
         </div>`;
@@ -1730,7 +1821,7 @@ function renderSessionItems() {
           <div class="tsr-label">Set ${si+1} — ${ref?refLabel+' '+(ref.metres||0)+'m/'+mmss(ref.seconds):'extra'}</div>
           <div class="track-set-row">
             <input type="number" class="tsr-input" value="${a.metres||''}" oninput="updateSessionSet(${ii},${si},'metres',this.value)"> m
-            <input type="number" class="tsr-input" style="width:46px !important" min="0" placeholder="min" value="${ms.min||''}" oninput="updateSessionSetTime(${ii},${si},'min',this.value)">:<input type="number" class="tsr-input" style="width:46px !important" min="0" max="59" placeholder="sec" value="${ms.sec||''}" oninput="updateSessionSetTime(${ii},${si},'sec',this.value)">
+            <select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
             <span class="tsr-trend">${trendArrow(pace, refPace)}</span>
             <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
             <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
@@ -1743,7 +1834,7 @@ function renderSessionItems() {
         return `<div class="track-set-block">
           <div class="tsr-label">Set ${si+1} — ${ref?refLabel+' '+mmss(ref.seconds):'extra'}</div>
           <div class="track-set-row">
-            <input type="number" class="tsr-input" style="width:46px !important" min="0" placeholder="min" value="${ms.min||''}" oninput="updateSessionSetTime(${ii},${si},'min',this.value)">:<input type="number" class="tsr-input" style="width:46px !important" min="0" max="59" placeholder="sec" value="${ms.sec||''}" oninput="updateSessionSetTime(${ii},${si},'sec',this.value)">
+            <select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
             <span class="tsr-trend">${trendArrow(a.seconds, ref?ref.seconds:null)}</span>
             <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
             <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
@@ -2171,6 +2262,7 @@ function quickStartArea(exerciseIds) {
 
 function renderInsights() {
   renderNextUpCard();
+  renderWeightSection();
   const {areaTotals, areaTags} = computeInsights(_insightsWindow);
   const areas = Object.keys(areaTotals).filter(a => a!=='Other' || areaTags['Other'].length).sort((a,b)=>areaTotals[b]-areaTotals[a]);
   const el = document.getElementById('insightsList');
@@ -2184,6 +2276,135 @@ function renderInsights() {
       ${zero ? '<div class="area-flag">⚠ Not worked in this window</div>' : `<div class="area-tags">${tagsStr}</div>`}
     </div>`;
   }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BODY WEIGHT TRACKING (GYM-020)
+// ═══════════════════════════════════════════════════════════════════
+function openWeightModal(id) {
+  document.getElementById('weightEditId').value = id||'';
+  const entries = getWeightEntries();
+  if (id) {
+    const w = entries.find(x=>x.id===id);
+    document.getElementById('weightModalTitle').textContent = 'Edit Weight Entry';
+    document.getElementById('weightDate').value = w.date;
+    document.getElementById('weightKg').value = w.weightKg;
+    document.getElementById('weightNotes').value = w.notes||'';
+  } else {
+    document.getElementById('weightModalTitle').textContent = 'Log Weight';
+    document.getElementById('weightDate').value = todayISO();
+    document.getElementById('weightKg').value = entries.length ? entries[entries.length-1].weightKg : '';
+    document.getElementById('weightNotes').value = '';
+  }
+  document.getElementById('healthShortcutName').value = localStorage.getItem('gym_health_shortcut_name') || '';
+  openModal('modalWeight');
+}
+function saveWeightEntry() {
+  const date = document.getElementById('weightDate').value || todayISO();
+  const weightKg = Number(document.getElementById('weightKg').value);
+  if (!weightKg || weightKg <= 0) { toast('Enter a weight'); return; }
+  const notes = document.getElementById('weightNotes').value.trim();
+  const id = document.getElementById('weightEditId').value;
+  const now = new Date().toISOString();
+  let record;
+  if (id) {
+    record = _env.data.weightEntries.find(x=>x.id===id);
+    record.date = date; record.weightKg = weightKg; record.notes = notes; record.updatedAt = now;
+  } else {
+    record = { id: uid('wt'), date, weightKg, notes, createdAt: now, updatedAt: now };
+    _env.data.weightEntries.push(record);
+  }
+  save(_env);
+  sbUpsert('weight', record, null);
+  closeModal('modalWeight');
+  renderInsights();
+  renderHomeWeight();
+  toast('Weight logged ✓');
+}
+function deleteWeightEntry(id) {
+  if (!confirm('Delete this weight entry?')) return;
+  const w = _env.data.weightEntries.find(x=>x.id===id);
+  w._deleted = true; w.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('weight', w, null);
+  renderInsights();
+  renderHomeWeight();
+  toast('Entry deleted');
+}
+function renderHomeWeight() {
+  const el = document.getElementById('homeWeightLatest');
+  if (!el) return;
+  const entries = getWeightEntries();
+  if (!entries.length) { el.textContent = 'No entries yet'; return; }
+  const last = entries[entries.length-1];
+  const prev = entries.length>1 ? entries[entries.length-2] : null;
+  const trend = prev ? trendArrow(last.weightKg, prev.weightKg) : '';
+  el.innerHTML = last.weightKg+' kg <span style="font-size:11px;color:var(--ink3);font-weight:400">('+fmtDate(last.date)+')</span> '+trend;
+}
+// Hand-rolled SVG line chart — no chart library dependency for a single line.
+function renderWeightChartSvg(entries) {
+  if (entries.length < 2) return '<div class="empty-state">Log at least 2 entries to see a chart</div>';
+  const w = 300, h = 120, pad = 22;
+  const values = entries.map(e=>e.weightKg);
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = (max-min) || 1;
+  const stepX = entries.length>1 ? (w - pad*2) / (entries.length-1) : 0;
+  const pt = (e,i) => { const x = pad + i*stepX; const y = h - pad - ((e.weightKg-min)/range)*(h-pad*2); return {x,y}; };
+  const points = entries.map((e,i)=>{const p=pt(e,i); return p.x+','+p.y;}).join(' ');
+  const dots = entries.map((e,i)=>{const p=pt(e,i); return `<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="var(--accent)"/>`;}).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:140px;background:var(--surface2);border-radius:8px;padding:8px;box-sizing:border-box" preserveAspectRatio="none">
+    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    ${dots}
+  </svg>
+  <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink2);margin-top:4px">
+    <span>${fmtDate(entries[0].date)} · ${entries[0].weightKg}kg</span>
+    <span>${fmtDate(entries[entries.length-1].date)} · ${entries[entries.length-1].weightKg}kg</span>
+  </div>`;
+}
+function renderWeightSection() {
+  const chartWrap = document.getElementById('weightChartWrap');
+  const listEl = document.getElementById('weightEntryList');
+  if (!chartWrap || !listEl) return;
+  const entries = getWeightEntries();
+  chartWrap.innerHTML = entries.length ? renderWeightChartSvg(entries) : '<div class="empty-state"><div class="big">⚖️</div>Log your weight to start tracking it here</div>';
+  const recent = entries.slice().reverse().slice(0,10);
+  listEl.innerHTML = recent.map((w,i) => {
+    const prevEntry = entries[entries.length-2-i]; // chronological neighbour before this one
+    const trend = prevEntry ? trendArrow(w.weightKg, prevEntry.weightKg) : '';
+    return `<div class="list-item">
+      <div class="li-top"><div>
+        <div class="li-name">${w.weightKg} kg ${trend}</div>
+        <div class="li-meta">${fmtDate(w.date)}${w.notes?' · '+escHtml(w.notes):''}</div>
+      </div></div>
+      <div class="li-actions">
+        <button class="btn btn-secondary btn-sm" onclick="openWeightModal('${w.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteWeightEntry('${w.id}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+// GYM-020: this device can copy to the clipboard and hand off to iOS's
+// `shortcuts://` URL scheme, but it can't author a Shortcut for you — you
+// need to have already built one in the Shortcuts app that reads the
+// clipboard and logs it to Health (e.g. "Get Clipboard" -> "Log Weight").
+// Only works in iOS Safari, and I have no way to test this myself from
+// here — worth a dry run before you rely on it.
+function sendWeightToHealthShortcut() {
+  const name = document.getElementById('healthShortcutName').value.trim();
+  const weightKg = document.getElementById('weightKg').value;
+  if (!name) { toast('Enter your Shortcut\'s name first'); return; }
+  if (!weightKg) { toast('Enter a weight first'); return; }
+  localStorage.setItem('gym_health_shortcut_name', name);
+  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+    toast('Clipboard not available here — copy manually: '+weightKg);
+    return;
+  }
+  navigator.clipboard.writeText(String(weightKg)).then(() => {
+    toast('Copied '+weightKg+'kg — opening Shortcut…');
+    window.location.href = 'shortcuts://run-shortcut?name='+encodeURIComponent(name);
+  }).catch(() => {
+    toast('Could not copy — copy manually: '+weightKg);
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2224,6 +2445,7 @@ function importJSON(event) {
         _env.data.exercises = _env.data.exercises || [];
         _env.data.plans     = _env.data.plans || _env.data.templates || [];
         _env.data.sessions  = _env.data.sessions  || [];
+        _env.data.weightEntries = _env.data.weightEntries || [];
         _env.data.starterDismissed = _env.data.starterDismissed || false;
         const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
         if (exChanged.length && _sbToken && _sbUserId) exChanged.forEach(ex => sbUpsert('exercise', ex, null));
