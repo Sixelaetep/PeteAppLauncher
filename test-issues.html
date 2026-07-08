@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.22</title>
+<title>Test &amp; Issues v1.23</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -403,7 +403,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.22</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.23</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncPanel()" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
@@ -802,6 +802,160 @@ function activeApps() {
   return Object.values(state.apps).filter(a => !a.archived);
 }
 
+// ══════════════════════════════════════════════════════════════════
+// APP REGISTRY (TI-010)
+// ══════════════════════════════════════════════════════════════════
+// Fixes the fragmented Apps tab: over time, release manifests filed
+// the same real-world app under slightly different "app" slugs
+// (e.g. the launcher landed under "PAD", "pad", "dashboard",
+// "pete-apps-launcher" AND "petes-apps-dashboard"), so the Apps tab
+// showed several partial cards — split version history, split issue
+// counts, and no icon whenever a manifest didn't send appEmoji.
+//
+// This registry is the single source of truth for each app's
+// canonical id/name/icon/issue-prefix. `aliases` lists every id
+// that has ever been used locally or in a manifest for that app.
+const APP_REGISTRY = [
+  { id: 'petes-apps-dashboard', name: "Pete's Apps Dashboard", emoji: '🚀', prefix: 'PET', aliases: ['petes-apps-dashboard','PAD','pad','dashboard','pete-apps-launcher'] },
+  { id: 'on-budget',            name: 'On Budget',             emoji: '💰', prefix: 'ON-', aliases: ['on-budget'] },
+  { id: 'claim-tracker',        name: 'Claim Tracker',         emoji: '💷', prefix: 'CLA', aliases: ['claim-tracker'] },
+  { id: 'fortnight-tracker',    name: 'Fortnight Tracker',     emoji: '📅', prefix: 'FT',  aliases: ['fortnight-tracker'] },
+  { id: 'reading-tracker',      name: 'Reading Tracker',       emoji: '📚', prefix: 'MR',  aliases: ['reading-tracker','my-reading','MR'] },
+  { id: 'GigsAndTrips',         name: 'Gigs & Trips',          emoji: '🎟', prefix: 'GIG', aliases: ['GigsAndTrips','gigsandtrips','GT'] },
+  { id: 'test-issues',          name: 'Test & Issues',         emoji: '🚦', prefix: 'TI',  aliases: ['test-issues'] },
+  { id: 'gym-tracker',          name: 'Gym Tracker',           emoji: '💪', prefix: 'GYM', aliases: ['gym-tracker'] },
+  { id: 'gut-journal',          name: 'Gut Journal',           emoji: '🍽️', prefix: 'GJ',  aliases: ['gut-journal'] },
+  { id: 'money-checker',        name: 'Money Checker',         emoji: '💵', prefix: 'MON', aliases: ['money-checker'] },
+  { id: 'workout-log',          name: 'Workout Log',           emoji: '🏋️', prefix: 'WOR', aliases: ['workout-log'] },
+  { id: 'meal-planner',         name: 'Meal Planner',          emoji: '🍲', prefix: 'MEA', aliases: ['meal-planner'] },
+];
+
+function normKey(s) { return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+
+// Resolve any raw app id/slug (typically manifest.app on import) to
+// its canonical registry id. Returns null for an app that isn't
+// catalogued yet (a genuinely new app) — callers fall back to
+// registering it under its own id, same as before this fix.
+function resolveCanonicalAppId(rawId) {
+  if (!rawId) return null;
+  for (const r of APP_REGISTRY) { if (r.aliases.includes(rawId)) return r.id; }
+  const norm = normKey(rawId);
+  for (const r of APP_REGISTRY) {
+    if (normKey(r.id) === norm) return r.id;
+    if (r.aliases.some(a => normKey(a) === norm)) return r.id;
+  }
+  return null;
+}
+
+function compareVersionStrings(a, b) {
+  const pa = String(a||'0').split('.').map(n => parseInt(n,10)||0);
+  const pb = String(b||'0').split('.').map(n => parseInt(n,10)||0);
+  for (let i=0; i<Math.max(pa.length,pb.length); i++) {
+    const d = (pa[i]||0) - (pb[i]||0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+// Fallback icon for a card even if migration hasn't stamped it yet.
+function appIcon(app) {
+  if (app.emoji) return app.emoji;
+  const reg = APP_REGISTRY.find(r => r.id === app.id);
+  return reg ? reg.emoji : '📦';
+}
+
+// Consolidates any local app entries that are aliases of the same
+// registry app into one canonical card: versions are merged and
+// de-duplicated (by version+date+heading), issues are re-pointed to
+// the canonical id, per-prefix issue counters are folded together
+// (keeping the highest), and name/icon/prefix are stamped from the
+// registry so every known app always shows a proper icon.
+//
+// Idempotent — once an app has been merged down to a single id,
+// later calls find nothing to do for it. Safe to call on every
+// boot and after every cloud pull.
+function migrateAppRegistry() {
+  const deletedAppIds = [];
+  const touchedIds    = [];
+  let changed = false;
+
+  APP_REGISTRY.forEach(reg => {
+    const matchIds = Object.keys(state.apps).filter(id => {
+      if (reg.aliases.includes(id)) return true;
+      const norm = normKey(id);
+      return normKey(reg.id) === norm || reg.aliases.some(a => normKey(a) === norm);
+    });
+    if (!matchIds.length) return;
+
+    // Merge onto whichever matching entry has the most version
+    // history, so no release history is discarded.
+    let primaryId = matchIds.includes(reg.id) ? reg.id : matchIds[0];
+    matchIds.forEach(id => {
+      if ((state.apps[id].versions||[]).length > (state.apps[primaryId].versions||[]).length) primaryId = id;
+    });
+    const primary = state.apps[primaryId];
+    if (!primary.versions) primary.versions = [];
+
+    matchIds.forEach(id => {
+      if (id === primaryId) return;
+      const other = state.apps[id];
+      const seenKeys = new Set(primary.versions.map(v => `${v.version}|${v.date}|${v.heading}`));
+      (other.versions||[]).forEach(v => {
+        const key = `${v.version}|${v.date}|${v.heading}`;
+        if (!seenKeys.has(key)) { primary.versions.push(v); seenKeys.add(key); }
+      });
+      Object.values(state.issues).forEach(is => { if (is.appId === id) is.appId = primaryId; });
+      if (other.prefix && other.prefix !== reg.prefix && state.nextSeq[other.prefix] !== undefined) {
+        state.nextSeq[reg.prefix] = Math.max(state.nextSeq[reg.prefix]||1, state.nextSeq[other.prefix]||1);
+        delete state.nextSeq[other.prefix];
+      }
+      delete state.apps[id];
+      deletedAppIds.push(id);
+      changed = true;
+    });
+
+    primary.versions.sort((a,b) => (a.date||'').localeCompare(b.date||'') || compareVersionStrings(a.version,b.version));
+
+    if (primaryId !== reg.id) {
+      state.apps[reg.id] = primary;
+      primary.id = reg.id;
+      delete state.apps[primaryId];
+      Object.values(state.issues).forEach(is => { if (is.appId === primaryId) is.appId = reg.id; });
+      deletedAppIds.push(primaryId);
+      changed = true;
+    }
+
+    const canonical = state.apps[reg.id];
+    if (canonical.name !== reg.name || canonical.emoji !== reg.emoji || canonical.prefix !== reg.prefix) {
+      canonical.name   = reg.name;
+      canonical.emoji  = reg.emoji;
+      canonical.prefix = reg.prefix;
+      changed = true;
+    }
+
+    // Safety net: if the issue-id counter for this prefix ever drifted
+    // behind the highest id actually in use (possible after years of
+    // the same fragmentation this function fixes), bump it forward so
+    // new issues can never collide with an existing id.
+    let maxSeq = 0;
+    Object.keys(state.issues).forEach(id => {
+      if (!id.startsWith(reg.prefix)) return;
+      const n = parseInt(id.slice(reg.prefix.length).replace(/^-+/,''), 10);
+      if (!isNaN(n) && n > maxSeq) maxSeq = n;
+    });
+    if (maxSeq >= (state.nextSeq[reg.prefix]||1)) { state.nextSeq[reg.prefix] = maxSeq + 1; changed = true; }
+
+    touchedIds.push(reg.id);
+  });
+
+  // An id can appear in deletedAppIds and then be recreated under the
+  // same string (e.g. a registry's own id was a lower-history alias
+  // that got merged away and then reinstated as the rename target) —
+  // only ids that truly no longer exist should be tombstoned.
+  const trulyDeleted = [...new Set(deletedAppIds)].filter(id => !state.apps[id]);
+  return { changed, deletedAppIds: trulyDeleted, touchedIds: [...new Set(touchedIds)] };
+}
+
 function allTests() {
   const out = [];
   activeApps().forEach(app => {
@@ -996,7 +1150,7 @@ function renderApps() {
     const metaStyle = isArchived ? 'opacity:0.55' : '';
     return `<div class="card" style="${isArchived?'border-style:dashed;opacity:0.75':''}">
       <div class="card-header" data-body="${cardBodyId}" onclick="toggleCard(this)" style="${metaStyle}">
-        <div class="ch-icon">${app.emoji||'📦'}</div>
+        <div class="ch-icon">${appIcon(app)}</div>
         <div class="ch-main">
           <div class="ch-name">${esc(app.name)}${isArchived?' <span style="font-size:10px;color:var(--ink3);font-weight:400">(archived)</span>':''}</div>
           <div class="ch-meta">${versions.length} ver · ${esc(app.prefix)}${passN?' · '+passN+'✓':''}${failN?' '+failN+'✗':''}${openN?' · <span style="color:var(--orange)">'+openN+' open</span>':''}</div>
@@ -1741,7 +1895,7 @@ function processManifestText(txt) {
 
 function showImportConfirm(m) {
   document.getElementById('import-modal-title').textContent = `Import v${m.version} — ${m.appName||m.app}`;
-  const existing = state.apps[m.app];
+  const existing = state.apps[resolveCanonicalAppId(m.app) || m.app];
   const existingVer = existing?.versions?.find(v=>v.version===m.version);
   const summary = existingVer
     ? `⚠️ Version ${m.version} already exists — tests will be reset and data merged.`
@@ -1762,15 +1916,30 @@ async function confirmImport() {
   if (!m) return;
   document.getElementById('modal-import').classList.add('hidden');
 
+  // TI-010: resolve to the canonical app id so a release always
+  // lands on the one existing card for that app, whatever slug this
+  // particular manifest used.
+  const canonicalId = resolveCanonicalAppId(m.app) || m.app;
+  const reg = APP_REGISTRY.find(r => r.id === canonicalId);
+
   // Register / update app
-  if (!state.apps[m.app]) {
-    state.apps[m.app] = { id: m.app, name: m.appName||m.app, emoji: m.appEmoji||'📦', prefix: m.appPrefix||m.app.substring(0,3).toUpperCase(), versions: [] };
-    if (!state.nextSeq[state.apps[m.app].prefix]) state.nextSeq[state.apps[m.app].prefix] = 1;
-  } else {
-    if (m.appName)  state.apps[m.app].name  = m.appName;
-    if (m.appEmoji) state.apps[m.app].emoji = m.appEmoji;
+  if (!state.apps[canonicalId]) {
+    state.apps[canonicalId] = {
+      id: canonicalId,
+      name:   reg ? reg.name   : (m.appName||m.app),
+      emoji:  reg ? reg.emoji  : (m.appEmoji||'📦'),
+      prefix: reg ? reg.prefix : (m.appPrefix||m.app.substring(0,3).toUpperCase()),
+      versions: []
+    };
+    if (!state.nextSeq[state.apps[canonicalId].prefix]) state.nextSeq[state.apps[canonicalId].prefix] = 1;
+  } else if (!reg) {
+    // Only apps outside the fixed registry can be renamed/re-iconed
+    // by a manifest — catalogued apps always keep their registry
+    // name/icon so the Apps tab can't fragment or lose its icon again.
+    if (m.appName)  state.apps[canonicalId].name  = m.appName;
+    if (m.appEmoji) state.apps[canonicalId].emoji = m.appEmoji;
   }
-  const app = state.apps[m.app];
+  const app = state.apps[canonicalId];
 
   // Build verify tests for any resolvesIssues — one test per cited issue
   const verifyTests = (m.resolvesIssues||[])
@@ -1822,7 +1991,7 @@ async function confirmImport() {
   _pendingImport = null;
   document.getElementById('paste-json').value = '';
   showTab('tests');
-  setTestAppFilter(m.app);
+  setTestAppFilter(canonicalId);
   const verifyNote = resolvedCount ? ` · ${resolvedCount} issue${resolvedCount!==1?'s':''} → Testing` : '';
   toast(`✓ Imported v${m.version} — ${(m.tests||[]).length + verifyTests.length} test(s) ready${verifyNote}`);
   // TI-009: await sync so cloud is up to date before any pull can fire
@@ -2082,11 +2251,31 @@ async function syncPull() {
       if (!seenIssueKeys.has(issue.id)) { await upsertRow('issue_'+issue.id, issue); pushedUp++; }
     }
 
+    // TI-010: a pull can re-introduce old fragmented app entries from
+    // cloud rows that predate this fix — consolidate again here, and
+    // if anything merged, tombstone the removed aliases and push the
+    // merged cards up so every device converges on one card per app.
+    const mig = migrateAppRegistry();
+    let registryCleanup = 0;
+    if (mig.changed) {
+      for (const id of mig.deletedAppIds) {
+        try { await tombstoneRow('app_'+id, { id }); registryCleanup++; }
+        catch(err) { addSyncLog('Registry cleanup tombstone failed: '+err.message,'err'); }
+      }
+      for (const id of mig.touchedIds) {
+        if (state.apps[id]) {
+          try { await upsertRow('app_'+id, state.apps[id]); }
+          catch(err) { addSyncLog('Registry cleanup upsert failed: '+err.message,'err'); }
+        }
+      }
+      try { await upsertRow('__meta__', { nextSeq: state.nextSeq }); } catch(err) {}
+    }
+
     saveState();
     renderTab(currentTab);
     refreshStats();
     setSyncState('synced');
-    const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', deletedLocally ? `${deletedLocally} tombstones applied` : ''].filter(Boolean).join(', ');
+    const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', deletedLocally ? `${deletedLocally} tombstones applied` : '', registryCleanup ? `${registryCleanup} duplicate app(s) consolidated` : ''].filter(Boolean).join(', ');
     addSyncLog(`Pull complete — ${parts}`,'ok');
   } catch(err) { setSyncState('error'); addSyncLog('Pull failed: '+err.message,'err'); }
 }
@@ -2157,6 +2346,10 @@ function toast(msg) {
 // BOOT
 // ══════════════════════════════════════════════════════════════════
 loadState();
+// TI-010: consolidate any fragmented app entries already sitting in
+// local storage before first render (cloud-synced cleanup happens
+// again after the first pull — see syncPull()).
+if (migrateAppRegistry().changed) saveState();
 showTab('tests');
 refreshStats();
 renderStorageInfo();
