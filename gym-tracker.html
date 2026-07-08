@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.17</title>
+<title>Gym Tracker v2.18</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -224,7 +224,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.17</div></span>
+      <span>Gym Tracker<div class="ver">v2.18</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -466,6 +466,7 @@
       In the Shortcuts app: long-press your shortcut → Share → Copy iCloud Link (or "Copy"), then paste it here. Useful if the name-based launch above doesn't behave the way you expect.
     </p>
     <button class="btn btn-secondary btn-block" style="margin-top:10px" onclick="sendWeightToHealthShortcut()">📋 Copy &amp; Run Shortcut</button>
+    <a id="shortcutFallbackLink" href="#" style="display:none;text-align:center;font-size:12px;color:var(--accent);margin-top:8px;text-decoration:underline">Tap here to open Shortcuts manually</a>
   </div>
 </div>
 
@@ -508,7 +509,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.17';
+const VERSION = '2.18';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -2309,6 +2310,7 @@ function openWeightModal(id) {
   }
   document.getElementById('healthShortcutName').value = localStorage.getItem('gym_health_shortcut_name') || '';
   document.getElementById('healthShortcutUrl').value = localStorage.getItem('gym_health_shortcut_url') || '';
+  document.getElementById('shortcutFallbackLink').style.display = 'none';
   openModal('modalWeight');
 }
 function saveWeightEntry() {
@@ -2410,16 +2412,37 @@ function sendWeightToHealthShortcut() {
   localStorage.setItem('gym_health_shortcut_name', name);
   localStorage.setItem('gym_health_shortcut_url', customUrl);
   const launchUrl = customUrl || ('shortcuts://run-shortcut?name='+encodeURIComponent(name));
-  if (!navigator.clipboard || !navigator.clipboard.writeText) {
-    toast('Clipboard not available here — copy manually: '+weightKg);
-    return;
+
+  // Copy in the background — don't gate the navigation on this promise
+  // resolving. By the time an async .then() fires, iOS may no longer treat
+  // the tap as "live" user activation and will silently drop a custom URL
+  // scheme navigation attempted from inside it — no error, it just doesn't
+  // switch apps, which matches exactly what was being seen.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(String(weightKg)).catch(()=>{});
   }
-  navigator.clipboard.writeText(String(weightKg)).then(() => {
-    toast('Copied '+weightKg+'kg — launching Shortcut…');
-    window.location.href = launchUrl;
-  }).catch(() => {
-    toast('Could not copy — copy manually: '+weightKg);
-  });
+
+  // A real <a> click, fired synchronously within this same tap, is honoured
+  // as user-initiated far more reliably than a location.href assignment —
+  // especially for a home-screen standalone app, which iOS treats more
+  // strictly than an ordinary Safari tab for this kind of app handoff.
+  const a = document.createElement('a');
+  a.href = launchUrl;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  // Still show a manual, guaranteed fallback: if the automatic handoff
+  // above is silently blocked (which does happen, unpredictably, across
+  // iOS versions and standalone-vs-Safari-tab), a direct tap on a visible
+  // link is the most reliable way there is to trigger a custom scheme —
+  // this doesn't rely on any of the timing/context quirks above.
+  const fallback = document.getElementById('shortcutFallbackLink');
+  if (fallback) {
+    fallback.href = launchUrl;
+    fallback.style.display = 'block';
+  }
+  toast('Copied '+weightKg+'kg — if Shortcuts didn\'t open, tap the link below');
 }
 
 // ═══════════════════════════════════════════════════════════════════
