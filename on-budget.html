@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.7</title>
+<title>On Budget v3.8</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -287,6 +287,12 @@
 
   .filter-row{display:flex;gap:5px}
   .filter-pill{padding:4px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--ink2);font-size:10px;font-weight:600;font-family:inherit;cursor:pointer;transition:all 0.15s;-webkit-tap-highlight-color:transparent;white-space:nowrap}
+
+  .quick-label-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .quick-label-chip{padding:6px 12px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);color:var(--ink2);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:all 0.15s;-webkit-tap-highlight-color:transparent;white-space:nowrap}
+  .quick-label-chip:active{background:var(--accent-dim);border-color:var(--accent-border);color:var(--accent)}
+  .manage-label-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px 5px 12px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);color:var(--ink2);font-size:12px;font-weight:600;margin:0 6px 6px 0}
+  .manage-label-chip button{border:none;background:none;color:var(--ink3);font-size:13px;cursor:pointer;padding:0 2px;line-height:1}
   .filter-pill.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
 
   .ledger-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
@@ -336,7 +342,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.7</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.8</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -414,6 +420,11 @@
       </div>
     </div>
     <div class="settings-block">
+      <h3>Shop list</h3>
+      <div class="settings-hint" style="margin-bottom:8px">Builds itself as you add labels when logging a transaction. Remove any you don't want showing as quick picks.</div>
+      <div id="manage-labels-list"></div>
+    </div>
+    <div class="settings-block">
       <h3>Bills account</h3>
       <div class="field-group">
         <label class="field-label">Cleared balance</label>
@@ -481,6 +492,7 @@
 
     <div class="field-group">
       <label class="field-label">Label <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional)</span></label>
+      <div class="quick-label-row" id="quick-label-row" style="display:none"></div>
       <input type="text" id="m-label" placeholder="e.g. Tesco, Petrol, Direct debit">
     </div>
 
@@ -653,7 +665,7 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.7
+// On Budget v3.8
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -734,6 +746,15 @@
 // 100%. Old transactions (all implicitly outgoing) are migrated with a
 // backfilled type:'outgoing' on load/import/pull, so pot calculations
 // on existing data are unaffected by this change.
+// v3.8: added a self-building quick-pick shop list (ON--016) for faster
+// Food & Travel entry. Picking a chip fills the label instantly; typing
+// a new one and saving adds it automatically — no separate "add to
+// list" step. New ftLabels{items,updated_at} synced via its own record
+// (__ft_labels__), but merged as a UNION on pull rather than last-write-
+// wins — two devices can legitimately add different shops between
+// syncs, and a whole-blob replace would silently drop whichever one
+// didn't sync last. Settings has a prune-only management list (the
+// list builds itself; Settings is just for removing unwanted entries).
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -760,6 +781,10 @@ let _breakdown = false;  // session state for collapsible headroom breakdown
 // bills.tx: actual ledger entries — either ad-hoc (source:'adhoc') or a cleared/skipped
 //           recurring occurrence (source:'recurring', linked back via recurringId+schedDate)
 let bills = { settings:{ clearedBalance:0, forecastMode:'next_income' }, recurring:[], tx:[], overrides:[] };
+
+// Quick-pick labels for faster Food & Travel entry — a small
+// self-building list of shop/label names. items: [{name, count, lastUsed}]
+let ftLabels = { items:[], updated_at:null };
 
 // Backup-nudge tracking — see save(trackChange) below. Not part of
 // settings/months/bills; it's app housekeeping, not user data.
@@ -871,6 +896,11 @@ async function syncUpsertSettings() {
   try { setSyncState('syncing'); await upsertRow('__settings__', settings); setSyncState('synced'); addSyncLog('Food & Travel settings synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Settings sync failed: '+err.message,'err'); }
 }
+async function syncUpsertFtLabels() {
+  if (!_sbToken) return;
+  try { setSyncState('syncing'); await upsertRow('__ft_labels__', ftLabels); setSyncState('synced'); addSyncLog('Shop list synced','ok'); }
+  catch(err) { setSyncState('error'); addSyncLog('Shop list sync failed: '+err.message,'err'); }
+}
 async function syncUpsertBillsSettings() {
   if (!_sbToken) return;
   try { setSyncState('syncing'); await upsertRow('__bills_settings__', bills.settings); setSyncState('synced'); addSyncLog('Bills settings synced','ok'); }
@@ -931,6 +961,7 @@ async function syncPush() {
   try {
     await upsertRow('__settings__', settings);
     await upsertRow('__bills_settings__', bills.settings);
+    await upsertRow('__ft_labels__', ftLabels);
     let count = 0;
     for (const mk of Object.keys(months)) {
       const m = months[mk];
@@ -987,6 +1018,33 @@ async function syncPull() {
       if ((remote.updated_at||'') >= (bills.settings.updated_at||'')) {
         bills.settings = { clearedBalance:0, forecastMode:'next_income', ...remote };
         addSyncLog('Bills settings merged from cloud','ok');
+      }
+    }
+
+    // Shop list is a UNION merge, not last-write-wins — unlike a single
+    // settings value, two devices can legitimately add different shop
+    // names between syncs, and a whole-blob replace would silently drop
+    // whichever device's additions didn't happen to sync last.
+    if (byKey['__ft_labels__']) {
+      const remote = byKey['__ft_labels__'].data;
+      const remoteItems = remote.items || [];
+      const merged = [...ftLabels.items];
+      remoteItems.forEach(ri => {
+        const idx = merged.findIndex(li=>li.name.toLowerCase()===ri.name.toLowerCase());
+        if (idx===-1) merged.push(ri);
+        else {
+          merged[idx] = {
+            name: merged[idx].name,
+            count: Math.max(merged[idx].count||0, ri.count||0),
+            lastUsed: (merged[idx].lastUsed||'') > (ri.lastUsed||'') ? merged[idx].lastUsed : ri.lastUsed
+          };
+        }
+      });
+      const changed = merged.length !== ftLabels.items.length || JSON.stringify(merged)!==JSON.stringify(ftLabels.items);
+      ftLabels = { items: merged, updated_at: new Date().toISOString() };
+      if (changed) {
+        addSyncLog('Shop list merged from cloud','ok');
+        await upsertRow('__ft_labels__', ftLabels);
       }
     }
 
@@ -1061,6 +1119,7 @@ async function syncPull() {
     let pushedUp = 0;
     if (!seenKeys.has('__settings__')) { await upsertRow('__settings__', settings); pushedUp++; }
     if (!seenKeys.has('__bills_settings__')) { await upsertRow('__bills_settings__', bills.settings); pushedUp++; }
+    if (!seenKeys.has('__ft_labels__') && ftLabels.items.length) { await upsertRow('__ft_labels__', ftLabels); pushedUp++; }
     for (const mk of Object.keys(months)) {
       if (!seenKeys.has('month_'+mk)) { await upsertRow('month_'+mk, { monthKey:mk, startBalance:months[mk].startBalance, updated_at:months[mk].updated_at||new Date().toISOString() }); pushedUp++; }
       for (const t of (months[mk].transactions||[])) {
@@ -1146,6 +1205,7 @@ function load() {
       };
     }
     if (parsed.meta) meta = { changesSinceBackup:0, lastBackupAt:null, ...parsed.meta };
+    if (d.ftLabels)  ftLabels = { items: d.ftLabels.items||[], updated_at: d.ftLabels.updated_at||null };
   } catch(e) {}
   migrateCategories();
   backfillSyncTimestamps();
@@ -1187,6 +1247,7 @@ function backfillSyncTimestamps() {
   bills.recurring.forEach(r => { if (!r.updated_at) r.updated_at = nowIso(); });
   bills.tx.forEach(t => { if (!t.updated_at) t.updated_at = tsFrom(t); });
   (bills.overrides||[]).forEach(o => { if (!o.updated_at) o.updated_at = nowIso(); });
+  if (!ftLabels.updated_at && ftLabels.items.length) ftLabels.updated_at = nowIso();
 }
 
 function save(trackChange) {
@@ -1194,14 +1255,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.7', lastUpdated:new Date().toISOString(),
-    data:{ settings, months, bills }, meta
+    version:'3.8', lastUpdated:new Date().toISOString(),
+    data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.7', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.8', lastUpdated:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1225,6 +1286,7 @@ function importJSON(e) {
       bills = d.bills
         ? { settings:{ clearedBalance:0, forecastMode:'next_income', ...d.bills.settings }, recurring:d.bills.recurring||[], tx:d.bills.tx||[], overrides:d.bills.overrides||[] }
         : { settings:{ clearedBalance:0, forecastMode:'next_income' }, recurring:[], tx:[], overrides:[] };
+      ftLabels = d.ftLabels ? { items:d.ftLabels.items||[], updated_at:d.ftLabels.updated_at||null } : { items:[], updated_at:null };
       // A fresh import means the person just handled a backup file, so
       // there's nothing new to nag about yet.
       meta = { changesSinceBackup:0, lastBackupAt:new Date().toISOString() };
@@ -1709,6 +1771,7 @@ function openSheet() {
   document.getElementById('m-date').value  = '';
   document.getElementById('date-field').classList.remove('shown');
   document.getElementById('date-toggle-btn').textContent = 'Not today?';
+  renderQuickLabels();
   document.getElementById('overlay').classList.add('open');
   setTimeout(()=>document.getElementById('m-amt').focus(), 280);
 }
@@ -1739,6 +1802,54 @@ function toggleDate() {
   document.getElementById('date-toggle-btn').textContent = _dateShown ? 'Use today' : 'Not today?';
 }
 
+// ── Quick-pick shop/label list ────────────────────────────────────
+// Self-building: picking from the list is instant; typing a new label
+// and saving adds it automatically — no separate "manage" step needed
+// to build the list up, only to prune it (done in Settings).
+function renderQuickLabels() {
+  const el = document.getElementById('quick-label-row');
+  if (!el) return;
+  const sorted = [...ftLabels.items].sort((a,b)=>(b.lastUsed||'').localeCompare(a.lastUsed||'')).slice(0,10);
+  if (!sorted.length) { el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display = 'flex';
+  el.innerHTML = sorted.map(l=>
+    `<button type="button" class="quick-label-chip" onclick="pickQuickLabel('${l.name.replace(/'/g,"\\'")}')">${l.name}</button>`
+  ).join('');
+}
+function pickQuickLabel(name) {
+  document.getElementById('m-label').value = name;
+}
+function touchFtLabel(name) {
+  const norm = (name||'').trim();
+  if (!norm) return;
+  const idx = ftLabels.items.findIndex(l=>l.name.toLowerCase()===norm.toLowerCase());
+  const now = new Date().toISOString();
+  if (idx>-1) { ftLabels.items[idx].count = (ftLabels.items[idx].count||0)+1; ftLabels.items[idx].lastUsed = now; }
+  else { ftLabels.items.push({ name:norm, count:1, lastUsed:now }); }
+  ftLabels.updated_at = now;
+  syncUpsertFtLabels();
+}
+
+// Settings list management — pruning, not building; the list builds
+// itself as labels get used (see touchFtLabel above).
+function renderManageLabels() {
+  const el = document.getElementById('manage-labels-list');
+  if (!el) return;
+  const sorted = [...ftLabels.items].sort((a,b)=>a.name.localeCompare(b.name));
+  if (!sorted.length) { el.innerHTML = `<div style="font-size:12px;color:var(--ink3)">No shops saved yet — add a label when logging a transaction and it'll appear here.</div>`; return; }
+  el.innerHTML = sorted.map(l=>
+    `<span class="manage-label-chip">${l.name}<button onclick="deleteFtLabel('${l.name.replace(/'/g,"\\'")}')">✕</button></span>`
+  ).join('');
+}
+function deleteFtLabel(name) {
+  ftLabels.items = ftLabels.items.filter(l=>l.name!==name);
+  ftLabels.updated_at = new Date().toISOString();
+  save(true);
+  renderManageLabels();
+  syncUpsertFtLabels();
+  toast('Removed from shop list');
+}
+
 function saveSpend() {
   const amt = pennyValue('m-amt');
   if (isNaN(amt)||amt<=0) { toast('Enter a valid amount'); return; }
@@ -1757,6 +1868,7 @@ function saveSpend() {
     _ts: Date.now(), updated_at: new Date().toISOString()
   };
   months[k].transactions.push(entry);
+  if (label) touchFtLabel(label);
 
   save(true); closeSheet(); renderDash();
   syncUpsertTx(k, entry);
@@ -1799,6 +1911,7 @@ function populateSettings() {
   setPennyValue('s-food', settings.weeklyFood);
   document.getElementById('s-day').value  = settings.payinDay;
   document.getElementById('info-food').textContent = settings.weeklyFood;
+  renderManageLabels();
   // Week start toggle
   const wsd = settings.weekStartDay ?? 6;
   document.getElementById('ws-mon').classList.toggle('active', wsd===1);
