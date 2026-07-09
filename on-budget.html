@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.6</title>
+<title>On Budget v3.7</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -179,6 +179,7 @@
   .tx-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
   .tx-dot.weekly{background:var(--weekly)}
   .tx-dot.other{background:var(--other)}
+  .tx-dot.income{background:var(--accent)}
   .tx-body{flex:1;min-width:0}
   .tx-name{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tx-name.unlabelled{color:var(--ink2)}
@@ -335,7 +336,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.6</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.7</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -455,15 +456,20 @@
 
 </div>
 
-<!-- ══ ADD SPEND SHEET ══ -->
+<!-- ══ ADD TRANSACTION SHEET ══ -->
 <div class="overlay" id="overlay" onclick="overlayClick(event)">
   <div class="sheet">
     <div class="sheet-title">
-      Add spend
+      Add transaction
       <button class="sheet-close" onclick="closeSheet()">✕</button>
     </div>
 
-    <div class="cat-grid">
+    <div class="type-toggle">
+      <button class="type-btn sel outgoing" id="fttx-type-outgoing" onclick="pickFtType('outgoing')">↓ Outgoing</button>
+      <button class="type-btn income" id="fttx-type-income" onclick="pickFtType('income')">↑ Income</button>
+    </div>
+
+    <div class="cat-grid" id="cat-grid-wrap">
       <button class="cat-btn sel weekly" id="cat-weekly" onclick="pickCat('weekly')"><span class="ci">🛒</span>Weekly Budget</button>
       <button class="cat-btn other"       id="cat-other"  onclick="pickCat('other')"><span class="ci">📦</span>Other</button>
     </div>
@@ -486,7 +492,7 @@
       </div>
     </div>
 
-    <button class="btn btn-primary btn-full" onclick="saveSpend()">Add spend</button>
+    <button class="btn btn-primary btn-full" onclick="saveSpend()">Add transaction</button>
   </div>
 </div>
 
@@ -647,7 +653,7 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.6
+// On Budget v3.7
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -718,6 +724,16 @@
 // week. Headroom: headroom ÷ days until pay-in. Both handle the over-
 // budget/negative case (shown as "over"/"short") and are simply omitted
 // when there are 0 or fewer days left, rather than dividing by zero.
+// v3.7: added income transactions to Food & Travel (ON--015). The Add
+// sheet now has an Income/Outgoing toggle — Weekly Budget/Other category
+// only applies to outgoing (income never draws against the weekly
+// reserve, so there's nothing to categorise). Pot remaining now nets
+// income in (startBalance + income − outgoing); the pot progress bar
+// still tracks outgoing spend against the original starting balance
+// only, so it stays meaningful even when income boosts the pot above
+// 100%. Old transactions (all implicitly outgoing) are migrated with a
+// backfilled type:'outgoing' on load/import/pull, so pot calculations
+// on existing data are unaffected by this change.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1145,6 +1161,10 @@ function migrateCategories() {
     (m.transactions||[]).forEach(t => {
       if (t.category === 'food')        t.category = 'weekly';
       else if (t.category === 'travel') t.category = 'other';
+      // Every transaction before this feature existed was always a
+      // spend — default it to outgoing so the pot calc (which now nets
+      // income in) doesn't miscount old data as income for lacking a type.
+      if (!t.type) t.type = 'outgoing';
     });
   });
 }
@@ -1174,14 +1194,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.6', lastUpdated:new Date().toISOString(),
+    version:'3.7', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.6', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.7', lastUpdated:new Date().toISOString(), data:{ settings, months, bills } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1429,14 +1449,15 @@ function renderDash() {
     return;
   }
 
-  const tx      = (d.transactions||[]).filter(t=>!t._deleted);
-  const weeks   = getWeeks(last, next);
-  const reserve = calcReserve(weeks, tx);
-  const spent   = tx.reduce((s,t)=>s+(t.amount||0),0);
-  const pot     = d.startBalance - spent;
-  const headroom= pot - reserve;
-  const today   = new Date(); today.setHours(0,0,0,0);
-  const dToNext = daysBetween(today, next);
+  const tx       = (d.transactions||[]).filter(t=>!t._deleted);
+  const weeks    = getWeeks(last, next);
+  const reserve  = calcReserve(weeks, tx);
+  const spent    = tx.filter(t=>t.type!=='income').reduce((s,t)=>s+(t.amount||0),0);
+  const incomeTot= tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const pot      = d.startBalance + incomeTot - spent;
+  const headroom = pot - reserve;
+  const today    = new Date(); today.setHours(0,0,0,0);
+  const dToNext  = daysBetween(today, next);
 
   // This week's weekly-budget spend
   const curWeek = weeks.find(w=>w.isCurrent);
@@ -1493,7 +1514,7 @@ function renderDash() {
     </div>
     <div class="bar-track"><div class="bar-fill ${potBarCls}" style="width:${potPct}%"></div></div>
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);margin-top:4px">
-      <span>£${spent.toFixed(2)} spent</span>
+      <span>£${spent.toFixed(2)} spent${incomeTot>0?` · +£${incomeTot.toFixed(2)} income`:''}</span>
       <span>${potPct}% of £${d.startBalance.toFixed(2)}</span>
     </div>
   </div>`;
@@ -1596,7 +1617,7 @@ function renderDash() {
   </div>`;
 
   // ── Add button ──
-  html += `<button class="add-btn" onclick="openSheet()"><span class="add-btn-icon">+</span> Add spend</button>`;
+  html += `<button class="add-btn" onclick="openSheet()"><span class="add-btn-icon">+</span> Add transaction</button>`;
 
   // ── Transaction list ──
   const sorted = [...tx].sort((a,b)=>b.date.localeCompare(a.date)||b._ts-a._ts);
@@ -1606,17 +1627,19 @@ function renderDash() {
   } else {
     html += `<div class="tx-list">`;
     sorted.forEach(t => {
-      const catEmoji = t.category==='weekly'?'🛒':'📦';
-      const catLabel = t.category==='weekly'?'Weekly Budget':'Other';
+      const isIncome = t.type==='income';
+      const catEmoji = isIncome ? '💰' : (t.category==='weekly'?'🛒':'📦');
+      const catLabel = isIncome ? 'Income' : (t.category==='weekly'?'Weekly Budget':'Other');
+      const dotClass = isIncome ? 'income' : t.category;
       const name     = t.label||'';
       const dateFmt  = new Date(t.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
       html += `<div class="tx-row">
-        <div class="tx-dot ${t.category}"></div>
+        <div class="tx-dot ${dotClass}"></div>
         <div class="tx-body">
           <div class="tx-name${name?'':' unlabelled'}">${name||catEmoji+' '+catLabel}</div>
           <div class="tx-date">${dateFmt}</div>
         </div>
-        <div class="tx-amt">£${(t.amount||0).toFixed(2)}</div>
+        <div class="tx-amt" style="${isIncome?'color:var(--accent)':''}">${isIncome?'+':''}£${(t.amount||0).toFixed(2)}</div>
         <button class="tx-del" onclick="delTx('${k}','${t.id}')">×</button>
       </div>`;
     });
@@ -1668,17 +1691,19 @@ function delTx(mk, id) {
   const snapshot = { ...t };
   save(true); renderDash();
   syncTombstoneTx(mk, snapshot);
-  toast('Spend removed');
+  toast('Transaction removed');
 }
 
 // ── Sheet ──────────────────────────────────────────────────────
 let _cat = 'weekly';
+let _ftType = 'outgoing';
 let _dateShown = false;
 
 function openSheet() {
-  _cat = 'weekly'; _dateShown = false;
+  _cat = 'weekly'; _ftType = 'outgoing'; _dateShown = false;
   document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('sel'));
   document.getElementById('cat-weekly').classList.add('sel');
+  pickFtType('outgoing');
   setPennyValue('m-amt', null);
   document.getElementById('m-label').value = '';
   document.getElementById('m-date').value  = '';
@@ -1690,6 +1715,17 @@ function openSheet() {
 
 function closeSheet() { document.getElementById('overlay').classList.remove('open'); }
 function overlayClick(e) { if (e.target===document.getElementById('overlay')) closeSheet(); }
+
+// Category (Weekly Budget / Other) only applies to outgoing spend —
+// income doesn't draw against the weekly reserve, so there's nothing
+// to categorise. Switching to Income hides the picker entirely rather
+// than leaving a stale/meaningless category selected underneath it.
+function pickFtType(t) {
+  _ftType = t;
+  document.getElementById('fttx-type-outgoing').classList.toggle('sel', t==='outgoing');
+  document.getElementById('fttx-type-income').classList.toggle('sel', t==='income');
+  document.getElementById('cat-grid-wrap').style.display = t==='outgoing' ? 'grid' : 'none';
+}
 
 function pickCat(c) {
   _cat = c;
@@ -1709,13 +1745,14 @@ function saveSpend() {
   const rawDate = _dateShown ? document.getElementById('m-date').value : '';
   const date    = rawDate || todayIso();
   const label   = document.getElementById('m-label').value.trim() || null;
+  const isIncome = _ftType==='income';
 
   // Ensure month exists (handle case where no startBalance set yet)
   const k = curKey();
   if (!months[k]) months[k] = { startBalance:null, transactions:[] };
 
   const entry = {
-    id:uid(), date, category:_cat,
+    id:uid(), date, type:_ftType, category: isIncome?null:_cat,
     amount:Math.round(amt*100)/100, label,
     _ts: Date.now(), updated_at: new Date().toISOString()
   };
@@ -1723,8 +1760,8 @@ function saveSpend() {
 
   save(true); closeSheet(); renderDash();
   syncUpsertTx(k, entry);
-  const emoji = _cat==='weekly'?'🛒':'📦';
-  toast(`${emoji} £${amt.toFixed(2)} added ✓`);
+  const emoji = isIncome ? '💰' : (_cat==='weekly'?'🛒':'📦');
+  toast(`${emoji} £${amt.toFixed(2)} ${isIncome?'income':'spend'} added ✓`);
 }
 
 // ── History ────────────────────────────────────────────────────
@@ -1741,6 +1778,7 @@ function renderHist() {
     const tx    = (d.transactions||[]).filter(t=>!t._deleted);
     const weekly = tx.filter(t=>t.category==='weekly').reduce((s,t)=>s+(t.amount||0),0);
     const oth    = tx.filter(t=>t.category==='other').reduce((s,t)=>s+(t.amount||0),0);
+    const inc    = tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
     const tot    = weekly+oth;
     html += `<div class="hist-month">
       <div class="hist-month-header">
@@ -1749,6 +1787,7 @@ function renderHist() {
       </div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--weekly)"></div><div class="hist-label">🛒 Weekly Budget</div><div class="hist-amt">£${weekly.toFixed(2)}</div></div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--other)"></div><div class="hist-label">📦 Other</div><div class="hist-amt">£${oth.toFixed(2)}</div></div>
+      ${inc>0 ? `<div class="hist-cat-row"><div class="hist-dot" style="background:var(--accent)"></div><div class="hist-label">💰 Income</div><div class="hist-amt" style="color:var(--accent)">+£${inc.toFixed(2)}</div></div>` : ''}
     </div>`;
   });
   el.innerHTML = html;
