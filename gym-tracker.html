@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.19</title>
+<title>Gym Tracker v2.20</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -224,7 +224,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.19</div></span>
+      <span>Gym Tracker<div class="ver">v2.20</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -418,6 +418,7 @@
     <textarea id="planNotes" placeholder="Warm-up notes, focus areas…"></textarea>
 
     <div class="section-title">Exercises in this Plan</div>
+    <div id="planTimeTotal" style="font-size:12.5px;color:var(--accent);font-weight:600;margin-bottom:8px"></div>
     <div id="planItemsList"></div>
     <button class="btn btn-secondary btn-block" onclick="openExercisePicker('plan')">+ Add Exercise</button>
 
@@ -496,7 +497,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.19';
+const VERSION = '2.20';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -584,6 +585,7 @@ function migratePlans(env) {
   env.data.plans.forEach(p => {
     (p.items||[]).forEach(item => {
       if (!item.trackType) item.trackType = item.type || (exById[item.exerciseId] ? exById[item.exerciseId].type : 'reps');
+      if (item.estimatedMinutes === undefined) item.estimatedMinutes = 0;
     });
   });
 }
@@ -984,10 +986,12 @@ function renderHome() {
       const done = sessions.filter(s=>s.planId===p.id);
       const last = done[0];
       const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
+      const timeTotal = planTimeTotal(p.items);
+      const timeStr = timeTotal>0 ? ' · ⏱ ~'+timeTotal+' min' : '';
       return `<div class="list-item">
         <div class="li-top"><div>
           <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
-          <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
+          <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
         </div></div>
         <div class="li-actions"><button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button></div>
       </div>`;
@@ -1328,10 +1332,12 @@ function renderPlanList() {
     const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     const last = done[0];
     const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
+    const timeTotal = planTimeTotal(p.items);
+    const timeStr = timeTotal>0 ? ' · ⏱ ~'+timeTotal+' min' : '';
     return `<div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
-        <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
+        <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button>
@@ -1363,6 +1369,7 @@ function openPlanEditor(id) {
 
 function renderPlanItemsList() {
   const el = document.getElementById('planItemsList');
+  renderPlanTimeTotal();
   if (!_planItems.length) { el.innerHTML = '<p style="font-size:12px;color:var(--ink2);padding:6px 0">No exercises added yet.</p>'; return; }
   el.innerHTML = _planItems.map((item, idx) => {
     const type = item.trackType || exerciseType(item.exerciseId);
@@ -1409,9 +1416,27 @@ function renderPlanItemsList() {
           <button class="pib-remove" onclick="removePlanItem(${idx})">✕</button>
         </span>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
+        <label style="margin:0;font-size:10.5px;white-space:nowrap">Est. time</label>
+        <input type="number" min="0" step="1" placeholder="min" style="max-width:70px" value="${item.estimatedMinutes||''}" oninput="updatePlanItemEstimate(${idx},this.value)">
+        <span style="font-size:10.5px;color:var(--ink3)">min — set by you, not auto-filled</span>
+      </div>
       <div class="set-builder">${setsHtml}<button class="add-set-mini" onclick="addPlanSet(${idx})">+ Add Set</button></div>
     </div>`;
   }).join('');
+}
+function updatePlanItemEstimate(idx, val) {
+  _planItems[idx].estimatedMinutes = val===''?0:Number(val);
+  renderPlanTimeTotal();
+}
+function planTimeTotal(items) {
+  return items.reduce((sum,pi)=>sum+(pi.estimatedMinutes||0),0);
+}
+function renderPlanTimeTotal() {
+  const el = document.getElementById('planTimeTotal');
+  if (!el) return;
+  const total = planTimeTotal(_planItems);
+  el.textContent = total>0 ? '⏱ Estimated total: '+total+' min' : '⏱ No time estimated yet — add minutes per exercise below';
 }
 function movePlanItem(idx, dir) {
   const newIdx = idx + dir;
@@ -1458,7 +1483,11 @@ function renderExercisePickerList() {
 function addExerciseToPlanItems(exerciseId) {
   const type = exerciseType(exerciseId);
   const defaultSets = type==='distance' ? [{metres:1000,seconds:300,weight:0}] : type==='time' ? [{seconds:30},{seconds:30},{seconds:30}] : [{reps:10,weight:0},{reps:10,weight:0},{reps:10,weight:0}];
-  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultSets });
+  // GYM-024: estimatedMinutes always starts at 0/unset regardless of type —
+  // even for time/distance exercises that already have a tracked duration,
+  // that's workout data, not a "how long does this realistically take"
+  // estimate, and the two shouldn't be conflated.
+  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultSets, estimatedMinutes: 0 });
   closeModal('modalExercisePicker');
   renderPlanItemsList();
 }
