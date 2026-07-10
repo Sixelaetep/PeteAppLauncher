@@ -381,7 +381,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v4.8</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v4.9</span></h1>
     <div class="gat-sync-badge" id="gatSyncBadge" style="pointer-events:none;user-select:none"><div class="gat-sync-dot" id="gatSyncDot"></div><span id="gatSyncText"></span></div>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Sync">💾</button>
@@ -1039,7 +1039,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v4.8</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v4.9</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -1599,7 +1599,13 @@ function saveTrip(existingId){
   // Auto-generate days if date range changed or new
   if(isNew||(prevSd!==sd||prevEd!==ed)){
     const added=generateDays(t);
-    showToast(isNew?`Trip added · ${added} day${added!==1?'s':''} added`:'Trip updated ✓');
+    if(added===-1) return; // user cancelled removal of content days — abort save
+    const removed=(prevSd&&prevEd)?
+      // count how many original days fell outside the new range
+      (t._prevDayCount||0) : 0;
+    showToast(isNew
+      ?`Trip added · ${added} day${added!==1?'s':''} added`
+      :'Trip updated ✓');
   } else {
     showToast('Trip updated ✓');
   }
@@ -1609,17 +1615,46 @@ function saveTrip(existingId){
   else{ _view='tripDetail'; _curTripId=t.id; openTripDetail(t.id,'itinerary'); }
 }
 
+// Returns true if a day has any real (non-placeholder) content worth warning about
+function dayHasContent(day){
+  if(day.notes&&day.notes.trim()) return true;
+  return (day.items||[]).some(it=>!it._placeholder);
+}
+
 function generateDays(trip){
   const existing=trip.days||[];
-  const dates=new Set(existing.map(d=>d.date));
-  let num=existing.length?Math.max(...existing.map(d=>d.dayNumber||1))+1:1;
+
+  // ── Step 1: Remove days outside the new date range ───────────────
+  const inRange=existing.filter(d=>d.date>=trip.startDate&&d.date<=trip.endDate);
+  const removed=existing.filter(d=>d.date<trip.startDate||d.date>trip.endDate);
+
+  // Warn if any removed days have real content (items/notes)
+  const contentDays=removed.filter(dayHasContent);
+  if(contentDays.length){
+    const dateList=contentDays.map(d=>fmtDateShort(d.date)).join(', ');
+    const ok=confirm(
+      `Shortening this trip will remove ${removed.length} day${removed.length!==1?'s':''}, `+
+      `including ${contentDays.length} with saved content (${dateList}).
+
+Remove these days?`
+    );
+    if(!ok){
+      // User cancelled — restore original days and abort: caller checks return value
+      trip.days=existing;
+      return -1; // sentinel: caller should abort save
+    }
+  }
+
+  // ── Step 2: Add new days for dates not yet present ───────────────
+  const dates=new Set(inRange.map(d=>d.date));
+  // Renumber cleanly from 1 after pruning
   const cur=new Date(trip.startDate+'T00:00:00');
   const end=new Date(trip.endDate+'T00:00:00');
   let added=0;
   while(cur<=end){
     const ds=localDateStr(cur);
     if(!dates.has(ds)){
-      existing.push({id:genId(),dayNumber:num++,date:ds,notes:'',items:[
+      inRange.push({id:genId(),date:ds,notes:'',items:[
         {id:genId(),type:'food',subtype:'Breakfast',name:'',_placeholder:true,cost:0,costActual:null,completed:false,review:null,order:0},
         {id:genId(),type:'food',subtype:'Lunch',name:'',_placeholder:true,cost:0,costActual:null,completed:false,review:null,order:1},
         {id:genId(),type:'food',subtype:'Dinner',name:'',_placeholder:true,cost:0,costActual:null,completed:false,review:null,order:2},
@@ -1628,7 +1663,11 @@ function generateDays(trip){
     }
     cur.setDate(cur.getDate()+1);
   }
-  trip.days=existing.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+
+  // ── Step 3: Sort and renumber sequentially ────────────────────────
+  inRange.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  inRange.forEach((d,i)=>{ d.dayNumber=i+1; });
+  trip.days=inRange;
   return added;
 }
 
