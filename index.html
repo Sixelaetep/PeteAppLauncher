@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.4</title>
+<title>P Apps v10.5</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -494,7 +494,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.4</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.5</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -959,10 +959,10 @@ function toggleTheme() {
   broadcastTheme();
 }
 
-// Refresh launcher card stats when gig/trip or gym data changes inside an iframe
+// Refresh launcher card stats when gig/trip, gym or on-budget data changes
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return; // ── origin guard ──
-  if (e.data && (e.data.type === 'GAT_DATA_UPDATED' || e.data.type === 'GYM_DATA_UPDATED')) {
+  if (e.data && (e.data.type === 'GAT_DATA_UPDATED' || e.data.type === 'GYM_DATA_UPDATED' || e.data.type === 'OB_DATA_UPDATED')) {
     refreshCardStats();
   }
 });
@@ -1678,7 +1678,7 @@ function statOnBudget() {
     const parsed = JSON.parse(raw);
     const d = parsed.data || parsed;
 
-    const DEFAULT_SETTINGS = { weeklyFood: 125, monthlyPot: 700, payinDay: 28, weekStartDay: 6 };
+    const DEFAULT_SETTINGS = { weeklyFood: 125, monthlyTravel: 150, monthlyPot: 700, payinDay: 28, weekStartDay: 6 };
     const settings = { ...DEFAULT_SETTINGS, ...(d.settings || {}) };
     const months   = d.months || {};
     const bills    = d.bills  || { settings: { clearedBalance: 0 }, recurring: [], tx: [], overrides: [] };
@@ -1759,41 +1759,38 @@ function statOnBudget() {
       return weeks;
     }
 
-    // calcReserve mirrors app exactly — deducts weekly-budget spend per week.
-    // v9.1 fix: was still filtering on the old 'food' category name. On
-    // Budget v2.8 renamed food→weekly (PAD-001) — this mirror was never
-    // updated, so it always saw £0 spent against every week's reserve,
-    // overstating the reserve and understating headroom on this card.
+    // calcReserve — exact port of app v3.13+: returns { food, travel, travelSpent, total }
+    // travel reserve = remaining monthly travel budget (monthlyTravel - travelSpent, floored at 0)
     function calcReserve(weeks, tx) {
-      return weeks.reduce((tot, w) => {
+      const food = weeks.reduce((tot, w) => {
         if (w.isPast) return tot;
         const ws = obIso(w.start), we = obIso(w.end);
         const spent = tx.filter(t=>t.category==='weekly'&&t.date>=ws&&t.date<=we&&!t._deleted)
                         .reduce((s,t)=>s+(t.amount||0),0);
         return tot + Math.max(0, w.budget - spent);
       }, 0);
+      const travelSpent = tx.filter(t=>t.category==='travel'&&!t._deleted).reduce((s,t)=>s+(t.amount||0),0);
+      const travel = Math.max(0, (settings.monthlyTravel||0) - travelSpent);
+      return { food, travel, travelSpent, total: food + travel };
     }
 
-    // ── Food pot section ──────────────────────────────────────────
+    // ── Food & Travel pot section ──────────────────────────────────
     let foodHtml = '';
     if (!monthData || monthData.startBalance === null) {
       foodHtml = `<div style="color:var(--ink3);font-size:12px">No data this month · Pay-in ${payinStr} · ${daysToNext}d away</div>`;
     } else {
       const startBalance = monthData.startBalance;
       const txs = (monthData.transactions || []).filter(t => !t._deleted);
-      // App formula (renderDash line 1517-1519): spent excludes income txs;
-      // income is added back to pot separately. Fixes PET-034 where income
-      // transactions were being subtracted as if they were spends.
       const totalSpent  = txs.filter(t => t.type !== 'income').reduce((s,t) => s+(t.amount||0), 0);
       const incomeTot   = txs.filter(t => t.type === 'income').reduce((s,t) => s+(t.amount||0), 0);
 
-      const weeks   = getWeeks(lastPayin, nextPayin);
-      const reserve = calcReserve(weeks, txs);
-      const pot     = startBalance + incomeTot - totalSpent;
-      const headroom = pot - reserve;
+      const weeks      = getWeeks(lastPayin, nextPayin);
+      const reserveBd  = calcReserve(weeks, txs);
+      const reserve    = reserveBd.total;
+      const pot        = startBalance + incomeTot - totalSpent;
+      const headroom   = pot - reserve;
 
-      // This week's weekly-budget spend, from weeks array (matches app curWeek lookup)
-      // v9.1 fix: was filtering 'food' — app renamed this category to 'weekly' in v2.8.
+      // This week food spend
       const curWeek = weeks.find(w => w.isCurrent);
       const wFoodBudget = curWeek?.budget || settings.weeklyFood;
       const wFood = curWeek ? txs.filter(t => {
@@ -1802,11 +1799,18 @@ function statOnBudget() {
       }).reduce((s,t)=>s+(t.amount||0),0) : 0;
       const wFoodLeft = Math.max(0, wFoodBudget - wFood);
 
-      const headFmt  = Math.abs(headroom).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
-      const potFmt   = pot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
+      // Travel spend this month
+      const mTravelBudget = settings.monthlyTravel || 0;
+      const mTravelLeft   = Math.max(0, mTravelBudget - reserveBd.travelSpent);
+
+      const headFmt    = Math.abs(headroom).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const potFmt     = pot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
       const headColour = headroom >= 0 ? '#3fb950' : '#f87171';
       const headPct    = startBalance > 0 ? Math.min(100, Math.max(0, Math.round((pot / startBalance) * 100))) : 0;
       const barColour  = headroom < 0 ? '#f87171' : headroom < reserve*0.15 ? '#f59e0b' : '#3fb950';
+      const travelLine = mTravelBudget > 0
+        ? `<span style="color:var(--ink3)"> · ✈️ £${mTravelLeft.toFixed(0)} travel left</span>`
+        : '';
 
       foodHtml = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
@@ -1818,7 +1822,7 @@ function statOnBudget() {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:baseline">
           <span style="font-size:12px;font-weight:700;color:${headColour}">${headroom>=0?'£'+headFmt+' headroom':'£'+headFmt+' deficit'}</span>
-          <span style="font-size:10px;color:var(--ink3)">£${wFoodLeft.toFixed(0)} left this week · pay-in ${payinStr} ${daysToNext}d</span>
+          <span style="font-size:10px;color:var(--ink3)">£${wFoodLeft.toFixed(0)} food · pay-in ${payinStr} ${daysToNext}d${travelLine}</span>
         </div>`;
     }
 
