@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.10</title>
+<title>On Budget v3.11</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -149,6 +149,14 @@
   .bar-ok{background:var(--accent)}
   .bar-amber{background:var(--amber)}
   .bar-warn{background:var(--red)}
+
+  .food-week-row{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .food-week-label{font-size:10px;color:var(--ink3);width:42px;flex-shrink:0}
+  .food-week-row.current .food-week-label{color:var(--ink);font-weight:700}
+  .food-week-row .bar-track{flex:1;margin-top:0}
+  .food-week-row.future .bar-track{opacity:0.5}
+  .food-week-amt{font-size:10px;color:var(--ink2);width:60px;text-align:right;flex-shrink:0}
+  .food-week-row.future .food-week-amt{color:var(--ink3)}
 
   /* ── Small stat cards ── */
   .cards-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
@@ -344,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.10</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.11</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -422,6 +430,7 @@
         </div>
         <div class="settings-hint">Affects which week spend is counted against.</div>
       </div>
+      <div class="info-card" id="next-month-projection" style="margin-top:4px"></div>
       <div class="btn-row">
         <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save settings</button>
       </div>
@@ -673,7 +682,7 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.10
+// On Budget v3.11
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -789,6 +798,21 @@
 // rewriting 'travel' to 'other' on every load/import/pull, which would
 // have silently destroyed every new Travel entry the moment this
 // shipped; only the old 'food' key is migrated now.
+// v3.11: dashboard redesign (ON--019). Pot remaining and Headroom now
+// share a row (compact 2-col) instead of each being full-width, to make
+// room for: Food is now full-width and shows a bar for EVERY week of the
+// month, not just this one — past/current weeks green (within budget)
+// or red (over, capped at 100% width), future weeks empty with the
+// budget target as the label rather than "£0 spent" (getWeeks already
+// pro-rates partial weeks correctly, reused as-is). Travel + Other now
+// share a row. Settings gained a live "next month's projected headroom"
+// preview under the Budget fields — recalculates from whatever's
+// currently typed (even unsaved) using the same week/pro-ration logic
+// via a new projectNextMonthHeadroom(), so a partial first/final week
+// in next month's cycle is still costed by daily rate, not assumed to
+// be a full week. getWeeks() gained an optional weeklyFood override
+// parameter so this preview never has to mutate global settings to
+// compute with unsaved form values.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1295,14 +1319,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.10', lastUpdated:new Date().toISOString(),
+    version:'3.11', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.10', lastUpdated:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.11', lastUpdated:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1365,6 +1389,25 @@ function getBoundaries() {
   return { last:payinDate(py,pm,pd), next:thisP };
 }
 
+// Projects next month's headroom from whatever pot/food/travel values are
+// passed in — deliberately NOT read from `settings`, so the Settings tab
+// can preview unsaved form values live as the person types, before they
+// tap Save. Full weekly budgets count here (not "remaining"), since this
+// is a future cycle where nothing's been spent yet; partial first/final
+// weeks still pro-rate correctly via getWeeks' own day-rate logic.
+function projectNextMonthHeadroom(pot, weeklyFood, monthlyTravel) {
+  const { next: curNext } = getBoundaries();
+  const last = curNext; // the upcoming cycle starts where the current one ends
+  const nm = last.getMonth()===11?0:last.getMonth()+1;
+  const ny = last.getMonth()===11?last.getFullYear()+1:last.getFullYear();
+  const next = payinDate(ny, nm, settings.payinDay);
+  const weeks = getWeeks(last, next, weeklyFood);
+  const foodBudget = weeks.reduce((s,w)=>s+w.budget, 0);
+  const travelBudget = monthlyTravel||0;
+  const headroom = pot - foodBudget - travelBudget;
+  return { foodBudget, travelBudget, headroom, weeksCount: weeks.length, cycleStart:last, cycleEnd:next };
+}
+
 // Returns start of the week containing date, respecting weekStartDay (0=Sun, 1=Mon, 6=Sat)
 function weekAnchor(date) {
   const d   = new Date(date); d.setHours(0,0,0,0);
@@ -1396,9 +1439,10 @@ function daysBetween(a,b) { return Math.round((b-a)/86400000); }
 function todayIso() { return iso(new Date()); }
 
 // ── Budget weeks ───────────────────────────────────────────────
-function getWeeks(last, next) {
+function getWeeks(last, next, weeklyFoodOverride) {
   const today  = new Date(); today.setHours(0,0,0,0);
-  const daily  = settings.weeklyFood / 7;
+  const weeklyFood = weeklyFoodOverride ?? settings.weeklyFood;
+  const daily  = weeklyFood / 7;
   const weeks  = [];
   // The cycle's actual first day is the day AFTER pay-in, not pay-in
   // day itself — anchoring from `last` could snap backwards across
@@ -1417,7 +1461,7 @@ function getWeeks(last, next) {
       const effStart = isFirst ? cycleStart : ws;
       const effEndEx = isFinal ? next : new Date(we.getTime()+86400000);
       const days     = (isFirst || isFinal) ? daysBetween(effStart, effEndEx) : 7;
-      const budget   = (isFirst || isFinal) ? Math.round(daily*days*100)/100 : settings.weeklyFood;
+      const budget   = (isFirst || isFinal) ? Math.round(daily*days*100)/100 : weeklyFood;
       weeks.push({
         num, start:new Date(ws), end:new Date(we),
         displayStart: isFirst ? new Date(cycleStart) : new Date(ws),
@@ -1614,28 +1658,21 @@ function renderDash() {
   // Pot hero colour: green if healthy, amber if <20% left, red if negative
   const potCls = pot < 0 ? 'warn' : potPct > 80 ? 'amber' : 'ok';
 
-  // ── Pot hero ──
+  // ── Row 1: Pot + Headroom share a line ──
   html += `
-  <div class="hero-card ${potCls}" style="margin-top:10px">
-    <div class="hero-top">
-      <div>
-        <div class="hero-label">Pot remaining</div>
-        <div class="hero-value">£${pot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+  <div class="cards-grid" style="margin-top:10px">
+    <div class="hero-card ${potCls}" style="margin:0;padding:13px 14px">
+      <div class="hero-label">Pot remaining</div>
+      <div class="hero-value" style="font-size:22px">£${pot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+      <div class="bar-track" style="margin-top:8px"><div class="bar-fill ${potBarCls}" style="width:${potPct}%"></div></div>
+      <div style="font-size:9px;color:var(--ink3);margin-top:4px">
+        £${spent.toFixed(2)} spent${incomeTot>0?` · +£${incomeTot.toFixed(2)} inc`:''}<br>${daysStr} to pay-in
       </div>
-      <div class="hero-right">
-        <strong>${daysStr}</strong>
-        to pay-in<br>
-        <span style="font-size:10px;color:var(--ink3)">${mRange}</span>
-      </div>
-    </div>
-    <div class="bar-track"><div class="bar-fill ${potBarCls}" style="width:${potPct}%"></div></div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);margin-top:4px">
-      <span>£${spent.toFixed(2)} spent${incomeTot>0?` · +£${incomeTot.toFixed(2)} income`:''}</span>
-      <span>${potPct}% of £${d.startBalance.toFixed(2)}</span>
-    </div>
-  </div>`;
+    </div>`;
 
-  // ── 2-col cards: headroom + weekly budget this week ──
+  // ── Headroom card — value row + collapsible "how is this calculated"
+  //     breakdown live inside ONE card. Expanding only grows this card's
+  //     own height; it can never move the Pot card beside it. ──
   const headFmt   = (headroom<0?'-':'')+'£'+Math.abs(headroom).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
   const headSub   = headroom>=0
     ? `<span class="${headCls}">free to spend</span>`
@@ -1673,76 +1710,91 @@ function renderDash() {
       </div>`;
   });
   const bdOpen = _breakdown ? 'open' : '';
+
+  // ── Per-week Food bars — every week of the month, not just this one.
+  //    Past/current weeks: bar filled to spend vs that week's own budget
+  //    (green if within, red if over, capped at 100% width regardless).
+  //    Future weeks: empty bar, label shows the budget available (not
+  //    "£0 spent", since nothing has happened yet there's nothing to
+  //    report — the target is the useful number). ──
+  let foodWeekBars = '';
+  weeks.forEach(w => {
+    const ws = iso(w.start), we = iso(w.end);
+    const wSpent = tx.filter(t=>t.category==='weekly'&&t.date>=ws&&t.date<=we&&!t._deleted)
+                     .reduce((s,t)=>s+(t.amount||0),0);
+    const isFuture = !w.isPast && !w.isCurrent;
+    const pct = isFuture ? 0 : Math.min(100, Math.round(wSpent/w.budget*100));
+    const barCls = isFuture ? 'bar-ok' : (wSpent>w.budget ? 'bar-warn' : 'bar-ok');
+    const amtLabel = isFuture ? `£${w.budget.toFixed(2)}` : `£${wSpent.toFixed(2)}`;
+    foodWeekBars += `
+      <div class="food-week-row ${w.isCurrent?'current':''} ${isFuture?'future':''}">
+        <span class="food-week-label">Wk ${w.num}</span>
+        <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${pct}%"></div></div>
+        <span class="food-week-amt">${amtLabel}</span>
+      </div>`;
+  });
   const travelRow = `
     <div class="breakdown-row">
       <span class="breakdown-week-label">Travel budget<span style="color:var(--ink3);font-weight:400"> (this month)</span><span style="color:var(--ink3);font-size:10px;display:block;margin-top:1px">£${mTravelSpent.toFixed(2)} spent of £${mTravelBudget.toFixed(2)}</span></span>
       <span class="breakdown-week-amt">£${reserveBd.travel.toFixed(2)}</span>
     </div>`;
 
-  // ── Headroom card — value row + collapsible "how is this calculated"
-  //     breakdown live inside ONE card. Expanding only grows this card's
-  //     own height; it can never move the hero above it, and the
-  //     cards-grid below is now positioned after it (not before), so a
-  //     Pete glancing at "the dashboard card" never sees it jump. ──
-  html += `<div class="stat-card" style="margin-bottom:10px;padding-bottom:0;overflow:hidden">
-    <div style="padding:13px 14px 10px">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div>
-          <div class="stat-card-label">Headroom</div>
-          <div class="stat-card-val" style="color:var(--${headCls==='warn'?'red':headCls==='amber'?'amber':'accent'})">${headFmt}</div>
+  html += `
+    <div class="stat-card" style="margin:0;padding-bottom:0;overflow:hidden">
+      <div style="padding:13px 14px 10px">
+        <div class="stat-card-label">Headroom</div>
+        <div class="stat-card-val" style="font-size:22px;color:var(--${headCls==='warn'?'red':headCls==='amber'?'amber':'accent'})">${headFmt}</div>
+        <div class="stat-card-sub" style="margin-top:2px">${headSub}</div>
+        ${headDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${headDaily<0?'-':''}£${Math.abs(headDaily).toFixed(2)}/day${headDaily<0?' short':''} · ${headDaysLeft}d left</div>` : ''}
+      </div>
+      <button class="breakdown-toggle" onclick="toggleBreakdown()" id="bd-toggle"
+        style="padding:10px 14px;border-top:1px solid rgba(0,0,0,0.07)">
+        <span style="font-size:11px;font-weight:600;color:var(--ink2)">How calculated?</span>
+        <span class="breakdown-chevron ${bdOpen}" id="bd-chevron" style="color:var(--ink3)">▾</span>
+      </button>
+      <div class="breakdown-body ${bdOpen}" id="bd-body" style="padding:0 14px">
+        ${breakdownRows}
+        <div class="breakdown-total-row">
+          <span>Food reserve needed</span>
+          <span style="color:var(--accent)">£${reserveBd.food.toFixed(2)}</span>
         </div>
-        <div style="text-align:right">
-          <div class="stat-card-sub" style="margin-bottom:2px">${headSub}</div>
-          <div class="stat-card-sub" style="color:var(--ink3)">£${pot.toFixed(2)} − £${reserve.toFixed(2)} reserve</div>
-          ${headDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${headDaily<0?'-':''}£${Math.abs(headDaily).toFixed(2)}/day${headDaily<0?' short':''} · ${headDaysLeft} day${headDaysLeft===1?'':'s'} left</div>` : ''}
+        <div style="font-size:10px;color:var(--ink3);margin:6px 0 12px">
+          Weeks run ${wkDayName}→${wkDayEnd} · Final week pro-rated by day
         </div>
-      </div>
-    </div>
-    <button class="breakdown-toggle" onclick="toggleBreakdown()" id="bd-toggle"
-      style="padding:10px 14px;border-top:1px solid rgba(0,0,0,0.07)">
-      <span style="font-size:12px;font-weight:600;color:var(--ink2)">How is headroom calculated?</span>
-      <span class="breakdown-chevron ${bdOpen}" id="bd-chevron" style="color:var(--ink3)">▾</span>
-    </button>
-    <div class="breakdown-body ${bdOpen}" id="bd-body" style="padding:0 14px">
-      ${breakdownRows}
-      <div class="breakdown-total-row">
-        <span>Food reserve needed</span>
-        <span style="color:var(--accent)">£${reserveBd.food.toFixed(2)}</span>
-      </div>
-      <div style="font-size:10px;color:var(--ink3);margin:6px 0 12px">
-        Weeks run ${wkDayName}→${wkDayEnd} · Final week pro-rated by day
-      </div>
-      ${travelRow}
-      <div class="breakdown-total-row" style="border-top:2px solid var(--border);margin-top:8px;padding-top:8px">
-        <span>Total reserve needed</span>
-        <span style="color:var(--accent)">£${reserve.toFixed(2)}</span>
-      </div>
-      <div style="font-size:10px;color:var(--ink3);margin:6px 0 12px">
-        Headroom = pot − total reserve (food + travel)
+        ${travelRow}
+        <div class="breakdown-total-row" style="border-top:2px solid var(--border);margin-top:8px;padding-top:8px">
+          <span>Total reserve needed</span>
+          <span style="color:var(--accent)">£${reserve.toFixed(2)}</span>
+        </div>
+        <div style="font-size:10px;color:var(--ink3);margin:6px 0 12px">
+          Headroom = pot − total reserve (food + travel)
+        </div>
       </div>
     </div>
   </div>
 
+  <div class="stat-card" style="margin-bottom:10px">
+    <div class="stat-card-label">🛒 Food this week</div>
+    <div class="stat-card-val">£${wWeeklySpent.toFixed(2)}</div>
+    <div class="bar-track" style="margin:6px 0 4px"><div class="bar-fill ${wWeeklyLeft<0?'bar-warn':wWeeklyPct>80?'bar-amber':'bar-ok'}" style="width:${wWeeklyPct}%"></div></div>
+    <div class="stat-card-sub">${weeklyLeftFmt} of £${wWeeklyBudget.toFixed(0)}</div>
+    ${weeklyDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${weeklyDaily<0?'-':''}£${Math.abs(weeklyDaily).toFixed(2)}/day${weeklyDaily<0?' over':''} · ${weekDaysLeft} day${weekDaysLeft===1?'':'s'} left</div>` : ''}
+    <div style="height:1px;background:var(--border);margin:10px 0 6px"></div>
+    ${foodWeekBars}
+  </div>
+
   <div class="cards-grid">
-    <div class="stat-card">
-      <div class="stat-card-label">🛒 Food this week</div>
-      <div class="stat-card-val">£${wWeeklySpent.toFixed(2)}</div>
-      <div class="bar-track" style="margin:6px 0 4px"><div class="bar-fill ${wWeeklyLeft<0?'bar-warn':wWeeklyPct>80?'bar-amber':'bar-ok'}" style="width:${wWeeklyPct}%"></div></div>
-      <div class="stat-card-sub">${weeklyLeftFmt} of £${wWeeklyBudget.toFixed(0)}</div>
-      ${weeklyDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${weeklyDaily<0?'-':''}£${Math.abs(weeklyDaily).toFixed(2)}/day${weeklyDaily<0?' over':''} · ${weekDaysLeft} day${weekDaysLeft===1?'':'s'} left</div>` : ''}
-    </div>
     <div class="stat-card">
       <div class="stat-card-label">🚗 Travel this month</div>
       <div class="stat-card-val">£${mTravelSpent.toFixed(2)}</div>
       <div class="bar-track" style="margin:6px 0 4px"><div class="bar-fill ${mTravelLeft<0?'bar-warn':mTravelPct>80?'bar-amber':'bar-ok'}" style="width:${mTravelPct}%"></div></div>
       <div class="stat-card-sub">${travelLeftFmt} of £${mTravelBudget.toFixed(0)}</div>
     </div>
-  </div>
-
-  <div class="stat-card" style="margin-bottom:10px">
-    <div class="stat-card-label">📦 Other this month</div>
-    <div class="stat-card-val">£${mOther.toFixed(2)}</div>
-    <div class="stat-card-sub" style="color:var(--ink3)">Not budgeted — tracked only, doesn't affect headroom</div>
+    <div class="stat-card">
+      <div class="stat-card-label">📦 Other this month</div>
+      <div class="stat-card-val">£${mOther.toFixed(2)}</div>
+      <div class="stat-card-sub" style="color:var(--ink3)">Not budgeted</div>
+    </div>
   </div>`;
 
   // ── Pay-in strip ──
@@ -1909,6 +1961,29 @@ function touchFtLabel(name) {
 
 // Settings list management — pruning, not building; the list builds
 // itself as labels get used (see touchFtLabel above).
+// Live preview of next month's projected headroom, recalculated from
+// whatever's currently in the Pot/Food/Travel fields — including unsaved
+// edits — so the person can see the effect of a change before Saving.
+function updateProjectionPreview() {
+  const el = document.getElementById('next-month-projection');
+  if (!el) return;
+  const pot    = pennyValue('s-pot');
+  const food   = pennyValue('s-food');
+  const travel = pennyValue('s-travel');
+  if (isNaN(pot)||isNaN(food)||isNaN(travel)) {
+    el.innerHTML = `<strong>Next month's projected headroom</strong><br>Enter valid amounts above to see a preview.`;
+    return;
+  }
+  const proj = projectNextMonthHeadroom(pot, food, travel);
+  const cls  = proj.headroom<0 ? 'var(--red)' : 'var(--accent)';
+  const sign = proj.headroom<0 ? '-' : '';
+  el.innerHTML = `
+    <strong>Next month's projected headroom</strong><br>
+    ${fmtShort(proj.cycleStart)}–${fmtShort(new Date(proj.cycleEnd.getTime()-86400000))} (${proj.weeksCount} week${proj.weeksCount===1?'':'s'})<br>
+    £${pot.toFixed(2)} pot − £${proj.foodBudget.toFixed(2)} food − £${proj.travelBudget.toFixed(2)} travel =
+    <strong style="color:${cls}">${sign}£${Math.abs(proj.headroom).toFixed(2)}</strong>`;
+}
+
 function renderManageLabels() {
   const el = document.getElementById('manage-labels-list');
   if (!el) return;
@@ -1992,6 +2067,7 @@ function populateSettings() {
   document.getElementById('s-day').value  = settings.payinDay;
   document.getElementById('info-food').textContent = settings.weeklyFood;
   renderManageLabels();
+  updateProjectionPreview();
   // Week start toggle
   const wsd = settings.weekStartDay ?? 6;
   document.getElementById('ws-mon').classList.toggle('active', wsd===1);
@@ -2846,6 +2922,10 @@ function toast(msg) {
 
 // ── Boot ───────────────────────────────────────────────────────
 ['s-pot','s-food','s-travel','s-bills-bal','m-amt','btx-amt','rc-amt','clr-amt'].forEach(attachPennyInput);
+['s-pot','s-food','s-travel'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', updateProjectionPreview);
+});
 load();
 populateSettings();
 renderDash();
