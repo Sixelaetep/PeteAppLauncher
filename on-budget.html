@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.12</title>
+<title>On Budget v3.13</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -257,7 +257,7 @@
   .breakdown-chevron{font-size:10px;transition:transform 0.2s}
   .breakdown-chevron.open{transform:rotate(180deg)}
   .breakdown-body{overflow:hidden;max-height:0;transition:max-height 0.28s ease}
-  .breakdown-body.open{max-height:300px}
+  .breakdown-body.open{max-height:400px;overflow-y:auto}
   .breakdown-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-top:1px solid var(--divider);font-size:12px}
   .breakdown-row:first-child{margin-top:6px}
   .breakdown-week-label{color:var(--ink2);flex:1}
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.12</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.13</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -685,7 +685,7 @@
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.12
+// On Budget v3.13
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -831,6 +831,13 @@
 // explicitly (e.g. "3 full weeks (£125 each) + 1 partial week (3 days,
 // £53.57)") instead of just a week count, so the day-rate maths behind
 // a partial week is visible, not just its result.
+// v3.13: added a "By tag" breakdown to the Other card (ON--023) — Other
+// transactions this month grouped by label (case-insensitively, so
+// "Amazon"/"amazon" combine), sorted by total descending, unlabelled
+// entries bucketed together rather than lost. Collapsible, matching the
+// existing headroom breakdown pattern. Also increased the shared
+// breakdown-body max-height from 300px to 400px and made it scrollable,
+// so a month with many distinct Other tags doesn't get silently clipped.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -851,6 +858,7 @@ const DEFAULT_SETTINGS = { weeklyFood:125, monthlyTravel:150, monthlyPot:700, pa
 let settings  = { ...DEFAULT_SETTINGS };
 let months    = {};   // 'YYYY-MM' → { startBalance, transactions[] }
 let _breakdown = false;  // session state for collapsible headroom breakdown
+let _otherBreakdown = false;  // session state for collapsible Other-by-label breakdown
 
 // Bills account — separate data domain from the Food account above.
 // bills.recurring: repeating income/outgoings (definitions only, no dates stored per-occurrence)
@@ -1337,14 +1345,14 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.12', lastUpdated:new Date().toISOString(),
+    version:'3.13', lastUpdated:new Date().toISOString(),
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.12', lastUpdated:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.13', lastUpdated:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1799,8 +1807,28 @@ function renderDash() {
     ${weeklyDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${weeklyDaily<0?'-':''}£${Math.abs(weeklyDaily).toFixed(2)}/day${weeklyDaily<0?' over':''} · ${weekDaysLeft} day${weekDaysLeft===1?'':'s'} left</div>` : ''}
     <div style="height:1px;background:var(--border);margin:10px 0 6px"></div>
     ${foodWeekBars}
-  </div>
+  </div>`;
 
+  // ── Other, grouped by label — so "Other" isn't a black box. Labels
+  //     are grouped case-insensitively (same normalisation as the quick-
+  //     pick shop list) so "Amazon" and "amazon" combine into one line.
+  //     Unlabelled entries get their own bucket rather than being lost. ──
+  const otherGroupsMap = {};
+  tx.filter(t=>t.category==='other').forEach(t => {
+    const key = (t.label||'').trim().toLowerCase() || '\u0000unlabelled';
+    if (!otherGroupsMap[key]) otherGroupsMap[key] = { label: t.label ? t.label.trim() : 'Unlabelled', total:0, count:0 };
+    otherGroupsMap[key].total += t.amount||0;
+    otherGroupsMap[key].count++;
+  });
+  const otherGroups = Object.values(otherGroupsMap).sort((a,b)=>b.total-a.total);
+  const otherBdOpen = _otherBreakdown ? 'open' : '';
+  const otherRows = otherGroups.map(g => `
+    <div class="breakdown-row">
+      <span class="breakdown-week-label">${g.label}<span style="color:var(--ink3);font-size:10px;display:block;margin-top:1px">${g.count} transaction${g.count===1?'':'s'}</span></span>
+      <span class="breakdown-week-amt">£${g.total.toFixed(2)}</span>
+    </div>`).join('');
+
+  html += `
   <div class="cards-grid">
     <div class="stat-card">
       <div class="stat-card-label">🚗 Travel this month</div>
@@ -1808,10 +1836,21 @@ function renderDash() {
       <div class="bar-track" style="margin:6px 0 4px"><div class="bar-fill ${mTravelLeft<0?'bar-warn':mTravelPct>80?'bar-amber':'bar-ok'}" style="width:${mTravelPct}%"></div></div>
       <div class="stat-card-sub">${travelLeftFmt} of £${mTravelBudget.toFixed(0)}</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-card-label">📦 Other this month</div>
-      <div class="stat-card-val">£${mOther.toFixed(2)}</div>
-      <div class="stat-card-sub" style="color:var(--ink3)">Not budgeted</div>
+    <div class="stat-card" style="padding-bottom:0;overflow:hidden">
+      <div style="padding:13px 14px 10px">
+        <div class="stat-card-label">📦 Other this month</div>
+        <div class="stat-card-val">£${mOther.toFixed(2)}</div>
+        <div class="stat-card-sub" style="color:var(--ink3)">Not budgeted</div>
+      </div>
+      ${otherGroups.length ? `
+      <button class="breakdown-toggle" onclick="toggleOtherBreakdown()" id="obd-toggle"
+        style="padding:10px 14px;border-top:1px solid rgba(0,0,0,0.07)">
+        <span style="font-size:11px;font-weight:600;color:var(--ink2)">By tag</span>
+        <span class="breakdown-chevron ${otherBdOpen}" id="obd-chevron" style="color:var(--ink3)">▾</span>
+      </button>
+      <div class="breakdown-body ${otherBdOpen}" id="obd-body" style="padding:0 14px 12px">
+        ${otherRows}
+      </div>` : ''}
     </div>
   </div>`;
 
@@ -2954,6 +2993,14 @@ function toggleBreakdown() {
   const chevron = document.getElementById('bd-chevron');
   if (body)    body.classList.toggle('open', _breakdown);
   if (chevron) chevron.classList.toggle('open', _breakdown);
+}
+
+function toggleOtherBreakdown() {
+  _otherBreakdown = !_otherBreakdown;
+  const body    = document.getElementById('obd-body');
+  const chevron = document.getElementById('obd-chevron');
+  if (body)    body.classList.toggle('open', _otherBreakdown);
+  if (chevron) chevron.classList.toggle('open', _otherBreakdown);
 }
 
 // ── Backup reminder ──────────────────────────────────────────────
