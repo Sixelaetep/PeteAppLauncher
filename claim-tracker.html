@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.3</title>
+<title>Claim Tracker v2.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -225,7 +225,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.3</div>
+        <div class="ver">v2.4</div>
       </div>
     </div>
     <div class="header-actions">
@@ -493,6 +493,8 @@
 
 <div id="toast"></div>
 
+<script src="pal-config.js"></script>
+<script src="pal-sync.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -507,11 +509,13 @@
 // the mileage-rate/commute/claim-window number fields (was 14px).
 // Below 16px, iOS Safari auto-zooms the page on focus; every other
 // app in the suite already uses 16px as the floor.
-const VERSION  = '2.3';
+const VERSION  = '2.4';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
-const SB_URL   = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
-const SB_ANON  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-const SB_TABLE = 'claim_entries';   // Supabase table name
+// v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
+// (which every app is supposed to load per its own header comment, but
+// this one never did). Now loaded from window.PAL_CONFIG via pal-sync.js.
+const SB_TABLE = 'claim_entries';   // Supabase table name — still app-specific
+const _ct = window.PalSync.table(SB_TABLE);
 
 const DEFAULT_CATEGORIES = ['Train / Rail','Bus / Taxi','Parking','Meal / Subsistence','Accommodation','Other'];
 const DEFAULT_STD_TRIPS  = [
@@ -607,10 +611,7 @@ let _editDeductMode = 'full';
 let _claimedVisible = false;
 
 // ── Supabase sync state ──
-let _sbToken       = null;
-let _sbUserId      = null;
 let _syncState     = 'local';   // local | connecting | syncing | synced | error
-let _palTimer      = null;      // 3s timer for no-session banner
 let _syncLog       = [];        // [{ts, msg, type}] newest first, cap 120
 
 // ═══════════════════════════════════════════════════════════════════
@@ -621,12 +622,6 @@ function init() {
   setTodayDefaults();
   renderAll();
   setSyncState('local');
-  // Give the launcher 3 seconds to send PAL_SESSION; if not, show banner
-  _palTimer = setTimeout(() => {
-    if (!_sbToken) {
-      document.getElementById('syncBanner').classList.add('visible');
-    }
-  }, 3000);
 }
 
 function setTodayDefaults() {
@@ -644,22 +639,26 @@ function applyTheme(theme) {
 
 // ═══════════════════════════════════════════════════════════════════
 // LAUNCHER INTEGRATION & PAL_SESSION
+// v2.4: session handling (token/user_id, origin guard, no-session
+// banner timing) moved to pal-sync.js — same behaviour, shared code.
 // ═══════════════════════════════════════════════════════════════════
+window.PalSync.initSession({
+  onSession: function () {
+    document.getElementById('syncBanner').classList.remove('visible');
+    addLog('PAL_SESSION received — starting sync', 'info');
+    setSyncState('connecting');
+    syncPull();
+    reportToLauncher();
+  },
+  onNoSession: function () {
+    document.getElementById('syncBanner').classList.add('visible');
+  },
+  noSessionMs: 3000
+});
+
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme); // v1.9
-  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
-    clearTimeout(_palTimer);
-    document.getElementById('syncBanner').classList.remove('visible');
-    _sbToken  = e.data.access_token || null;
-    _sbUserId = e.data.user_id || null;
-    if (_sbToken && _sbUserId) {
-      addLog('PAL_SESSION received — starting sync', 'info');
-      setSyncState('connecting');
-      syncPull();
-    }
-    reportToLauncher();
-  }
 });
 
 function reportToLauncher() {
@@ -687,8 +686,8 @@ function setSyncState(state, label) {
   const labels = {local:'Local', connecting:'Connecting…', syncing:'Syncing…', synced:'Synced', error:'Sync error'};
   lbl.textContent = label || labels[state] || state;
   document.getElementById('drSyncStatus').textContent = label || labels[state] || state;
-  document.getElementById('drSession').textContent    = _sbToken  ? 'Token received' : 'No token';
-  document.getElementById('drUser').textContent       = _sbUserId ? _sbUserId.slice(0,8)+'…' : '—';
+  document.getElementById('drSession').textContent    = window.PalSync.hasSession() ? 'Token received' : 'No token';
+  document.getElementById('drUser').textContent       = window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '—';
 }
 
 // ── Log helpers ──
@@ -708,38 +707,23 @@ function renderLog() {
   ).join('');
 }
 
-// ── Low-level fetch ──
-async function sbFetch(path, method='GET', body=null) {
-  const headers = {
-    'apikey': SB_ANON,
-    'Authorization': 'Bearer ' + _sbToken,
-    'Content-Type': 'application/json',
-    'Prefer': method === 'PATCH' ? 'return=representation' : method === 'DELETE' ? 'return=minimal' : ''
-  };
-  const opts = {method, headers};
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(SB_URL + '/rest/v1' + path, opts);
-  return res;
-}
-
-// ── The data model: one row per entry (record_key = entry.id) ──
-// Row shape: { id (uuid PK), user_id, record_key (entry id), data (full entry JSON), updated_at }
+// ── The data model: one row per entry (record_key = entry.id), plus a
+// single '__settings__' record_key for settings. Row shape (in Supabase):
+// { id (uuid PK), user_id, record_key, data (full entry/settings JSON), updated_at }
 
 // ── Pull: fetch all rows for user, merge with local ──
 async function syncPull() {
-  if (!_sbToken || !_sbUserId) { addLog('Pull skipped — no session', 'info'); return; }
+  if (!window.PalSync.hasSession()) { addLog('Pull skipped — no session', 'info'); return; }
   setSyncState('syncing', 'Pulling…');
   addLog('Pull started', 'info');
   try {
-    const res = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&select=record_key,data,updated_at`);
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-    const rows = await res.json();
-    addLog(`Pull received ${rows.length} row(s)`, 'ok');
+    const result = await _ct.pull(getEntries(), 'id');
+    addLog(`Pull received ${result.rows.length} row(s)`, 'ok');
 
-    const settingsRow = rows.find(r => r.record_key === '__settings__');
-    const entryRows   = rows.filter(r => r.record_key !== '__settings__');
-
-    // Merge settings: cloud wins if newer
+    // Settings travel in the same table under record_key '__settings__' —
+    // _ct.pull() ignores rows without an 'id' field (settings has none),
+    // so it's merged here exactly as before: cloud wins if newer.
+    const settingsRow = result.rows.find(r => r.record_key === '__settings__');
     if (settingsRow) {
       const remoteTs = settingsRow.updated_at || '';
       const localTs  = _env.lastUpdated || '';
@@ -749,36 +733,9 @@ async function syncPull() {
       }
     }
 
-    // Merge entries respecting tombstones (_deleted:true) from any device
-    const localMap = {};
-    getEntries().forEach(e => { localMap[e.id] = e; });
+    if (result.pushedCount) addLog(`${result.pushedCount} local-only entr(ies) pushed`, 'info');
 
-    entryRows.forEach(row => {
-      const remote = row.data;
-      if (!remote || !remote.id) return;
-      if (remote._deleted) {
-        // Tombstone received from cloud — remove locally
-        delete localMap[remote.id];
-        return;
-      }
-      const local = localMap[remote.id];
-      // Local tombstone wins — don’t overwrite with a live cloud copy
-      if (local && local._deleted) return;
-      if (!local || (remote.updated_at||'') > (local.updated_at||'')) {
-        localMap[remote.id] = remote;
-      }
-    });
-
-    // Local-only live entries not yet in cloud — push them up
-    const cloudIds = new Set(entryRows.map(r => r.record_key));
-    const localOnly = Object.values(localMap).filter(e => !e._deleted && !cloudIds.has(e.id));
-    if (localOnly.length) {
-      addLog(`${localOnly.length} local-only entr(ies) to push`, 'info');
-      for (const e of localOnly) await upsertRow(e.id, e);
-    }
-
-    // Strip any remaining local tombstones from the display list
-    _env.data.entries = Object.values(localMap).filter(e => !e._deleted);
+    _env.data.entries = result.merged;
     save(_env);
     renderAll();
     setSyncState('synced');
@@ -791,18 +748,18 @@ async function syncPull() {
 
 // ── Push: upsert all local entries and settings to cloud ──
 async function syncPush() {
-  if (!_sbToken || !_sbUserId) { addLog('Push skipped — no session', 'info'); return; }
+  if (!window.PalSync.hasSession()) { addLog('Push skipped — no session', 'info'); return; }
   setSyncState('syncing', 'Pushing…');
   addLog('Push started', 'info');
   try {
     let count = 0;
     for (const e of getEntries()) {
       if (e._deleted) continue; // tombstones handled separately
-      await upsertRow(e.id, e);
+      await _ct.upsert(e.id, e);
       count++;
     }
     // Push settings
-    await upsertRow('__settings__', getSettings());
+    await _ct.upsert('__settings__', getSettings());
     setSyncState('synced');
     addLog(`Push complete — ${count} entr(ies) + settings`, 'ok');
   } catch(err) {
@@ -811,52 +768,15 @@ async function syncPush() {
   }
 }
 
-// ── Upsert one row: PATCH first, POST if no match ──
-async function upsertRow(recordKey, data) {
-  if (!_sbToken || !_sbUserId) return;
-  const row = { user_id: _sbUserId, record_key: recordKey, data, updated_at: new Date().toISOString() };
-  try {
-    const patch = await sbFetch(
-      `/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`,
-      'PATCH', row
-    );
-    if (patch.ok) {
-      const body = await patch.json();
-      if (Array.isArray(body) && body.length === 0) {
-        // PATCH matched 0 rows — insert instead
-        const post = await sbFetch(`/${SB_TABLE}`, 'POST', row);
-        if (!post.ok) throw new Error('POST failed: ' + (await post.text()));
-      }
-    } else {
-      throw new Error('PATCH failed: ' + (await patch.text()));
-    }
-  } catch(err) {
-    addLog(`Upsert failed [${recordKey}]: ${err.message}`, 'err');
-    throw err;
-  }
-}
-
-// ── Tombstone one row in cloud (_deleted:true, updated_at now) ──
-// Keeps the row visible to other devices so their next pull removes it locally.
-async function tombstoneRow(recordKey, entryData) {
-  if (!_sbToken || !_sbUserId) return;
-  try {
-    const tombstone = { ...entryData, _deleted: true, updated_at: new Date().toISOString() };
-    await upsertRow(recordKey, tombstone);
-    addLog(`Tombstoned in cloud: ${recordKey}`, 'ok');
-  } catch(err) {
-    addLog(`Tombstone failed [${recordKey}]: ${err.message}`, 'err');
-  }
-}
 
 // ── Mutation sync: save locally then upsert to cloud ──
 async function mutate() {
   save(_env);
-  if (!_sbToken || !_sbUserId) return;
+  if (!window.PalSync.hasSession()) return;
   setSyncState('syncing');
   try {
     // Upsert settings on every mutation
-    await upsertRow('__settings__', getSettings());
+    await _ct.upsert('__settings__', getSettings());
     setSyncState('synced');
     addLog('Mutation synced', 'ok');
   } catch(err) {
@@ -868,11 +788,11 @@ async function mutate() {
 // ── Entry-level upsert (called after add/edit) ──
 async function mutateEntry(entry) {
   save(_env);
-  if (!_sbToken || !_sbUserId) return;
+  if (!window.PalSync.hasSession()) return;
   setSyncState('syncing');
   try {
-    await upsertRow(entry.id, entry);
-    await upsertRow('__settings__', getSettings());
+    await _ct.upsert(entry.id, entry);
+    await _ct.upsert('__settings__', getSettings());
     setSyncState('synced');
     addLog('Entry synced: ' + (entry.reason||entry.id).slice(0,30), 'ok');
   } catch(err) {
@@ -884,10 +804,11 @@ async function mutateEntry(entry) {
 // ── Entry-level delete: tombstone in cloud so other devices see the deletion ──
 async function deleteEntryFromCloud(id, entrySnapshot) {
   save(_env);
-  if (!_sbToken || !_sbUserId) return;
+  if (!window.PalSync.hasSession()) return;
   setSyncState('syncing');
   try {
-    await tombstoneRow(id, entrySnapshot);
+    await _ct.tombstone(id, entrySnapshot);
+    addLog(`Tombstoned in cloud: ${id}`, 'ok');
     setSyncState('synced');
   } catch(err) {
     setSyncState('error');
@@ -1089,9 +1010,9 @@ function doClaimAll() {
   });
   save(_env); closeModal('claimAllModal');
   // Sync all newly claimed entries
-  if (_sbToken && _sbUserId) {
+  if (window.PalSync.hasSession()) {
     setSyncState('syncing');
-    Promise.all(unclaimed.map(e => upsertRow(e.id, e)))
+    Promise.all(unclaimed.map(e => _ct.upsert(e.id, e)))
       .then(() => { setSyncState('synced'); addLog('Claim all synced', 'ok'); })
       .catch(err => { setSyncState('error'); addLog('Claim all sync failed: '+err.message,'err'); });
   }

@@ -1,0 +1,167 @@
+/**
+ * pal-sync.js
+ * ─────────────────────────────────────────────────────────────
+ * Shared Supabase sync helper for Pete's Apps.
+ * v1.0 — extracted from Claim Tracker's sync layer, which was the
+ * most robust of four slightly-different implementations found
+ * across the suite (Claim Tracker / On Budget / Test & Issues used
+ * proper bidirectional last-write-wins merge; GigsAndTrips did too
+ * but with tombstones kept forever and a different field name;
+ * Gym Tracker and Fortnight Tracker did a cloud-replaces-local
+ * approach with their own tombstone workarounds). This file is the
+ * one canonical pattern going forward.
+ *
+ * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
+ * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
+ *
+ * Does NOT touch localStorage or any app's data model — this only
+ * knows about Supabase rows shaped { user_id, record_key, data,
+ * updated_at }. Each app still owns its own local storage, envelope
+ * shape, and rendering.
+ * ─────────────────────────────────────────────────────────────
+ */
+window.PalSync = (function () {
+
+  let _token  = null;
+  let _userId = null;
+  let _listenerAttached = false;
+  let _sessionCallbacks  = [];   // fns called with (token, userId) on every PAL_SESSION/PAL_UNLOCKED
+
+  // ── Session (PAL_SESSION / PAL_UNLOCKED, with origin guard) ──────────
+  // Call once at startup. onSession fires every time a session arrives
+  // (including re-auth after expiry). onNoSession fires once if nothing
+  // arrives within noSessionMs (default 3000) — apps use this to show a
+  // "not connected" banner, same as every app already does.
+  function initSession(opts) {
+    opts = opts || {};
+    if (!_listenerAttached) {
+      _listenerAttached = true;
+      window.addEventListener('message', function (e) {
+        if (e.origin !== window.location.origin) return;
+        if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
+          _token  = e.data.access_token || null;
+          _userId = e.data.user_id || null;
+          if (_token && _userId) {
+            _sessionCallbacks.forEach(function (fn) { fn(_token, _userId); });
+          }
+        }
+      });
+    }
+    if (opts.onSession) _sessionCallbacks.push(opts.onSession);
+    if (opts.onNoSession) {
+      setTimeout(function () {
+        if (!_token) opts.onNoSession();
+      }, opts.noSessionMs || 3000);
+    }
+  }
+
+  function hasSession() { return !!(_token && _userId); }
+  function getUserId()  { return _userId; }
+
+  // ── Low-level REST wrapper ────────────────────────────────────────
+  async function sbFetch(path, method, body) {
+    method = method || 'GET';
+    const headers = {
+      'apikey':        window.PAL_CONFIG.SB_KEY,
+      'Authorization': 'Bearer ' + _token,
+      'Content-Type':  'application/json',
+      'Prefer':        method === 'PATCH' ? 'return=representation'
+                       : method === 'DELETE' ? 'return=minimal' : ''
+    };
+    const opts = { method: method, headers: headers };
+    if (body) opts.body = JSON.stringify(body);
+    return fetch(window.PAL_CONFIG.SB_URL + '/rest/v1' + path, opts);
+  }
+
+  // ── Per-table helper ──────────────────────────────────────────────
+  // tableName: the Supabase table (record_key + jsonb data + updated_at,
+  // RLS scoped to auth.uid() = user_id — see the reference tables already
+  // set up for Claim Tracker / On Budget / Test & Issues / Gym Tracker).
+  function table(tableName) {
+
+    // PATCH first (matches existing row for this user_id + record_key);
+    // POST if nothing matched. Throws on failure so callers can log it.
+    async function upsert(recordKey, data) {
+      if (!hasSession()) return;
+      const row = { user_id: _userId, record_key: recordKey, data: data, updated_at: new Date().toISOString() };
+      const patch = await sbFetch(
+        '/' + tableName + '?user_id=eq.' + _userId + '&record_key=eq.' + encodeURIComponent(recordKey),
+        'PATCH', row
+      );
+      if (patch.ok) {
+        const body = await patch.json();
+        if (Array.isArray(body) && body.length === 0) {
+          const post = await sbFetch('/' + tableName, 'POST', row);
+          if (!post.ok) throw new Error('POST failed: ' + (await post.text()));
+        }
+      } else {
+        throw new Error('PATCH failed: ' + (await patch.text()));
+      }
+    }
+
+    // Soft-delete: upsert the same record with _deleted:true baked into
+    // its data, rather than a hard DELETE. Keeps the row visible to other
+    // devices so their next pull removes it locally too, instead of
+    // silently vanishing (the exact bug this library exists to prevent).
+    async function tombstone(recordKey, currentData) {
+      const dead = Object.assign({}, currentData, { _deleted: true, updated_at: new Date().toISOString() });
+      await upsert(recordKey, dead);
+    }
+
+    // Bidirectional last-write-wins merge, tombstone-aware, pushes
+    // local-only live records up. This is the canonical pattern — same
+    // logic regardless of which app or table calls it.
+    //
+    // localRecords: current array of the app's local records. Each must
+    //   have an id field (default 'id') and may have updated_at / _deleted.
+    // idField: name of the id field on each record (default 'id').
+    //
+    // Returns { merged, pushedCount, rows, skipped }:
+    //   merged      — final live record array (tombstones stripped) —
+    //                 the app should replace its local array with this.
+    //   pushedCount — how many local-only records were pushed to cloud.
+    //   rows        — the raw rows fetched (record_key/data/updated_at),
+    //                 for callers that keep a special record alongside
+    //                 the entry array (e.g. a '__settings__' record_key).
+    //   skipped     — true if there's no session; merged === localRecords.
+    async function pull(localRecords, idField) {
+      idField = idField || 'id';
+      if (!hasSession()) return { merged: localRecords, pushedCount: 0, rows: [], skipped: true };
+
+      const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
+      if (!res.ok) throw new Error(res.status + ' ' + (await res.text()));
+      const rows = await res.json();
+
+      const localMap = {};
+      localRecords.forEach(function (r) { localMap[r[idField]] = r; });
+
+      rows.forEach(function (row) {
+        const remote = row.data;
+        if (!remote || !remote[idField]) return; // not a record this merge cares about (e.g. a settings row)
+        if (remote._deleted) { delete localMap[remote[idField]]; return; }
+        const local = localMap[remote[idField]];
+        if (local && local._deleted) return; // local tombstone wins — don't resurrect from an older cloud copy
+        if (!local || (remote.updated_at || '') > (local.updated_at || '')) {
+          localMap[remote[idField]] = remote;
+        }
+      });
+
+      const cloudKeys  = new Set(rows.map(function (r) { return r.record_key; }));
+      const localOnly  = Object.values(localMap).filter(function (r) { return !r._deleted && !cloudKeys.has(r[idField]); });
+      for (const r of localOnly) await upsert(r[idField], r);
+
+      const merged = Object.values(localMap).filter(function (r) { return !r._deleted; });
+      return { merged: merged, pushedCount: localOnly.length, rows: rows, skipped: false };
+    }
+
+    return { upsert: upsert, tombstone: tombstone, pull: pull };
+  }
+
+  return {
+    initSession: initSession,
+    hasSession:  hasSession,
+    getUserId:   getUserId,
+    sbFetch:     sbFetch,
+    table:       table
+  };
+})();
