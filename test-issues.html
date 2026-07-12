@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.26</title>
+<title>Test &amp; Issues v1.27</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -403,7 +403,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.26</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.27</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncPanel()" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
@@ -705,6 +705,8 @@
 
 <div id="toast"></div>
 
+<script src="pal-config.js"></script>
+<script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // STORAGE ABSTRACTION
@@ -1295,7 +1297,7 @@ function confirmClearTests() {
   refreshStats();
   toast(`🗑 Deleted ${deleted} test${deleted!==1?'s':''}`);
   // Sync all apps whose test arrays changed
-  if (_sbToken) Object.values(state.apps).forEach(app => syncApp(app));
+  if (window.PalSync.hasSession()) Object.values(state.apps).forEach(app => syncApp(app));
 }
 
 function archiveApp(appId) {
@@ -1999,7 +2001,7 @@ async function confirmImport() {
   const verifyNote = resolvedCount ? ` · ${resolvedCount} issue${resolvedCount!==1?'s':''} → Testing` : '';
   toast(`✓ Imported v${m.version} — ${(m.tests||[]).length + verifyTests.length} test(s) ready${verifyNote}`);
   // TI-009: await sync so cloud is up to date before any pull can fire
-  if (_sbToken) {
+  if (window.PalSync.hasSession()) {
     _syncLock = true; // block pulls while we're writing
     addSyncLog('Import complete — pushing to cloud','info');
     try {
@@ -2083,12 +2085,17 @@ function renderStorageInfo() {
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE SYNC
 // ══════════════════════════════════════════════════════════════════
-const SB_URL   = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
-const SB_KEY   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-const SB_TABLE = 'ti_records';
+// v1.27: SB_URL/SB_KEY were hardcoded here, duplicating pal-config.js
+// (which this app never loaded despite pal-config.js's own header
+// comment claiming every app does). Now loaded from window.PAL_CONFIG
+// via pal-sync.js. One shared table, three record kinds distinguished
+// by record_key prefix — each gets its own scoped table() instance so
+// pulling apps can't cross-contaminate with issues (both carry an id).
+const SB_TABLE  = 'ti_records';
+const _tiApps   = window.PalSync.table(SB_TABLE, { prefix: 'app_' });
+const _tiIssues = window.PalSync.table(SB_TABLE, { prefix: 'issue_' });
+const _tiMeta   = window.PalSync.table(SB_TABLE); // no prefix — record_key is exactly '__meta__'
 
-let _sbToken   = null;
-let _sbUserId  = null;
 let _syncState = 'local';
 let _syncLog   = []; // [{ts,msg,type}] newest first, cap 120
 let _syncLock  = false; // true while import is pushing — blocks concurrent pulls
@@ -2104,9 +2111,9 @@ function setSyncState(st, label) {
   const sb = document.getElementById('sb-status');
   if (sb) sb.textContent = text;
   const se = document.getElementById('sb-session');
-  if (se) se.textContent = _sbToken ? 'Token received' : 'No token';
+  if (se) se.textContent = window.PalSync.hasSession() ? 'Token received' : 'No token';
   const us = document.getElementById('sb-user');
-  if (us) us.textContent = _sbUserId ? _sbUserId.slice(0,8)+'…' : '—';
+  if (us) us.textContent = window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '—';
 }
 
 function addSyncLog(msg, type) {
@@ -2117,143 +2124,80 @@ function addSyncLog(msg, type) {
   if (el) el.innerHTML = _syncLog.map(e=>`<div class="log-entry ${e.type}">${e.ts} — ${e.msg}</div>`).join('');
 }
 
-function sbFetch(path, method, body) {
-  const opts = {
-    method,
-    headers: {
-      'Content-Type':  'application/json',
-      'apikey':         SB_KEY,
-      'Authorization': 'Bearer ' + _sbToken,
-      'Prefer':        method === 'PATCH' ? 'return=representation' : ''
-    }
-  };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(SB_URL + '/rest/v1' + path, opts);
-}
-
-// PATCH→POST upsert for one record_key
-async function upsertRow(recordKey, data) {
-  if (!_sbToken || !_sbUserId) return;
-  const row = { user_id: _sbUserId, record_key: recordKey, data, updated_at: new Date().toISOString() };
-  const patch = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`, 'PATCH', row);
-  if (patch.ok) {
-    const body = await patch.json();
-    if (Array.isArray(body) && body.length > 0) return; // PATCH matched
-  }
-  // No rows matched — POST insert
-  const post = await sbFetch(`/${SB_TABLE}`, 'POST', row);
-  if (!post.ok) throw new Error('POST failed: ' + (await post.text()));
-}
-
-// Tombstone a row — marks _deleted:true so pull won't resurrect it
-// (Direct DELETE fails across devices: the pull loop sees local-only and pushes it back up)
-async function tombstoneRow(recordKey, existingData) {
-  if (!_sbToken || !_sbUserId) return;
-  const row = { user_id: _sbUserId, record_key: recordKey, data: { ...existingData, _deleted: true, updated_at: new Date().toISOString() }, updated_at: new Date().toISOString() };
-  const patch = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`, 'PATCH', row);
-  if (patch.ok) {
-    const body = await patch.json();
-    if (Array.isArray(body) && body.length > 0) return; // PATCH matched
-  }
-  // Row didn't exist yet — POST the tombstone so other devices get it
-  const post = await sbFetch(`/${SB_TABLE}`, 'POST', row);
-  if (!post.ok) throw new Error('Tombstone POST failed: ' + (await post.text()));
-}
-
 // ── Per-entity sync helpers ─────────────────────────────────────
 // Fire-and-forget versions (used for normal single-mutation sync)
 async function syncIssue(issue) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('issue_'+issue.id, issue); setSyncState('synced'); addSyncLog('Issue '+issue.id+' synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _tiIssues.upsert(issue.id, issue); setSyncState('synced'); addSyncLog('Issue '+issue.id+' synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+err.message,'err'); }
 }
 
 async function syncDeleteIssue(issueId, snapshot) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await tombstoneRow('issue_'+issueId, snapshot||{id:issueId}); setSyncState('synced'); addSyncLog('Issue '+issueId+' tombstoned in cloud','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _tiIssues.tombstone(issueId, snapshot||{id:issueId}); setSyncState('synced'); addSyncLog('Issue '+issueId+' tombstoned in cloud','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Issue delete sync failed: '+err.message,'err'); }
 }
 
 async function syncApp(app) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('app_'+app.id, app); setSyncState('synced'); addSyncLog('App '+app.id+' synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _tiApps.upsert(app.id, app); setSyncState('synced'); addSyncLog('App '+app.id+' synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('App sync failed: '+err.message,'err'); }
 }
 
 async function syncMeta() {
-  if (!_sbToken) return;
-  try { await upsertRow('__meta__', { nextSeq: state.nextSeq }); addSyncLog('Meta synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); addSyncLog('Meta synced','ok'); }
   catch(err) { addSyncLog('Meta sync failed: '+err.message,'err'); }
 }
 
 // TI-009: Direct versions — throw on error, used in awaited import flow
-async function syncAppDirect(app)     { await upsertRow('app_'+app.id, app); }
-async function syncIssueDirect(issue) { await upsertRow('issue_'+issue.id, issue); }
-async function syncMetaDirect()       { await upsertRow('__meta__', { nextSeq: state.nextSeq }); }
+async function syncAppDirect(app)     { await _tiApps.upsert(app.id, app); }
+async function syncIssueDirect(issue) { await _tiIssues.upsert(issue.id, issue); }
+async function syncMetaDirect()       { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); }
 
 // ── Full push (all local data → cloud) ─────────────────────────
 async function syncPush() {
-  if (!_sbToken || !_sbUserId) { addSyncLog('Push skipped — no session','info'); return; }
+  if (!window.PalSync.hasSession()) { addSyncLog('Push skipped — no session','info'); return; }
   setSyncState('syncing','Pushing…');
   try {
     let count = 0;
-    for (const app of Object.values(state.apps)) { await upsertRow('app_'+app.id, app); count++; }
-    for (const issue of Object.values(state.issues)) { await upsertRow('issue_'+issue.id, issue); count++; }
-    await upsertRow('__meta__', { nextSeq: state.nextSeq });
+    for (const app of Object.values(state.apps)) { await _tiApps.upsert(app.id, app); count++; }
+    for (const issue of Object.values(state.issues)) { await _tiIssues.upsert(issue.id, issue); count++; }
+    await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq });
     setSyncState('synced');
     addSyncLog(`Push complete — ${count} records written`,'ok');
   } catch(err) { setSyncState('error'); addSyncLog('Push failed: '+err.message,'err'); }
 }
 
-// ── Full pull (cloud → local, cloud wins on conflict) ──────────
+// ── Full pull (cloud → local) ───────────────────────────────────
+// v1.27: apps and issues now go through PalSync's proper bidirectional
+// last-write-wins merge instead of unconditional cloud-wins overwrite.
+// The old syncPull() overwrote state.apps[id]/state.issues[id] with
+// whatever cloud had, with NO timestamp comparison at all — a local
+// edit not yet pushed could get silently clobbered by a stale cloud
+// copy. This was a real (if low-probability, single-mostly-Pete-user)
+// data-loss risk that the canonical merge closes off.
 async function syncPull() {
-  if (!_sbToken || !_sbUserId) { addSyncLog('Pull skipped — no session','info'); return; }
+  if (!window.PalSync.hasSession()) { addSyncLog('Pull skipped — no session','info'); return; }
   if (_syncLock) { addSyncLog('Pull deferred — sync in progress','info'); return; }
   setSyncState('syncing','Pulling…');
   try {
-    const res = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&select=record_key,data,updated_at`, 'GET');
-    if (!res.ok) throw new Error('Pull failed: ' + (await res.text()));
-    const rows = await res.json();
-    const seenAppKeys   = new Set();
-    const seenIssueKeys = new Set();
-    let pulled = 0, pushedUp = 0, deletedLocally = 0;
+    const appsResult   = await _tiApps.pull(Object.values(state.apps), 'id');
+    const issuesResult = await _tiIssues.pull(Object.values(state.issues), 'id');
 
-    for (const row of rows) {
-      const key  = row.record_key;
-      const data = row.data;
-      if (key.startsWith('app_')) {
-        const appId = key.slice(4);
-        seenAppKeys.add(appId);
-        if (data._deleted) {
-          // Tombstoned — remove locally if present
-          if (state.apps[appId]) { delete state.apps[appId]; deletedLocally++; }
-        } else {
-          state.apps[appId] = data;
-          pulled++;
-        }
-      } else if (key.startsWith('issue_')) {
-        const issueId = key.slice(6);
-        seenIssueKeys.add(issueId);
-        if (data._deleted) {
-          // Tombstoned — remove locally if present
-          if (state.issues[issueId]) { delete state.issues[issueId]; deletedLocally++; }
-        } else {
-          state.issues[issueId] = data;
-          pulled++;
-        }
-      } else if (key === '__meta__') {
-        if (data.nextSeq) state.nextSeq = data.nextSeq;
-      }
-    }
+    const pulled    = appsResult.merged.length + issuesResult.merged.length;
+    const pushedUp  = appsResult.pushedCount + issuesResult.pushedCount;
 
-    // Push up any local-only records not seen in cloud at all
-    // (seen but tombstoned means deleted — do NOT push back up)
-    for (const app of Object.values(state.apps)) {
-      if (!seenAppKeys.has(app.id)) { await upsertRow('app_'+app.id, app); pushedUp++; }
-    }
-    for (const issue of Object.values(state.issues)) {
-      if (!seenIssueKeys.has(issue.id)) { await upsertRow('issue_'+issue.id, issue); pushedUp++; }
-    }
+    state.apps = {};
+    appsResult.merged.forEach(app => { state.apps[app.id] = app; });
+    state.issues = {};
+    issuesResult.merged.forEach(issue => { state.issues[issue.id] = issue; });
+
+    // Meta travels in the same table under record_key '__meta__' — both
+    // pull() calls above return the full unfiltered row set, so no extra
+    // fetch is needed to find it.
+    const metaRow = appsResult.rows.find(r => r.record_key === '__meta__');
+    if (metaRow && metaRow.data && metaRow.data.nextSeq) state.nextSeq = metaRow.data.nextSeq;
 
     // TI-010: a pull can re-introduce old fragmented app entries from
     // cloud rows that predate this fix — consolidate again here, and
@@ -2263,23 +2207,23 @@ async function syncPull() {
     let registryCleanup = 0;
     if (mig.changed) {
       for (const id of mig.deletedAppIds) {
-        try { await tombstoneRow('app_'+id, { id }); registryCleanup++; }
+        try { await _tiApps.tombstone(id, { id }); registryCleanup++; }
         catch(err) { addSyncLog('Registry cleanup tombstone failed: '+err.message,'err'); }
       }
       for (const id of mig.touchedIds) {
         if (state.apps[id]) {
-          try { await upsertRow('app_'+id, state.apps[id]); }
+          try { await _tiApps.upsert(id, state.apps[id]); }
           catch(err) { addSyncLog('Registry cleanup upsert failed: '+err.message,'err'); }
         }
       }
-      try { await upsertRow('__meta__', { nextSeq: state.nextSeq }); } catch(err) {}
+      try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); } catch(err) {}
     }
 
     saveState();
     renderTab(currentTab);
     refreshStats();
     setSyncState('synced');
-    const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', deletedLocally ? `${deletedLocally} tombstones applied` : '', registryCleanup ? `${registryCleanup} duplicate app(s) consolidated` : ''].filter(Boolean).join(', ');
+    const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', registryCleanup ? `${registryCleanup} duplicate app(s) consolidated` : ''].filter(Boolean).join(', ');
     addSyncLog(`Pull complete — ${parts}`,'ok');
   } catch(err) { setSyncState('error'); addSyncLog('Pull failed: '+err.message,'err'); }
 }
@@ -2301,27 +2245,21 @@ function applyTheme(theme) {
 }
 
 // ── PAL_SESSION postMessage ────────────────────────────────────
-// v1.16: added an origin check here — every other app in the suite has
-// one on this listener, this one didn't. Also added PAL_THEME handling
-// for the suite-wide theme toggle.
+// v1.27: session handling (token/user_id, origin guard) moved to
+// pal-sync.js — same behaviour, shared code.
 window.addEventListener('message', e => {
   if (e.origin !== window.location.origin) return;
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
-  if (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED') {
-    _sbToken  = e.data.access_token || null;
-    _sbUserId = e.data.user_id      || null;
-    if (_sbToken && _sbUserId) {
-      addSyncLog('PAL_SESSION received — starting sync','info');
-      setSyncState('connecting');
-      syncPull();
-    }
-  }
 });
 
-// 3s timeout — show local banner if no PAL_SESSION
-setTimeout(() => {
-  if (!_sbToken) {
+window.PalSync.initSession({
+  onSession: () => {
+    addSyncLog('PAL_SESSION received — starting sync','info');
+    setSyncState('connecting');
+    syncPull();
+  },
+  onNoSession: () => {
     setSyncState('local');
     addSyncLog('No PAL_SESSION received — running locally','info');
     // Non-blocking banner
@@ -2331,8 +2269,9 @@ setTimeout(() => {
     banner.textContent = 'Open via Pete\'s Apps launcher for cloud sync';
     document.body.appendChild(banner);
     requestAnimationFrame(() => { banner.style.opacity = '1'; setTimeout(() => { banner.style.opacity = '0'; setTimeout(()=>banner.remove(),400); }, 4000); });
-  }
-}, 3000);
+  },
+  noSessionMs: 3000
+});
 
 // ══════════════════════════════════════════════════════════════════
 // TOAST

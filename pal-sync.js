@@ -10,6 +10,14 @@
  * Gym Tracker and Fortnight Tracker did a cloud-replaces-local
  * approach with their own tombstone workarounds). This file is the
  * one canonical pattern going forward.
+ * v1.1 — added an optional `prefix` per table() instance. Some apps
+ * (Test & Issues) share ONE Supabase table across multiple record
+ * kinds using a record_key prefix ('app_', 'issue_'), where more than
+ * one kind carries an `id` field — without prefix scoping, pulling
+ * "apps" would also merge in "issues" that happen to expose `.id`.
+ * Each table() instance now optionally scopes itself to one prefix;
+ * omitting it (Claim Tracker's usage) is unchanged and fully backward
+ * compatible — prefix defaults to '', so id === record_key as before.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -77,12 +85,20 @@ window.PalSync = (function () {
   // tableName: the Supabase table (record_key + jsonb data + updated_at,
   // RLS scoped to auth.uid() = user_id — see the reference tables already
   // set up for Claim Tracker / On Budget / Test & Issues / Gym Tracker).
-  function table(tableName) {
+  //
+  // opts.prefix (optional): if a table holds more than one record kind
+  // under the same table (e.g. Test & Issues' 'app_'/'issue_' prefixes),
+  // scope this instance to one kind. record_key becomes prefix + id.
+  // Create one table() instance per kind sharing the same tableName.
+  function table(tableName, opts) {
+    const prefix = (opts && opts.prefix) || '';
 
     // PATCH first (matches existing row for this user_id + record_key);
     // POST if nothing matched. Throws on failure so callers can log it.
-    async function upsert(recordKey, data) {
+    // id: the record's own id — record_key sent to Supabase is prefix + id.
+    async function upsert(id, data) {
       if (!hasSession()) return;
+      const recordKey = prefix + id;
       const row = { user_id: _userId, record_key: recordKey, data: data, updated_at: new Date().toISOString() };
       const patch = await sbFetch(
         '/' + tableName + '?user_id=eq.' + _userId + '&record_key=eq.' + encodeURIComponent(recordKey),
@@ -103,9 +119,9 @@ window.PalSync = (function () {
     // its data, rather than a hard DELETE. Keeps the row visible to other
     // devices so their next pull removes it locally too, instead of
     // silently vanishing (the exact bug this library exists to prevent).
-    async function tombstone(recordKey, currentData) {
+    async function tombstone(id, currentData) {
       const dead = Object.assign({}, currentData, { _deleted: true, updated_at: new Date().toISOString() });
-      await upsert(recordKey, dead);
+      await upsert(id, dead);
     }
 
     // Bidirectional last-write-wins merge, tombstone-aware, pushes
@@ -120,9 +136,12 @@ window.PalSync = (function () {
     //   merged      — final live record array (tombstones stripped) —
     //                 the app should replace its local array with this.
     //   pushedCount — how many local-only records were pushed to cloud.
-    //   rows        — the raw rows fetched (record_key/data/updated_at),
-    //                 for callers that keep a special record alongside
-    //                 the entry array (e.g. a '__settings__' record_key).
+    //   rows        — ALL rows fetched from the table, unfiltered by
+    //                 prefix — for callers that keep another record kind
+    //                 alongside this one (e.g. Test & Issues' '__meta__',
+    //                 or Claim Tracker's '__settings__', neither of
+    //                 which carry an id field so this merge ignores them
+    //                 automatically either way).
     //   skipped     — true if there's no session; merged === localRecords.
     async function pull(localRecords, idField) {
       idField = idField || 'id';
@@ -130,14 +149,18 @@ window.PalSync = (function () {
 
       const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
       if (!res.ok) throw new Error(res.status + ' ' + (await res.text()));
-      const rows = await res.json();
+      const allRows = await res.json();
+      // Scope the merge to this instance's prefix, if any — otherwise a
+      // table holding multiple record kinds (each with an id field) would
+      // get cross-contaminated (e.g. issues merging into an apps pull).
+      const rows = prefix ? allRows.filter(function (r) { return r.record_key.indexOf(prefix) === 0; }) : allRows;
 
       const localMap = {};
       localRecords.forEach(function (r) { localMap[r[idField]] = r; });
 
       rows.forEach(function (row) {
         const remote = row.data;
-        if (!remote || !remote[idField]) return; // not a record this merge cares about (e.g. a settings row)
+        if (!remote || !remote[idField]) return; // not a record this merge cares about (e.g. a settings/meta row)
         if (remote._deleted) { delete localMap[remote[idField]]; return; }
         const local = localMap[remote[idField]];
         if (local && local._deleted) return; // local tombstone wins — don't resurrect from an older cloud copy
@@ -146,12 +169,14 @@ window.PalSync = (function () {
         }
       });
 
-      const cloudKeys  = new Set(rows.map(function (r) { return r.record_key; }));
-      const localOnly  = Object.values(localMap).filter(function (r) { return !r._deleted && !cloudKeys.has(r[idField]); });
+      // Derived from each row's own data[idField], not the raw record_key —
+      // safe regardless of whether this instance uses a prefix.
+      const cloudIds  = new Set(rows.map(function (r) { return r.data && r.data[idField]; }).filter(Boolean));
+      const localOnly = Object.values(localMap).filter(function (r) { return !r._deleted && !cloudIds.has(r[idField]); });
       for (const r of localOnly) await upsert(r[idField], r);
 
       const merged = Object.values(localMap).filter(function (r) { return !r._deleted; });
-      return { merged: merged, pushedCount: localOnly.length, rows: rows, skipped: false };
+      return { merged: merged, pushedCount: localOnly.length, rows: allRows, skipped: false };
     }
 
     return { upsert: upsert, tombstone: tombstone, pull: pull };
