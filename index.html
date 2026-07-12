@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.6</title>
+<title>P Apps v10.7</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -532,7 +532,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.6</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.7</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -1657,6 +1657,17 @@ async function backupAll() {
 }
 
 // ── Health Check (v10.6, TI-010 follow-up) ──────────────────────────
+// v10.7: first real run surfaced two bugs in this check itself.
+// (1) Version check was scanning the whole rendered page for any
+// vX.Y-shaped text, which picked up far more than the title/badge and
+// flagged every app as "mismatched" against its own changelog-shaped
+// text. Replaced with a precise check: extract the version from
+// <title> and from one specific, mapped badge element per app, compare
+// just those two. (2) Registry alignment always failed with
+// "APP_REGISTRY not found" — top-level `const` doesn't attach to
+// `window` the way `var` does, so contentWindow.APP_REGISTRY was
+// always undefined. Fixed by having Test & Issues (v1.26) explicitly
+// expose window.APP_REGISTRY.
 // Reads each app's localStorage envelope directly (same origin, no
 // iframe needed for this bit), then briefly loads each app's iframe
 // once — same mechanism as Backup All — to scan its rendered title
@@ -1665,13 +1676,13 @@ async function backupAll() {
 // exportJSON() above). Nothing here needs any changes to the other
 // app files.
 const HEALTH_APPS = [
-  { id: 'fortnight-tracker', name: 'Fortnight Tracker', target: 'fortnight', storageKey: 'fn_tracker_v5',        envelope: 'standard' },
-  { id: 'reading-tracker',   name: 'Reading Tracker',   target: 'reading',   storageKey: 'reading-tracker-v6',   envelope: 'known-exception' },
-  { id: 'GigsAndTrips',      name: 'Gigs & Trips',      target: 'gat',       storageKey: 'gat_v1',               envelope: 'known-exception' },
-  { id: 'test-issues',       name: 'Test & Issues',     target: 'ti',        storageKey: 'ti_v1',                envelope: 'standard' },
-  { id: 'claim-tracker',     name: 'Claim Tracker',     target: 'claims',    storageKey: 'claim_tracker_v1',     envelope: 'standard' },
-  { id: 'on-budget',         name: 'On Budget',         target: 'onbudget',  storageKey: 'on_budget_v1',         envelope: 'standard' },
-  { id: 'gym-tracker',       name: 'Gym Tracker',       target: 'gym',       storageKey: 'gym_tracker_v1',       envelope: 'standard' },
+  { id: 'fortnight-tracker', name: 'Fortnight Tracker', target: 'fortnight', storageKey: 'fn_tracker_v5',        envelope: 'standard',       badgeSelector: '.logo-sub span' },
+  { id: 'reading-tracker',   name: 'Reading Tracker',   target: 'reading',   storageKey: 'reading-tracker-v6',   envelope: 'known-exception', badgeSelector: '.rt-logo span' },
+  { id: 'GigsAndTrips',      name: 'Gigs & Trips',      target: 'gat',       storageKey: 'gat_v1',               envelope: 'known-exception', badgeSelector: '#hdrTitle .ver' },
+  { id: 'test-issues',       name: 'Test & Issues',     target: 'ti',        storageKey: 'ti_v1',                envelope: 'standard',       badgeSelector: '.nav-ver' },
+  { id: 'claim-tracker',     name: 'Claim Tracker',     target: 'claims',    storageKey: 'claim_tracker_v1',     envelope: 'standard',       badgeSelector: '.ver' },
+  { id: 'on-budget',         name: 'On Budget',         target: 'onbudget',  storageKey: 'on_budget_v1',         envelope: 'standard',       badgeSelector: '.logo-ver' },
+  { id: 'gym-tracker',       name: 'Gym Tracker',       target: 'gym',       storageKey: 'gym_tracker_v1',       envelope: 'standard',       badgeSelector: '.ver' },
 ];
 
 function relTime(iso) {
@@ -1700,14 +1711,21 @@ function checkEnvelope(app) {
   };
 }
 
-function scanVersionStrings(frame) {
+function extractVersion(str) {
+  if (!str) return null;
+  const m = str.match(/\bv?(\d+\.\d+)\b/);
+  return m ? m[1] : null;
+}
+
+function checkVersionConsistency(frame, app) {
   try {
     const doc = frame.contentDocument;
-    const text = (doc.title || '') + ' ' + (doc.body ? doc.body.innerText : '');
-    const matches = [...text.matchAll(/\bv\d+\.\d+\b/g)].map(m => m[0]);
-    return [...new Set(matches)];
+    const titleVer = extractVersion(doc.title || '');
+    const badgeEl = app.badgeSelector ? doc.querySelector(app.badgeSelector) : null;
+    const badgeVer = badgeEl ? extractVersion(badgeEl.textContent || '') : null;
+    return { titleVer, badgeVer, readable: true };
   } catch (e) {
-    return null; // couldn't read — treat as unknown, don't fail the whole check
+    return { readable: false };
   }
 }
 
@@ -1738,7 +1756,6 @@ async function runHealthCheck() {
   for (const app of HEALTH_APPS) {
     const env = checkEnvelope(app);
     const frame = await ensureLoaded(app.target);
-    const versions = scanVersionStrings(frame);
 
     let status = 'ok';
     const notes = [];
@@ -1758,15 +1775,17 @@ async function runHealthCheck() {
       notes.push('Last updated: ' + (upd || 'unknown') + ' · Last exported: ' + (exp || 'never'));
     }
 
-    if (versions === null) {
+    const v = checkVersionConsistency(frame, app);
+
+    if (!v.readable) {
       notes.push('Could not read the loaded app to check its version display.');
-    } else if (versions.length === 0) {
-      notes.push('No version text found on the page.');
-    } else if (versions.length > 1) {
+    } else if (!v.titleVer && !v.badgeVer) {
+      notes.push('No version text found in the title or badge.');
+    } else if (v.titleVer && v.badgeVer && v.titleVer !== v.badgeVer) {
       status = 'error';
-      notes.push('<span class="issue">Version mismatch on page: ' + versions.join(', ') + '</span>');
+      notes.push('<span class="issue">Version mismatch: title says v' + v.titleVer + ', badge says v' + v.badgeVer + '</span>');
     } else {
-      notes.push('Version displayed: ' + versions[0]);
+      notes.push('Version displayed: v' + (v.titleVer || v.badgeVer));
     }
 
     if (status !== 'ok') issueCount++;
