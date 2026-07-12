@@ -18,6 +18,14 @@
  * Each table() instance now optionally scopes itself to one prefix;
  * omitting it (Claim Tracker's usage) is unchanged and fully backward
  * compatible — prefix defaults to '', so id === record_key as before.
+ * v1.2 — pull() hardcoded the merge timestamp field as `updated_at`.
+ * Claim Tracker's own records use that name, but Test & Issues' apps
+ * and issues use `updatedAt` (camelCase) — so for that app, EVERY
+ * comparison silently evaluated `'' > ''` (false), meaning an existing
+ * local record could never be updated by a genuinely newer cloud copy.
+ * This wasn't a hidden risk, it was total breakage for that field
+ * convention. pull() now takes an optional updatedAtField (3rd arg,
+ * default 'updated_at' — unchanged for existing callers).
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -129,8 +137,14 @@ window.PalSync = (function () {
     // logic regardless of which app or table calls it.
     //
     // localRecords: current array of the app's local records. Each must
-    //   have an id field (default 'id') and may have updated_at / _deleted.
+    //   have an id field (default 'id') and may have a timestamp field
+    //   (default 'updated_at') / _deleted.
     // idField: name of the id field on each record (default 'id').
+    // updatedAtField: name of the last-modified timestamp field on each
+    //   record (default 'updated_at'). Must match whatever field name
+    //   the calling app actually stamps — a mismatch here means every
+    //   comparison silently evaluates false and incoming updates never
+    //   win, which is exactly what happened before this was configurable.
     //
     // Returns { merged, pushedCount, rows, skipped }:
     //   merged      — final live record array (tombstones stripped) —
@@ -143,8 +157,9 @@ window.PalSync = (function () {
     //                 which carry an id field so this merge ignores them
     //                 automatically either way).
     //   skipped     — true if there's no session; merged === localRecords.
-    async function pull(localRecords, idField) {
+    async function pull(localRecords, idField, updatedAtField) {
       idField = idField || 'id';
+      updatedAtField = updatedAtField || 'updated_at';
       if (!hasSession()) return { merged: localRecords, pushedCount: 0, rows: [], skipped: true };
 
       const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
@@ -164,7 +179,7 @@ window.PalSync = (function () {
         if (remote._deleted) { delete localMap[remote[idField]]; return; }
         const local = localMap[remote[idField]];
         if (local && local._deleted) return; // local tombstone wins — don't resurrect from an older cloud copy
-        if (!local || (remote.updated_at || '') > (local.updated_at || '')) {
+        if (!local || (remote[updatedAtField] || '') > (local[updatedAtField] || '')) {
           localMap[remote[idField]] = remote;
         }
       });

@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.27</title>
+<title>Test &amp; Issues v1.28</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -403,7 +403,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.27</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.28</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncPanel()" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
@@ -2126,8 +2126,15 @@ function addSyncLog(msg, type) {
 
 // ── Per-entity sync helpers ─────────────────────────────────────
 // Fire-and-forget versions (used for normal single-mutation sync)
+// TI-043: stamped here, not left to each call site — apps in particular
+// never carried a top-level timestamp at all (nested test/version
+// changes only stamped the test itself), so an app that changed but
+// wasn't freshly stamped could never be recognised as "newer" on
+// another device's pull. Issues already stamped updatedAt at most call
+// sites; stamping it here too is belt-and-suspenders, not a change.
 async function syncIssue(issue) {
   if (!window.PalSync.hasSession()) return;
+  issue.updatedAt = new Date().toISOString();
   try { setSyncState('syncing'); await _tiIssues.upsert(issue.id, issue); setSyncState('synced'); addSyncLog('Issue '+issue.id+' synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+err.message,'err'); }
 }
@@ -2140,6 +2147,7 @@ async function syncDeleteIssue(issueId, snapshot) {
 
 async function syncApp(app) {
   if (!window.PalSync.hasSession()) return;
+  app.updatedAt = new Date().toISOString();
   try { setSyncState('syncing'); await _tiApps.upsert(app.id, app); setSyncState('synced'); addSyncLog('App '+app.id+' synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('App sync failed: '+err.message,'err'); }
 }
@@ -2151,8 +2159,8 @@ async function syncMeta() {
 }
 
 // TI-009: Direct versions — throw on error, used in awaited import flow
-async function syncAppDirect(app)     { await _tiApps.upsert(app.id, app); }
-async function syncIssueDirect(issue) { await _tiIssues.upsert(issue.id, issue); }
+async function syncAppDirect(app)     { app.updatedAt = new Date().toISOString(); await _tiApps.upsert(app.id, app); }
+async function syncIssueDirect(issue) { issue.updatedAt = new Date().toISOString(); await _tiIssues.upsert(issue.id, issue); }
 async function syncMetaDirect()       { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); }
 
 // ── Full push (all local data → cloud) ─────────────────────────
@@ -2177,13 +2185,26 @@ async function syncPush() {
 // edit not yet pushed could get silently clobbered by a stale cloud
 // copy. This was a real (if low-probability, single-mostly-Pete-user)
 // data-loss risk that the canonical merge closes off.
+// v1.28 (TI-043): that merge silently never worked. Two compounding
+// bugs: (1) apps and issues stamp `updatedAt` (camelCase); the merge
+// compared `updated_at` (snake_case), so every comparison was `'' > ''`
+// — false, always. An existing local record could NEVER be recognised
+// as older than a genuinely newer cloud copy, so nothing pulled in for
+// apps/issues that already existed locally — a passed test never
+// arrived on a second device because its app record never updated.
+// (2) apps never carried a timestamp at all — marking a nested test
+// passed only stamped the test itself, not the app object it lives
+// inside. Fixed by passing 'updatedAt' explicitly to pull() (pal-sync
+// v1.2 made this configurable) and stamping app.updatedAt/issue.updatedAt
+// centrally in syncApp/syncIssue/syncAppDirect/syncIssueDirect, so every
+// push always carries a fresh, correctly-named timestamp.
 async function syncPull() {
   if (!window.PalSync.hasSession()) { addSyncLog('Pull skipped — no session','info'); return; }
   if (_syncLock) { addSyncLog('Pull deferred — sync in progress','info'); return; }
   setSyncState('syncing','Pulling…');
   try {
-    const appsResult   = await _tiApps.pull(Object.values(state.apps), 'id');
-    const issuesResult = await _tiIssues.pull(Object.values(state.issues), 'id');
+    const appsResult   = await _tiApps.pull(Object.values(state.apps), 'id', 'updatedAt');
+    const issuesResult = await _tiIssues.pull(Object.values(state.issues), 'id', 'updatedAt');
 
     const pulled    = appsResult.merged.length + issuesResult.merged.length;
     const pushedUp  = appsResult.pushedCount + issuesResult.pushedCount;
