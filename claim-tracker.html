@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.4</title>
+<title>Claim Tracker v2.5</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -225,7 +225,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.4</div>
+        <div class="ver">v2.5</div>
       </div>
     </div>
     <div class="header-actions">
@@ -509,7 +509,18 @@
 // the mileage-rate/commute/claim-window number fields (was 14px).
 // Below 16px, iOS Safari auto-zooms the page on focus; every other
 // app in the suite already uses 16px as the floor.
-const VERSION  = '2.4';
+// v2.5 (CLA-009): settings sync compared a cloud row's updated_at
+// against _env.lastUpdated — the whole envelope's dirty timestamp,
+// bumped by ANY local save (adding an entry, claiming, anything). A
+// device with unrelated recent activity looked "newer" than another
+// device's real settings push, so incoming settings got silently
+// dropped. Settings now carry their own updated_at, stamped only when
+// settings actually change (mutate()), and the merge compares against
+// that instead. Also renamed a local variable that was literally
+// named `window` inside saveMileageSettings() — harmless as written
+// (separate function scope from mutate()), but a landmine now that
+// the app leans on window.PalSync throughout.
+const VERSION  = '2.5';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -545,7 +556,8 @@ function defaultEnvelope() {
         ratePerMile:      0.55,
         claimWindowMonths: 3,
         categories:       [...DEFAULT_CATEGORIES],
-        stdTrips:         DEFAULT_STD_TRIPS.map(t=>({...t}))
+        stdTrips:         DEFAULT_STD_TRIPS.map(t=>({...t})),
+        updated_at:       ''
       }
     }
   };
@@ -567,6 +579,7 @@ function load() {
         m.data.settings.claimWindowMonths = parsed.settings.claimWindowMonths ?? 3;
         m.data.settings.categories        = parsed.settings.categories        || [...DEFAULT_CATEGORIES];
         m.data.settings.stdTrips          = parsed.settings.stdTrips          || DEFAULT_STD_TRIPS.map(t=>({...t}));
+        m.data.settings.updated_at        = parsed.settings.updated_at        || '';
       }
       save(m);
       return m;
@@ -585,6 +598,7 @@ function load() {
         env.data.settings.claimWindowMonths = s.claimWindowMonths ?? 3;
         env.data.settings.categories        = s.categories        || [...DEFAULT_CATEGORIES];
         env.data.settings.stdTrips          = s.stdTrips          || DEFAULT_STD_TRIPS.map(t=>({...t}));
+        env.data.settings.updated_at        = s.updated_at        || '';
       }
     }
     return env;
@@ -722,11 +736,19 @@ async function syncPull() {
 
     // Settings travel in the same table under record_key '__settings__' —
     // _ct.pull() ignores rows without an 'id' field (settings has none),
-    // so it's merged here exactly as before: cloud wins if newer.
+    // so it's merged here separately: cloud wins if newer.
+    // CLA-009 fix: this used to compare against _env.lastUpdated, the
+    // whole envelope's dirty timestamp — which gets bumped by ANY local
+    // save (adding an entry, claiming, anything), not just a settings
+    // change. On a device that had done any unrelated local activity
+    // recently, that made its "local" timestamp look newer than another
+    // device's real settings push, so the incoming settings got silently
+    // dropped. Now compares against settings' own dedicated updated_at,
+    // stamped only when settings actually change (see mutate()).
     const settingsRow = result.rows.find(r => r.record_key === '__settings__');
     if (settingsRow) {
       const remoteTs = settingsRow.updated_at || '';
-      const localTs  = _env.lastUpdated || '';
+      const localTs  = getSettings().updated_at || '';
       if (remoteTs > localTs) {
         _env.data.settings = settingsRow.data;
         addLog('Settings merged from cloud', 'ok');
@@ -771,6 +793,7 @@ async function syncPush() {
 
 // ── Mutation sync: save locally then upsert to cloud ──
 async function mutate() {
+  getSettings().updated_at = new Date().toISOString();
   save(_env);
   if (!window.PalSync.hasSession()) return;
   setSyncState('syncing');
@@ -1278,13 +1301,13 @@ function updateDeductLabels() {
 function saveMileageSettings() {
   const ow     = parseFloat(document.getElementById('settCommuteOw').value);
   const rate   = parseFloat(document.getElementById('settRate').value);
-  const window = parseInt(document.getElementById('settClaimWindow').value);
+  const claimWindowMonths = parseInt(document.getElementById('settClaimWindow').value);
   if (isNaN(ow)||ow<0)       { toast('Enter a valid commute distance'); return; }
   if (isNaN(rate)||rate<=0)  { toast('Enter a valid rate'); return; }
-  if (isNaN(window)||window<1){ toast('Claim window must be at least 1 month'); return; }
+  if (isNaN(claimWindowMonths)||claimWindowMonths<1){ toast('Claim window must be at least 1 month'); return; }
   getSettings().commuteOw         = ow;
   getSettings().ratePerMile       = rate;
-  getSettings().claimWindowMonths = window;
+  getSettings().claimWindowMonths = claimWindowMonths;
   mutate(); updateDeductLabels(); renderClaims(); toast('Settings saved \u2713');
 }
 
