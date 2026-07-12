@@ -313,6 +313,20 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .pin-logo span{color:var(--acc)}
 .pin-sub{font-size:14px;color:rgba(255,255,255,.5);margin-bottom:8px}
 
+/* ── Completion prompt ──────────────────────────────────────────── */
+.cp-item{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--bdr)}
+.cp-item:last-child{border-bottom:none}
+.cp-icon{font-size:24px;flex-shrink:0}
+.cp-info{flex:1;min-width:0}
+.cp-name{font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-sub{font-size:12px;color:var(--ink3);margin-top:1px}
+.cp-actions{display:flex;gap:6px;flex-shrink:0}
+.cp-btn{padding:6px 10px;border-radius:var(--rsm);font-size:12px;font-weight:600;font-family:var(--f);cursor:pointer;border:1.5px solid var(--bdr);background:var(--card);color:var(--ink2);transition:all var(--tr);white-space:nowrap}
+.cp-btn:active{transform:scale(.96)}
+.cp-btn.ok{background:var(--ok-dim);color:var(--ok);border-color:#6ee7b7}
+.cp-btn.miss{background:var(--surf);color:var(--ink3);border-color:var(--bdr)}
+.cp-btn.complete{background:var(--acc-dim);color:var(--acc-dk);border-color:var(--acc)}
+
 /* ── Toast ──────────────────────────────────────────────────────── */
 .toast{position:fixed;bottom:calc(84px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#1a1a2e;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:600;z-index:400;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;max-width:calc(100vw - 32px);text-align:center}
 .toast.show{opacity:1}
@@ -381,7 +395,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v4.9</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v5.0</span></h1>
     <div class="gat-sync-badge" id="gatSyncBadge" style="pointer-events:none;user-select:none"><div class="gat-sync-dot" id="gatSyncDot"></div><span id="gatSyncText"></span></div>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Sync">💾</button>
@@ -1039,7 +1053,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v4.9</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v5.0</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
@@ -3243,12 +3257,129 @@ function gcalTripUrl(t){
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// COMPLETION PROMPT — fires once per day on first open
+// ═══════════════════════════════════════════════════════════════════
+function checkCompletionPrompt(){
+  const todayStr=localDateStr(new Date());
+  const checkedKey=SK+'_cpChecked';
+
+  // Only prompt once per calendar day
+  if(localStorage.getItem(checkedKey)===todayStr) return;
+  localStorage.setItem(checkedKey, todayStr);
+
+  const d=getData();
+  const all=(d.events||[]).filter(ev=>!ev._deleted);
+
+  // Gigs: date is yesterday or earlier, not done, not missed
+  const pendingGigs=all.filter(ev=>
+    ev.type==='gig' &&
+    ev.date && ev.date<todayStr &&
+    !ev.done && !ev.missed
+  );
+
+  // Trips: endDate is yesterday or earlier, status is still Planning or Booked
+  const pendingTrips=all.filter(ev=>
+    ev.type==='trip' &&
+    ev.endDate && ev.endDate<todayStr &&
+    (ev.status==='Planning'||ev.status==='Booked')
+  );
+
+  const pending=[...pendingTrips, ...pendingGigs];
+  if(!pending.length) return;
+
+  // Sort: most recently past first
+  pending.sort((a,b)=>{
+    const da=a.type==='gig'?a.date:a.endDate;
+    const db=b.type==='gig'?b.date:b.endDate;
+    return db.localeCompare(da);
+  });
+
+  // Build modal content
+  const count=pending.length;
+  let itemsHtml=pending.map(ev=>{
+    if(ev.type==='gig'){
+      const ti=gigTypeInfo(ev.gigType||'music');
+      return `<div class="cp-item" id="cp-${esc(ev.id)}">
+        <div class="cp-icon">${ti.icon}</div>
+        <div class="cp-info">
+          <div class="cp-name">${esc(ev.name)}</div>
+          <div class="cp-sub">${fmtDateShort(ev.date)}${ev.venue?' · '+esc(ev.venue):''}</div>
+        </div>
+        <div class="cp-actions">
+          <button class="cp-btn ok" onclick="cpMarkGigDone('${esc(ev.id)}')">✓ Done</button>
+          <button class="cp-btn miss" onclick="cpMarkGigMissed('${esc(ev.id)}')">✗ Missed</button>
+        </div>
+      </div>`;
+    } else {
+      return `<div class="cp-item" id="cp-${esc(ev.id)}">
+        <div class="cp-icon">✈️</div>
+        <div class="cp-info">
+          <div class="cp-name">${esc(ev.name)}</div>
+          <div class="cp-sub">${fmtDateShort(ev.startDate)} – ${fmtDateShort(ev.endDate)}${ev.destination?' · '+esc(ev.destination):''}</div>
+        </div>
+        <div class="cp-actions">
+          <button class="cp-btn complete" onclick="cpMarkTripDone('${esc(ev.id)}')">✓ Complete</button>
+        </div>
+      </div>`;
+    }
+  }).join('');
+
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">Catch up (${count})</div>
+      <button class="modal-close" onclick="closeModal()">Later</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--ink3);margin-bottom:12px">
+        ${count===1?'This item is':'These items are'} in the past — how did ${count===1?'it':'they'} go?
+      </p>
+      <div id="cpList">${itemsHtml}</div>
+      <div style="margin-top:16px">
+        <button class="btn btn-ghost" style="width:100%" onclick="closeModal()">Skip for now</button>
+      </div>
+    </div>`);
+}
+
+// Remove a completion prompt item from the list; close modal if all done
+function cpRemoveItem(id){
+  const el=document.getElementById('cp-'+id);
+  if(el) el.remove();
+  const list=document.getElementById('cpList');
+  if(list&&!list.children.length) closeModal();
+}
+
+function cpMarkGigDone(id){
+  const g=getEvent(id); if(!g) return;
+  g.done=true; g.missed=false; g.updatedAt=new Date().toISOString();
+  saveEvent(g);
+  cpRemoveItem(id);
+  showToast('Marked as done ✓');
+}
+
+function cpMarkGigMissed(id){
+  const g=getEvent(id); if(!g) return;
+  g.missed=true; g.done=false; g.updatedAt=new Date().toISOString();
+  saveEvent(g);
+  cpRemoveItem(id);
+  showToast('Marked as missed');
+}
+
+function cpMarkTripDone(id){
+  const t=getEvent(id); if(!t) return;
+  t.status='Completed'; t.updatedAt=new Date().toISOString();
+  saveEvent(t);
+  cpRemoveItem(id);
+  showToast('Trip marked complete ✓');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // BOOT
 // ═══════════════════════════════════════════════════════════════════
 function onUnlocked(){
   render();
   pullFromSupabase();  // initial pull
   startPoll();         // then poll every 60s in background
+  // Check for past items needing completion — delay so initial pull can settle
+  setTimeout(checkCompletionPrompt, 1800);
 }
 
 // Expose for launcher backup
