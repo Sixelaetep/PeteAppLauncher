@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.17</title>
+<title>On Budget v3.18</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.17</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.18</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -687,7 +687,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.17
+// On Budget v3.18
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -862,6 +862,16 @@
 // hitting a duplicate-key conflict and surfacing as an immediate sync
 // error. Added a _syncInFlight guard shared by syncPull/syncPush,
 // matching the pattern Test & Issues already uses (_syncLock).
+// v3.18 (ON--025): the shop list moves from one blob with a union
+// merge to individual per-record entries (id = lowercased name),
+// going through pal-sync's table() pattern like everything else in
+// this app. The union merge could only ever add — a delete on one
+// device never propagated to another that still had the name locally,
+// and could even get silently resurrected by that device's next push.
+// Tradeoff: count/lastUsed used to merge as max(both values); now it's
+// whichever device wrote most recently, same as every other collection.
+// Existing local items are migrated in place (id/updated_at backfilled)
+// and the old __ft_labels__ blob is tombstoned once it's no longer needed.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -933,11 +943,9 @@ let meta = { changesSinceBackup:0, lastBackupAt:null };
 // pulling transactions can't cross-contaminate with recurring items,
 // bills, or overrides (all of which carry an id).
 //
-// __ft_labels__ (the shop list) deliberately stays OUTSIDE pal-sync's
-// generic merge — it's a union merge (two devices can legitimately add
-// different shop names between syncs; last-write-wins would silently
-// drop whichever side didn't sync last), not last-write-wins. It still
-// uses _obRaw.upsert() to push, just never goes through .pull().
+// Shop list items (ftlabel_ prefix, v3.18/ON--025) go through the same
+// pattern too, one record per shop name — see the changelog entry above
+// for why this replaced the old single-blob union merge.
 const SB_TABLE   = 'on_budget_entries';
 const _obRaw      = window.PalSync.table(SB_TABLE); // singletons only (record_key === id, no prefix) — pushed via upsert(), merged by hand below
 const _obMonths   = window.PalSync.table(SB_TABLE, { prefix: 'month_' });
@@ -945,6 +953,7 @@ const _obTx       = window.PalSync.table(SB_TABLE, { prefix: 'tx_' });
 const _obBillsRec = window.PalSync.table(SB_TABLE, { prefix: 'billsrecur_' });
 const _obBillsTx  = window.PalSync.table(SB_TABLE, { prefix: 'billstx_' });
 const _obBillsOv  = window.PalSync.table(SB_TABLE, { prefix: 'billsoverride_' });
+const _obFtLabels = window.PalSync.table(SB_TABLE, { prefix: 'ftlabel_' }); // v3.18 (ON--025): per-record, not a blob — see changelog
 
 let _syncState = 'local';   // local | connecting | syncing | synced | error
 let _syncLog   = [];        // [{ts, msg, type}] newest first, cap 120
@@ -985,10 +994,24 @@ async function syncUpsertSettings() {
   try { setSyncState('syncing'); await _obRaw.upsert('__settings__', settings); setSyncState('synced'); addSyncLog('Food & Travel settings synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Settings sync failed: '+err.message,'err'); }
 }
-async function syncUpsertFtLabels() {
+// v3.18 (ON--025): the shop list used to be one blob with a union merge
+// (adds from either device combined, but deletes never propagated — a
+// deleted name would just get re-added by whichever device still had it
+// locally). Each shop name is now its own record, id'd by its lowercased
+// name (matching the existing case-insensitive matching), going through
+// the same tombstone + last-write-wins pattern as every other collection
+// in this app. One tradeoff: count/lastUsed used to merge as max(both) —
+// now it's whichever device's write is newest, like everywhere else.
+function ftLabelId(name) { return (name||'').trim().toLowerCase(); }
+async function syncUpsertFtLabel(item) {
   if (!window.PalSync.hasSession()) return;
-  try { setSyncState('syncing'); await _obRaw.upsert('__ft_labels__', ftLabels); setSyncState('synced'); addSyncLog('Shop list synced','ok'); }
+  try { setSyncState('syncing'); await _obFtLabels.upsert(item.id, item); setSyncState('synced'); addSyncLog('Shop list item synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Shop list sync failed: '+err.message,'err'); }
+}
+async function syncTombstoneFtLabel(item) {
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obFtLabels.tombstone(item.id, item); setSyncState('synced'); addSyncLog('Shop list item removed in cloud','ok'); }
+  catch(err) { setSyncState('error'); addSyncLog('Shop list delete sync failed — will retry next sync: '+err.message,'err'); }
 }
 async function syncUpsertBillsSettings() {
   if (!window.PalSync.hasSession()) return;
@@ -1052,8 +1075,11 @@ async function syncPush() {
   try {
     await _obRaw.upsert('__settings__', settings);
     await _obRaw.upsert('__bills_settings__', bills.settings);
-    await _obRaw.upsert('__ft_labels__', ftLabels);
     let count = 0;
+    for (const l of ftLabels.items) {
+      if (l._deleted) { await _obFtLabels.tombstone(l.id, l); }
+      else { await _obFtLabels.upsert(l.id, l); count++; }
+    }
     for (const mk of Object.keys(months)) {
       const m = months[mk];
       await _obMonths.upsert(mk, { monthKey:mk, startBalance:m.startBalance, updated_at:m.updated_at||new Date().toISOString() });
@@ -1117,33 +1143,20 @@ async function syncPull() {
       }
     }
 
-    // Shop list is a UNION merge, not last-write-wins — unlike a single
-    // settings value, two devices can legitimately add different shop
-    // names between syncs, and a whole-blob replace would silently drop
-    // whichever device's additions didn't happen to sync last. Stays
-    // outside pal-sync.js entirely — it has no per-record concept to
-    // merge against, just one blob with its own union logic.
-    if (byKey['__ft_labels__']) {
-      const remote = byKey['__ft_labels__'].data;
-      const remoteItems = remote.items || [];
-      const merged = [...ftLabels.items];
-      remoteItems.forEach(ri => {
-        const idx = merged.findIndex(li=>li.name.toLowerCase()===ri.name.toLowerCase());
-        if (idx===-1) merged.push(ri);
-        else {
-          merged[idx] = {
-            name: merged[idx].name,
-            count: Math.max(merged[idx].count||0, ri.count||0),
-            lastUsed: (merged[idx].lastUsed||'') > (ri.lastUsed||'') ? merged[idx].lastUsed : ri.lastUsed
-          };
-        }
-      });
-      const changed = merged.length !== ftLabels.items.length || JSON.stringify(merged)!==JSON.stringify(ftLabels.items);
-      ftLabels = { items: merged, updated_at: new Date().toISOString() };
-      if (changed) {
-        addSyncLog('Shop list merged from cloud','ok');
-        await _obRaw.upsert('__ft_labels__', ftLabels);
-      }
+    // v3.18 (ON--025): shop list items are now individual records, going
+    // through the same pull() every other collection uses — tombstones
+    // now propagate correctly, which the old union merge never supported.
+    const ftResult = await _obFtLabels.pull(ftLabels.items, 'id', 'updated_at', rows);
+    ftLabels.items = ftResult.merged;
+
+    // One-time retirement of the old __ft_labels__ blob, if it's still
+    // there from before this version. Each device's existing local items
+    // already get individually pushed up by the .pull() call above (via
+    // its own "local-only" step), so nothing needs to be read out of the
+    // old blob — it's just dead weight once every device has migrated.
+    if (byKey['__ft_labels__'] && !byKey['__ft_labels__'].data._deleted) {
+      await _obRaw.tombstone('__ft_labels__', {});
+      addSyncLog('Retired legacy shop list record','info');
     }
 
     // Months (per-month starting balance) — flatten the keyed object
@@ -1187,7 +1200,7 @@ async function syncPull() {
     // Local-only records (a fresh device, or edits made while offline)
     // are already pushed up by each .pull() call above — no separate
     // "push anything cloud doesn't have" loop needed anymore.
-    const pushedUp = monthsResult.pushedCount + txResult.pushedCount + recurResult.pushedCount + billsTxResult.pushedCount + overrideResult.pushedCount;
+    const pushedUp = monthsResult.pushedCount + txResult.pushedCount + recurResult.pushedCount + billsTxResult.pushedCount + overrideResult.pushedCount + ftResult.pushedCount;
     if (pushedUp) addSyncLog(`${pushedUp} local-only record(s) pushed to cloud`,'info');
 
     // A cloud row can still carry an old food/travel tag if it was
@@ -1299,7 +1312,15 @@ function backfillSyncTimestamps() {
   bills.recurring.forEach(r => { if (!r.updated_at) r.updated_at = nowIso(); });
   bills.tx.forEach(t => { if (!t.updated_at) t.updated_at = tsFrom(t); });
   (bills.overrides||[]).forEach(o => { if (!o.updated_at) o.updated_at = nowIso(); });
-  if (!ftLabels.updated_at && ftLabels.items.length) ftLabels.updated_at = nowIso();
+  // v3.18 (ON--025): shop list items used to be one blob (a single
+  // ftLabels.updated_at covered all of them); each is now its own record
+  // and needs its own id + updated_at before it can go through pal-sync's
+  // per-record pull — without an id, every un-migrated item would
+  // collide under the same undefined key and all but one would vanish.
+  ftLabels.items.forEach(l => {
+    if (!l.id) l.id = ftLabelId(l.name);
+    if (!l.updated_at) l.updated_at = ftLabels.updated_at || nowIso();
+  });
 }
 
 function save(trackChange) {
@@ -1307,7 +1328,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.17', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.18', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1316,7 +1337,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.17', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.18', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1997,7 +2018,7 @@ function toggleDate() {
 function renderQuickLabels() {
   const el = document.getElementById('quick-label-row');
   if (!el) return;
-  const sorted = [...ftLabels.items].sort((a,b)=>(b.lastUsed||'').localeCompare(a.lastUsed||'')).slice(0,10);
+  const sorted = [...ftLabels.items].filter(l=>!l._deleted).sort((a,b)=>(b.lastUsed||'').localeCompare(a.lastUsed||'')).slice(0,10);
   if (!sorted.length) { el.style.display='none'; el.innerHTML=''; return; }
   el.style.display = 'flex';
   el.innerHTML = sorted.map(l=>
@@ -2010,12 +2031,21 @@ function pickQuickLabel(name) {
 function touchFtLabel(name) {
   const norm = (name||'').trim();
   if (!norm) return;
-  const idx = ftLabels.items.findIndex(l=>l.name.toLowerCase()===norm.toLowerCase());
+  const id = ftLabelId(norm);
+  const idx = ftLabels.items.findIndex(l=>l.id===id);
   const now = new Date().toISOString();
-  if (idx>-1) { ftLabels.items[idx].count = (ftLabels.items[idx].count||0)+1; ftLabels.items[idx].lastUsed = now; }
-  else { ftLabels.items.push({ name:norm, count:1, lastUsed:now }); }
-  ftLabels.updated_at = now;
-  syncUpsertFtLabels();
+  let item;
+  if (idx>-1) {
+    item = ftLabels.items[idx];
+    item.count = (item.count||0)+1;
+    item.lastUsed = now;
+    item.updated_at = now;
+    delete item._deleted; // re-adding a previously-removed name un-deletes it
+  } else {
+    item = { id, name:norm, count:1, lastUsed:now, updated_at:now };
+    ftLabels.items.push(item);
+  }
+  syncUpsertFtLabel(item);
 }
 
 // Settings list management — pruning, not building; the list builds
@@ -2058,18 +2088,21 @@ function updateProjectionPreview() {
 function renderManageLabels() {
   const el = document.getElementById('manage-labels-list');
   if (!el) return;
-  const sorted = [...ftLabels.items].sort((a,b)=>a.name.localeCompare(b.name));
+  const sorted = [...ftLabels.items].filter(l=>!l._deleted).sort((a,b)=>a.name.localeCompare(b.name));
   if (!sorted.length) { el.innerHTML = `<div style="font-size:12px;color:var(--ink3)">No shops saved yet — add a label when logging a transaction and it'll appear here.</div>`; return; }
   el.innerHTML = sorted.map(l=>
     `<span class="manage-label-chip">${l.name}<button onclick="deleteFtLabel('${l.name.replace(/'/g,"\\'")}')">✕</button></span>`
   ).join('');
 }
 function deleteFtLabel(name) {
-  ftLabels.items = ftLabels.items.filter(l=>l.name!==name);
-  ftLabels.updated_at = new Date().toISOString();
+  const idx = ftLabels.items.findIndex(l=>l.name===name && !l._deleted);
+  if (idx===-1) return;
+  const item = ftLabels.items[idx];
+  item._deleted = true;
+  item.updated_at = new Date().toISOString();
   save(true);
   renderManageLabels();
-  syncUpsertFtLabels();
+  syncTombstoneFtLabel(item);
   toast('Removed from shop list');
 }
 
