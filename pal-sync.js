@@ -26,6 +26,38 @@
  * This wasn't a hidden risk, it was total breakage for that field
  * convention. pull() now takes an optional updatedAtField (3rd arg,
  * default 'updated_at' — unchanged for existing callers).
+ * v1.3 — two fixes surfaced while planning On Budget, which shares one
+ * table across SEVEN record kinds (far more than Test & Issues' two):
+ * (1) pull() did its own full-table GET every time — fine for one or
+ * two kinds, wasteful for seven near-identical fetches of the same
+ * rows. pull() now accepts an optional 4th arg, preFetchedRows; when
+ * provided, it skips the network call and merges against those rows
+ * instead. New PalSync.fetchTableRows(tableName) does the one fetch a
+ * multi-kind app needs, shared across all its table() instances.
+ * Existing 3-arg callers (Claim Tracker, Test & Issues) are unaffected
+ * — they keep doing their own single fetch exactly as before.
+ * (2) the tie-break on an exact timestamp match was local-wins (`>`).
+ * On Budget's own hand-rolled merges (already in production, proven)
+ * use cloud-wins-on-tie (`>=`) — that's what makes a push-then-pull on
+ * the same device converge cleanly instead of re-diverging. Adopted
+ * `>=` as the one canonical choice; Claim Tracker and Test & Issues
+ * inherit this too, since a tie is an edge case rare enough that
+ * consistency across apps matters more than which side wins it.
+ * v1.4 — the "push local-only records up" step in pull() excluded
+ * anything with _deleted:true. Fine for apps that splice a deleted
+ * record out of its local array immediately (Claim Tracker, Test &
+ * Issues) — there's no local tombstone left to exclude. But On Budget
+ * keeps _deleted:true records in their local arrays deliberately, so a
+ * delete made while offline survives until it's confirmed synced. With
+ * the old exclusion, that offline tombstone would never get pushed by
+ * a pull — it would just be silently stripped from the merged result
+ * (pull()'s output has always dropped _deleted records, correctly),
+ * with the cloud never having been told. Other devices would then never
+ * see the deletion. Local-only records are now always pushed up exactly
+ * as they are (including a _deleted:true one), regardless of which
+ * pattern the calling app uses — a strict correctness improvement, not
+ * a behavior choice, since a tombstone that never reaches the cloud
+ * defeats the entire point of tombstoning.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -89,6 +121,18 @@ window.PalSync = (function () {
     return fetch(window.PAL_CONFIG.SB_URL + '/rest/v1' + path, opts);
   }
 
+  // ── Fetch all rows in a table once ─────────────────────────────────
+  // For apps with several record kinds sharing one table (e.g. On
+  // Budget's 7 kinds under one table), fetch once and pass the result
+  // into each table() instance's pull() as preFetchedRows, instead of
+  // each instance doing its own identical full-table GET.
+  async function fetchTableRows(tableName) {
+    if (!hasSession()) return [];
+    const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
+    if (!res.ok) throw new Error(res.status + ' ' + (await res.text()));
+    return res.json();
+  }
+
   // ── Per-table helper ──────────────────────────────────────────────
   // tableName: the Supabase table (record_key + jsonb data + updated_at,
   // RLS scoped to auth.uid() = user_id — see the reference tables already
@@ -145,6 +189,10 @@ window.PalSync = (function () {
     //   the calling app actually stamps — a mismatch here means every
     //   comparison silently evaluates false and incoming updates never
     //   win, which is exactly what happened before this was configurable.
+    // preFetchedRows: optional — if you've already called
+    //   PalSync.fetchTableRows(tableName) (e.g. once per pull cycle for
+    //   an app with several record kinds sharing one table), pass the
+    //   result here to skip this instance's own network fetch.
     //
     // Returns { merged, pushedCount, rows, skipped }:
     //   merged      — final live record array (tombstones stripped) —
@@ -157,14 +205,12 @@ window.PalSync = (function () {
     //                 which carry an id field so this merge ignores them
     //                 automatically either way).
     //   skipped     — true if there's no session; merged === localRecords.
-    async function pull(localRecords, idField, updatedAtField) {
+    async function pull(localRecords, idField, updatedAtField, preFetchedRows) {
       idField = idField || 'id';
       updatedAtField = updatedAtField || 'updated_at';
       if (!hasSession()) return { merged: localRecords, pushedCount: 0, rows: [], skipped: true };
 
-      const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
-      if (!res.ok) throw new Error(res.status + ' ' + (await res.text()));
-      const allRows = await res.json();
+      const allRows = preFetchedRows || await fetchTableRows(tableName);
       // Scope the merge to this instance's prefix, if any — otherwise a
       // table holding multiple record kinds (each with an id field) would
       // get cross-contaminated (e.g. issues merging into an apps pull).
@@ -179,7 +225,7 @@ window.PalSync = (function () {
         if (remote._deleted) { delete localMap[remote[idField]]; return; }
         const local = localMap[remote[idField]];
         if (local && local._deleted) return; // local tombstone wins — don't resurrect from an older cloud copy
-        if (!local || (remote[updatedAtField] || '') > (local[updatedAtField] || '')) {
+        if (!local || (remote[updatedAtField] || '') >= (local[updatedAtField] || '')) {
           localMap[remote[idField]] = remote;
         }
       });
@@ -187,7 +233,11 @@ window.PalSync = (function () {
       // Derived from each row's own data[idField], not the raw record_key —
       // safe regardless of whether this instance uses a prefix.
       const cloudIds  = new Set(rows.map(function (r) { return r.data && r.data[idField]; }).filter(Boolean));
-      const localOnly = Object.values(localMap).filter(function (r) { return !r._deleted && !cloudIds.has(r[idField]); });
+      // Local-only records not yet in cloud — push them up exactly as
+      // they are, INCLUDING a _deleted:true one. A delete made offline
+      // still needs to reach the cloud so other devices learn about it;
+      // excluding tombstones here would silently strand offline deletes.
+      const localOnly = Object.values(localMap).filter(function (r) { return !cloudIds.has(r[idField]); });
       for (const r of localOnly) await upsert(r[idField], r);
 
       const merged = Object.values(localMap).filter(function (r) { return !r._deleted; });
@@ -198,10 +248,11 @@ window.PalSync = (function () {
   }
 
   return {
-    initSession: initSession,
-    hasSession:  hasSession,
-    getUserId:   getUserId,
-    sbFetch:     sbFetch,
-    table:       table
+    initSession:    initSession,
+    hasSession:     hasSession,
+    getUserId:      getUserId,
+    sbFetch:        sbFetch,
+    fetchTableRows: fetchTableRows,
+    table:          table
   };
 })();

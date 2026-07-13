@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.15</title>
+<title>On Budget v3.16</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.15</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.16</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -683,9 +683,11 @@
 
 <div id="toast"></div>
 
+<script src="pal-config.js"></script>
+<script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.15
+// On Budget v3.16
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -843,6 +845,14 @@
 // across the file. Also added lastExported to the save/export envelope
 // (was missing; every other app in the suite tracks it) using the
 // existing meta.lastBackupAt as the source of truth.
+// v3.16: migrated to the shared pal-sync.js (now v1.4). Now loads
+// pal-config.js instead of hardcoding SB_URL/SB_ANON. Settings/bills
+// settings singletons and the shop list's union merge stay hand-rolled
+// exactly as before — neither fits pal-sync's generic per-record model.
+// Months, transactions, recurring bills, bills transactions, and
+// occurrence overrides now go through pal-sync's table() instances,
+// one per record_key prefix, sharing a single fetch via
+// PalSync.fetchTableRows() instead of doing 7 near-identical GETs.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -906,14 +916,28 @@ let meta = { changesSinceBackup:0, lastBackupAt:null };
 // meta (backup-nudge counters) is deliberately NOT synced — it's a
 // per-device nudge, not real data.
 // ══════════════════════════════════════════════════════════════
-const SB_URL   = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
-const SB_ANON  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-const SB_TABLE = 'on_budget_entries';
+// v3.16: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
+// (which this app never loaded despite pal-config.js's own header
+// comment claiming every app does). Now loaded from window.PAL_CONFIG
+// via pal-sync.js. One shared table, several record kinds distinguished
+// by record_key prefix — each gets its own scoped table() instance so
+// pulling transactions can't cross-contaminate with recurring items,
+// bills, or overrides (all of which carry an id).
+//
+// __ft_labels__ (the shop list) deliberately stays OUTSIDE pal-sync's
+// generic merge — it's a union merge (two devices can legitimately add
+// different shop names between syncs; last-write-wins would silently
+// drop whichever side didn't sync last), not last-write-wins. It still
+// uses _obRaw.upsert() to push, just never goes through .pull().
+const SB_TABLE   = 'on_budget_entries';
+const _obRaw      = window.PalSync.table(SB_TABLE); // singletons only (record_key === id, no prefix) — pushed via upsert(), merged by hand below
+const _obMonths   = window.PalSync.table(SB_TABLE, { prefix: 'month_' });
+const _obTx       = window.PalSync.table(SB_TABLE, { prefix: 'tx_' });
+const _obBillsRec = window.PalSync.table(SB_TABLE, { prefix: 'billsrecur_' });
+const _obBillsTx  = window.PalSync.table(SB_TABLE, { prefix: 'billstx_' });
+const _obBillsOv  = window.PalSync.table(SB_TABLE, { prefix: 'billsoverride_' });
 
-let _sbToken   = null;
-let _sbUserId  = null;
 let _syncState = 'local';   // local | connecting | syncing | synced | error
-let _palTimer  = null;
 let _syncLog   = [];        // [{ts, msg, type}] newest first, cap 120
 
 function setSyncState(state, label) {
@@ -927,8 +951,8 @@ function setSyncState(state, label) {
     if (lbl) lbl.textContent = text;
   }
   const st = document.getElementById('sb-status');   if (st) st.textContent = text;
-  const se = document.getElementById('sb-session');  if (se) se.textContent = _sbToken  ? 'Token received' : 'No token';
-  const us = document.getElementById('sb-user');     if (us) us.textContent = _sbUserId ? _sbUserId.slice(0,8)+'…' : '—';
+  const se = document.getElementById('sb-session');  if (se) se.textContent = window.PalSync.hasSession() ? 'Token received' : 'No token';
+  const us = document.getElementById('sb-user');     if (us) us.textContent = window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '—';
 }
 
 function addSyncLog(msg, type) {
@@ -941,136 +965,102 @@ function addSyncLog(msg, type) {
   }
 }
 
-// ── Low-level Supabase REST call ──
-async function sbFetch(path, method, body) {
-  method = method || 'GET';
-  const headers = {
-    'apikey': SB_ANON,
-    'Authorization': 'Bearer ' + _sbToken,
-    'Content-Type': 'application/json',
-    'Prefer': method === 'PATCH' ? 'return=representation' : ''
-  };
-  const opts = { method, headers };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(SB_URL + '/rest/v1' + path, opts);
-}
-
-// ── Upsert one row: PATCH first (by user_id+record_key), POST if no match ──
-async function upsertRow(recordKey, data) {
-  if (!_sbToken || !_sbUserId) return;
-  const row = { user_id:_sbUserId, record_key:recordKey, data, updated_at:new Date().toISOString() };
-  const patch = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&record_key=eq.${encodeURIComponent(recordKey)}`, 'PATCH', row);
-  if (patch.ok) {
-    const body = await patch.json();
-    if (Array.isArray(body) && body.length === 0) {
-      const post = await sbFetch(`/${SB_TABLE}`, 'POST', row);
-      if (!post.ok) throw new Error('POST failed: ' + (await post.text()));
-    }
-  } else {
-    throw new Error('PATCH failed: ' + (await patch.text()));
-  }
-}
-
-async function tombstoneRow(recordKey, snapshot) {
-  await upsertRow(recordKey, { ...snapshot, _deleted:true, updated_at:new Date().toISOString() });
-}
-
 // ── Fire-and-forget wrappers used by every mutation function above.
 //    Best-effort: if offline, the local record already carries its own
 //    _deleted/updated_at marker (for deletes) so the next successful
 //    sync will retry it — nothing is silently lost, but a failure here
 //    is surfaced in the sync log rather than swallowed. ──
 async function syncUpsertSettings() {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('__settings__', settings); setSyncState('synced'); addSyncLog('Food & Travel settings synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obRaw.upsert('__settings__', settings); setSyncState('synced'); addSyncLog('Food & Travel settings synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Settings sync failed: '+err.message,'err'); }
 }
 async function syncUpsertFtLabels() {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('__ft_labels__', ftLabels); setSyncState('synced'); addSyncLog('Shop list synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obRaw.upsert('__ft_labels__', ftLabels); setSyncState('synced'); addSyncLog('Shop list synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Shop list sync failed: '+err.message,'err'); }
 }
 async function syncUpsertBillsSettings() {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('__bills_settings__', bills.settings); setSyncState('synced'); addSyncLog('Bills settings synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obRaw.upsert('__bills_settings__', bills.settings); setSyncState('synced'); addSyncLog('Bills settings synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Bills settings sync failed: '+err.message,'err'); }
 }
 async function syncUpsertMonth(mk) {
-  if (!_sbToken || !months[mk]) return;
-  try { setSyncState('syncing'); await upsertRow('month_'+mk, { monthKey:mk, startBalance:months[mk].startBalance, updated_at:months[mk].updated_at }); setSyncState('synced'); addSyncLog('Month '+mk+' synced','ok'); }
+  if (!window.PalSync.hasSession() || !months[mk]) return;
+  try { setSyncState('syncing'); await _obMonths.upsert(mk, { monthKey:mk, startBalance:months[mk].startBalance, updated_at:months[mk].updated_at }); setSyncState('synced'); addSyncLog('Month '+mk+' synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Month sync failed: '+err.message,'err'); }
 }
 async function syncUpsertTx(mk, t) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('tx_'+mk+'_'+t.id, { ...t, monthKey:mk }); setSyncState('synced'); addSyncLog('Transaction synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obTx.upsert(mk+'_'+t.id, { ...t, monthKey:mk }); setSyncState('synced'); addSyncLog('Transaction synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Transaction sync failed: '+err.message,'err'); }
 }
 async function syncTombstoneTx(mk, snapshot) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await tombstoneRow('tx_'+mk+'_'+snapshot.id, { ...snapshot, monthKey:mk }); setSyncState('synced'); addSyncLog('Transaction delete synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obTx.tombstone(mk+'_'+snapshot.id, { ...snapshot, monthKey:mk }); setSyncState('synced'); addSyncLog('Transaction delete synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Transaction delete sync failed — will retry next sync: '+err.message,'err'); }
 }
 async function syncUpsertBillsRecur(r) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('billsrecur_'+r.id, r); setSyncState('synced'); addSyncLog('Recurring item synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obBillsRec.upsert(r.id, r); setSyncState('synced'); addSyncLog('Recurring item synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Recurring sync failed: '+err.message,'err'); }
 }
 async function syncTombstoneBillsRecur(snapshot) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await tombstoneRow('billsrecur_'+snapshot.id, snapshot); setSyncState('synced'); addSyncLog('Recurring delete synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obBillsRec.tombstone(snapshot.id, snapshot); setSyncState('synced'); addSyncLog('Recurring delete synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Recurring delete sync failed — will retry next sync: '+err.message,'err'); }
 }
 async function syncUpsertBillsTx(t) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('billstx_'+t.id, t); setSyncState('synced'); addSyncLog('Bills transaction synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obBillsTx.upsert(t.id, t); setSyncState('synced'); addSyncLog('Bills transaction synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Bills transaction sync failed: '+err.message,'err'); }
 }
 async function syncTombstoneBillsTx(snapshot) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await tombstoneRow('billstx_'+snapshot.id, snapshot); setSyncState('synced'); addSyncLog('Bills transaction delete synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obBillsTx.tombstone(snapshot.id, snapshot); setSyncState('synced'); addSyncLog('Bills transaction delete synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Bills delete sync failed — will retry next sync: '+err.message,'err'); }
 }
 async function syncUpsertBillsOverride(o) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await upsertRow('billsoverride_'+o.id, o); setSyncState('synced'); addSyncLog('Occurrence edit synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obBillsOv.upsert(o.id, o); setSyncState('synced'); addSyncLog('Occurrence edit synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Occurrence edit sync failed: '+err.message,'err'); }
 }
 async function syncTombstoneBillsOverride(snapshot) {
-  if (!_sbToken) return;
-  try { setSyncState('syncing'); await tombstoneRow('billsoverride_'+snapshot.id, snapshot); setSyncState('synced'); addSyncLog('Occurrence edit removal synced','ok'); }
+  if (!window.PalSync.hasSession()) return;
+  try { setSyncState('syncing'); await _obBillsOv.tombstone(snapshot.id, snapshot); setSyncState('synced'); addSyncLog('Occurrence edit removal synced','ok'); }
   catch(err) { setSyncState('error'); addSyncLog('Occurrence edit removal sync failed — will retry next sync: '+err.message,'err'); }
 }
 
 // ── Push everything local to the cloud (manual "Push to cloud" button,
 //    and used by pull to send up anything cloud doesn't have yet) ──
 async function syncPush() {
-  if (!_sbToken || !_sbUserId) { addSyncLog('Push skipped — no session','info'); return; }
+  if (!window.PalSync.hasSession()) { addSyncLog('Push skipped — no session','info'); return; }
   setSyncState('syncing','Pushing…');
   addSyncLog('Push started','info');
   try {
-    await upsertRow('__settings__', settings);
-    await upsertRow('__bills_settings__', bills.settings);
-    await upsertRow('__ft_labels__', ftLabels);
+    await _obRaw.upsert('__settings__', settings);
+    await _obRaw.upsert('__bills_settings__', bills.settings);
+    await _obRaw.upsert('__ft_labels__', ftLabels);
     let count = 0;
     for (const mk of Object.keys(months)) {
       const m = months[mk];
-      await upsertRow('month_'+mk, { monthKey:mk, startBalance:m.startBalance, updated_at:m.updated_at||new Date().toISOString() });
+      await _obMonths.upsert(mk, { monthKey:mk, startBalance:m.startBalance, updated_at:m.updated_at||new Date().toISOString() });
       for (const t of (m.transactions||[])) {
-        if (t._deleted) { await tombstoneRow('tx_'+mk+'_'+t.id, { ...t, monthKey:mk }); }
-        else { await upsertRow('tx_'+mk+'_'+t.id, { ...t, monthKey:mk }); count++; }
+        if (t._deleted) { await _obTx.tombstone(mk+'_'+t.id, { ...t, monthKey:mk }); }
+        else { await _obTx.upsert(mk+'_'+t.id, { ...t, monthKey:mk }); count++; }
       }
     }
     for (const r of bills.recurring) {
-      if (r._deleted) { await tombstoneRow('billsrecur_'+r.id, r); }
-      else { await upsertRow('billsrecur_'+r.id, r); count++; }
+      if (r._deleted) { await _obBillsRec.tombstone(r.id, r); }
+      else { await _obBillsRec.upsert(r.id, r); count++; }
     }
     for (const t of bills.tx) {
-      if (t._deleted) { await tombstoneRow('billstx_'+t.id, t); }
-      else { await upsertRow('billstx_'+t.id, t); count++; }
+      if (t._deleted) { await _obBillsTx.tombstone(t.id, t); }
+      else { await _obBillsTx.upsert(t.id, t); count++; }
     }
     for (const o of bills.overrides) {
-      if (o._deleted) { await tombstoneRow('billsoverride_'+o.id, o); }
-      else { await upsertRow('billsoverride_'+o.id, o); count++; }
+      if (o._deleted) { await _obBillsOv.tombstone(o.id, o); }
+      else { await _obBillsOv.upsert(o.id, o); count++; }
     }
     setSyncState('synced');
     addSyncLog(`Push complete — ${count} record(s) + settings`,'ok');
@@ -1082,19 +1072,20 @@ async function syncPush() {
 
 // ── Pull everything from the cloud and merge ──
 async function syncPull() {
-  if (!_sbToken || !_sbUserId) { addSyncLog('Pull skipped — no session','info'); return; }
+  if (!window.PalSync.hasSession()) { addSyncLog('Pull skipped — no session','info'); return; }
   setSyncState('syncing','Pulling…');
   addSyncLog('Pull started','info');
   try {
-    const res = await sbFetch(`/${SB_TABLE}?user_id=eq.${_sbUserId}&select=record_key,data,updated_at`);
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-    const rows = await res.json();
+    // One fetch, shared across every table() instance below — was 7
+    // near-identical full-table GETs before pal-sync.js v1.3.
+    const rows = await window.PalSync.fetchTableRows(SB_TABLE);
     addSyncLog(`Pull received ${rows.length} row(s)`,'ok');
     const byKey = {};
     rows.forEach(r => byKey[r.record_key] = r);
-    const seenKeys = new Set(Object.keys(byKey));
 
-    // Settings singletons — cloud wins only if genuinely newer
+    // Settings singletons — cloud wins only if genuinely newer. Not a
+    // fit for the generic array merge (no id field, exactly one record
+    // per key), so this stays hand-rolled exactly as before.
     if (byKey['__settings__']) {
       const remote = byKey['__settings__'].data;
       if ((remote.updated_at||'') >= (settings.updated_at||'')) {
@@ -1113,7 +1104,9 @@ async function syncPull() {
     // Shop list is a UNION merge, not last-write-wins — unlike a single
     // settings value, two devices can legitimately add different shop
     // names between syncs, and a whole-blob replace would silently drop
-    // whichever device's additions didn't happen to sync last.
+    // whichever device's additions didn't happen to sync last. Stays
+    // outside pal-sync.js entirely — it has no per-record concept to
+    // merge against, just one blob with its own union logic.
     if (byKey['__ft_labels__']) {
       const remote = byKey['__ft_labels__'].data;
       const remoteItems = remote.items || [];
@@ -1133,109 +1126,52 @@ async function syncPull() {
       ftLabels = { items: merged, updated_at: new Date().toISOString() };
       if (changed) {
         addSyncLog('Shop list merged from cloud','ok');
-        await upsertRow('__ft_labels__', ftLabels);
+        await _obRaw.upsert('__ft_labels__', ftLabels);
       }
     }
 
-    // Months (per-month starting balance)
-    Object.keys(byKey).filter(k=>k.startsWith('month_')).forEach(k => {
-      const remote = byKey[k].data;
-      const mk = remote.monthKey || k.slice(6);
+    // Months (per-month starting balance) — flatten the keyed object
+    // into an array for pal-sync's merge, then rebuild. Transactions
+    // aren't carried on these records (they're their own kind, below);
+    // preserve each month's existing .transactions array across the merge.
+    const flatMonths = Object.keys(months).map(mk => ({
+      monthKey: mk, startBalance: months[mk].startBalance, updated_at: months[mk].updated_at
+    }));
+    const monthsResult = await _obMonths.pull(flatMonths, 'monthKey', 'updated_at', rows);
+    monthsResult.merged.forEach(m => {
+      if (!months[m.monthKey]) months[m.monthKey] = { startBalance:null, transactions:[] };
+      months[m.monthKey].startBalance = m.startBalance;
+      months[m.monthKey].updated_at   = m.updated_at;
+    });
+
+    // Food & Travel transactions — flatten across ALL months into one
+    // array (ids are generated via uid(), globally unique, so this is
+    // safe), merge, then redistribute back into their owning month by
+    // the monthKey each transaction already carries.
+    const flatTx = [];
+    Object.keys(months).forEach(mk => (months[mk].transactions||[]).forEach(t => flatTx.push(t)));
+    const txResult = await _obTx.pull(flatTx, 'id', 'updated_at', rows);
+    Object.keys(months).forEach(mk => { months[mk].transactions = []; });
+    txResult.merged.forEach(t => {
+      const mk = t.monthKey;
+      if (!mk) return;
       if (!months[mk]) months[mk] = { startBalance:null, transactions:[] };
-      if ((remote.updated_at||'') >= (months[mk].updated_at||'')) {
-        months[mk].startBalance = remote.startBalance;
-        months[mk].updated_at   = remote.updated_at;
-      }
+      months[mk].transactions.push(t);
     });
 
-    // Food & Travel transactions — tombstone-aware per-record merge
-    Object.keys(byKey).filter(k=>k.startsWith('tx_')).forEach(k => {
-      const remote = byKey[k].data;
-      const mk = remote.monthKey;
-      if (!mk || !remote.id) return;
-      if (!months[mk]) months[mk] = { startBalance:null, transactions:[] };
-      const list = months[mk].transactions;
-      const idx = list.findIndex(t=>t.id===remote.id);
-      if (remote._deleted) {
-        if (idx>-1) list.splice(idx,1);
-        return;
-      }
-      if (idx===-1) list.push(remote);
-      else if ((remote.updated_at||'') >= (list[idx].updated_at||'')) list[idx] = remote;
-    });
+    // Bills recurring / bills transactions / occurrence overrides — each
+    // already a flat array locally, so these map onto pal-sync directly.
+    const recurResult = await _obBillsRec.pull(bills.recurring, 'id', 'updated_at', rows);
+    bills.recurring = recurResult.merged;
+    const billsTxResult = await _obBillsTx.pull(bills.tx, 'id', 'updated_at', rows);
+    bills.tx = billsTxResult.merged;
+    const overrideResult = await _obBillsOv.pull(bills.overrides, 'id', 'updated_at', rows);
+    bills.overrides = overrideResult.merged;
 
-    // Bills recurring items — tombstone-aware
-    Object.keys(byKey).filter(k=>k.startsWith('billsrecur_')).forEach(k => {
-      const remote = byKey[k].data;
-      if (!remote.id) return;
-      const idx = bills.recurring.findIndex(r=>r.id===remote.id);
-      if (remote._deleted) {
-        if (idx>-1) bills.recurring.splice(idx,1);
-        return;
-      }
-      if (idx===-1) bills.recurring.push(remote);
-      else if ((remote.updated_at||'') >= (bills.recurring[idx].updated_at||'')) bills.recurring[idx] = remote;
-    });
-
-    // Bills transactions — tombstone-aware
-    Object.keys(byKey).filter(k=>k.startsWith('billstx_')).forEach(k => {
-      const remote = byKey[k].data;
-      if (!remote.id) return;
-      const idx = bills.tx.findIndex(t=>t.id===remote.id);
-      if (remote._deleted) {
-        if (idx>-1) bills.tx.splice(idx,1);
-        return;
-      }
-      if (idx===-1) bills.tx.push(remote);
-      else if ((remote.updated_at||'') >= (bills.tx[idx].updated_at||'')) bills.tx[idx] = remote;
-    });
-
-    // Per-occurrence edit overrides — tombstone-aware
-    Object.keys(byKey).filter(k=>k.startsWith('billsoverride_')).forEach(k => {
-      const remote = byKey[k].data;
-      if (!remote.id) return;
-      const idx = bills.overrides.findIndex(o=>o.id===remote.id);
-      if (remote._deleted) {
-        if (idx>-1) bills.overrides.splice(idx,1);
-        return;
-      }
-      if (idx===-1) bills.overrides.push(remote);
-      else if ((remote.updated_at||'') >= (bills.overrides[idx].updated_at||'')) bills.overrides[idx] = remote;
-    });
-
-    // Anything local that cloud doesn't have yet — push it up (covers a
-    // fresh device, or edits made while offline before this pull)
-    let pushedUp = 0;
-    if (!seenKeys.has('__settings__')) { await upsertRow('__settings__', settings); pushedUp++; }
-    if (!seenKeys.has('__bills_settings__')) { await upsertRow('__bills_settings__', bills.settings); pushedUp++; }
-    if (!seenKeys.has('__ft_labels__') && ftLabels.items.length) { await upsertRow('__ft_labels__', ftLabels); pushedUp++; }
-    for (const mk of Object.keys(months)) {
-      if (!seenKeys.has('month_'+mk)) { await upsertRow('month_'+mk, { monthKey:mk, startBalance:months[mk].startBalance, updated_at:months[mk].updated_at||new Date().toISOString() }); pushedUp++; }
-      for (const t of (months[mk].transactions||[])) {
-        const key = 'tx_'+mk+'_'+t.id;
-        if (seenKeys.has(key)) continue;
-        if (t._deleted) await tombstoneRow(key, { ...t, monthKey:mk });
-        else { await upsertRow(key, { ...t, monthKey:mk }); pushedUp++; }
-      }
-    }
-    for (const r of bills.recurring) {
-      const key = 'billsrecur_'+r.id;
-      if (seenKeys.has(key)) continue;
-      if (r._deleted) await tombstoneRow(key, r);
-      else { await upsertRow(key, r); pushedUp++; }
-    }
-    for (const t of bills.tx) {
-      const key = 'billstx_'+t.id;
-      if (seenKeys.has(key)) continue;
-      if (t._deleted) await tombstoneRow(key, t);
-      else { await upsertRow(key, t); pushedUp++; }
-    }
-    for (const o of bills.overrides) {
-      const key = 'billsoverride_'+o.id;
-      if (seenKeys.has(key)) continue;
-      if (o._deleted) await tombstoneRow(key, o);
-      else { await upsertRow(key, o); pushedUp++; }
-    }
+    // Local-only records (a fresh device, or edits made while offline)
+    // are already pushed up by each .pull() call above — no separate
+    // "push anything cloud doesn't have" loop needed anymore.
+    const pushedUp = monthsResult.pushedCount + txResult.pushedCount + recurResult.pushedCount + billsTxResult.pushedCount + overrideResult.pushedCount;
     if (pushedUp) addSyncLog(`${pushedUp} local-only record(s) pushed to cloud`,'info');
 
     // A cloud row can still carry an old food/travel tag if it was
@@ -1253,23 +1189,26 @@ async function syncPull() {
   }
 }
 
-// ── Launcher handshake — identical pattern to Claim Tracker/Fortnight/
-//    GigsAndTrips: launcher posts PAL_SESSION once signed in, we listen
-//    for it. No launcher-side changes needed; it already sends this. ──
-window.addEventListener('message', function(e) {
-  if (e.origin !== window.location.origin) return;
-  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
-    clearTimeout(_palTimer);
+// ── Launcher handshake ────────────────────────────────────────
+// v3.16: session handling (token/user_id, origin guard) moved to
+// pal-sync.js — same behaviour, shared code.
+window.PalSync.initSession({
+  onSession: function () {
     const banner = document.getElementById('sync-open-banner');
     if (banner) banner.classList.remove('show');
-    _sbToken  = e.data.access_token || null;
-    _sbUserId = e.data.user_id || null;
-    if (_sbToken && _sbUserId) {
-      addSyncLog('PAL_SESSION received — starting sync','info');
-      setSyncState('connecting');
-      syncPull();
-    }
-  }
+    addSyncLog('PAL_SESSION received — starting sync','info');
+    setSyncState('connecting');
+    syncPull();
+  },
+  onNoSession: function () {
+    const banner = document.getElementById('sync-open-banner');
+    if (banner) banner.classList.add('show');
+  },
+  noSessionMs: 3000
+});
+
+window.addEventListener('message', function(e) {
+  if (e.origin !== window.location.origin) return;
   // v2.9 — global theme, pushed down by the launcher (pilot app).
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) {
     applyTheme(e.data.theme);
@@ -1350,7 +1289,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.15', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.16', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1359,7 +1298,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.15', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.16', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1391,7 +1330,7 @@ function importJSON(e) {
       backfillSyncTimestamps();
       save(); populateSettings(); renderDash(); renderHist();
       hideBackupBanner();
-      if (_sbToken) { addSyncLog('Import complete — pushing to cloud','info'); syncPush(); }
+      if (window.PalSync.hasSession()) { addSyncLog('Import complete — pushing to cloud','info'); syncPush(); }
       toast('Import successful ✓');
     } catch(err) { toast('Import failed — invalid file'); }
   };
@@ -3076,14 +3015,6 @@ populateSettings();
 renderDash();
 if ((meta.changesSinceBackup||0) >= BACKUP_THRESHOLD) showBackupBanner();
 setSyncState('local');
-// Give the launcher 3 seconds to send PAL_SESSION before suggesting the
-// person open the app that way — matches Claim Tracker's pattern.
-_palTimer = setTimeout(() => {
-  if (!_sbToken) {
-    const banner = document.getElementById('sync-open-banner');
-    if (banner) banner.classList.add('show');
-  }
-}, 3000);
 </script>
 </body>
 </html>
