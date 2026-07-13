@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.25</title>
+<title>Gym Tracker v2.26</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -265,7 +265,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.25</div></span>
+      <span>Gym Tracker<div class="ver">v2.26</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -568,11 +568,13 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="pal-config.js"></script>
+<script src="pal-sync.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.25';
+const VERSION = '2.26';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -794,27 +796,30 @@ function currentStreakWeeks(sessions) {
 // ═══════════════════════════════════════════════════════════════════
 // CLOUD SYNC — Supabase, mirrors Fortnight Tracker's model
 // ═══════════════════════════════════════════════════════════════════
-// Deviation from Fortnight: Fortnight hard-DELETEs a bundle row when the
-// bundle is removed locally. Gym Tracker already keeps soft-deleted
-// exercises/plans/sessions locally (_deleted:true) so plan/session history
-// can still show the name of something you've since removed from the
-// library. Rather than layer a second delete mechanism on top, deletions
-// here are just an ordinary upsert with _deleted:true baked into the
-// record's data — the tombstone the rest of the suite already uses
-// (Claim Tracker et al). Cloud never gets a hard DELETE call.
-//
-// Bootstrap safeguard: Fortnight's "cloud is authoritative on pull, no
-// local merge" rule is exactly right for a device that's synced before.
-// It is NOT safe the very first time sync is switched on for an app that
-// already has real local data and zero cloud rows — a naive pull would
-// wipe every exercise/plan/session you've already built. So: if a table
-// comes back with 0 rows AND you have local records, this treats it as
-// first-time bootstrap and pushes local up instead of blanking it.
-var SB_URL = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
-var SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-const SB_TABLES = { exercise: SB_URL+'/rest/v1/gym_exercises', plan: SB_URL+'/rest/v1/gym_plans', session: SB_URL+'/rest/v1/gym_sessions', weight: SB_URL+'/rest/v1/gym_weight' };
-let _sbToken = null;   // set via PAL_SESSION postMessage
-let _sbUserId = null;  // Supabase auth UUID — never a display name
+// v2.26 (GYM-010): migrated to the shared pal-sync.js. Two real
+// improvements fall out of this, not just less code:
+// (1) pullFromCloud() used to be a full replace per table (cloud always
+// wins, no per-record comparison) — the same pattern Fortnight Tracker
+// had before it was fixed, and the same resurrection risk: manualPush()
+// didn't pull first, so pushing a stale local copy could overwrite a
+// cloud tombstone from another device. Both now go through pal-sync's
+// proper bidirectional last-write-wins merge, and manualPush() pulls
+// before it pushes, exactly like Fortnight Tracker's fix.
+// (2) the "bootstrap safeguard" (0 cloud rows + local records = push up,
+// don't wipe) is now automatic — pal-sync's pull() already pushes any
+// local-only record up as part of every pull, which covers this exact
+// case without a special branch for it.
+// Tombstones (_deleted:true baked into the record's data, no hard
+// DELETE) are unchanged — that part of the design was already right,
+// pal-sync.js just formalises it as the one canonical pattern.
+// Records use `updatedAt` (camelCase), not `updated_at` — passed
+// explicitly to pull(), the same trap that bit Test & Issues.
+const _gymExercises = window.PalSync.table('gym_exercises');
+const _gymPlans     = window.PalSync.table('gym_plans');
+const _gymSessions  = window.PalSync.table('gym_sessions');
+const _gymWeight    = window.PalSync.table('gym_weight');
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -833,7 +838,7 @@ function queueRetry(kind, record) {
   renderSyncPanel();
 }
 function flushSyncRetryQueue() {
-  if (!_syncRetryQueue.length || !_sbToken || !_sbUserId) return;
+  if (!_syncRetryQueue.length || !window.PalSync.hasSession()) return;
   const queue = _syncRetryQueue; _syncRetryQueue = [];
   slog('Retrying '+queue.length+' queued change(s) after reconnect','ok');
   queue.forEach(q => sbUpsert(q.kind, q.record, null));
@@ -851,10 +856,6 @@ function syncErrorHint(status, message) {
   if (status === 404) return 'table not found — the matching Supabase table may not have been created yet (check the SQL setup)';
   if (status === 403) return 'access denied — check the RLS policy on this table';
   return message || ('HTTP '+status);
-}
-
-function sbHdr(extra) {
-  return Object.assign({ 'apikey': SB_KEY, 'Authorization': 'Bearer '+_sbToken, 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, extra||{});
 }
 
 let _syncLog = [];
@@ -882,76 +883,47 @@ function setSyncStatus(s) {
   lbl.textContent = s==='synced'?'Synced':s==='syncing'?'Syncing…':s==='connecting'?'Connecting…':s==='error'?'Sync error':'Local';
 }
 
-// Push one record (exercise/plan/session) up to its table. Always an
-// upsert — never a delete — because soft-delete tombstones travel inside
-// the record's own data.
+// Push one record (exercise/plan/session/weight) up to its table. Always
+// an upsert — never a delete — because soft-delete tombstones travel
+// inside the record's own data.
 function sbUpsert(kind, record, cb) {
-  if (!_sbToken || !_sbUserId) { if (cb) cb(false); return; }
-  const tbl = SB_TABLES[kind];
+  if (!window.PalSync.hasSession()) { if (cb) cb(false); return; }
   setSyncStatus('syncing');
-  const row = { user_id: _sbUserId, record_key: record.id, data: record, updated_at: new Date().toISOString() };
-  fetch(tbl+'?user_id=eq.'+_sbUserId+'&record_key=eq.'+record.id, { method:'PATCH', headers: sbHdr(), body: JSON.stringify(row) })
-    .then(r => {
-      if (r.status === 401) return Promise.resolve({status:401, data:null});
-      return r.json().then(d => ({status:r.status, data:d}));
-    })
-    .then(res => {
-      if (res.status===200 && Array.isArray(res.data) && res.data.length>0) {
-        slog('Upsert (PATCH) '+kind+' '+record.id+' ✓','ok'); setSyncStatus('synced'); if (cb) cb(true); return;
-      }
-      if (res.status === 401) {
+  _gymTables[kind].upsert(record.id, record)
+    .then(() => { slog('Upsert '+kind+' '+record.id+' ✓','ok'); setSyncStatus('synced'); if (cb) cb(true); })
+    .catch(err => {
+      if (err.status === 401) {
         slog('Upsert failed: '+kind+' '+record.id+' — session token expired, queued for retry','error');
         queueRetry(kind, record);
-        setSyncStatus('error'); if (cb) cb(false); return;
+      } else {
+        slog('Upsert '+kind+' '+record.id+' ✗ '+syncErrorHint(err.status, err.message), 'error');
       }
-      return fetch(tbl, { method:'POST', headers: sbHdr(), body: JSON.stringify(row) })
-        .then(r2 => r2.json().then(d2 => ({status:r2.status, data:d2})).catch(()=>({status:r2.status,data:null})))
-        .then(res2 => {
-          const ok = res2.status===201;
-          if (res2.status === 401) queueRetry(kind, record);
-          slog('Upsert '+kind+' '+record.id+(ok?' ✓':' ✗ '+syncErrorHint(res2.status)), ok?'ok':'error');
-          setSyncStatus(ok?'synced':'error'); if (cb) cb(ok);
-        });
-    })
-    .catch(e => { slog('Upsert error '+kind+' '+record.id+': '+e.message,'error'); setSyncStatus('error'); if (cb) cb(false); });
+      setSyncStatus('error'); if (cb) cb(false);
+    });
 }
 
 function pullFromCloud(cb) {
-  if (!_sbToken || !_sbUserId) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
+  if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
   const kinds = ['exercise','plan','session','weight'];
-  // GYM-009: this used to be a single Promise.all() over the three raw
-  // fetches. If any one table's fetch rejected (e.g. a 401 on exercises),
-  // Promise.all short-circuits straight to .catch and the OTHER two tables
-  // never get processed either — a session that failed to sync would take
-  // down an otherwise-successful plans/sessions pull with it. Each fetch
-  // below catches its own outcome so one table failing never blocks the
-  // other two, and each failure gets a message pointing at the likely cause.
-  Promise.all(kinds.map(kind =>
-    fetch(SB_TABLES[kind]+'?user_id=eq.'+_sbUserId+'&order=updated_at.desc', { headers: { apikey: SB_KEY, Authorization: 'Bearer '+_sbToken } })
-      .then(r => r.ok ? r.json().then(rows => ({kind, ok:true, rows})) : Promise.resolve({kind, ok:false, status:r.status}))
-      .catch(e => ({kind, ok:false, message:e.message}))
-  )).then(results => {
+  // GYM-009: each table's pull runs in its own try/catch, so one table
+  // failing (e.g. a 401 on exercises) never blocks the other three from
+  // completing — same guarantee as before, now per pal-sync.js call.
+  (async () => {
     let anyError = false;
-    results.forEach(res => {
-      const arrKey = res.kind==='exercise' ? 'exercises' : res.kind==='plan' ? 'plans' : res.kind==='weight' ? 'weightEntries' : 'sessions';
-      if (!res.ok) {
+    for (const kind of kinds) {
+      const arrKey = _gymArrKeys[kind];
+      try {
+        const result = await _gymTables[kind].pull(_env.data[arrKey], 'id', 'updatedAt');
+        _env.data[arrKey] = result.merged;
+        slog('Pulled '+arrKey+' — '+result.merged.length+' record(s)'+(result.pushedCount?', '+result.pushedCount+' pushed up':''), 'ok');
+      } catch(err) {
         anyError = true;
-        const hint = syncErrorHint(res.status, res.message);
-        slog('Pull failed: '+res.kind+' — '+hint, 'error');
-        return; // this table's local data is left exactly as it was
+        slog('Pull failed: '+kind+' — '+syncErrorHint(err.status, err.message), 'error');
+        // this table's local data is left exactly as it was
       }
-      const localArr = _env.data[arrKey];
-      if (res.rows.length === 0 && localArr.length > 0) {
-        // First-time bootstrap: push local up rather than wiping it.
-        slog('Cloud '+arrKey+' empty but local has '+localArr.length+' — bootstrapping up','ok');
-        localArr.forEach(rec => sbUpsert(res.kind, rec, null));
-      } else {
-        _env.data[arrKey] = res.rows.map(row => row.data);
-        slog('Pulled '+res.rows.length+' '+arrKey, 'ok');
-      }
-    });
+    }
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     save(_env);
     if (exChanged.length) {
@@ -961,58 +933,63 @@ function pullFromCloud(cb) {
     setSyncStatus(anyError ? 'error' : 'synced');
     slog(anyError ? 'Pull finished with errors on some tables — see above' : 'Pull complete', 'ok');
     if (cb) cb();
-  });
+  })();
 }
 
 function manualPull() {
-  if (!_sbToken) { toast('Not connected to cloud'); return; }
+  if (!window.PalSync.hasSession()) { toast('Not connected to cloud'); return; }
   pullFromCloud(() => { flushSyncRetryQueue(); renderAll(); toast('Pulled from cloud ✓'); });
 }
 function manualPush() {
-  if (!_sbToken) { toast('Not connected to cloud'); return; }
-  let total = 0; ['exercises','plans','sessions','weightEntries'].forEach(k => total += _env.data[k].length);
-  if (!total) { toast('Nothing to push'); return; }
-  setSyncStatus('syncing');
-  slog('Manual push — '+total+' record(s)');
-  let done = 0, errors = 0;
-  [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries]].forEach(([kind, arr]) => {
-    arr.forEach(rec => sbUpsert(kind, rec, ok => {
-      if (!ok) errors++;
-      done++;
-      if (done===total) { setSyncStatus(errors?'error':'synced'); toast(errors ? errors+' failed, '+(total-errors)+' pushed' : 'Pushed '+total+' record(s) ✓'); }
-    }));
+  if (!window.PalSync.hasSession()) { toast('Not connected to cloud'); return; }
+  // v2.26 (GYM-010): pull first, same fix as Fortnight Tracker — pushing
+  // a stale local copy without pulling first could overwrite a tombstone
+  // from another device, resurrecting something that was deleted elsewhere.
+  pullFromCloud(() => {
+    flushSyncRetryQueue();
+    let total = 0; ['exercises','plans','sessions','weightEntries'].forEach(k => total += _env.data[k].length);
+    if (!total) { toast('Nothing to push'); return; }
+    setSyncStatus('syncing');
+    slog('Manual push — '+total+' record(s)');
+    let done = 0, errors = 0;
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries]].forEach(([kind, arr]) => {
+      arr.forEach(rec => sbUpsert(kind, rec, ok => {
+        if (!ok) errors++;
+        done++;
+        if (done===total) { setSyncStatus(errors?'error':'synced'); toast(errors ? errors+' failed, '+(total-errors)+' pushed' : 'Pushed '+total+' record(s) ✓'); renderAll(); }
+      }));
+    });
   });
 }
 
 // ── PAL_SESSION AUTH (with origin guard from the start) ─────────────
-let _palReceived = false;
+// v2.26: session handling (token/user_id, origin guard) moved to
+// pal-sync.js — same behaviour, shared code.
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
-  if (e.data.type !== 'PAL_SESSION') return;
-  _palReceived = true;
-  _sbToken = e.data.access_token || null;
-  _sbUserId = e.data.user_id || null; // Supabase auth UUID, not a display name
-  slog('PAL_SESSION received — user '+(_sbUserId ? _sbUserId.slice(0,8)+'…' : '?'));
-  // Belt-and-braces: if the session arrived just after the 3s fallback fired,
-  // hide the banner again and reclaim the space it was taking.
-  const bannerEl = document.getElementById('noPalBanner');
-  if (bannerEl) bannerEl.style.display = 'none';
-  adjustBodyScrollTop();
-  if (_sbToken && _sbUserId) {
+});
+window.PalSync.initSession({
+  onSession: function () {
+    slog('PAL_SESSION received — user '+(window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '?'));
+    // Belt-and-braces: if the session arrived just after the 3s fallback fired,
+    // hide the banner again and reclaim the space it was taking.
+    const bannerEl = document.getElementById('noPalBanner');
+    if (bannerEl) bannerEl.style.display = 'none';
+    adjustBodyScrollTop();
     setSyncStatus('connecting');
     pullFromCloud(() => { flushSyncRetryQueue(); renderAll(); });
-  }
+  },
+  onNoSession: function () {
+    setSyncStatus('local');
+    slog('No PAL_SESSION after 3s — running local only','error');
+    const banner = document.getElementById('noPalBanner');
+    if (banner) banner.style.display = 'block';
+    adjustBodyScrollTop();
+  },
+  noSessionMs: 3000
 });
-setTimeout(function() {
-  if (_palReceived) return;
-  setSyncStatus('local');
-  slog('No PAL_SESSION after 3s — running local only','error');
-  const banner = document.getElementById('noPalBanner');
-  if (banner) banner.style.display = 'block';
-  adjustBodyScrollTop();
-}, 3000);
 
 // GYM-001 fix: .body-scroll's top offset was a fixed calc() that only knew
 // about the header + tab bar. The no-PAL banner adds real height on top of
@@ -1045,7 +1022,7 @@ function renderSyncPanel() {
       : _syncState==='syncing'||_syncState==='connecting' ? '<span style="color:var(--accent4)">'+(_syncState==='connecting'?'Connecting…':'Syncing…')+'</span>'
       : '<span style="color:var(--ink2)">Local only</span>';
     const pendingNote = _syncRetryQueue.length ? '<br><span style="font-size:10.5px;color:var(--ink3)">Your data is saved locally and will sync automatically once reconnected.</span>' : '';
-    sp.innerHTML = 'Status &nbsp;'+stateLabel+'<br>Token &nbsp;<strong>'+(_sbToken?'Received ✓':'Not received')+'</strong><br>User ID &nbsp;<strong>'+(_sbUserId?_sbUserId.slice(0,8)+'…':'—')+'</strong>'+pendingNote;
+    sp.innerHTML = 'Status &nbsp;'+stateLabel+'<br>Token &nbsp;<strong>'+(window.PalSync.hasSession()?'Received ✓':'Not received')+'</strong><br>User ID &nbsp;<strong>'+(window.PalSync.getUserId()?window.PalSync.getUserId().slice(0,8)+'…':'—')+'</strong>'+pendingNote;
   }
   renderSyncLog();
 }
@@ -2728,7 +2705,7 @@ function importJSON(event) {
         _env.data.weightEntries = _env.data.weightEntries || [];
         _env.data.starterDismissed = _env.data.starterDismissed || false;
         const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
-        if (exChanged.length && _sbToken && _sbUserId) exChanged.forEach(ex => sbUpsert('exercise', ex, null));
+        if (exChanged.length && window.PalSync.hasSession()) exChanged.forEach(ex => sbUpsert('exercise', ex, null));
       } else { throw new Error('Unrecognised backup format'); }
       save(_env);
       closeDataDrawer();

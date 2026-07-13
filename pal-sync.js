@@ -58,6 +58,13 @@
  * pattern the calling app uses — a strict correctness improvement, not
  * a behavior choice, since a tombstone that never reaches the cloud
  * defeats the entire point of tombstoning.
+ * v1.5 — thrown errors only ever carried a message string. Gym Tracker's
+ * retry queue needs to tell "session token expired (401) — worth queuing
+ * for automatic retry once a fresh token arrives" apart from any other
+ * failure, and parsing a status code back out of message text is fragile.
+ * Errors now carry a .status property (the HTTP status, where available)
+ * alongside .message — purely additive, no existing catch that only reads
+ * .message is affected.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -129,7 +136,7 @@ window.PalSync = (function () {
   async function fetchTableRows(tableName) {
     if (!hasSession()) return [];
     const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
-    if (!res.ok) throw new Error(res.status + ' ' + (await res.text()));
+    if (!res.ok) { const err = new Error(res.status + ' ' + (await res.text())); err.status = res.status; throw err; }
     return res.json();
   }
 
@@ -160,10 +167,10 @@ window.PalSync = (function () {
         const body = await patch.json();
         if (Array.isArray(body) && body.length === 0) {
           const post = await sbFetch('/' + tableName, 'POST', row);
-          if (!post.ok) throw new Error('POST failed: ' + (await post.text()));
+          if (!post.ok) { const err = new Error('POST failed: ' + (await post.text())); err.status = post.status; throw err; }
         }
       } else {
-        throw new Error('PATCH failed: ' + (await patch.text()));
+        const err = new Error('PATCH failed: ' + (await patch.text())); err.status = patch.status; throw err;
       }
     }
 
