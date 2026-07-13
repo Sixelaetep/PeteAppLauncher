@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.16</title>
+<title>On Budget v3.17</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.16</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.17</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="switchTab('settings')" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -687,7 +687,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.16
+// On Budget v3.17
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -853,6 +853,15 @@
 // occurrence overrides now go through pal-sync's table() instances,
 // one per record_key prefix, sharing a single fetch via
 // PalSync.fetchTableRows() instead of doing 7 near-identical GETs.
+// v3.17 (ON--024): syncPull() had no re-entrancy guard. The v3.16
+// migration replaced one atomic pass with 6 sequential awaited
+// .pull() calls, which widened the window for a second PAL_SESSION
+// (an initial broadcast plus a near-immediate refresh, or a re-send on
+// tab focus) to trigger an overlapping syncPull() before the first had
+// finished — both racing to upsert the same records, one of them
+// hitting a duplicate-key conflict and surfacing as an immediate sync
+// error. Added a _syncInFlight guard shared by syncPull/syncPush,
+// matching the pattern Test & Issues already uses (_syncLock).
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -939,6 +948,7 @@ const _obBillsOv  = window.PalSync.table(SB_TABLE, { prefix: 'billsoverride_' })
 
 let _syncState = 'local';   // local | connecting | syncing | synced | error
 let _syncLog   = [];        // [{ts, msg, type}] newest first, cap 120
+let _syncInFlight = false;  // ON--024: guards against overlapping syncPull()/syncPush() calls racing on shared state
 
 function setSyncState(state, label) {
   _syncState = state;
@@ -1035,6 +1045,8 @@ async function syncTombstoneBillsOverride(snapshot) {
 //    and used by pull to send up anything cloud doesn't have yet) ──
 async function syncPush() {
   if (!window.PalSync.hasSession()) { addSyncLog('Push skipped — no session','info'); return; }
+  if (_syncInFlight) { addSyncLog('Push skipped — sync already in progress','info'); return; }
+  _syncInFlight = true;
   setSyncState('syncing','Pushing…');
   addSyncLog('Push started','info');
   try {
@@ -1067,12 +1079,16 @@ async function syncPush() {
   } catch(err) {
     setSyncState('error');
     addSyncLog('Push failed: '+err.message,'err');
+  } finally {
+    _syncInFlight = false;
   }
 }
 
 // ── Pull everything from the cloud and merge ──
 async function syncPull() {
   if (!window.PalSync.hasSession()) { addSyncLog('Pull skipped — no session','info'); return; }
+  if (_syncInFlight) { addSyncLog('Pull skipped — sync already in progress','info'); return; }
+  _syncInFlight = true;
   setSyncState('syncing','Pulling…');
   addSyncLog('Pull started','info');
   try {
@@ -1186,6 +1202,8 @@ async function syncPull() {
   } catch(err) {
     setSyncState('error');
     addSyncLog('Pull failed: '+err.message,'err');
+  } finally {
+    _syncInFlight = false;
   }
 }
 
@@ -1289,7 +1307,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.16', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.17', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1298,7 +1316,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.16', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.17', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
