@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.8</title>
+<title>9-Day Fortnight Tracker v3.9</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -330,7 +330,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.8</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.9</span></div></div>
   </div>
   <div class="header-actions">
     <div class="sync-wrap" style="cursor:pointer" onclick="openDataModal()" title="Sync status">
@@ -391,7 +391,8 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 </div>
 <div class="toast" id="toast"></div>
 
-
+<script src="pal-config.js"></script>
+<script src="pal-sync.js"></script>
 <script>
 'use strict';
 // PWA
@@ -464,20 +465,23 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // Manual Push now pulls before pushing, so it can't resurrect a bundle
 // deleted on another device this one hasn't caught up with yet. Also
 // added the version number to <title> — it was missing entirely.
-var SB_URL  = 'https://gnzxsbbmfwmtkqidxgoj.supabase.co';
-var SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduenhzYmJtZndtdGtxaWR4Z29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE0OTAsImV4cCI6MjA5NzI5NzQ5MH0.Jr-EiAdmpwuj69tJ7zRK22L7I2oiQaO3oWnu1uB915A';
-var SB_TBL  = SB_URL + '/rest/v1/fortnight_bundles';
-var _sbToken  = null; // set via PAL_SESSION postMessage
-var _sbUserId = null;
-
-function sbHdr(extra) {
-  return Object.assign({
-    'apikey': SB_KEY,
-    'Authorization': 'Bearer ' + _sbToken,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=representation'
-  }, extra || {});
-}
+// v3.9 (FT-003): migrated to the shared pal-sync.js. Two changes worth
+// flagging clearly:
+// (1) The real Supabase table used `bundle_start` as its lookup column,
+// not `record_key` like every other migrated app. pal-sync.js hardcodes
+// `record_key` — rather than teach the library a second column-name
+// convention for one app, the column was renamed (same data, same
+// column, just renamed to match everyone else):
+//   ALTER TABLE fortnight_bundles RENAME COLUMN bundle_start TO record_key;
+// This is a pure rename, no data reshaping, but it IS a required
+// prerequisite — this file won't sync correctly against the old column
+// name.
+// (2) Bundles never carried their own updatedAt — pullFromCloud used to
+// be cloud-authoritative-full-replace (see the FT-002 note below), which
+// never needed per-record comparison. The canonical merge does, so
+// save() (the one funnel every mutation already goes through) now
+// stamps bundle.updatedAt before pushing.
+const _ft = window.PalSync.table('fortnight_bundles');
 
 // ── SYNC LOG ─────────────────────────────────────────────────────────────────
 var _syncLog = [];
@@ -515,83 +519,53 @@ function setSyncStatus(s, detail) {
 
 // ── SUPABASE OPERATIONS ───────────────────────────────────────────────────────
 function sbUpsert(bundle, cb) {
-  if (!_sbToken || !_sbUserId) { if (cb) cb(false); return; }
+  if (!window.PalSync.hasSession()) { if (cb) cb(false); return; }
   setSyncStatus('syncing');
-  var row = { user_id: _sbUserId, bundle_start: bundle.startDate, data: bundle, updated_at: new Date().toISOString() };
-  // PATCH first — targets the specific row
-  fetch(SB_TBL + '?user_id=eq.' + _sbUserId + '&bundle_start=eq.' + bundle.startDate, {
-    method: 'PATCH', headers: sbHdr(), body: JSON.stringify(row)
-  })
-  .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
-  .then(function(res) {
-    if (res.status === 200 && Array.isArray(res.data) && res.data.length > 0) {
-      slog('Upsert (PATCH) ' + bundle.startDate + ' ✓', 'ok');
-      setSyncStatus('synced'); if (cb) cb(true); return;
-    }
-    // No row matched — POST insert
-    return fetch(SB_TBL, { method: 'POST', headers: sbHdr(), body: JSON.stringify(row) })
-      .then(function(r2) { return r2.json().then(function(d2) { return { status: r2.status, data: d2 }; }); })
-      .then(function(res2) {
-        var ok = res2.status === 201;
-        slog('Upsert (POST) ' + bundle.startDate + (ok ? ' ✓' : ' ✗ HTTP ' + res2.status), ok ? 'ok' : 'error');
-        setSyncStatus(ok ? 'synced' : 'error'); if (cb) cb(ok);
-      });
-  })
-  .catch(function(e) { slog('Upsert error ' + bundle.startDate + ': ' + e.message, 'error'); setSyncStatus('error'); if (cb) cb(false); });
+  _ft.upsert(bundle.startDate, bundle)
+    .then(function() { slog('Upsert ' + bundle.startDate + ' \u2713', 'ok'); setSyncStatus('synced'); if (cb) cb(true); })
+    .catch(function(e) { slog('Upsert error ' + bundle.startDate + ': ' + e.message, 'error'); setSyncStatus('error'); if (cb) cb(false); });
 }
 
 function sbDelete(bundle, cb) {
-  if (!_sbToken || !_sbUserId) { if (cb) cb(false); return; }
-  // v3.8 (FT-002): tombstone soft-delete instead of hard DELETE.
-  // A hard DELETE has no way to tell a later "push all local bundles"
-  // on another device that this record was intentionally removed —
-  // that device just re-uploads its stale local copy and the bundle
-  // resurrects. Marking the row _deleted:true and keeping it via the
-  // normal PATCH→POST upsert path means the tombstone always wins on
-  // pull (see pullFromCloud), and the reference tombstone pattern used
-  // by Claim Tracker / Gym Tracker / Test & Issues stays consistent
-  // across the whole suite.
-  var tombstone = Object.assign({}, bundle, { _deleted: true });
+  if (!window.PalSync.hasSession()) { if (cb) cb(false); return; }
+  // v3.8 (FT-002): tombstone soft-delete instead of hard DELETE — kept
+  // exactly as it was. v3.9: stamps updatedAt directly here rather than
+  // going through pal-sync.js's generic tombstone() helper, which always
+  // stamps the snake_case updated_at — this app's bundles use camelCase
+  // updatedAt for their own merge comparison, so tombstone() wouldn't
+  // refresh the field pull() actually reads.
+  var tombstone = Object.assign({}, bundle, { _deleted: true, updatedAt: new Date().toISOString() });
   sbUpsert(tombstone, cb);
 }
 
 function pullFromCloud(cb) {
-  if (!_sbToken || !_sbUserId) { slog('Pull skipped — no auth token', 'error'); if (cb) cb(); return; }
+  if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token', 'error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  fetch(SB_TBL + '?user_id=eq.' + _sbUserId + '&order=bundle_start.desc', {
-    headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + _sbToken }
-  })
-  .then(function(r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  })
-  .then(function(rows) {
-    slog('Cloud returned ' + rows.length + ' row(s)');
-    // Cloud is the single source of truth on pull.
-    // We do NOT push local-only bundles here — that caused deleted bundles to resurrect.
-    // Local bundles missing from cloud were deleted on another device; respect that.
-    // v3.8: rows tombstoned via sbDelete (data._deleted === true) are kept in Supabase
-    // for cross-device consistency but filtered out of the working set here.
-    var cloudBundles = rows
-      .map(function(row) {
-        var b = row.data;
-        migrateDays(b);
-        return b;
-      })
-      .filter(function(b) { return !b._deleted; });
-    state.bundles = cloudBundles.sort(function(a, b) { return b.startDate.localeCompare(a.startDate); });
-    saveLocal();
-    setSyncStatus('synced');
-    slog('Pull complete — ' + state.bundles.length + ' bundle(s)', 'ok');
-    if (cb) cb();
-  })
-  .catch(function(e) {
-    slog('Pull failed: ' + e.message, 'error');
-    setSyncStatus('error');
-    if (cb) cb();
-  });
+  // v3.9 (FT-003): replaced cloud-authoritative-full-replace with pal-sync's
+  // proper bidirectional last-write-wins merge. The old approach avoided
+  // resurrection by simply never pushing local-only bundles during a pull —
+  // safe, but meant a local edit made while offline could get silently
+  // overwritten by a stale cloud copy with no comparison at all. The new
+  // merge compares bundle.updatedAt on both sides and only takes cloud's
+  // copy if it's genuinely newer, while still handling deletes correctly
+  // (a tombstone on either side always wins over a live copy).
+  _ft.pull(state.bundles, 'startDate', 'updatedAt')
+    .then(function(result) {
+      result.merged.forEach(migrateDays);
+      state.bundles = result.merged.sort(function(a, b) { return b.startDate.localeCompare(a.startDate); });
+      saveLocal();
+      setSyncStatus('synced');
+      slog('Pull complete — ' + state.bundles.length + ' bundle(s)' + (result.pushedCount ? ', ' + result.pushedCount + ' pushed up' : ''), 'ok');
+      if (cb) cb();
+    })
+    .catch(function(e) {
+      slog('Pull failed: ' + e.message, 'error');
+      setSyncStatus('error');
+      if (cb) cb();
+    });
 }
+
 
 // ── STORAGE ABSTRACTION ──────────────────────────────────────────────────────
 var SKEY = 'fn_tracker_v5';
@@ -624,6 +598,7 @@ function save(bundle) {
   // bundle = specific bundle that changed; if omitted, only saves locally
   saveLocal();
   if (bundle !== undefined) {
+    bundle.updatedAt = new Date().toISOString();
     sbUpsert(bundle, null);
   }
 }
@@ -701,7 +676,7 @@ function switchTab(tab){
 
 // Set a bundle as active (only one at a time)
 function setActiveBundle(idx){
-  state.bundles.forEach(function(b,i){ b.active = (i===idx); });
+  state.bundles.forEach(function(b,i){ b.active = (i===idx); b.updatedAt = new Date().toISOString(); });
   saveLocal();
   state.bundles.forEach(function(b) { sbUpsert(b, null); });
   render();
@@ -712,7 +687,7 @@ function setActiveBundle(idx){
 function checkAutoComplete(bi){
   var b=state.bundles[bi];
   if(isComplete(b)){
-    if(b.active){ b.active=false; saveLocal(); sbUpsert(b, null); }
+    if(b.active){ b.active=false; b.updatedAt = new Date().toISOString(); saveLocal(); sbUpsert(b, null); }
     render();
     toast('Bundle complete — moved to Archive','ok');
   }
@@ -1147,14 +1122,14 @@ function openDataModal(){
   // Sync status panel
   var sp = document.getElementById('syncStatusPanel');
   if (sp) {
-    var connected = !!_sbToken;
+    var connected = window.PalSync.hasSession();
     var stateLabel = _syncState === 'synced' ? '<span style="color:var(--green)">Synced</span>'
                    : _syncState === 'error'  ? '<span style="color:var(--red)">Error</span>'
                    : _syncState === 'syncing' ? '<span style="color:var(--amber)">Syncing…</span>'
                    : '<span style="color:var(--muted)">Local only</span>';
     sp.innerHTML = 'Status &nbsp;' + stateLabel + '<br>'
       + 'Token &nbsp;<strong>' + (connected ? 'Received ✓' : 'Not received') + '</strong><br>'
-      + 'User ID &nbsp;<strong>' + (_sbUserId ? _sbUserId.slice(0,8) + '…' : '—') + '</strong>';
+      + 'User ID &nbsp;<strong>' + (window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8) + '…' : '—') + '</strong>';
   }
   renderSyncLog();
   document.getElementById('dataModal').classList.add('open');
@@ -1163,12 +1138,12 @@ function closeDataModal(){document.getElementById('dataModal').classList.remove(
 
 // MANUAL SYNC
 function manualPull() {
-  if (!_sbToken) { toast('Not connected to cloud', 'err'); return; }
+  if (!window.PalSync.hasSession()) { toast('Not connected to cloud', 'err'); return; }
   pullFromCloud(function() { render(); toast('Pulled from cloud ✓', 'ok'); });
 }
 
 function manualPush() {
-  if (!_sbToken) { toast('Not connected to cloud', 'err'); return; }
+  if (!window.PalSync.hasSession()) { toast('Not connected to cloud', 'err'); return; }
   if (!state.bundles.length) { toast('No bundles to push', 'err'); return; }
   // v3.8 (FT-002): pull first. Pushing local bundles blind can resurrect
   // one that was deleted on another device before this device caught up —
@@ -1229,6 +1204,7 @@ function importData(event){
       var added=0;
       bundles.forEach(function(b){
         migrateDays(b);
+        b.updatedAt = new Date().toISOString();
         if(!existing.has(b.startDate)){ state.bundles.push(b); added++; }
         else {
           // Overwrite existing bundle data from backup
@@ -1238,7 +1214,7 @@ function importData(event){
       });
       state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
       saveLocal();
-      state.bundles.forEach(function(b){ sbUpsert(b, null); });
+      bundles.forEach(function(b){ sbUpsert(b, null); });
       render();
       toast(added>0?'Imported '+added+' bundle'+(added>1?'s':'')+' ✓':'Data restored ✓','ok');
     }catch(err){toast('Import failed: '+err.message,'err');}
@@ -1295,44 +1271,41 @@ function createBundle(){
 
 
 // ── PAL_SESSION AUTH ─────────────────────────────────────────────────────────
+// v3.9: session handling (token/user_id, origin guard) moved to pal-sync.js —
+// same behaviour, shared code. The "only pull on first receipt, not on
+// subsequent token-refresh broadcasts" distinction is preserved here since
+// PalSync.initSession's onSession fires on every arrival, not just the first.
 var _palReceived = false;
 
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
-  if (e.data.type !== 'PAL_SESSION') return;
-
-  // Always update the token so sync calls stay fresh
-  _sbToken  = e.data.access_token || null;
-  _sbUserId = e.data.user_id || null;
-
-  if (_palReceived) {
-    // Subsequent broadcasts (token refresh, tab focus) — just update token, no pull/render
-    slog('PAL_SESSION refresh — token updated');
-    return;
-  }
-
-  // First receipt only — pull from cloud and render
-  _palReceived = true;
-  slog('PAL_SESSION received — user ' + (_sbUserId ? _sbUserId.slice(0,8) + '\u2026' : '?'));
-  if (_sbToken) {
+});
+window.PalSync.initSession({
+  onSession: function () {
+    if (_palReceived) {
+      // Subsequent broadcasts (token refresh, tab focus) — token's already
+      // updated internally by pal-sync.js; no pull/render needed here.
+      slog('PAL_SESSION refresh — token updated');
+      return;
+    }
+    _palReceived = true;
+    slog('PAL_SESSION received — user ' + (window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8) + '\u2026' : '?'));
     setSyncStatus('connecting');
     pullFromCloud(function() {
       // Preserve current UI state — only re-render data, don't reset tab/panel/day
       render();
     });
-  }
+  },
+  onNoSession: function () {
+    setSyncStatus('local');
+    slog('No PAL_SESSION after 3s — running local only', 'error');
+    var banner = document.getElementById('no-pal-banner');
+    if (banner) banner.style.display = 'block';
+  },
+  noSessionMs: 3000
 });
-
-// 3-second fallback: if no PAL_SESSION, work locally and show banner
-setTimeout(function() {
-  if (_palReceived) return;
-  setSyncStatus('local');
-  slog('No PAL_SESSION after 3s — running local only', 'error');
-  var banner = document.getElementById('no-pal-banner');
-  if (banner) banner.style.display = 'block';
-}, 3000);
 
 // BOOT
 load();
