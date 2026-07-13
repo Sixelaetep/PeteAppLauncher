@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.26</title>
+<title>Gym Tracker v2.27</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -265,7 +265,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.26</div></span>
+      <span>Gym Tracker<div class="ver">v2.27</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -557,6 +557,14 @@
     </div>
     <label style="margin-top:14px">Restore from backup</label>
     <input type="file" id="importFile" accept="application/json" onchange="importJSON(event)">
+
+    <div class="section-title">Import Program</div>
+    <p style="font-size:11px;color:var(--ink3);line-height:1.5;margin-bottom:8px">
+      For adding plans from a personal trainer: give Claude the trainer's plan (photo, PDF, whatever) and ask for a "program import" JSON file, then load it here. New exercises are matched by name against your library — if one already exists it's reused, not duplicated; only genuinely new ones get created. Existing plans/sessions/exercises are never touched or replaced by this.
+    </p>
+    <input type="file" id="importProgramFile" accept="application/json" onchange="importProgramFileHandler(event)">
+    <button class="cat-link" onclick="downloadProgramTemplate()">⬇ Download blank template (schema reference)</button>
+
     <div class="section-title">Danger Zone</div>
     <button class="btn btn-danger btn-block" onclick="confirmClearAll()">🗑 Clear All Data</button>
     <p style="font-size:11px;color:var(--ink3);margin-top:18px;line-height:1.5">
@@ -574,7 +582,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.26';
+const VERSION = '2.27';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -2716,6 +2724,99 @@ function importJSON(event) {
   reader.readAsText(file);
   event.target.value='';
 }
+// ── Import Program ───────────────────────────────────────────────────
+// Additive, unlike importJSON()/Restore from backup which replaces the
+// whole envelope: this only ADDS. Exercises are matched by exact
+// case-insensitive name against the current (non-deleted) library — an
+// existing one is reused, never duplicated; only genuinely new names get
+// created. Plans are always new records, but a plan whose name exactly
+// matches an existing one is skipped (protects against re-importing the
+// same file twice by accident) rather than silently duplicated.
+function importProgramFileHandler(event) {
+  const file = event.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const bundle = JSON.parse(ev.target.result);
+      if (!bundle || !Array.isArray(bundle.plans)) throw new Error('Not a recognised program-import file (missing "plans" array)');
+      const exercisesIn = Array.isArray(bundle.exercises) ? bundle.exercises : [];
+
+      // Name → id map, seeded with everything already in the library so
+      // plan items can resolve exercises that existed before this import
+      // too, not just ones newly created by it.
+      const nameToId = {};
+      _env.data.exercises.forEach(e => { if (!e._deleted) nameToId[e.name.toLowerCase()] = e.id; });
+
+      const now = new Date().toISOString();
+      let exercisesAdded = 0;
+      const newExerciseRecords = [];
+      exercisesIn.forEach(exIn => {
+        if (!exIn || !exIn.name) return;
+        const key = exIn.name.toLowerCase();
+        if (nameToId[key]) return; // already exists — reused, not duplicated
+        const type = ['reps','time','distance'].includes(exIn.type) ? exIn.type : 'reps';
+        const record = { id: uid('ex'), name: exIn.name, type, tags: Array.isArray(exIn.tags) ? exIn.tags : [], notes: exIn.notes||'', createdAt: now, updatedAt: now };
+        _env.data.exercises.push(record);
+        newExerciseRecords.push(record);
+        nameToId[key] = record.id;
+        exercisesAdded++;
+      });
+
+      const existingPlanNames = new Set(getPlans().map(p => p.name.toLowerCase()));
+      let plansAdded = 0, plansSkipped = 0;
+      const newPlanRecords = [];
+      bundle.plans.forEach(planIn => {
+        if (!planIn || !planIn.name || !Array.isArray(planIn.items)) return;
+        if (existingPlanNames.has(planIn.name.toLowerCase())) { plansSkipped++; return; }
+        const items = planIn.items.map(itemIn => {
+          const exId = itemIn.exerciseName ? nameToId[itemIn.exerciseName.toLowerCase()] : null;
+          if (!exId) return null; // exercise couldn't be resolved — dropped, not guessed at
+          const trackType = ['reps','time','distance'].includes(itemIn.trackType) ? itemIn.trackType : exerciseType(exId);
+          return { id: uid('pi'), exerciseId: exId, trackType, targetSets: Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [], estimatedMinutes: 0 };
+        }).filter(Boolean);
+        if (!items.length) return;
+        const record = { id: uid('plan'), name: planIn.name, notes: planIn.notes||'', items, createdAt: now, updatedAt: now };
+        _env.data.plans.push(record);
+        newPlanRecords.push(record);
+        existingPlanNames.add(planIn.name.toLowerCase());
+        plansAdded++;
+      });
+
+      save(_env);
+      newExerciseRecords.forEach(r => sbUpsert('exercise', r, null));
+      newPlanRecords.forEach(r => sbUpsert('plan', r, null));
+      closeDataDrawer();
+      renderAll();
+      toast(`Imported ${plansAdded} plan${plansAdded===1?'':'s'} and ${exercisesAdded} new exercise${exercisesAdded===1?'':'s'}${plansSkipped?' · '+plansSkipped+' plan(s) skipped (name already exists)':''} ✓`);
+    } catch(ex) { toast('Program import failed: '+ex.message); }
+  };
+  reader.readAsText(file);
+  event.target.value='';
+}
+function downloadProgramTemplate() {
+  const template = {
+    schemaVersion: 1,
+    type: "programImport",
+    programName: "Example — replace with your trainer's program name",
+    exercises: [
+      { name: "Example New Exercise", type: "reps", tags: ["Chest"], notes: "Optional setup notes, e.g. handle position." }
+    ],
+    plans: [
+      {
+        name: "Example — Day 1",
+        notes: "Optional plan notes.",
+        items: [
+          { exerciseName: "Example New Exercise", trackType: "reps", targetSets: [ {reps:10, weight:20}, {reps:10, weight:20}, {reps:10, weight:20} ] }
+        ]
+      }
+    ]
+  };
+  const blob = new Blob([JSON.stringify(template,null,2)],{type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'gym-tracker-program-template.json'; a.click();
+  toast('Template downloaded ✓');
+}
+
 function confirmClearAll() {
   if (!confirm('Clear ALL gym data? This cannot be undone.')) return;
   _env = defaultEnvelope();
