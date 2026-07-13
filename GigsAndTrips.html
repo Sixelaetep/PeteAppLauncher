@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips</title>
+<title>Gigs &amp; Trips v5.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -395,7 +395,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v5.0</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v5.1</span></h1>
     <div class="gat-sync-badge" id="gatSyncBadge" style="pointer-events:none;user-select:none"><div class="gat-sync-dot" id="gatSyncDot"></div><span id="gatSyncText"></span></div>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
     <button class="ha" id="dataBtn" onclick="showDataManager()" title="Backup &amp; Sync">💾</button>
@@ -757,6 +757,26 @@ function pushEvent(ev){
   });
 }
 
+// v4.8 (GT-001): used only from pullFromSupabase, to confirm a tombstone
+// has actually reached the cloud before it's safe to drop from local
+// storage. Unlike pushEvent() (fire-and-forget, swallows its own errors),
+// this reports success/failure so the pull can decide what's safe to strip
+// — stripping a tombstone that never reached the cloud would let the
+// deleted event get resurrected on this very device's next pull.
+async function pushTombstoneConfirmed(ev){
+  try{
+    const user_id=getUserId();
+    if(!user_id) return false;
+    await sbFetch('POST','events?on_conflict=id',{
+      id:ev.id, user_id, type:ev.type,
+      start_date:ev.type==='gig'?ev.date:ev.startDate,
+      end_date:ev.type==='gig'?ev.date:ev.endDate,
+      data:ev, updated_at:new Date().toISOString()
+    });
+    return true;
+  } catch(e){ return false; }
+}
+
 async function pushAllEvents(){
   const events=getData().events;
   if(!events.length) return;
@@ -867,42 +887,39 @@ async function pushVenuesNow(){
   }
 }
 
-// Wipe the _venues row in Supabase and replace with the supplied list.
-// Uses DELETE then INSERT rather than upsert — guarantees the old row is
-// gone regardless of how the composite key constraint behaves.
+// Overwrite the shared cloud _venues row with the given list.
+// v4.8 (GT-002): this used to DELETE the row then re-INSERT it, on the
+// reasoning that it "guarantees the old row is gone regardless of how
+// the composite key constraint behaves." That reasoning didn't hold up
+// — pushVenuesNow() already PATCHes the existing row (or POSTs if it's
+// missing), so a delete-then-recreate wasn't needed at all, and it
+// opened a real window where the shared row briefly doesn't exist —
+// another device pulling in that gap would see zero venues. It also
+// turned out the actual "Reset cloud venues" button in the UI called
+// THIS function, which had been left as a stub (just a toast, no real
+// work) during an earlier refactor — the working DELETE-based version
+// was only reachable from the separate debug data-manager panel. Both
+// paths now do the same simple, safe thing: update local venues, then
+// let pushVenuesNow() upsert them — no delete, no dead code, no gap.
 async function resetVenuesInSupabase(venueList){
   const user_id=getUserId();
   if(!user_id){ showToast('❌ Not signed in'); return; }
   showToast('Resetting venues…');
+  const d=getData();
+  d.venues=venueList;
+  _pulling=true; saveData(d); _pulling=false;
+  await pushVenuesNow();
+  renderVenues();
 }
 
 async function confirmResetVenuesLogged(venueList){
   const user_id=getUserId();
   if(!user_id){ syncLog('Not signed in','err'); return; }
-  const token=_sbAccessToken||SB_KEY;
-  const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
-  // Step 1: DELETE
-  syncLog('Step 1: DELETE existing _venues row…','working');
-  try{
-    const delUrl=SB_URL+'/rest/v1/events?id=eq._venues'; // shared row — no user_id filter (v4.7)
-    const delRes=await fetch(delUrl,{method:'DELETE',headers});
-    if(delRes.ok){
-      syncLog('DELETE OK (status '+delRes.status+')','ok');
-    } else {
-      const txt=await delRes.text().catch(()=>'');
-      syncLog('DELETE '+delRes.status+': '+txt.slice(0,200),'err');
-      return;
-    }
-  } catch(e){
-    syncLog('DELETE network error: '+String(e),'err');
-    return;
-  }
-  // Step 2: update local state
+  syncLog('Updating local venues…','working');
   const d=getData();
   d.venues=venueList;
   _pulling=true; saveData(d); _pulling=false;
-  // Step 3: INSERT via pushVenuesNow (logs itself)
-  syncLog('Step 2: INSERT '+venueList.length+' venues…','working');
+  syncLog('Pushing '+venueList.length+' venues to cloud…','working');
   await pushVenuesNow();
   syncLog('Done — pull on other devices now','ok');
   renderVenues();
@@ -973,8 +990,28 @@ async function pullFromSupabase(silent){
       d.venues=normaliseVenues(d.venues);
     }
 
-    // Persist events including tombstones
-    d.events=Object.values(localMap);
+    // v4.8 (GT-001): tombstones used to be kept in d.events forever,
+    // filtered out at every render/read call site instead of ever being
+    // removed. That meant local storage only ever grew. Now, any local
+    // tombstone the cloud already independently confirms (its own row is
+    // also _deleted) — or one we successfully push right here — gets
+    // dropped from local storage. One we can't confirm (push failed,
+    // e.g. offline) stays, so a future pull retries it rather than the
+    // deletion silently getting lost or the event resurrecting itself.
+    const cloudDeletedIds=new Set(
+      rows.filter(r=>r.id!=='_venues'&&r.data&&r.data.id&&r.data._deleted).map(r=>r.data.id)
+    );
+    const localTombstones=Object.values(localMap).filter(ev=>ev._deleted);
+    const stillPending=new Set();
+    for(const ev of localTombstones){
+      if(!cloudDeletedIds.has(ev.id)){
+        const ok=await pushTombstoneConfirmed(ev);
+        if(!ok) stillPending.add(ev.id);
+      }
+    }
+
+    // Persist live events, plus any tombstone not yet confirmed synced
+    d.events=Object.values(localMap).filter(ev=>!ev._deleted||stillPending.has(ev.id));
     _pulling=true; saveData(d); _pulling=false;
     // NO pushVenuesNow() here — remote won, nothing to push back
 
@@ -1053,7 +1090,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v5.0</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v5.1</span>';
   document.getElementById('hdrAction').style.display='none';
   document.getElementById('dataBtn').style.display='';
 }
