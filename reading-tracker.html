@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.9</title>
+<title>Reading Tracker v3.10</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -659,7 +659,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.9</span></div>
+    <div class="rt-logo">My Reading <span>v3.10</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -2690,9 +2690,24 @@ function removeEntry(id) {
   // numeric ids, newer ones are uid() strings. The onclick handler always
   // passes a quoted string now (see render), so a strict !== against an
   // old numeric id would never match and silently fail to delete it.
+  const entry = state.entries.find(e => String(e.id) === String(id));
   state.entries = state.entries.filter(e => String(e.id) !== String(id));
+  save(); // v3.10 (MR-010): this never called save() at all before either.
   showToast("Entry removed");
   render();
+  if (entry) tombstoneEntryInCloud(entry);
+}
+
+// v3.10 (MR-010): same root cause as deleteTracker/removeBook — spliced
+// locally with no tombstone ever reaching the cloud.
+async function tombstoneEntryInCloud(entry) {
+  if (!window.PalSync.hasSession()) return;
+  const trackerId = appState.activeTrackerId;
+  try {
+    await _rtEntries.upsert(entry.id, Object.assign({}, entry, { trackerId, _deleted: true, updatedAt: new Date().toISOString() }));
+  } catch(e) {
+    console.warn('Entry delete sync failed:', e);
+  }
 }
 
 function toggleAddBook() {
@@ -2822,10 +2837,33 @@ function saveBookEdit(bookId) {
 
 function removeBook(id) {
   if (!confirm("Remove this book and all its logged sessions?")) return;
+  const book = state.books.find(b => b.id === id);
+  const removedEntries = state.entries.filter(e => e.bookId === id);
   state.books   = state.books.filter(b => b.id !== id);
   state.entries = state.entries.filter(e => e.bookId !== id);
+  save(); // v3.10 (MR-010): this never called save() at all before — the
+  // removal didn't even persist locally past a reload, let alone sync.
   showToast("Book removed");
   render();
+  if (book) tombstoneBookInCloud(book, removedEntries);
+}
+
+// v3.10 (MR-010): same root cause as deleteTracker — removing a book
+// only ever spliced it locally, no tombstone reached the cloud, so it
+// would resurrect on this device's own next pull and never propagate
+// to any other device.
+async function tombstoneBookInCloud(book, removedEntries) {
+  if (!window.PalSync.hasSession()) return;
+  const trackerId = appState.activeTrackerId;
+  const now = new Date().toISOString();
+  try {
+    await _rtBooks.upsert(book.id, Object.assign({}, book, { trackerId, _deleted: true, updatedAt: now }));
+    for (const e of removedEntries) {
+      await _rtEntries.upsert(e.id, Object.assign({}, e, { trackerId, _deleted: true, updatedAt: now }));
+    }
+  } catch(e) {
+    console.warn('Book delete sync failed:', e);
+  }
 }
 
 function onNameChange() {
@@ -3722,10 +3760,43 @@ function renderDashboard() {
 
 function deleteTracker(id) {
   if (!confirm("Delete this tracker and all its data? This cannot be undone.")) return;
+  const tracker = appState.trackers.find(t => t.id === id);
   appState.trackers = appState.trackers.filter(t => t.id !== id);
   save();
   renderDashboard();
   showToast("Tracker deleted");
+  if (tracker) tombstoneTrackerInCloud(tracker);
+}
+
+// v3.10 (MR-010): deleteTracker only ever spliced the tracker out of the
+// local array — no tombstone was ever pushed. From the per-record merge's
+// point of view, a device with no local record for an id and one with a
+// _deleted record for that id look completely different: the former reads
+// as "this device just doesn't have it yet" (exactly what a fresh device
+// looks like), so the very next pull re-added the cloud's still-live copy
+// right back — on the SAME device that just deleted it, and propagated
+// nothing to any other device either, since the cloud row was never
+// touched at all. Deleting a tracker now explicitly tombstones the
+// tracker plus every book and entry that lived inside it, matching the
+// tombstone convention every other collection in the suite already uses.
+async function tombstoneTrackerInCloud(tracker) {
+  if (!window.PalSync.hasSession()) return;
+  const now = new Date().toISOString();
+  try {
+    await _rtTrackers.upsert(tracker.id, {
+      id: tracker.id, trackerName: tracker.trackerName, targetDate: tracker.targetDate,
+      type: tracker.type, active: tracker.active, activeBookId: tracker.activeBookId,
+      _deleted: true, updatedAt: now
+    });
+    for (const b of (tracker.books || [])) {
+      await _rtBooks.upsert(b.id, Object.assign({}, b, { trackerId: tracker.id, _deleted: true, updatedAt: now }));
+    }
+    for (const e of (tracker.entries || [])) {
+      await _rtEntries.upsert(e.id, Object.assign({}, e, { trackerId: tracker.id, _deleted: true, updatedAt: now }));
+    }
+  } catch(e) {
+    console.warn('Tracker delete sync failed:', e);
+  }
 }
 
 function createTracker() {
@@ -3765,6 +3836,7 @@ function addWishlistToTracker(wishlistId) {
     appState.wishlist = appState.wishlist.filter(x => x.id !== wishlistId);
     save(); renderWishlistView(); updateWishlistCard();
     showToast(`"${w.title}" added to new tracker "${name.trim()}" ✓`);
+    tombstoneWishlistInCloud(w);
     return;
   }
 
@@ -3791,6 +3863,7 @@ function addWishlistToTracker(wishlistId) {
   save();
   showToast(`"${w.title}" added to ${t.trackerName} ✓`);
   if (document.getElementById("wishlistApp")?.classList.contains("active")) renderWishlistView();
+  tombstoneWishlistInCloud(w);
   updateWishlistCard();
   if (appState.activeTrackerId === t.id) render();
 }
@@ -3820,10 +3893,24 @@ function saveWishlistEdit(wid) {
 }
 
 function deleteWishlistItem(wid) {
+  const item = appState.wishlist.find(w => w.id === wid);
   appState.wishlist = appState.wishlist.filter(w => w.id !== wid);
   save();
   updateWishlistCard();
   if (document.getElementById("wishlistApp")?.classList.contains("active")) renderWishlistView();
+  if (item) tombstoneWishlistInCloud(item);
+}
+
+// v3.10 (MR-010): same root cause as deleteTracker/removeBook/removeEntry
+// — wishlist removals (delete, or converting an item into a tracker/book)
+// only ever spliced the item out locally, no tombstone reached the cloud.
+async function tombstoneWishlistInCloud(item) {
+  if (!window.PalSync.hasSession()) return;
+  try {
+    await _rtWishlist.upsert(item.id, Object.assign({}, item, { _deleted: true, updatedAt: new Date().toISOString() }));
+  } catch(e) {
+    console.warn('Wishlist delete sync failed:', e);
+  }
 }
 
 // ── Wishlist navigation ───────────────────────────────────────────────
