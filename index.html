@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.8</title>
+<title>P Apps v10.9</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -563,7 +563,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.8</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.9</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -1692,14 +1692,19 @@ async function backupAll() {
 // APP_REGISTRY directly off its window (same trick already used for
 // exportJSON() above). Nothing here needs any changes to the other
 // app files.
+// v10.9: added a pal-sync.js usage check (usesPalSync per app) — six of
+// seven apps now share that library; GigsAndTrips is the deliberate
+// exception (shared, not per-user, data model + different table shape),
+// flagged as informational rather than an issue when its script tag is
+// correctly absent.
 const HEALTH_APPS = [
-  { id: 'fortnight-tracker', name: 'Fortnight Tracker', target: 'fortnight', storageKey: 'fn_tracker_v5',        envelope: 'standard',       badgeSelector: '.logo-sub span' },
-  { id: 'reading-tracker',   name: 'Reading Tracker',   target: 'reading',   storageKey: 'reading-tracker-v6',   envelope: 'known-exception', badgeSelector: '.rt-logo span' },
-  { id: 'GigsAndTrips',      name: 'Gigs & Trips',      target: 'gat',       storageKey: 'gat_v1',               envelope: 'known-exception', badgeSelector: '#hdrTitle .ver' },
-  { id: 'test-issues',       name: 'Test & Issues',     target: 'ti',        storageKey: 'ti_v1',                envelope: 'standard',       badgeSelector: '.nav-ver' },
-  { id: 'claim-tracker',     name: 'Claim Tracker',     target: 'claims',    storageKey: 'claim_tracker_v1',     envelope: 'standard',       badgeSelector: '.ver' },
-  { id: 'on-budget',         name: 'On Budget',         target: 'onbudget',  storageKey: 'on_budget_v1',         envelope: 'standard',       badgeSelector: '.logo-ver' },
-  { id: 'gym-tracker',       name: 'Gym Tracker',       target: 'gym',       storageKey: 'gym_tracker_v1',       envelope: 'standard',       badgeSelector: '.ver' },
+  { id: 'fortnight-tracker', name: 'Fortnight Tracker', target: 'fortnight', storageKey: 'fn_tracker_v5',        envelope: 'standard',       badgeSelector: '.logo-sub span', usesPalSync: true },
+  { id: 'reading-tracker',   name: 'Reading Tracker',   target: 'reading',   storageKey: 'reading-tracker-v6',   envelope: 'known-exception', badgeSelector: '.rt-logo span',  usesPalSync: true },
+  { id: 'GigsAndTrips',      name: 'Gigs & Trips',      target: 'gat',       storageKey: 'gat_v1',               envelope: 'known-exception', badgeSelector: '#hdrTitle .ver', usesPalSync: false },
+  { id: 'test-issues',       name: 'Test & Issues',     target: 'ti',        storageKey: 'ti_v1',                envelope: 'standard',       badgeSelector: '.nav-ver',       usesPalSync: true },
+  { id: 'claim-tracker',     name: 'Claim Tracker',     target: 'claims',    storageKey: 'claim_tracker_v1',     envelope: 'standard',       badgeSelector: '.ver',           usesPalSync: true },
+  { id: 'on-budget',         name: 'On Budget',         target: 'onbudget',  storageKey: 'on_budget_v1',         envelope: 'standard',       badgeSelector: '.logo-ver',      usesPalSync: true },
+  { id: 'gym-tracker',       name: 'Gym Tracker',       target: 'gym',       storageKey: 'gym_tracker_v1',       envelope: 'standard',       badgeSelector: '.ver',           usesPalSync: true },
 ];
 
 function relTime(iso) {
@@ -1741,6 +1746,19 @@ function checkVersionConsistency(frame, app) {
     const badgeEl = app.badgeSelector ? doc.querySelector(app.badgeSelector) : null;
     const badgeVer = badgeEl ? extractVersion(badgeEl.textContent || '') : null;
     return { titleVer, badgeVer, readable: true };
+  } catch (e) {
+    return { readable: false };
+  }
+}
+
+// Checks for the pal-sync.js <script> tag in the loaded app's document.
+// Deliberately just a DOM read (same as the version check above), not an
+// attempt to introspect whether the app is actually calling into it
+// correctly — that's a deeper question than Health Check is meant to
+// answer, same reasoning as the version-badge check only reading text.
+function checkPalSyncUsage(frame) {
+  try {
+    return { present: !!frame.contentDocument.querySelector('script[src="pal-sync.js"]'), readable: true };
   } catch (e) {
     return { readable: false };
   }
@@ -1803,6 +1821,21 @@ async function runHealthCheck() {
       notes.push('<span class="issue">Version mismatch: title says v' + v.titleVer + ', badge says v' + v.badgeVer + '</span>');
     } else {
       notes.push('Version displayed: v' + (v.titleVer || v.badgeVer));
+    }
+
+    const ps = checkPalSyncUsage(frame);
+    if (!ps.readable) {
+      notes.push('Could not check pal-sync.js usage.');
+    } else if (app.usesPalSync && !ps.present) {
+      status = 'error';
+      notes.push('<span class="issue">Expected to be using pal-sync.js, but no script tag found.</span>');
+    } else if (!app.usesPalSync && ps.present) {
+      status = 'error';
+      notes.push('<span class="issue">Not expected to use pal-sync.js, but a script tag was found — check if this is intentional.</span>');
+    } else if (app.usesPalSync) {
+      notes.push('Using pal-sync.js ✓');
+    } else {
+      notes.push('Not on pal-sync.js — known exception (see registry notes).');
     }
 
     if (status !== 'ok') issueCount++;
