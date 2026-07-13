@@ -74,6 +74,17 @@
  * lets an app feed in a session from any source, so a standalone-auth path
  * can use the same table()/pull()/upsert() machinery as the normal
  * launcher path instead of needing a second, parallel sync implementation.
+ * v1.7 — tombstone() always stamped the dead record's timestamp as
+ * `updated_at` (snake_case), with no way to override it. Every camelCase
+ * app (Test & Issues, Gym Tracker, Fortnight Tracker, Reading Tracker)
+ * noticed this during their own migration and worked around it by never
+ * calling tombstone() at all — building the tombstone object by hand
+ * instead, since the hardcoded field wouldn't refresh whatever their own
+ * merge actually reads. Not a live bug (every app already sidesteps it),
+ * but a landmine for the next migration that assumes the helper "just
+ * works" regardless of field convention. tombstone() now takes an
+ * optional updatedAtField (3rd arg, default 'updated_at' — unchanged for
+ * existing callers, e.g. Claim Tracker's and On Budget's).
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -199,8 +210,17 @@ window.PalSync = (function () {
     // its data, rather than a hard DELETE. Keeps the row visible to other
     // devices so their next pull removes it locally too, instead of
     // silently vanishing (the exact bug this library exists to prevent).
-    async function tombstone(id, currentData) {
-      const dead = Object.assign({}, currentData, { _deleted: true, updated_at: new Date().toISOString() });
+    // updatedAtField: name of the timestamp field to stamp on the
+    // tombstone (default 'updated_at'). Every camelCase app so far
+    // (Test & Issues, Gym Tracker, Fortnight Tracker, Reading Tracker)
+    // has worked around this by never calling tombstone() at all —
+    // building the dead record manually instead, since the old hardcoded
+    // snake_case stamp wouldn't refresh the field their own merge reads.
+    // That workaround still works, this just means it's no longer needed.
+    async function tombstone(id, currentData, updatedAtField) {
+      updatedAtField = updatedAtField || 'updated_at';
+      const dead = Object.assign({}, currentData, { _deleted: true });
+      dead[updatedAtField] = new Date().toISOString();
       await upsert(id, dead);
     }
 
