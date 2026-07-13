@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.8</title>
+<title>Reading Tracker v3.9</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -659,7 +659,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.8</span></div>
+    <div class="rt-logo">My Reading <span>v3.9</span></div>
     <div class="rt-topbar-right">
       <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
@@ -1220,6 +1220,7 @@
 <div id="toast"></div>
 
 <script src="pal-config.js"></script>
+<script src="pal-sync.js"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -1486,74 +1487,127 @@ function showSessionExpiredBanner() {
   ind.onclick = () => location.reload();
 }
 
-// ── Supabase: load from cloud ─────────────────────────────────────────
+// ── Supabase: per-record sync (v3.9, MR-005) ───────────────────────────
+// Replaces the old whole-blob reading_data table (one row per user) with
+// four record kinds sharing a new reading_records table, matching the
+// canonical pattern used across the rest of the suite. The local
+// appState shape is UNCHANGED (nested trackers[].books[]/.entries[],
+// separate wishlist[]) — flattenForSync()/reassembleFromSync() convert
+// between that and the flat per-record shape pal-sync.js needs, so
+// none of the existing UI/render code needed to change.
+//
+// Book notes stay nested inside their book's own record rather than
+// becoming a 5th kind — they're a sub-field of one book, not a
+// top-level collection worth syncing independently; last-write-wins at
+// the book level covers them.
+//
+// None of trackers/books/entries/wishlist ever had their own updatedAt
+// (the old blob sync never needed one) — backfillReadingTimestamps()
+// adds it, same pattern as CLA-009/TI-043/FT-003.
 let _lastCloudError = null; // v2.7 (MR-003) — captured for diagnostics, shown in sync log
-async function loadFromCloud(friendlyUserId) {
-  // v2.8 (MR-003): the reading_data table's row-level security scopes
-  // rows to the actual authenticated Supabase user — it doesn't know
-  // about "pete"/"lex" labels, only the real auth UUID. Using the
-  // friendly label here (as before) meant this could never match, so
-  // the row-level security policy silently hid every row on read.
-  if (!_sbUserId) { _lastCloudError = "load: no authenticated user yet"; return null; }
+
+const _rtTrackers = window.PalSync.table('reading_records', { prefix: 'tracker_' });
+const _rtBooks     = window.PalSync.table('reading_records', { prefix: 'book_' });
+const _rtEntries   = window.PalSync.table('reading_records', { prefix: 'entry_' });
+const _rtWishlist  = window.PalSync.table('reading_records', { prefix: 'wishlist_' });
+
+function backfillReadingTimestamps() {
+  const now = new Date().toISOString();
+  (appState.trackers || []).forEach(t => {
+    if (!t.updatedAt) t.updatedAt = now;
+    (t.books   || []).forEach(b => { if (!b.updatedAt) b.updatedAt = now; });
+    (t.entries || []).forEach(e => { if (!e.updatedAt) e.updatedAt = now; });
+  });
+  (appState.wishlist || []).forEach(w => { if (!w.updatedAt) w.updatedAt = now; });
+}
+
+// Flatten the nested UI structure into the four per-record arrays
+// pal-sync.js works with. trackerId is added to books/entries here —
+// it's implicit via nesting locally, but needs to be explicit once
+// flattened so a pull can put each book/entry back under the right
+// tracker.
+function flattenForSync() {
+  const trackers = [], books = [], entries = [];
+  (appState.trackers || []).forEach(t => {
+    trackers.push({
+      id: t.id, trackerName: t.trackerName, targetDate: t.targetDate,
+      type: t.type, active: t.active, activeBookId: t.activeBookId,
+      updatedAt: t.updatedAt
+    });
+    (t.books || []).forEach(b => books.push(Object.assign({}, b, { trackerId: t.id })));
+    (t.entries || []).forEach(e => entries.push(Object.assign({}, e, { trackerId: t.id })));
+  });
+  return { trackers, books, entries, wishlist: appState.wishlist || [] };
+}
+
+// Rebuild appState.trackers[].books[]/.entries[] from the flat merged
+// arrays pull() returns. trackerId is stripped back off — the local
+// nested shape never carried it, and no existing UI code expects it.
+function reassembleFromSync(flat) {
+  const byId = {};
+  flat.trackers.forEach(t => { byId[t.id] = Object.assign({}, t, { books: [], entries: [] }); });
+  flat.books.forEach(b => {
+    const t = byId[b.trackerId];
+    if (!t) return;
+    const rest = Object.assign({}, b); delete rest.trackerId;
+    t.books.push(rest);
+  });
+  flat.entries.forEach(e => {
+    const t = byId[e.trackerId];
+    if (!t) return;
+    const rest = Object.assign({}, e); delete rest.trackerId;
+    t.entries.push(rest);
+  });
+  appState.trackers = Object.values(byId);
+  appState.wishlist = flat.wishlist;
+}
+
+// Push everything up. Used by both the debounced auto-save and the
+// manual Push button.
+async function pushAllToCloud() {
+  if (!window.PalSync.hasSession()) { _lastCloudError = 'push: no authenticated user yet'; return false; }
+  backfillReadingTimestamps();
+  const flat = flattenForSync();
   try {
-    const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY) };
-    const res = await fetch(
-      `${SB_URL}/rest/v1/reading_data?user_id=eq.${encodeURIComponent(_sbUserId)}&select=data`,
-      { headers }
-    );
-    if (!res.ok) {
-      if (res.status === 401) showSessionExpiredBanner();
-      _lastCloudError = "load HTTP " + res.status;
-      throw new Error("HTTP " + res.status);
-    }
-    const rows = await res.json();
-    if (rows && rows.length > 0 && rows[0].data) {
-      return rows[0].data;
-    }
-    return null;
+    for (const t of flat.trackers) await _rtTrackers.upsert(t.id, t);
+    for (const b of flat.books)    await _rtBooks.upsert(b.id, b);
+    for (const e of flat.entries)  await _rtEntries.upsert(e.id, e);
+    for (const w of flat.wishlist) await _rtWishlist.upsert(w.id, w);
+    _lastCloudError = null;
+    return true;
   } catch(e) {
-    if (!_lastCloudError) _lastCloudError = "load: " + (e && e.message ? e.message : "network error");
-    console.warn("Supabase load failed:", e);
-    return null;
+    _lastCloudError = 'push: ' + (e && e.message ? e.message : 'network error');
+    if (e && e.status === 401) showSessionExpiredBanner();
+    console.warn('Supabase push failed:', e);
+    return false;
   }
 }
 
-// ── Supabase: save to cloud (upsert) ─────────────────────────────────
-// v2.7 (MR-003): added on_conflict=user_id so merge-duplicates has a
-// column to merge on.
-// v2.8 (MR-003): root cause of the 403 row-level-security rejection —
-// this was writing the friendly label ("pete"/"lex") as the row's
-// user_id instead of the real Supabase auth UUID. Row-level security
-// checks the row against the authenticated user's real ID, so a label
-// like "pete" could never satisfy that policy — every write was
-// rejected outright, every time, regardless of network conditions.
-// Fixed to use the real UUID (_sbUserId), matching the same pattern
-// already used correctly in Claim Tracker and Fortnight Tracker.
-async function saveToCloud(friendlyUserId, data) {
-  if (!_sbUserId) { _lastCloudError = "save: no authenticated user yet"; return false; }
+// Pull everything, merge (last-write-wins per record, tombstone-aware),
+// and reassemble into the nested UI shape. Returns null on failure so
+// callers can distinguish "nothing in the cloud yet" from "pull failed".
+async function pullAllFromCloud() {
+  if (!window.PalSync.hasSession()) { _lastCloudError = 'pull: no authenticated user yet'; return null; }
   try {
-    const headers = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": "Bearer " + (_sbAccessToken || SB_KEY), "Prefer": "resolution=merge-duplicates" };
-    const res = await fetch(
-      `${SB_URL}/rest/v1/reading_data?on_conflict=user_id`,
-      {
-        method:  "POST",
-        headers,
-        body:    JSON.stringify({ user_id: _sbUserId, data, updated_at: new Date().toISOString() })
-      }
-    );
-    if (!res.ok && res.status === 401) showSessionExpiredBanner();
-    if (!res.ok) {
-      let detail = "";
-      try { detail = (await res.json())?.message || ""; } catch(e2) {}
-      _lastCloudError = "save HTTP " + res.status + (detail ? " — " + detail : "");
-    } else {
-      _lastCloudError = null;
-    }
-    return res.ok || res.status === 201 || res.status === 200;
+    const rows = await window.PalSync.fetchTableRows('reading_records');
+    const flat = flattenForSync();
+    const trackersResult = await _rtTrackers.pull(flat.trackers, 'id', 'updatedAt', rows);
+    const booksResult    = await _rtBooks.pull(flat.books, 'id', 'updatedAt', rows);
+    const entriesResult  = await _rtEntries.pull(flat.entries, 'id', 'updatedAt', rows);
+    const wishlistResult = await _rtWishlist.pull(flat.wishlist, 'id', 'updatedAt', rows);
+    reassembleFromSync({
+      trackers: trackersResult.merged, books: booksResult.merged,
+      entries: entriesResult.merged, wishlist: wishlistResult.merged
+    });
+    _lastCloudError = null;
+    return {
+      pushedUp: trackersResult.pushedCount + booksResult.pushedCount + entriesResult.pushedCount + wishlistResult.pushedCount
+    };
   } catch(e) {
-    _lastCloudError = "save: " + (e && e.message ? e.message : "network error");
-    console.warn("Supabase save failed:", e);
-    return false;
+    _lastCloudError = 'pull: ' + (e && e.message ? e.message : 'network error');
+    if (e && e.status === 401) showSessionExpiredBanner();
+    console.warn('Supabase pull failed:', e);
+    return null;
   }
 }
 
@@ -1617,6 +1671,9 @@ async function doRtLogin() {
     _sbAccessToken = data.access_token;
     localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
     _sbUserId = data.user?.id || null; // v2.8 (MR-003)
+    // v3.9 (MR-005): feed this standalone-obtained token into pal-sync.js
+    // too, so table()/pull()/upsert() work the same as via the launcher.
+    window.PalSync.setSession(_sbAccessToken, _sbUserId);
     const userId = RT_USER_MAP[data.user?.id] || 'pete';
     hidePinScreen();
     afterRtAuth(userId);
@@ -1645,18 +1702,15 @@ async function selectUser(userId) {
 
   showSync("saving", "Loading your data…");
 
-  // Try cloud first
-  const cloudData = await loadFromCloud(userId);
-  if (cloudData && cloudData.trackers) {
-    appState.trackers        = cloudData.trackers;
-    appState.wishlist        = cloudData.wishlist || [];
+  const result = await pullAllFromCloud();
+  if (result) {
     appState.activeTrackerId = null;
     save(); // mirror to localStorage
-    showSync("ok", "Loaded from cloud ✓");
+    showSync("ok", result.pushedUp ? "Loaded — " + result.pushedUp + " pushed up ✓" : "Loaded from cloud ✓");
   } else {
     // Fall back to localStorage (may have data from before Supabase)
     load();
-    showSync("ok", cloudData === null ? "No cloud data yet" : "Loaded locally");
+    showSync("ok", "Loaded locally");
     // Push local data to cloud if we have any
     if (appState.trackers.length > 0) {
       syncToCloud();
@@ -1670,22 +1724,19 @@ async function selectUser(userId) {
 async function manualPullFromCloud() {
   if (!_currentUser) { showSync('red', 'Not signed in'); return; }
   showSync('saving', 'Pulling from cloud…');
-  const cloudData = await loadFromCloud(_currentUser);
-  if (cloudData && cloudData.trackers) {
-    appState.trackers = cloudData.trackers;
-    appState.wishlist = cloudData.wishlist || [];
+  const result = await pullAllFromCloud();
+  if (result) {
     save(); renderAll();
     showSync('ok', 'Pulled from cloud ✓');
   } else {
-    showSync('red', cloudData ? 'Invalid cloud data' : 'Nothing found in cloud');
+    showSync('red', _lastCloudError || 'Pull failed');
   }
 }
 
 async function manualPushToCloud() {
   if (!_currentUser) { showSync('red', 'Not signed in'); return; }
   showSync('saving', 'Pushing to cloud…');
-  const data = { ...appState, version: 7 };
-  const ok = await saveToCloud(_currentUser, data);
+  const ok = await pushAllToCloud();
   showSync(ok ? 'ok' : 'red', ok ? 'Pushed to cloud ✓' : 'Push failed');
 }
 
@@ -1697,8 +1748,7 @@ function syncToCloud() {
     if (!_currentUser || !_pendingSync) return;
     _pendingSync = false;
     showSync("saving", "Saving…");
-    const data = { ...appState, version: 7 };
-    let ok = await saveToCloud(_currentUser, data);
+    let ok = await pushAllToCloud();
     // v2.6 (MR-002): one silent retry before surfacing an error. This call
     // fires automatically (e.g. right after cold app-open, pushing local
     // data up when no cloud copy was found) rather than from a direct user
@@ -1706,7 +1756,7 @@ function syncToCloud() {
     // a manual push/pull is still one tap away if it genuinely keeps failing.
     if (!ok) {
       await new Promise(r => setTimeout(r, 1200));
-      ok = await saveToCloud(_currentUser, data);
+      ok = await pushAllToCloud();
     }
     // v2.7 (MR-003): include the captured reason so if this recurs, the
     // actual cause is visible instead of a generic message.
@@ -1715,14 +1765,13 @@ function syncToCloud() {
   }, 1500); // 1.5s debounce — batches rapid saves
 }
 
-// ── Periodic background pull (v3.3 / MR-BLOB) ──────────────────────────
-// My Reading syncs as a single whole-library blob rather than per-record,
-// and previously only pulled from the cloud once, at sign-in (or via the
-// manual Pull button). A long-open tab could drift stale, and its next
-// edit would push that stale full copy over anything added elsewhere in
-// the meantime — silently, with no conflict warning. This doesn't change
-// that underlying model (a proper fix is per-record sync, a bigger job),
-// it just narrows the window a long-lived session can drift.
+// ── Periodic background pull ────────────────────────────────────────────
+// v3.9 (MR-005): now a real per-record pull (was a whole-blob pull under
+// the old model — the comment used to note that a proper fix meant
+// per-record sync, "a bigger job"; this is that job). A long-open tab no
+// longer risks clobbering another device's changes on its next edit —
+// each record is compared and merged individually, not overwritten
+// wholesale.
 let _pollTimer = null;
 const RT_POLL_INTERVAL_MS = 60000; // matches GigsAndTrips' existing poll cadence
 
@@ -1740,12 +1789,8 @@ async function backgroundPullFromCloud() {
   // spending the request.
   if (!_currentUser || _pendingSync || document.hidden) return;
   try {
-    const cloudData = await loadFromCloud(_currentUser);
-    if (cloudData && cloudData.trackers && !_pendingSync) {
-      appState.trackers = cloudData.trackers;
-      appState.wishlist = cloudData.wishlist || [];
-      save(); renderAll();
-    }
+    const result = await pullAllFromCloud();
+    if (result && !_pendingSync) { save(); renderAll(); }
   } catch(e) {
     // Silent by design — this runs unattended. A real, persistent problem
     // will still surface through the manual pull/push or a failed save.
@@ -4179,46 +4224,55 @@ function applyTheme(theme) {
 }
 
 // ── PeteAppLauncher passthrough ──────────────────────────────────────────
+// v3.9 (MR-005): session capture (token/user_id, origin guard, no-session
+// timing) now goes through pal-sync.js's initSession/setSession, so the
+// launcher path and the standalone refresh-token path both feed the same
+// shared session state instead of only setting local variables.
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return; // ── origin guard ──
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme); // v2.4
-  if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
-    if (e.data.access_token) _sbAccessToken = e.data.access_token;
-    if (e.data.user_id) _sbUserId = e.data.user_id; // v2.8 (MR-003)
+});
+window.PalSync.initSession({
+  onSession: function(token, userId) {
+    _sbAccessToken = token;
+    _sbUserId = userId;
     hidePinScreen();
-    const userId = RT_USER_MAP[e.data.user_id] || e.data.user_key || localStorage.getItem('rt-user') || 'pete';
-    if (!window._rtInited) { window._rtInited = true; afterRtAuth(userId); }
-  }
+    const userKey = RT_USER_MAP[userId] || localStorage.getItem('rt-user') || 'pete';
+    if (!window._rtInited) { window._rtInited = true; afterRtAuth(userKey); }
+  },
+  onNoSession: function() {
+    if (!window._rtInited) showRtDirectLogin();
+  },
+  noSessionMs: 300
 });
 
-// Boot: restore session or show login
+// Boot: restore a standalone session via refresh token, if one's stored.
+// If this succeeds it feeds pal-sync.js the same way the launcher path
+// does; if not (or there's nothing stored), initSession's onNoSession
+// above handles showing the login screen after 300ms.
 (async function rtBoot() {
   const stored = localStorage.getItem('rt_session');
-  if (stored) {
-    try {
-      const s = JSON.parse(stored);
-      const res = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY },
-        body: JSON.stringify({ refresh_token: s.refresh_token })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        _sbAccessToken = data.access_token;
-        _sbUserId = data.user?.id || _sbUserId; // v2.8 (MR-003)
-        localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
-        hidePinScreen();
-        const userId = RT_USER_MAP[data.user?.id] || localStorage.getItem('rt-user') || 'pete';
-        if (!window._rtInited) { window._rtInited = true; afterRtAuth(userId); }
-        return;
-      }
-    } catch(e) {}
-    localStorage.removeItem('rt_session');
-  }
-  // Show login unless launcher posts first
-  setTimeout(() => {
-    if (!window._rtInited) showRtDirectLogin();
-  }, 300);
+  if (!stored) return;
+  try {
+    const s = JSON.parse(stored);
+    const res = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY },
+      body: JSON.stringify({ refresh_token: s.refresh_token })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      _sbAccessToken = data.access_token;
+      _sbUserId = data.user?.id || _sbUserId; // v2.8 (MR-003)
+      localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
+      window.PalSync.setSession(_sbAccessToken, _sbUserId);
+      hidePinScreen();
+      const userKey = RT_USER_MAP[data.user?.id] || localStorage.getItem('rt-user') || 'pete';
+      if (!window._rtInited) { window._rtInited = true; afterRtAuth(userKey); }
+      return;
+    }
+  } catch(e) {}
+  localStorage.removeItem('rt_session');
 })();
 
 

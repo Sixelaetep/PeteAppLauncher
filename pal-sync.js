@@ -65,6 +65,15 @@
  * Errors now carry a .status property (the HTTP status, where available)
  * alongside .message — purely additive, no existing catch that only reads
  * .message is affected.
+ * v1.6 — some apps (Reading Tracker, GigsAndTrips) have a second, standalone
+ * auth path — an email/password login with its own refresh-token flow —
+ * for when the app is opened directly rather than through the launcher.
+ * Until now there was no way to hand a token obtained that way to this
+ * library; _token/_userId were only ever settable via the internal
+ * PAL_SESSION postMessage listener. New PalSync.setSession(token, userId)
+ * lets an app feed in a session from any source, so a standalone-auth path
+ * can use the same table()/pull()/upsert() machinery as the normal
+ * launcher path instead of needing a second, parallel sync implementation.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -112,6 +121,18 @@ window.PalSync = (function () {
 
   function hasSession() { return !!(_token && _userId); }
   function getUserId()  { return _userId; }
+
+  // Feed in a session obtained outside the PAL_SESSION postMessage flow
+  // (e.g. a standalone email/password login). Triggers the same
+  // onSession callbacks as a normal PAL_SESSION arrival, so callers that
+  // pull-on-first-session don't need a separate code path for this.
+  function setSession(token, userId) {
+    _token  = token || null;
+    _userId = userId || null;
+    if (_token && _userId) {
+      _sessionCallbacks.forEach(function (fn) { fn(_token, _userId); });
+    }
+  }
 
   // ── Low-level REST wrapper ────────────────────────────────────────
   async function sbFetch(path, method, body) {
@@ -258,6 +279,7 @@ window.PalSync = (function () {
     initSession:    initSession,
     hasSession:     hasSession,
     getUserId:      getUserId,
+    setSession:     setSession,
     sbFetch:        sbFetch,
     fetchTableRows: fetchTableRows,
     table:          table
