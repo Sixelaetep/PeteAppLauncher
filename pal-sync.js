@@ -85,6 +85,26 @@
  * works" regardless of field convention. tombstone() now takes an
  * optional updatedAtField (3rd arg, default 'updated_at' — unchanged for
  * existing callers, e.g. Claim Tracker's and On Budget's).
+ * v1.8 — only Gym Tracker had any handling for a push failing because the
+ * session token expired mid-use (401): it queued the record and retried
+ * once a fresh PAL_SESSION arrived. On Budget, Test & Issues, Claim
+ * Tracker, and Fortnight Tracker had none — a 401 during upsert() was
+ * just logged and dropped by the caller, relying on the next full pull()
+ * to notice the local record is newer than cloud and push it again. Not
+ * data loss, but inconsistent, and something every app would otherwise
+ * have to reimplement by hand (as Gym Tracker did). Two additions, both
+ * purely additive:
+ * (1) table().upsert() now auto-queues itself internally whenever a
+ * PATCH/POST fails with status 401, then still re-throws exactly as
+ * before — existing callers that catch and log the error see no change
+ * in behaviour. The queue auto-flushes the next time a session arrives,
+ * via initSession()/setSession(), before any app code runs — no app
+ * needs to remember to call anything for the common case. New
+ * PalSync.flushRetryQueue() is also exposed for a manual/explicit flush,
+ * and PalSync.retryQueueLength() for a UI to show "N pending".
+ * (2) PalSync.errorHint(status, message) — Gym Tracker's syncErrorHint()
+ * pulled out into the shared library, so every app gets the same plain-
+ * English translation of a 401/403/404 instead of a bare status code.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -101,12 +121,56 @@ window.PalSync = (function () {
   let _userId = null;
   let _listenerAttached = false;
   let _sessionCallbacks  = [];   // fns called with (token, userId) on every PAL_SESSION/PAL_UNLOCKED
+  let _retryFlushCallbacks = []; // fns called with ({flushed, stillQueued}) after an auto-flush attempt
+  let _retryQueue = [];          // [{ tableApi, id, data }] — queued upsert()s awaiting a fresh session
+
+  // Every 401 upsert lands here (see table().upsert() below); flushed
+  // automatically the next time a session arrives via _onSessionArrived,
+  // so ordinary apps never need to call this directly.
+  function _queueForRetry(tableApi, id, data) {
+    _retryQueue = _retryQueue.filter(function (q) { return !(q.tableApi === tableApi && q.id === id); });
+    _retryQueue.push({ tableApi: tableApi, id: id, data: data });
+  }
+
+  function retryQueueLength() { return _retryQueue.length; }
+
+  // Re-attempts every queued upsert. Safe to call with an empty queue or
+  // no session (no-op). A record that fails again (still no valid
+  // session, or a different error) is re-queued rather than dropped.
+  async function flushRetryQueue() {
+    if (!_retryQueue.length || !hasSession()) return { flushed: 0, stillQueued: _retryQueue.length };
+    const queue = _retryQueue; _retryQueue = [];
+    let flushed = 0;
+    for (const q of queue) {
+      try { await q.tableApi.upsert(q.id, q.data); flushed++; }
+      catch (e) { /* upsert() re-queues on its own 401 path; other errors are dropped same as any other failed upsert */ }
+    }
+    return { flushed: flushed, stillQueued: _retryQueue.length };
+  }
+
+  // Common tail for both session-arrival paths (postMessage and
+  // setSession()): fire the app's own onSession callbacks first, then
+  // attempt a retry-queue flush and report the outcome to anyone
+  // listening via opts.onRetryFlushed. Ordering matters — an app's
+  // onSession handler typically does its first pull() before anything
+  // else, so the queue gets a real chance to flush against a live
+  // session rather than racing it.
+  function _onSessionArrived() {
+    _sessionCallbacks.forEach(function (fn) { fn(_token, _userId); });
+    if (_retryQueue.length) {
+      flushRetryQueue().then(function (result) {
+        _retryFlushCallbacks.forEach(function (fn) { fn(result); });
+      });
+    }
+  }
 
   // ── Session (PAL_SESSION / PAL_UNLOCKED, with origin guard) ──────────
   // Call once at startup. onSession fires every time a session arrives
   // (including re-auth after expiry). onNoSession fires once if nothing
   // arrives within noSessionMs (default 3000) — apps use this to show a
-  // "not connected" banner, same as every app already does.
+  // "not connected" banner, same as every app already does. onRetryFlushed
+  // (optional, v1.8) fires after every session arrival that had queued
+  // retries to attempt — apps can use it to log/display the outcome.
   function initSession(opts) {
     opts = opts || {};
     if (!_listenerAttached) {
@@ -116,13 +180,12 @@ window.PalSync = (function () {
         if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
           _token  = e.data.access_token || null;
           _userId = e.data.user_id || null;
-          if (_token && _userId) {
-            _sessionCallbacks.forEach(function (fn) { fn(_token, _userId); });
-          }
+          if (_token && _userId) _onSessionArrived();
         }
       });
     }
     if (opts.onSession) _sessionCallbacks.push(opts.onSession);
+    if (opts.onRetryFlushed) _retryFlushCallbacks.push(opts.onRetryFlushed);
     if (opts.onNoSession) {
       setTimeout(function () {
         if (!_token) opts.onNoSession();
@@ -140,10 +203,20 @@ window.PalSync = (function () {
   function setSession(token, userId) {
     _token  = token || null;
     _userId = userId || null;
-    if (_token && _userId) {
-      _sessionCallbacks.forEach(function (fn) { fn(_token, _userId); });
-    }
+    if (_token && _userId) _onSessionArrived();
   }
+
+  // Plain-English translation of a sync failure's HTTP status, shared
+  // across every app so error messages read the same everywhere (v1.8 —
+  // lifted out of Gym Tracker's local syncErrorHint(), which was the
+  // only app that had one).
+  function errorHint(status, message) {
+    if (status === 401) return 'session token invalid or expired — reopen the app via the launcher to refresh it';
+    if (status === 404) return 'table not found — the matching Supabase table may not have been created yet (check the SQL setup)';
+    if (status === 403) return 'access denied — check the RLS policy on this table';
+    return message || ('HTTP ' + status);
+  }
+
 
   // ── Low-level REST wrapper ────────────────────────────────────────
   async function sbFetch(path, method, body) {
@@ -183,26 +256,36 @@ window.PalSync = (function () {
   // Create one table() instance per kind sharing the same tableName.
   function table(tableName, opts) {
     const prefix = (opts && opts.prefix) || '';
+    let api; // forward reference so upsert() below can queue *itself* for retry
 
     // PATCH first (matches existing row for this user_id + record_key);
     // POST if nothing matched. Throws on failure so callers can log it.
     // id: the record's own id — record_key sent to Supabase is prefix + id.
+    // v1.8: a 401 here is now also queued automatically via _queueForRetry,
+    // in addition to being thrown as before — existing callers that catch
+    // and log the error see identical behaviour; the queue is purely
+    // additive and flushes itself on the next session arrival.
     async function upsert(id, data) {
       if (!hasSession()) return;
       const recordKey = prefix + id;
       const row = { user_id: _userId, record_key: recordKey, data: data, updated_at: new Date().toISOString() };
-      const patch = await sbFetch(
-        '/' + tableName + '?user_id=eq.' + _userId + '&record_key=eq.' + encodeURIComponent(recordKey),
-        'PATCH', row
-      );
-      if (patch.ok) {
-        const body = await patch.json();
-        if (Array.isArray(body) && body.length === 0) {
-          const post = await sbFetch('/' + tableName, 'POST', row);
-          if (!post.ok) { const err = new Error('POST failed: ' + (await post.text())); err.status = post.status; throw err; }
+      try {
+        const patch = await sbFetch(
+          '/' + tableName + '?user_id=eq.' + _userId + '&record_key=eq.' + encodeURIComponent(recordKey),
+          'PATCH', row
+        );
+        if (patch.ok) {
+          const body = await patch.json();
+          if (Array.isArray(body) && body.length === 0) {
+            const post = await sbFetch('/' + tableName, 'POST', row);
+            if (!post.ok) { const err = new Error('POST failed: ' + (await post.text())); err.status = post.status; throw err; }
+          }
+        } else {
+          const err = new Error('PATCH failed: ' + (await patch.text())); err.status = patch.status; throw err;
         }
-      } else {
-        const err = new Error('PATCH failed: ' + (await patch.text())); err.status = patch.status; throw err;
+      } catch (err) {
+        if (err && err.status === 401) _queueForRetry(api, id, data);
+        throw err;
       }
     }
 
@@ -292,16 +375,19 @@ window.PalSync = (function () {
       return { merged: merged, pushedCount: localOnly.length, rows: allRows, skipped: false };
     }
 
-    return { upsert: upsert, tombstone: tombstone, pull: pull };
+    return (api = { upsert: upsert, tombstone: tombstone, pull: pull });
   }
 
   return {
-    initSession:    initSession,
-    hasSession:     hasSession,
-    getUserId:      getUserId,
-    setSession:     setSession,
-    sbFetch:        sbFetch,
-    fetchTableRows: fetchTableRows,
-    table:          table
+    initSession:      initSession,
+    hasSession:       hasSession,
+    getUserId:        getUserId,
+    setSession:       setSession,
+    sbFetch:          sbFetch,
+    fetchTableRows:   fetchTableRows,
+    table:            table,
+    errorHint:        errorHint,
+    flushRetryQueue:  flushRetryQueue,
+    retryQueueLength: retryQueueLength
   };
 })();

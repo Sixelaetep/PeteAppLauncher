@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.9</title>
+<title>9-Day Fortnight Tracker v3.10</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -330,7 +330,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.9</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.10</span></div></div>
   </div>
   <div class="header-actions">
     <div class="sync-wrap" style="cursor:pointer" onclick="openDataModal()" title="Sync status">
@@ -505,15 +505,32 @@ function renderSyncLog() {
 }
 
 // ── SYNC STATUS ───────────────────────────────────────────────────────────────
+// v3.10 (FT-014): note this v3.10 is the retry-queue release below, not
+// the earlier background-polling build that was deliberately shelved —
+// Fortnight Tracker is Pete-only/single-user, so on-load pull is enough
+// and background polling stays reserved for genuinely shared apps.
+// This release instead closes the same gap On Budget, Test & Issues,
+// and Claim Tracker had: no handling for a push failing because the
+// session token expired mid-use (401) — just logged and dropped, relying
+// on the next full pull to notice the local record is newer and push it
+// again. That protection now lives in pal-sync.js itself (v1.8) —
+// table().upsert() queues a 401 internally and flushes it automatically
+// the next time a fresh session arrives. No sync logic changes needed
+// here beyond wiring onRetryFlushed into initSession() to log the
+// outcome, and reading window.PalSync.retryQueueLength() in
+// setSyncStatus() to show "N pending sync" instead of a bare error while
+// a retry is queued. Every sync error log message now also runs through
+// the shared PalSync.errorHint() instead of a bare e.message.
 var _syncState = 'local'; // local | connecting | syncing | synced | error
 function setSyncStatus(s, detail) {
   _syncState = s;
   var dot = document.getElementById('sync-dot');
   var lbl = document.getElementById('sync-lbl');
   if (!dot) return;
-  var cls = s === 'synced' ? 'synced' : s === 'syncing' || s === 'connecting' ? 'syncing' : s === 'error' ? 'error' : 'offline';
+  var pendingCount = window.PalSync.retryQueueLength();
+  var cls = pendingCount ? 'syncing' : s === 'synced' ? 'synced' : s === 'syncing' || s === 'connecting' ? 'syncing' : s === 'error' ? 'error' : 'offline';
   dot.className = 'sync-dot ' + cls;
-  var txt = s === 'synced' ? 'Synced' : s === 'syncing' ? 'Syncing…' : s === 'connecting' ? 'Connecting…' : s === 'error' ? 'Sync error' : 'Local';
+  var txt = pendingCount ? '\u23f3 ' + pendingCount + ' pending sync' : s === 'synced' ? 'Synced' : s === 'syncing' ? 'Syncing…' : s === 'connecting' ? 'Connecting…' : s === 'error' ? 'Sync error' : 'Local';
   lbl.textContent = txt;
 }
 
@@ -523,7 +540,7 @@ function sbUpsert(bundle, cb) {
   setSyncStatus('syncing');
   _ft.upsert(bundle.startDate, bundle)
     .then(function() { slog('Upsert ' + bundle.startDate + ' \u2713', 'ok'); setSyncStatus('synced'); if (cb) cb(true); })
-    .catch(function(e) { slog('Upsert error ' + bundle.startDate + ': ' + e.message, 'error'); setSyncStatus('error'); if (cb) cb(false); });
+    .catch(function(e) { slog('Upsert error ' + bundle.startDate + ': ' + window.PalSync.errorHint(e.status, e.message), 'error'); setSyncStatus('error'); if (cb) cb(false); });
 }
 
 function sbDelete(bundle, cb) {
@@ -560,7 +577,7 @@ function pullFromCloud(cb) {
       if (cb) cb();
     })
     .catch(function(e) {
-      slog('Pull failed: ' + e.message, 'error');
+      slog('Pull failed: ' + window.PalSync.errorHint(e.status, e.message), 'error');
       setSyncStatus('error');
       if (cb) cb();
     });
@@ -1297,6 +1314,10 @@ window.PalSync.initSession({
       // Preserve current UI state — only re-render data, don't reset tab/panel/day
       render();
     });
+  },
+  onRetryFlushed: function (result) {
+    if (result.flushed) slog('Retrying ' + result.flushed + ' queued change(s) after reconnect \u2014 done', 'ok');
+    setSyncStatus(_syncState);
   },
   onNoSession: function () {
     setSyncStatus('local');

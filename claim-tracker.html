@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.5</title>
+<title>Claim Tracker v2.6</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -225,7 +225,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.5</div>
+        <div class="ver">v2.6</div>
       </div>
     </div>
     <div class="header-actions">
@@ -520,7 +520,18 @@
 // named `window` inside saveMileageSettings() — harmless as written
 // (separate function scope from mutate()), but a landmine now that
 // the app leans on window.PalSync throughout.
-const VERSION  = '2.5';
+// v2.6 (CLA-010): Claim Tracker had no handling for a push failing
+// because the session token expired mid-use (401) — just logged and
+// dropped, relying on the next full pull to notice the local record is
+// newer and push it again. That protection now lives in pal-sync.js
+// itself (v1.8) — table().upsert() queues a 401 internally and flushes
+// it automatically the next time a fresh session arrives. No sync logic
+// changes needed here beyond wiring onRetryFlushed into initSession() to
+// log the outcome, and reading window.PalSync.retryQueueLength() in
+// setSyncState() to show "N pending sync" instead of a bare error while
+// a retry is queued. Every sync error log message now also runs through
+// the shared PalSync.errorHint() instead of a bare err.message.
+const VERSION  = '2.6';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -664,6 +675,10 @@ window.PalSync.initSession({
     syncPull();
     reportToLauncher();
   },
+  onRetryFlushed: function (result) {
+    if (result.flushed) addLog(`Retrying ${result.flushed} queued change(s) after reconnect — done`, 'ok');
+    setSyncState(_syncState);
+  },
   onNoSession: function () {
     document.getElementById('syncBanner').classList.add('visible');
   },
@@ -696,10 +711,12 @@ function setSyncState(state, label) {
   _syncState = state;
   const chip  = document.getElementById('syncChip');
   const lbl   = document.getElementById('syncLabel');
-  chip.className = 'sync-chip state-' + state;
+  const pendingCount = window.PalSync.retryQueueLength();
+  chip.className = 'sync-chip state-' + (pendingCount ? 'syncing' : state);
   const labels = {local:'Local', connecting:'Connecting…', syncing:'Syncing…', synced:'Synced', error:'Sync error'};
-  lbl.textContent = label || labels[state] || state;
-  document.getElementById('drSyncStatus').textContent = label || labels[state] || state;
+  const text = pendingCount ? `⏳ ${pendingCount} pending sync` : (label || labels[state] || state);
+  lbl.textContent = text;
+  document.getElementById('drSyncStatus').textContent = text;
   document.getElementById('drSession').textContent    = window.PalSync.hasSession() ? 'Token received' : 'No token';
   document.getElementById('drUser').textContent       = window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '—';
 }
@@ -764,7 +781,7 @@ async function syncPull() {
     addLog('Pull complete', 'ok');
   } catch(err) {
     setSyncState('error');
-    addLog('Pull failed: ' + err.message, 'err');
+    addLog('Pull failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
   }
 }
 
@@ -786,7 +803,7 @@ async function syncPush() {
     addLog(`Push complete — ${count} entr(ies) + settings`, 'ok');
   } catch(err) {
     setSyncState('error');
-    addLog('Push failed: ' + err.message, 'err');
+    addLog('Push failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
   }
 }
 
@@ -804,7 +821,7 @@ async function mutate() {
     addLog('Mutation synced', 'ok');
   } catch(err) {
     setSyncState('error');
-    addLog('Mutation sync failed: ' + err.message, 'err');
+    addLog('Mutation sync failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
   }
 }
 
@@ -820,7 +837,7 @@ async function mutateEntry(entry) {
     addLog('Entry synced: ' + (entry.reason||entry.id).slice(0,30), 'ok');
   } catch(err) {
     setSyncState('error');
-    addLog('Entry sync failed: ' + err.message, 'err');
+    addLog('Entry sync failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
   }
 }
 
@@ -835,7 +852,7 @@ async function deleteEntryFromCloud(id, entrySnapshot) {
     setSyncState('synced');
   } catch(err) {
     setSyncState('error');
-    addLog('Delete sync failed: ' + err.message, 'err');
+    addLog('Delete sync failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
   }
 }
 
@@ -1037,7 +1054,7 @@ function doClaimAll() {
     setSyncState('syncing');
     Promise.all(unclaimed.map(e => _ct.upsert(e.id, e)))
       .then(() => { setSyncState('synced'); addLog('Claim all synced', 'ok'); })
-      .catch(err => { setSyncState('error'); addLog('Claim all sync failed: '+err.message,'err'); });
+      .catch(err => { setSyncState('error'); addLog('Claim all sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); });
   }
   renderAll(); toast(unclaimed.length+' entr'+(unclaimed.length===1?'y':'ies')+' marked claimed \u2713');
 }

@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.30</title>
+<title>Test &amp; Issues v1.31</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -403,7 +403,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.30</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.31</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncPanel()" title="Sync status"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
   <button class="nav-pill" onclick="openNewIssueModal()" style="border-color:var(--ti);color:var(--ti)">+ Issue</button>
@@ -2025,7 +2025,7 @@ async function confirmImport() {
       await syncMetaDirect();
       addSyncLog('Import sync complete','ok');
     } catch(err) {
-      addSyncLog('Import sync error: '+err.message,'err');
+      addSyncLog('Import sync error: '+window.PalSync.errorHint(err.status, err.message),'err');
     } finally {
       _syncLock = false;
     }
@@ -2113,12 +2113,25 @@ let _syncState = 'local';
 let _syncLog   = []; // [{ts,msg,type}] newest first, cap 120
 let _syncLock  = false; // true while import is pushing — blocks concurrent pulls
 
+// v1.31 (TI-051): Test & Issues had no handling for a push failing
+// because the session token expired mid-use (401) — just logged and
+// dropped, relying on the next full pull to notice the local record is
+// newer and push it again. That protection now lives in pal-sync.js
+// itself (v1.8) — table().upsert() queues a 401 internally and flushes
+// it automatically the next time a fresh session arrives. No sync logic
+// changes needed here beyond wiring onRetryFlushed into initSession() to
+// log the outcome, and reading window.PalSync.retryQueueLength() in
+// setSyncState() to show "N pending sync" instead of a bare error while
+// a retry is queued. Every sync error log message now also runs through
+// the shared PalSync.errorHint() instead of a bare err.message.
+
 function setSyncState(st, label) {
   _syncState = st;
   const texts = { local:'Local', connecting:'Connecting…', syncing:'Syncing…', synced:'Synced', error:'Error' };
-  const text  = label || texts[st] || st;
+  const pendingCount = window.PalSync.retryQueueLength();
+  const text  = pendingCount ? `⏳ ${pendingCount} pending sync` : (label || texts[st] || st);
   const badge = document.getElementById('sync-badge');
-  if (badge) { badge.className = 'sync-badge state-' + st; }
+  if (badge) { badge.className = 'sync-badge state-' + (pendingCount ? 'syncing' : st); }
   const lbl = document.getElementById('sync-badge-label');
   if (lbl) lbl.textContent = text;
   const sb = document.getElementById('sb-status');
@@ -2149,26 +2162,26 @@ async function syncIssue(issue) {
   if (!window.PalSync.hasSession()) return;
   issue.updatedAt = new Date().toISOString();
   try { setSyncState('syncing'); await _tiIssues.upsert(issue.id, issue); setSyncState('synced'); addSyncLog('Issue '+issue.id+' synced','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+err.message,'err'); }
+  catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
 }
 
 async function syncDeleteIssue(issueId, snapshot) {
   if (!window.PalSync.hasSession()) return;
   try { setSyncState('syncing'); await _tiIssues.tombstone(issueId, snapshot||{id:issueId}); setSyncState('synced'); addSyncLog('Issue '+issueId+' tombstoned in cloud','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('Issue delete sync failed: '+err.message,'err'); }
+  catch(err) { setSyncState('error'); addSyncLog('Issue delete sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
 }
 
 async function syncApp(app) {
   if (!window.PalSync.hasSession()) return;
   app.updatedAt = new Date().toISOString();
   try { setSyncState('syncing'); await _tiApps.upsert(app.id, app); setSyncState('synced'); addSyncLog('App '+app.id+' synced','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('App sync failed: '+err.message,'err'); }
+  catch(err) { setSyncState('error'); addSyncLog('App sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
 }
 
 async function syncMeta() {
   if (!window.PalSync.hasSession()) return;
   try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); addSyncLog('Meta synced','ok'); }
-  catch(err) { addSyncLog('Meta sync failed: '+err.message,'err'); }
+  catch(err) { addSyncLog('Meta sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
 }
 
 // TI-009: Direct versions — throw on error, used in awaited import flow
@@ -2187,7 +2200,7 @@ async function syncPush() {
     await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq });
     setSyncState('synced');
     addSyncLog(`Push complete — ${count} records written`,'ok');
-  } catch(err) { setSyncState('error'); addSyncLog('Push failed: '+err.message,'err'); }
+  } catch(err) { setSyncState('error'); addSyncLog('Push failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
 }
 
 // ── Full pull (cloud → local) ───────────────────────────────────
@@ -2253,12 +2266,12 @@ async function syncPull() {
     if (mig.changed) {
       for (const id of mig.deletedAppIds) {
         try { await _tiApps.tombstone(id, { id }); registryCleanup++; }
-        catch(err) { addSyncLog('Registry cleanup tombstone failed: '+err.message,'err'); }
+        catch(err) { addSyncLog('Registry cleanup tombstone failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
       }
       for (const id of mig.touchedIds) {
         if (state.apps[id]) {
           try { await _tiApps.upsert(id, state.apps[id]); }
-          catch(err) { addSyncLog('Registry cleanup upsert failed: '+err.message,'err'); }
+          catch(err) { addSyncLog('Registry cleanup upsert failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
         }
       }
       try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); } catch(err) {}
@@ -2270,7 +2283,7 @@ async function syncPull() {
     setSyncState('synced');
     const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', registryCleanup ? `${registryCleanup} duplicate app(s) consolidated` : ''].filter(Boolean).join(', ');
     addSyncLog(`Pull complete — ${parts}`,'ok');
-  } catch(err) { setSyncState('error'); addSyncLog('Pull failed: '+err.message,'err'); }
+  } catch(err) { setSyncState('error'); addSyncLog('Pull failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
 }
 
 function openSyncPanel() {
@@ -2303,6 +2316,10 @@ window.PalSync.initSession({
     addSyncLog('PAL_SESSION received — starting sync','info');
     setSyncState('connecting');
     syncPull();
+  },
+  onRetryFlushed: (result) => {
+    if (result.flushed) addSyncLog(`Retrying ${result.flushed} queued change(s) after reconnect — done`,'ok');
+    setSyncState(_syncState);
   },
   onNoSession: () => {
     setSyncState('local');
