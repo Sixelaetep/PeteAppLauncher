@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.27</title>
+<title>Gym Tracker v2.28</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -265,7 +265,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.27</div></span>
+      <span>Gym Tracker<div class="ver">v2.28</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -582,7 +582,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.27';
+const VERSION = '2.28';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -918,20 +918,36 @@ function pullFromCloud(cb) {
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
+  // v2.28 (GYM-011): the four tables were awaited one at a time in a
+  // for-loop — four sequential network round-trips before the pull
+  // finished, even though exercises/plans/sessions/weight are entirely
+  // independent tables with no shared state between them. Switched to
+  // Promise.allSettled so all four requests fire concurrently instead —
+  // wall-clock time drops to roughly the slowest single table instead of
+  // the sum of all four. Promise.allSettled (not Promise.all) preserves
+  // the GYM-009 guarantee: one table rejecting still can't stop the
+  // other three from resolving, and results are read back out in the
+  // same fixed kind order so the sync log reads in the same sequence as
+  // before, regardless of which table's request actually finished first.
   (async () => {
     let anyError = false;
-    for (const kind of kinds) {
+    const outcomes = await Promise.allSettled(
+      kinds.map(kind => _gymTables[kind].pull(_env.data[_gymArrKeys[kind]], 'id', 'updatedAt'))
+    );
+    kinds.forEach((kind, i) => {
       const arrKey = _gymArrKeys[kind];
-      try {
-        const result = await _gymTables[kind].pull(_env.data[arrKey], 'id', 'updatedAt');
+      const outcome = outcomes[i];
+      if (outcome.status === 'fulfilled') {
+        const result = outcome.value;
         _env.data[arrKey] = result.merged;
         slog('Pulled '+arrKey+' — '+result.merged.length+' record(s)'+(result.pushedCount?', '+result.pushedCount+' pushed up':''), 'ok');
-      } catch(err) {
+      } else {
         anyError = true;
-        slog('Pull failed: '+kind+' — '+syncErrorHint(err.status, err.message), 'error');
+        const err = outcome.reason;
+        slog('Pull failed: '+kind+' — '+syncErrorHint(err && err.status, err && err.message), 'error');
         // this table's local data is left exactly as it was
       }
-    }
+    });
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     save(_env);
     if (exChanged.length) {
