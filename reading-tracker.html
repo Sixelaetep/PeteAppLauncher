@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.11</title>
+<title>Reading Tracker v3.12</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -80,13 +80,26 @@
   .rt-logo { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; color: var(--text); }
   .rt-logo span { font-size: 10px; font-weight: 400; opacity: .35; font-family: 'Inter', sans-serif; margin-left: 5px; }
   .rt-topbar-right { display: flex; align-items: center; gap: 8px; }
-  .rt-sync-badge {
+  /* ── Sync chip (v3.12) ──
+     Was two separate elements — a static, never-updated "Synced" badge
+     plus a floating temporary toast for saving/error/session-expired.
+     Consolidated into one persistent, clickable pill that always
+     reflects real state, matching the pattern shared across the rest
+     of the suite (Claim Tracker, Gym Tracker, Fortnight Tracker, On
+     Budget, Test & Issues). */
+  .sync-chip {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 9px; border-radius: 12px; font-size: 11px; font-weight: 500;
-    pointer-events: none; user-select: none;
-    background: rgba(91,191,138,.15); color: var(--badge-text); border: 1px solid rgba(91,191,138,.25);
+    padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: all .18s; font-family: 'Inter', sans-serif;
+    background: var(--card); color: var(--muted); border: 1px solid var(--border);
   }
-  .rt-sync-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .sync-chip:hover { border-color: var(--accent); }
+  .sync-chip.state-local   { background: var(--card); color: var(--muted); border-color: var(--border); }
+  .sync-chip.state-syncing { background: rgba(232,147,74,.15); color: var(--warning); border-color: rgba(232,147,74,.3); }
+  .sync-chip.state-synced  { background: rgba(91,191,138,.15); color: var(--badge-text); border-color: rgba(91,191,138,.25); }
+  .sync-chip.state-error   { background: rgba(224,92,92,.15); color: var(--danger); border-color: rgba(224,92,92,.3); }
+  .sync-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .sync-chip.state-syncing .sync-chip-dot { animation: pulse 1s ease-in-out infinite; }
   .rt-save-btn {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 5px 10px; background: rgba(200,169,110,.15);
@@ -586,13 +599,6 @@
   .user-btn-name { font-weight:700; display:block; margin-bottom:2px; }
   .user-btn-sub { font-size:11px; color:var(--muted); font-family:'Inter',sans-serif; font-weight:400; }
 
-  /* ── Sync status indicator ── */
-  .sync-indicator { position:fixed; bottom:calc(60px + env(safe-area-inset-bottom)); right:16px; background:var(--card); border:1px solid var(--border); border-radius:20px; padding:5px 12px; font-size:11px; font-weight:600; display:flex; align-items:center; gap:5px; z-index:400; transition:opacity .3s; opacity:0; pointer-events:none; }
-  .sync-indicator.show { opacity:1; }
-  .sync-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
-  .sync-dot.green  { background:var(--success); }
-  .sync-dot.orange { background:var(--warning); animation:pulse 1s ease-in-out infinite; }
-  .sync-dot.red    { background:var(--danger); }
   @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
 
   /* ── Switch user button in dashboard ── */
@@ -659,9 +665,9 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.11</span></div>
+    <div class="rt-logo">My Reading <span>v3.12</span></div>
     <div class="rt-topbar-right">
-      <div class="rt-sync-badge" id="rtSyncBadge"><div class="rt-sync-dot" id="rtSyncDot"></div><span id="rtSyncText">Synced</span></div>
+      <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
       <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
     </div>
   </div>
@@ -1210,11 +1216,6 @@
   </div>
 </div>
 
-<!-- Sync status indicator -->
-<div class="sync-indicator" id="syncIndicator">
-  <div class="sync-dot" id="syncDot"></div>
-  <span id="syncText">Syncing…</span>
-</div>
 
 <!-- Toast -->
 <div id="toast"></div>
@@ -1305,33 +1306,25 @@ let _sbUserId = null;
 
 let _currentUser = null;   // "pete" or "claire"
 let _syncTimer   = null;
-let _syncBadgeTimer = null; // v3.3 (MR-BUG): was sharing _syncTimer with the
-// debounced cloud-save timer below — if showSync() fired for any reason
-// while a save was queued, clearTimeout(_syncTimer) silently cancelled the
-// pending save instead of just hiding the badge. Separate timers now.
 let _pendingSync = false;
 
-// ── Top bar sync badge (mirrors showSync to persistent badge) ─────────
+// ── Top bar sync chip (v3.12: consolidated from a separate
+// floating toast + a static badge into one persistent, state-driven
+// pill) ─────────────────────────────────────────────────────────────
 function showSync(state, msg) {
-  const ind  = document.getElementById("syncIndicator");
-  const dot  = document.getElementById("syncDot");
-  const text = document.getElementById("syncText");
-  if (ind) {
-    dot.className  = "sync-dot " + (state === "saving" ? "orange" : state === "ok" ? "green" : "red");
-    text.textContent = msg;
-    ind.classList.add("show");
-    if (state !== "saving") {
-      clearTimeout(_syncBadgeTimer);
-      // v2.7: error toasts stay up longer (6s vs 2.5s) — with the added
-      // diagnostic detail (MR-003), there's more to actually read.
-      _syncBadgeTimer = setTimeout(() => ind.classList.remove("show"), state === "ok" ? 2500 : 6000);
-    }
-  }
-  // Mirror to persistent top bar badge
-  const tbDot  = document.getElementById("rtSyncDot");
-  const tbText = document.getElementById("rtSyncText");
-  if (tbDot) tbDot.style.background = state === "saving" ? "var(--warning)" : state === "ok" ? "var(--success)" : "var(--danger)";
-  if (tbText) tbText.textContent = state === "saving" ? "Syncing…" : state === "ok" ? "Synced" : "Sync error";
+  const chip = document.getElementById("rtSyncBadge");
+  const text = document.getElementById("rtSyncText");
+  if (!chip) return;
+  // Normalise every state this app has ever passed in ("saving", "ok",
+  // "red", or the old sync-dot colour names) down to the same
+  // local|syncing|synced|error vocabulary used across the suite.
+  const norm = state === "saving" ? "syncing" : state === "ok" ? "synced" : "error";
+  chip.className = "sync-chip state-" + norm;
+  if (text) text.textContent = norm === "syncing" ? "Syncing…" : norm === "synced" ? "Synced" : "Sync error";
+  // Detail message (e.g. "3 pushed up ✓") is no longer shown inline —
+  // there's no separate toast anymore — but it's kept as a tooltip so
+  // nothing is lost, just demoted from prominent to on-hover.
+  chip.title = msg || "Sync status / Backup & data";
 }
 
 // ── Top bar navigation ────────────────────────────────────────────────
@@ -1475,16 +1468,15 @@ let _rtSessionBannerShown = false;
 function showSessionExpiredBanner() {
   if (_rtSessionBannerShown) return;
   _rtSessionBannerShown = true;
-  const ind  = document.getElementById('syncIndicator');
-  const dot  = document.getElementById('syncDot');
-  const text = document.getElementById('syncText');
-  if (!ind) return;
-  dot.className = 'sync-dot red';
-  ind.style.pointerEvents = 'auto';
-  ind.style.cursor = 'pointer';
-  text.innerHTML = 'Session expired — tap to refresh';
-  ind.classList.add('show');
-  ind.onclick = () => location.reload();
+  const chip = document.getElementById('rtSyncBadge');
+  const text = document.getElementById('rtSyncText');
+  if (!chip) return;
+  chip.className = 'sync-chip state-error';
+  if (text) text.textContent = 'Session expired — tap to refresh';
+  chip.title = 'Tap to refresh';
+  // Overrides the chip's normal "open data modal" behaviour while the
+  // session is expired — refreshing is the only useful action here.
+  chip.onclick = () => location.reload();
 }
 
 // ── Supabase: per-record sync (v3.9, MR-005) ───────────────────────────
