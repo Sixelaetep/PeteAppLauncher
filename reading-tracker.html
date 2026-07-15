@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.12</title>
+<title>Reading Tracker v3.13</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -100,14 +100,16 @@
   .sync-chip.state-error   { background: rgba(224,92,92,.15); color: var(--danger); border-color: rgba(224,92,92,.3); }
   .sync-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
   .sync-chip.state-syncing .sync-chip-dot { animation: pulse 1s ease-in-out infinite; }
-  .rt-save-btn {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 5px 10px; background: rgba(200,169,110,.15);
-    border: 1px solid rgba(200,169,110,.35); border-radius: 18px;
-    color: var(--accent); font-size: 11px; font-weight: 600;
-    cursor: pointer; transition: all .18s; font-family: 'Inter', sans-serif;
-  }
-  .rt-save-btn:hover { background: rgba(200,169,110,.3); }
+
+  /* ── Sync log + status rows (v3.13, MR-012) ── */
+  .rt-info-row { display:flex; justify-content:space-between; font-size:12.5px; padding:6px 0; border-bottom:1px solid var(--border); }
+  .rt-info-row span:first-child { color:var(--muted); }
+  .sync-log { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:8px 10px; max-height:160px; overflow-y:auto; font-size:11px; font-family:monospace; margin-top:8px; }
+  .log-entry { padding:2px 0; line-height:1.5; border-bottom:1px solid rgba(122,138,153,0.15); }
+  .log-entry:last-child { border-bottom:none; }
+  .log-entry.ok { color: var(--success); }
+  .log-entry.err { color: var(--danger); }
+  .log-entry.info { color: var(--muted); }
   .rt-nav { display: flex; }
   .rt-nav-btn {
     flex: 1; padding: 8px 2px; font-size: 11px; font-weight: 600;
@@ -665,10 +667,9 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.12</span></div>
+    <div class="rt-logo">My Reading <span>v3.13</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
-      <button class="rt-save-btn" onclick="openRtDataModal()">💾</button>
     </div>
   </div>
   <div class="rt-nav">
@@ -682,17 +683,22 @@
 <!-- ── Data modal ── -->
 <div class="rt-modal-overlay" id="rtDataModal" onclick="closeRtDataModalOutside(event)">
   <div class="rt-modal">
-    <div class="rt-modal-title">💾 Backup &amp; Sync <button class="rt-modal-close" onclick="closeRtDataModal()">✕</button></div>
+    <div class="rt-modal-title">💾 Sync &amp; Backup <button class="rt-modal-close" onclick="closeRtDataModal()">✕</button></div>
     <div class="rt-data-summary" id="rtDataSummary"></div>
+    <div class="rt-data-lbl">Sync Status</div>
+    <div class="rt-info-row"><span>Status</span><span id="rtSyncStatusVal">Local</span></div>
+    <div class="rt-info-row"><span>Session</span><span id="rtSyncSessionVal">No token</span></div>
+    <div class="rt-info-row"><span>User</span><span id="rtSyncUserVal">—</span></div>
+    <div class="rt-data-btns" style="margin-top:10px">
+      <button class="rt-data-btn" onclick="manualPullFromCloud()">⬇ Pull from cloud</button>
+      <button class="rt-data-btn" onclick="manualPushToCloud()">⬆ Push to cloud</button>
+    </div>
+    <div class="rt-data-lbl">Sync Log</div>
+    <div class="sync-log" id="rtSyncLogBox"><div class="log-entry info">No sync activity yet</div></div>
     <div class="rt-data-lbl">JSON Backup</div>
     <div class="rt-data-btns">
       <button class="rt-data-btn pri" onclick="exportJSON();closeRtDataModal()">⬇ Download backup</button>
       <button class="rt-data-btn" onclick="copyExport();closeRtDataModal()">📋 Copy to clipboard</button>
-    </div>
-    <div class="rt-data-lbl">Cloud Sync</div>
-    <div class="rt-data-btns">
-      <button class="rt-data-btn" onclick="manualPushToCloud();closeRtDataModal()">⬆ Push to cloud</button>
-      <button class="rt-data-btn" onclick="manualPullFromCloud();closeRtDataModal()">⬇ Pull from cloud</button>
     </div>
     <div class="rt-data-lbl">Restore from Backup</div>
     <div class="rt-data-btns">
@@ -1308,23 +1314,38 @@ let _currentUser = null;   // "pete" or "claire"
 let _syncTimer   = null;
 let _pendingSync = false;
 
-// ── Top bar sync chip (v3.12: consolidated from a separate
-// floating toast + a static badge into one persistent, state-driven
-// pill) ─────────────────────────────────────────────────────────────
+let _syncState = 'local'; // local | syncing | synced | error
+let _syncLog   = [];      // [{ts, msg, type}] newest first, cap 120
+
 function showSync(state, msg) {
   const chip = document.getElementById("rtSyncBadge");
   const text = document.getElementById("rtSyncText");
-  if (!chip) return;
   // Normalise every state this app has ever passed in ("saving", "ok",
   // "red", or the old sync-dot colour names) down to the same
   // local|syncing|synced|error vocabulary used across the suite.
   const norm = state === "saving" ? "syncing" : state === "ok" ? "synced" : "error";
-  chip.className = "sync-chip state-" + norm;
+  _syncState = norm;
+  if (chip) chip.className = "sync-chip state-" + norm;
   if (text) text.textContent = norm === "syncing" ? "Syncing…" : norm === "synced" ? "Synced" : "Sync error";
   // Detail message (e.g. "3 pushed up ✓") is no longer shown inline —
   // there's no separate toast anymore — but it's kept as a tooltip so
   // nothing is lost, just demoted from prominent to on-hover.
-  chip.title = msg || "Sync status / Backup & data";
+  if (chip) chip.title = msg || "Sync status / Backup & data";
+
+  // Mirror to the sync log in the Sync & Backup modal.
+  const ts = new Date().toLocaleTimeString("en-GB", {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  const logType = norm === "synced" ? "ok" : norm === "error" ? "err" : "info";
+  _syncLog.unshift({ts, msg: msg || text?.textContent || norm, type: logType});
+  if (_syncLog.length > 120) _syncLog.length = 120;
+  renderRtSyncLog();
+}
+
+function renderRtSyncLog() {
+  const el = document.getElementById("rtSyncLogBox");
+  if (!el) return;
+  el.innerHTML = _syncLog.length
+    ? _syncLog.map(e => `<div class="log-entry ${e.type}">${e.ts} — ${e.msg}</div>`).join("")
+    : '<div class="log-entry info">No sync activity yet</div>';
 }
 
 // ── Top bar navigation ────────────────────────────────────────────────
@@ -1422,6 +1443,11 @@ function openRtDataModal() {
     '<strong>' + trackers.length + '</strong> tracker' + (trackers.length !== 1 ? 's' : '') +
     ' &nbsp;·&nbsp; <strong>' + active + '</strong> active &nbsp;·&nbsp; <strong>' + done + '</strong> completed' +
     ' &nbsp;·&nbsp; <strong>' + wl + '</strong> wishlist';
+  const statusLabels = {local:'Local', syncing:'Syncing…', synced:'Synced', error:'Sync error'};
+  document.getElementById('rtSyncStatusVal').textContent  = statusLabels[_syncState] || 'Local';
+  document.getElementById('rtSyncSessionVal').textContent = window.PalSync && window.PalSync.hasSession() ? 'Token received' : 'No token';
+  document.getElementById('rtSyncUserVal').textContent    = window.PalSync && window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '—';
+  renderRtSyncLog();
   document.getElementById('rtModalRestoreRow').style.display = 'none';
   document.getElementById('rtModalRestoreResult').style.display = 'none';
   document.getElementById('rtDataModal').classList.add('open');
