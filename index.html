@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.12</title>
+<title>P Apps v10.13</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -563,7 +563,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.12</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.13</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -928,16 +928,33 @@ function onSignedIn(userInfo, session) {
 }
 
 let _gatPollTimer = null;
+// PET-001: this poll and GigsAndTrips' own internal 60s poll were both
+// hitting the same 'events' table independently the whole time GigsAndTrips
+// had ever been opened in a session — the launcher never knew the app had
+// its own poll running, so it kept its own going too. GigsAndTrips already
+// writes to the exact gat_v1/gat_v1_clean keys this poll's result feeds, and
+// already broadcasts GAT_DATA_UPDATED to the parent on every one of its own
+// pulls (including its silent background ones) — see its saveData(). So
+// once that iframe has loaded, its poll alone is enough to keep the card
+// fresh via the existing GAT_DATA_UPDATED → refreshCardStats() bridge below;
+// this poll only needs to run before the user has ever opened GigsAndTrips
+// in this session, so the card still populates without opening the app.
 function startGatPoll() {
   clearInterval(_gatPollTimer);
   _gatPollTimer = setInterval(() => {
+    if (loaded['gat']) { stopGatPoll(); return; } // GigsAndTrips has taken over
     if (!document.hidden && sbSession) pullGatFromSupabase();
   }, 60000);
 }
+function stopGatPoll() {
+  clearInterval(_gatPollTimer);
+  _gatPollTimer = null;
+}
 
-// Pull immediately when the launcher tab becomes visible again
+// Pull immediately when the launcher tab becomes visible again — but only
+// if GigsAndTrips hasn't taken over polling duty (see startGatPoll above).
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && sbSession) pullGatFromSupabase();
+  if (!document.hidden && sbSession && !loaded['gat']) pullGatFromSupabase();
 });
 
 // ── User visibility ────────────────────────────────────────────────
@@ -1067,6 +1084,10 @@ document.querySelectorAll('.app-frame').forEach(frame => {
   frame.addEventListener('load', () => {
     if (sbSession) setTimeout(() => pingFrame(frame), 100);
     setTimeout(() => pingTheme(frame), 100);
+    // GigsAndTrips runs its own 60s poll and broadcasts GAT_DATA_UPDATED on
+    // every pull — stop this launcher's redundant poll the moment it loads
+    // rather than waiting up to 60s for startGatPoll's own tick to notice.
+    if (frame.id === 'frame-gat') stopGatPoll();
   });
 });
 applyOwnTheme();
@@ -1498,15 +1519,7 @@ function statGat() {
       return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     }
 
-    // Map gigType keys to their emoji — mirrors GIG_TYPES in GigsAndTrips.html
-    const _GIG_ICONS = {
-      music:'🎸', play:'🎭', musical:'🎶', comedy:'😂', sport:'⚽',
-      festival:'🎪', cinema:'🎬', gym:'🏋️', appointment:'📅', other:'📌'
-    };
-    function evIcon(ev) {
-      if (ev.type === 'trip') return '✈️';
-      return _GIG_ICONS[ev.gigType] || '🎸';
-    }
+    function evIcon(ev) { return ev.type === 'gig' ? '🎸' : '✈️'; }
 
     // ── Check for active trip (currently on one) ──────────────────
     const activeTrip = events.find(ev =>
