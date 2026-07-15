@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.29</title>
+<title>Gym Tracker v2.27</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -265,7 +265,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.29</div></span>
+      <span>Gym Tracker<div class="ver">v2.27</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -582,7 +582,7 @@
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const VERSION = '2.29';
+const VERSION = '2.27';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -833,36 +833,37 @@ const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions',
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
 // and every push from then on fails with 401. Local saves already never
 // depended on this — save(_env) always succeeds regardless — but pushes
-// were just being logged as errors and dropped. Failed 401 pushes queue
-// automatically (see sbUpsert() below) and flush the next time a fresh
-// PAL_SESSION arrives. requestFreshSession() also proactively asks the
-// launcher for a new one every few minutes if anything is queued; this
-// is a no-op today unless the launcher is updated to answer it, but it's
-// harmless to send and costs nothing to have ready.
-// v2.29 (GYM-011): Gym Tracker was the only app with any of this — the
-// review that found the gap recommended lifting it into pal-sync.js
-// (now v1.8) so On Budget, Test & Issues, Claim Tracker, and Fortnight
-// Tracker get the same protection instead of four more bespoke copies.
-// table().upsert() now queues a 401 internally and pal-sync's own
-// session-arrival handling flushes it — so the local _syncRetryQueue,
-// queueRetry(), and flushSyncRetryQueue() that used to live here are
-// gone; window.PalSync.retryQueueLength() is the single source of truth
-// now, read by renderSyncPanel() below exactly where _syncRetryQueue.length
-// used to be. requestFreshSession() is unchanged — it doesn't care where
-// the queue lives, only whether one exists.
+// were just being logged as errors and dropped. Failed 401 pushes now
+// queue here and flush automatically the next time a fresh PAL_SESSION
+// arrives (e.g. reopening the tab). requestFreshSession() also proactively
+// asks the launcher for a new one every few minutes if anything is queued;
+// this is a no-op today unless the launcher is updated to answer it, but
+// it's harmless to send and costs nothing to have ready.
+let _syncRetryQueue = []; // [{kind, record}]
+function queueRetry(kind, record) {
+  _syncRetryQueue = _syncRetryQueue.filter(q => !(q.kind===kind && q.record.id===record.id));
+  _syncRetryQueue.push({kind, record});
+  renderSyncPanel();
+}
+function flushSyncRetryQueue() {
+  if (!_syncRetryQueue.length || !window.PalSync.hasSession()) return;
+  const queue = _syncRetryQueue; _syncRetryQueue = [];
+  slog('Retrying '+queue.length+' queued change(s) after reconnect','ok');
+  queue.forEach(q => sbUpsert(q.kind, q.record, null));
+}
 function requestFreshSession() {
   if (window.parent === window) return;
   try { window.parent.postMessage({ type: 'PAL_REQUEST_SESSION' }, window.location.origin); } catch(e) {}
 }
-setInterval(() => { if (window.PalSync.retryQueueLength()) requestFreshSession(); }, 5*60*1000);
+setInterval(() => { if (_syncRetryQueue.length) requestFreshSession(); }, 5*60*1000);
 
 // Shared diagnostic mapping so any sync failure — pull or upsert, any
 // table — gives the same actionable hint instead of a bare status code.
-// v2.29: delegates to the shared PalSync.errorHint() (pal-sync.js v1.8)
-// so every app's wording matches; kept as a thin wrapper rather than
-// changing every call site in this file.
 function syncErrorHint(status, message) {
-  return window.PalSync.errorHint(status, message);
+  if (status === 401) return 'session token invalid or expired — reopen the app via the launcher to refresh it';
+  if (status === 404) return 'table not found — the matching Supabase table may not have been created yet (check the SQL setup)';
+  if (status === 403) return 'access denied — check the RLS policy on this table';
+  return message || ('HTTP '+status);
 }
 
 let _syncLog = [];
@@ -900,10 +901,8 @@ function sbUpsert(kind, record, cb) {
     .then(() => { slog('Upsert '+kind+' '+record.id+' ✓','ok'); setSyncStatus('synced'); if (cb) cb(true); })
     .catch(err => {
       if (err.status === 401) {
-        // pal-sync.js has already queued this record internally (v1.8) —
-        // just reflect it in the panel; no local queue to push into here.
         slog('Upsert failed: '+kind+' '+record.id+' — session token expired, queued for retry','error');
-        renderSyncPanel();
+        queueRetry(kind, record);
       } else {
         slog('Upsert '+kind+' '+record.id+' ✗ '+syncErrorHint(err.status, err.message), 'error');
       }
@@ -919,36 +918,20 @@ function pullFromCloud(cb) {
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
-  // v2.29 (GYM-011): the four tables were awaited one at a time in a
-  // for-loop — four sequential network round-trips before the pull
-  // finished, even though exercises/plans/sessions/weight are entirely
-  // independent tables with no shared state between them. Switched to
-  // Promise.allSettled so all four requests fire concurrently instead —
-  // wall-clock time drops to roughly the slowest single table instead of
-  // the sum of all four. Promise.allSettled (not Promise.all) preserves
-  // the GYM-009 guarantee: one table rejecting still can't stop the
-  // other three from resolving, and results are read back out in the
-  // same fixed kind order so the sync log reads in the same sequence as
-  // before, regardless of which table's request actually finished first.
   (async () => {
     let anyError = false;
-    const outcomes = await Promise.allSettled(
-      kinds.map(kind => _gymTables[kind].pull(_env.data[_gymArrKeys[kind]], 'id', 'updatedAt'))
-    );
-    kinds.forEach((kind, i) => {
+    for (const kind of kinds) {
       const arrKey = _gymArrKeys[kind];
-      const outcome = outcomes[i];
-      if (outcome.status === 'fulfilled') {
-        const result = outcome.value;
+      try {
+        const result = await _gymTables[kind].pull(_env.data[arrKey], 'id', 'updatedAt');
         _env.data[arrKey] = result.merged;
         slog('Pulled '+arrKey+' — '+result.merged.length+' record(s)'+(result.pushedCount?', '+result.pushedCount+' pushed up':''), 'ok');
-      } else {
+      } catch(err) {
         anyError = true;
-        const err = outcome.reason;
-        slog('Pull failed: '+kind+' — '+syncErrorHint(err && err.status, err && err.message), 'error');
+        slog('Pull failed: '+kind+' — '+syncErrorHint(err.status, err.message), 'error');
         // this table's local data is left exactly as it was
       }
-    });
+    }
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     save(_env);
     if (exChanged.length) {
@@ -963,7 +946,7 @@ function pullFromCloud(cb) {
 
 function manualPull() {
   if (!window.PalSync.hasSession()) { toast('Not connected to cloud'); return; }
-  pullFromCloud(() => { window.PalSync.flushRetryQueue().then(renderSyncPanel); renderAll(); toast('Pulled from cloud ✓'); });
+  pullFromCloud(() => { flushSyncRetryQueue(); renderAll(); toast('Pulled from cloud ✓'); });
 }
 function manualPush() {
   if (!window.PalSync.hasSession()) { toast('Not connected to cloud'); return; }
@@ -971,7 +954,7 @@ function manualPush() {
   // a stale local copy without pulling first could overwrite a tombstone
   // from another device, resurrecting something that was deleted elsewhere.
   pullFromCloud(() => {
-    window.PalSync.flushRetryQueue().then(renderSyncPanel);
+    flushSyncRetryQueue();
     let total = 0; ['exercises','plans','sessions','weightEntries'].forEach(k => total += _env.data[k].length);
     if (!total) { toast('Nothing to push'); return; }
     setSyncStatus('syncing');
@@ -1004,11 +987,7 @@ window.PalSync.initSession({
     if (bannerEl) bannerEl.style.display = 'none';
     adjustBodyScrollTop();
     setSyncStatus('connecting');
-    pullFromCloud(() => { renderAll(); });
-  },
-  onRetryFlushed: function (result) {
-    if (result.flushed) slog('Retrying '+result.flushed+' queued change(s) after reconnect — done','ok');
-    renderSyncPanel();
+    pullFromCloud(() => { flushSyncRetryQueue(); renderAll(); });
   },
   onNoSession: function () {
     setSyncStatus('local');
@@ -1045,13 +1024,12 @@ function renderAll() {
 function renderSyncPanel() {
   const sp = document.getElementById('syncStatusPanel');
   if (sp) {
-    const pendingCount = window.PalSync.retryQueueLength();
-    const stateLabel = pendingCount ? '<span style="color:var(--accent4)">⏳ '+pendingCount+' pending sync</span>'
+    const stateLabel = _syncRetryQueue.length ? '<span style="color:var(--accent4)">⏳ '+_syncRetryQueue.length+' pending sync</span>'
       : _syncState==='synced' ? '<span style="color:var(--accent2)">Synced</span>'
       : _syncState==='error' ? '<span style="color:#f78166">Error</span>'
       : _syncState==='syncing'||_syncState==='connecting' ? '<span style="color:var(--accent4)">'+(_syncState==='connecting'?'Connecting…':'Syncing…')+'</span>'
       : '<span style="color:var(--ink2)">Local only</span>';
-    const pendingNote = pendingCount ? '<br><span style="font-size:10.5px;color:var(--ink3)">Your data is saved locally and will sync automatically once reconnected.</span>' : '';
+    const pendingNote = _syncRetryQueue.length ? '<br><span style="font-size:10.5px;color:var(--ink3)">Your data is saved locally and will sync automatically once reconnected.</span>' : '';
     sp.innerHTML = 'Status &nbsp;'+stateLabel+'<br>Token &nbsp;<strong>'+(window.PalSync.hasSession()?'Received ✓':'Not received')+'</strong><br>User ID &nbsp;<strong>'+(window.PalSync.getUserId()?window.PalSync.getUserId().slice(0,8)+'…':'—')+'</strong>'+pendingNote;
   }
   renderSyncLog();
