@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.14</title>
+<title>9-Day Fortnight Tracker v3.15</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -337,7 +337,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.14</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.15</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -422,7 +422,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
   var ml=document.getElementById('pwa-manifest-link');
   if(ml)ml.href='data:application/manifest+json,'+encodeURIComponent(JSON.stringify(mf));
   if('serviceWorker' in navigator){
-    var sw="const C='fn12';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('.')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(rs=>{if(rs&&rs.status===200&&rs.type==='basic'){var cl=rs.clone();caches.open(C).then(ca=>ca.put(e.request,cl));}return rs;}).catch(()=>caches.match('.'))));});";
+    var sw="const C='fn13';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('.')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(rs=>{if(rs&&rs.status===200&&rs.type==='basic'){var cl=rs.clone();caches.open(C).then(ca=>ca.put(e.request,cl));}return rs;}).catch(()=>caches.match('.'))));});";
     try{var b=new Blob([sw],{type:'text/javascript'});navigator.serviceWorker.register(URL.createObjectURL(b)).catch(function(){});}catch(e){}
   }
 })();
@@ -655,12 +655,10 @@ function m2hrs(m){return+(m/60).toFixed(2);}
 function m2t(m){var h=Math.floor(m/60)%24,mn=m%60;return String(h).padStart(2,'0')+':'+String(mn).padStart(2,'0');}
 
 function dayTotal(d){
-  if((d.status==='holiday'||d.status==='sick')&&(d.holidayMins||0)>0){
-    return d.holidayMins;
-  }
   var clock=Math.max(0,t2m(d.end)-t2m(d.start)-(d.lunch||0));
   var extra=((d.extraH||0)*60)+(d.extraM||0);
-  return Math.max(0,clock+extra);
+  var absence=(d.status==='holiday'||d.status==='sick')?(d.holidayMins||0):0;
+  return Math.max(0,clock+extra+absence);
 }
 function stdMins(i){return i===4?360:480;}
 
@@ -882,8 +880,16 @@ function renderDay(container,day,bi,di,bundle){
   var clockMins=Math.max(0,t2m(day.end)-t2m(day.start)-(day.lunch||0));
   var extraMins=((day.extraH||0)*60)+(day.extraM||0);
   var isAbsenceDay=day.status==='holiday'||day.status==='sick';
+  var absenceMins=isAbsenceDay?(day.holidayMins||0):0;
   var breakdownHtml=isAbsenceDay
-    ?'<div class="day-total-breakdown"><b style="color:var(--blue)">'+(day.status==='holiday'?'Holiday':'Sick leave')+'</b></div>'
+    ?(function(){
+        var parts=[];
+        if(clockMins>0) parts.push('Clock <b>'+m2hm(clockMins)+'</b>');
+        if(extraMins>0) parts.push('extra <b>'+m2hm(extraMins)+'</b>');
+        var absLabel=day.status==='holiday'?'Holiday':'Sick';
+        if(absenceMins>0) parts.push('<b style="color:var(--blue)">'+absLabel+' <b>'+m2hm(absenceMins)+'</b></b>');
+        return parts.length?'<div class="day-total-breakdown">'+parts.join(' + ')+'</div>':'';
+      })()
     :(extraMins>0?'<div class="day-total-breakdown">Clock <b>'+m2hm(clockMins)+'</b> + extra <b>'+m2hm(extraMins)+'</b></div>':'');
   var diffHtml='<div class="day-std-diff '+diffCls+'" id="ddiff-'+key+'">'+sign+m2hm(absDiff)+' vs '+m2hm(std)+'</div>';
 
@@ -924,40 +930,39 @@ function renderDay(container,day,bi,di,bundle){
       '</div>'+
       (function(){
         var isAbsence=day.status==='holiday'||day.status==='sick';
+        var absColour=day.status==='holiday'?'var(--blue)':'var(--red)';
+        var absencePickerHtml='';
         if(isAbsence){
-          // Hours picker for holiday / sick
           var hlMins=day.holidayMins||0;
           var hlH=Math.floor(hlMins/60),hlM=hlMins%60;
           hlM=Math.round(hlM/5)*5;if(hlM>=60){hlM=0;hlH++;}
           var hlHOpts=Array.from({length:11},function(_,i){return'<option value="'+i+'"'+(i===hlH?' selected':'')+'>'+(i>0?i+'h':'0h')+'</option>';}).join('');
           var hlMOpts=[0,5,10,15,20,25,30,35,40,45,50,55].map(function(v){return'<option value="'+v+'"'+(v===hlM?' selected':'')+'">'+String(v).padStart(2,'0')+'m</option>';}).join('');
-          var absLabel=day.status==='holiday'?'Holiday hours':'Sick hours';
-          var absColour=day.status==='holiday'?'var(--blue)':'var(--red)';
-          var stdH=Math.floor(stdMins(di)/60),stdM=stdMins(di)%60;
-          var stdLabel=stdM>0?stdH+'h '+stdM+'m':stdH+'h';
-          return '<div class="day-inputs">'+
-            '<div class="extra-row" style="border:1px solid rgba(96,165,250,.25);background:rgba(96,165,250,.06)">'+
-              '<label style="color:'+absColour+'">'+absLabel+'</label>'+
+          var absLabel=day.status==='holiday'?'Holiday hrs':'Sick hrs';
+          var stdH=Math.floor(stdMins(di)/60),stdMx=stdMins(di)%60;
+          var stdLabel=stdMx>0?stdH+'h '+stdMx+'m':stdH+'h';
+          absencePickerHtml=
+            '<div class="extra-row" style="border:1px solid rgba(96,165,250,.25);background:rgba(96,165,250,.06);margin-bottom:.3rem">'+
+              '<label style="color:'+absColour+';font-size:.6rem;text-transform:uppercase;letter-spacing:.5px">'+absLabel+'</label>'+
               '<select class="extra-sel active" id="hlH-'+key+'" onchange="updHolidayMins('+bi+','+di+')" style="border-color:'+absColour+';color:'+absColour+'">'+hlHOpts+'</select>'+
               '<select class="extra-sel active" id="hlM-'+key+'" onchange="updHolidayMins('+bi+','+di+')" style="border-color:'+absColour+';color:'+absColour+'">'+hlMOpts+'</select>'+
-              '<span class="extra-hint">Full day = '+stdLabel+'</span>'+
-            '</div>'+
-          '</div>';
-        } else {
-          return '<div class="day-inputs">'+
-            '<div class="time-row">'+
-              '<div class="tf"><label>Start</label>'+tSels('start',day.start,bi,di)+'</div>'+
-              '<div class="tf"><label>End</label>'+tSels('end',day.end,bi,di)+'</div>'+
-              '<div class="tf"><label>Lunch</label><select class="lunch-sel" onchange="updLunch('+bi+','+di+',this.value)">'+lO+'</select></div>'+
-            '</div>'+
-            '<div class="extra-row">'+
-              '<label>Extra</label>'+
-              '<select class="extra-sel'+(hasEx?' active':'')+'" id="exH-'+key+'" onchange="updExtra('+bi+','+di+')">'+hxO+'</select>'+
-              '<select class="extra-sel'+(hasEx?' active':'')+'" id="exM-'+key+'" onchange="updExtra('+bi+','+di+')">'+mxO+'</select>'+
-              '<span class="extra-hint">'+(hasEx?m2hm(extraMins)+' added':'banked / overtime')+'</span>'+
-            '</div>'+
-          '</div>';
+              '<span class="extra-hint">full day='+stdLabel+'</span>'+
+            '</div>';
         }
+        return '<div class="day-inputs">'+
+          absencePickerHtml+
+          '<div class="time-row">'+
+            '<div class="tf"><label>Start</label>'+tSels('start',day.start,bi,di)+'</div>'+
+            '<div class="tf"><label>End</label>'+tSels('end',day.end,bi,di)+'</div>'+
+            '<div class="tf"><label>Lunch</label><select class="lunch-sel" onchange="updLunch('+bi+','+di+',this.value)">'+lO+'</select></div>'+
+          '</div>'+
+          '<div class="extra-row">'+
+            '<label>Extra</label>'+
+            '<select class="extra-sel'+(hasEx?' active':'')+'" id="exH-'+key+'" onchange="updExtra('+bi+','+di+')">'+hxO+'</select>'+
+            '<select class="extra-sel'+(hasEx?' active':'')+'" id="exM-'+key+'" onchange="updExtra('+bi+','+di+')">'+mxO+'</select>'+
+            '<span class="extra-hint">'+(hasEx?m2hm(extraMins)+' added':'banked / overtime')+'</span>'+
+          '</div>'+
+        '</div>';
       })()+
       '<div class="status-row">'+
         '<button class="sbtn'+(day.status==='done'?' s-done':'')+'" onclick="setStat('+bi+','+di+',\'done\')">&#10003; Done</button>'+
@@ -1033,9 +1038,17 @@ function liveUpdate(bi,di){
   var breakdown=document.getElementById('dbreakdown-'+key);
   if(breakdown){
     var isAbs=day.status==='holiday'||day.status==='sick';
-    breakdown.innerHTML=isAbs
-      ?'<div class="day-total-breakdown"><b style="color:var(--blue)">'+(day.status==='holiday'?'Holiday':'Sick leave')+'</b></div>'
-      :(extraMins>0?'<div class="day-total-breakdown">Clock <b>'+m2hm(clockMins)+'</b> + extra <b>'+m2hm(extraMins)+'</b></div>':'');
+    if(isAbs){
+      var absMins=day.holidayMins||0;
+      var parts=[];
+      if(clockMins>0) parts.push('Clock <b>'+m2hm(clockMins)+'</b>');
+      if(extraMins>0) parts.push('extra <b>'+m2hm(extraMins)+'</b>');
+      var absLbl=day.status==='holiday'?'Holiday':'Sick';
+      if(absMins>0) parts.push('<span style="color:var(--blue)">'+absLbl+' <b>'+m2hm(absMins)+'</b></span>');
+      breakdown.innerHTML=parts.length?'<div class="day-total-breakdown">'+parts.join(' + ')+'</div>':'';
+    } else {
+      breakdown.innerHTML=extraMins>0?'<div class="day-total-breakdown">Clock <b>'+m2hm(clockMins)+'</b> + extra <b>'+m2hm(extraMins)+'</b></div>':'';
+    }
   }
   var diffEl=document.getElementById('ddiff-'+key);
   if(diffEl){diffEl.textContent=sign+m2hm(absDiff)+' vs '+m2hm(std);diffEl.className='day-std-diff '+diffCls;}
