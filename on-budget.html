@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.27</title>
+<title>On Budget v3.28</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.27</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.28</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -695,6 +695,11 @@
       <input type="number" id="scen-interval" min="2" max="52" placeholder="4">
     </div>
 
+    <div class="field-group">
+      <label class="field-label">Note <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional) — why this change?</span></label>
+      <input type="text" id="scen-item-note" placeholder="e.g. Cancelling, don't use it anymore">
+    </div>
+
     <div class="btn-row">
       <button class="btn btn-primary btn-full" onclick="saveScenarioItem()">Save</button>
     </div>
@@ -752,7 +757,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.27
+// On Budget v3.28
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1006,6 +1011,20 @@
 // entirely — Pete's report), the note, and the same itemized changes
 // section, all using the app's actual brand hex values (hardcoded,
 // since a standalone print window can't see the page's CSS variables).
+// v3.28 (ON--032): moved from one overall scenario note to a note per
+// individual change, shown right next to that item's name in "What
+// changed" (in-app and PDF) rather than collected in one place — "why
+// did I add/remove/change THIS one" is a different question for every
+// line. Added a note field to the scenario item sheet; also shown as a
+// preview on the item's own card. Closed a real gap this surfaced:
+// there was no way to explain a REMOVAL, since deleting an item took
+// its note field with it. deleteScenarioItem() now captures whatever's
+// in the note field at the moment of removal into a small
+// _scenarioDraft.removedNotes map keyed by the real recurring item's
+// id, which "What changed" looks up for removed lines — carried
+// through save/load/reset like everything else. The overall scenario-
+// level note from v3.27 is unchanged and still there for describing
+// the scenario as a whole.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1493,7 +1512,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.27', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.28', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1502,7 +1521,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.27', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.28', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2848,25 +2867,26 @@ function asIsScenarioItems() {
 function freshScenarioItems() {
   return asIsScenarioItems().map(r => ({
     id: uid(), baseId: r.id, name: r.name, type: r.type,
-    amount: r.amount, frequency: r.frequency, interval: r.interval||1
+    amount: r.amount, frequency: r.frequency, interval: r.interval||1, note: ''
   }));
 }
 
 function ensureScenarioDraft() {
   if (!_scenarioDraft) {
-    _scenarioDraft = { id: null, name: '', note: '', items: freshScenarioItems() };
+    _scenarioDraft = { id: null, name: '', note: '', items: freshScenarioItems(), removedNotes: {} };
   }
 }
 
 function resetScenarioDraft() {
   ensureScenarioDraft();
   _scenarioDraft.items = freshScenarioItems();
+  _scenarioDraft.removedNotes = {};
   renderScenarioTab();
   toast('Scenario reset to as-is figures');
 }
 
 function newScenarioDraft() {
-  _scenarioDraft = { id: null, name: '', note: '', items: freshScenarioItems() };
+  _scenarioDraft = { id: null, name: '', note: '', items: freshScenarioItems(), removedNotes: {} };
   renderScenarioTab();
 }
 function renderBillsRecurring() {
@@ -2958,21 +2978,28 @@ function renderScenarioTab() {
 
   // What changed and why — itemized, not just the aggregate totals.
   // Only shows things that actually differ; nothing to say about items
-  // left alone.
+  // left alone. Each line's own note (if any) shows right next to the
+  // item name — this is deliberately per-change, not just the one
+  // overall scenario note, since "why did I add/remove/change THIS
+  // one" is a different question for every line.
   if (diff.added.length || diff.removed.length || diff.modified.length) {
     html += `<div class="stat-card" style="margin-bottom:10px">
       <div class="stat-card-label">What changed</div>`;
     diff.added.forEach(i => {
       const d = netImpact(i);
-      html += `<div class="breakdown-row"><span class="breakdown-week-label">+ Added: ${i.name}<span style="color:var(--ink3);font-size:10px;display:block">${i.type==='income'?'New income':'New outgoing'}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
+      const noteHtml = i.note ? ` <span style="color:var(--ink2);font-weight:400">— ${i.note}</span>` : '';
+      html += `<div class="breakdown-row"><span class="breakdown-week-label">+ Added: ${i.name}${noteHtml}<span style="color:var(--ink3);font-size:10px;display:block">${i.type==='income'?'New income':'New outgoing'}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
     });
     diff.removed.forEach(i => {
       const d = -netImpact(i);
-      html += `<div class="breakdown-row"><span class="breakdown-week-label">− Removed: ${i.name}<span style="color:var(--ink3);font-size:10px;display:block">${i.type==='income'?'Lost income':'No longer paying this'}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
+      const removedNote = (_scenarioDraft.removedNotes||{})[i.id];
+      const noteHtml = removedNote ? ` <span style="color:var(--ink2);font-weight:400">— ${removedNote}</span>` : '';
+      html += `<div class="breakdown-row"><span class="breakdown-week-label">− Removed: ${i.name}${noteHtml}<span style="color:var(--ink3);font-size:10px;display:block">${i.type==='income'?'Lost income':'No longer paying this'}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
     });
     diff.modified.forEach(m => {
       const d = netImpact(m.after) - netImpact(m.before);
-      html += `<div class="breakdown-row"><span class="breakdown-week-label">~ Changed: ${m.after.name}<span style="color:var(--ink3);font-size:10px;display:block">£${m.before.amount.toFixed(2)} → £${m.after.amount.toFixed(2)} ${m.before.frequency!==m.after.frequency?`(${m.before.frequency}→${m.after.frequency})`:''}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
+      const noteHtml = m.after.note ? ` <span style="color:var(--ink2);font-weight:400">— ${m.after.note}</span>` : '';
+      html += `<div class="breakdown-row"><span class="breakdown-week-label">~ Changed: ${m.after.name}${noteHtml}<span style="color:var(--ink3);font-size:10px;display:block">£${m.before.amount.toFixed(2)} → £${m.after.amount.toFixed(2)} ${m.before.frequency!==m.after.frequency?`(${m.before.frequency}→${m.after.frequency})`:''}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
     });
     html += `</div>`;
   }
@@ -3005,7 +3032,7 @@ function renderScenarioTab() {
       html += `<div class="recur-card" onclick="openScenarioItemSheet('${item.id}')">
         <div class="recur-body">
           <div class="recur-name">${item.name}${item.baseId?' <span class="recur-badge">from real</span>':' <span class="recur-badge">new</span>'}</div>
-          <div class="recur-meta">${freqTxt} · £${monthlyEquivalent(item).toFixed(2)}/mo equiv</div>
+          <div class="recur-meta">${freqTxt} · £${monthlyEquivalent(item).toFixed(2)}/mo equiv${item.note?' · '+item.note:''}</div>
         </div>
         <div class="recur-right"><div class="recur-amt ${item.type}">${item.type==='income'?'+':'−'}£${item.amount.toFixed(2)}</div></div>
       </div>`;
@@ -3054,6 +3081,7 @@ function openScenarioItemSheet(id) {
   pickScenType(item ? item.type : 'outgoing');
   pickScenFreq(item ? item.frequency : 'monthly');
   document.getElementById('scen-interval').value = item ? (item.interval||4) : 4;
+  document.getElementById('scen-item-note').value = item ? (item.note||'') : '';
   document.getElementById('scen-delete-row').style.display = item ? 'flex' : 'none';
   document.getElementById('overlay-scenitem').classList.add('open');
 }
@@ -3074,13 +3102,15 @@ function saveScenarioItem() {
   const name = document.getElementById('scen-name').value.trim();
   const amt  = pennyValue('scen-amt');
   const interval = parseInt(document.getElementById('scen-interval').value,10)||4;
+  const note = document.getElementById('scen-item-note').value.trim();
   if (!name) { toast('Enter a name'); return; }
   if (isNaN(amt)||amt<=0) { toast('Enter a valid amount'); return; }
   const rec = {
     id: _scenItemEditId || uid(),
     baseId: _scenItemEditId ? (_scenarioDraft.items.find(i=>i.id===_scenItemEditId)||{}).baseId : null,
     name, type:_scenItemType, amount:Math.round(amt*100)/100,
-    frequency:_scenItemFreq, interval:_scenItemFreq==='custom' ? Math.max(1,interval) : 1
+    frequency:_scenItemFreq, interval:_scenItemFreq==='custom' ? Math.max(1,interval) : 1,
+    note
   };
   if (_scenItemEditId) {
     const idx = _scenarioDraft.items.findIndex(i=>i.id===_scenItemEditId);
@@ -3093,6 +3123,20 @@ function saveScenarioItem() {
 }
 function deleteScenarioItem() {
   if (!_scenItemEditId) return;
+  const item = _scenarioDraft.items.find(i=>i.id===_scenItemEditId);
+  // Capture whatever's currently in the note field — this is the one
+  // moment a note about a REMOVAL can exist, since the item (and its
+  // own note field) is about to disappear from the items array entirely.
+  // Keyed by baseId so "What changed" can look it up for a real
+  // recurring item that's no longer in the scenario.
+  if (item && item.baseId) {
+    const noteEl = document.getElementById('scen-item-note');
+    const note = noteEl ? noteEl.value.trim() : '';
+    if (note) {
+      if (!_scenarioDraft.removedNotes) _scenarioDraft.removedNotes = {};
+      _scenarioDraft.removedNotes[item.baseId] = note;
+    }
+  }
   _scenarioDraft.items = _scenarioDraft.items.filter(i=>i.id!==_scenItemEditId);
   closeScenarioItemSheet();
   renderScenarioTab();
@@ -3110,6 +3154,7 @@ function saveScenario() {
   const rec = {
     id: _scenarioDraft.id || uid(),
     name, note, items: _scenarioDraft.items,
+    removedNotes: _scenarioDraft.removedNotes || {},
     updated_at: now
   };
   const idx = bills.scenarios.findIndex(s=>s.id===rec.id);
@@ -3127,7 +3172,7 @@ function loadScenario(id) {
   if (!s) return;
   // Deep-ish copy so editing the loaded draft never mutates the saved
   // record until Save is tapped again.
-  _scenarioDraft = { id: s.id, name: s.name, note: s.note||'', items: s.items.map(i=>({...i})) };
+  _scenarioDraft = { id: s.id, name: s.name, note: s.note||'', items: s.items.map(i=>({...i})), removedNotes: {...(s.removedNotes||{})} };
   renderScenarioTab();
   toast(`Loaded "${s.name}"`);
 }
@@ -3172,13 +3217,13 @@ function exportScenarioPdf() {
   let changesHtml = '';
   if (diff.added.length || diff.removed.length || diff.modified.length) {
     const lines = [];
-    diff.added.forEach(i => lines.push([`+ Added: ${i.name}`, i.type==='income'?'New income':'New outgoing', netImpact(i)]));
-    diff.removed.forEach(i => lines.push([`− Removed: ${i.name}`, i.type==='income'?'Lost income':'No longer paying this', -netImpact(i)]));
-    diff.modified.forEach(m => lines.push([`~ Changed: ${m.after.name}`, `£${m.before.amount.toFixed(2)} → £${m.after.amount.toFixed(2)}`, netImpact(m.after)-netImpact(m.before)]));
+    diff.added.forEach(i => lines.push([`+ Added: ${i.name}`, i.type==='income'?'New income':'New outgoing', netImpact(i), i.note]));
+    diff.removed.forEach(i => lines.push([`− Removed: ${i.name}`, i.type==='income'?'Lost income':'No longer paying this', -netImpact(i), (_scenarioDraft.removedNotes||{})[i.id]]));
+    diff.modified.forEach(m => lines.push([`~ Changed: ${m.after.name}`, `£${m.before.amount.toFixed(2)} → £${m.after.amount.toFixed(2)}`, netImpact(m.after)-netImpact(m.before), m.after.note]));
     changesHtml = `
     <div class="section-label">What changed</div>
     <table>
-      ${lines.map(([name,desc,d]) => `<tr><td>${name}<div style="color:${INK3};font-size:11px">${desc}</div></td><td style="text-align:right;color:${clr(d)};font-weight:700">${sign(d)}</td></tr>`).join('')}
+      ${lines.map(([name,desc,d,note]) => `<tr><td>${name}${note?` <span style="color:${INK2};font-weight:400">— ${note.replace(/</g,'&lt;')}</span>`:''}<div style="color:${INK3};font-size:11px">${desc}</div></td><td style="text-align:right;color:${clr(d)};font-weight:700">${sign(d)}</td></tr>`).join('')}
     </table>`;
   }
 
