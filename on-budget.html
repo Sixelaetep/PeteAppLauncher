@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.26</title>
+<title>On Budget v3.27</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.26</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.27</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -752,7 +752,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.26
+// On Budget v3.27
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -989,6 +989,23 @@
 // a bundled PDF library, to keep the app dependency-free; "Save as PDF"
 // is one tap away in the browser's own print dialog on iOS/Android/
 // desktop alike.
+// v3.27 (ON--030/031): found and fixed a real bug while addressing the
+// feedback — delta cells used bare class="ok"/"warn", but those only
+// exist scoped to .stat-card-sub/.log-entry, so the green/red colouring
+// never actually rendered despite the code looking right. Replaced with
+// deltaColor()/netImpact() returning real colour values directly.
+// Added: a note field per scenario (what/why, shown in-app and in the
+// saved-scenarios list as a snippet); an "Overall change" callout
+// card, colour-matched to whether the scenario is net better or worse;
+// a "What changed" itemized section (diffScenario(), matched by
+// baseId) showing exactly which items were added/removed/modified and
+// each one's signed monthly impact — omits anything unchanged, since
+// the point is explaining differences, not restating everything.
+// PDF export rewritten to match: app-branded header, a colour-filled
+// overall-change banner, an explicit Delta row (previously missing
+// entirely — Pete's report), the note, and the same itemized changes
+// section, all using the app's actual brand hex values (hardcoded,
+// since a standalone print window can't see the page's CSS variables).
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1476,7 +1493,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.26', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.27', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1485,7 +1502,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.26', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.27', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2789,6 +2806,37 @@ function scenarioTotals(items) {
   return { income, outgoing, net: income-outgoing };
 }
 
+// Signed monthly impact on net position — positive always means "better
+// off", negative always means "worse off", regardless of whether it's
+// income or outgoing. This is what "green = positive financial change,
+// red = negative" actually needs; a raw £ amount doesn't have a sign
+// that means that on its own (a bigger outgoing is a worse change).
+function netImpact(item) {
+  const m = monthlyEquivalent(item);
+  return item.type==='income' ? m : -m;
+}
+
+// Itemizes what actually changed between the real recurring set and a
+// scenario, matched by baseId — this is the "changes and why" section,
+// not just the aggregate totals. Unchanged items are deliberately
+// omitted; the point is to explain what's different, not restate
+// everything that's the same.
+function diffScenario(asIs, scenarioItems) {
+  const added = [], removed = [], modified = [];
+  const asIsById = {}; asIs.forEach(a => asIsById[a.id] = a);
+  const scenBaseIds = new Set();
+  scenarioItems.filter(s=>!s._deleted).forEach(s => {
+    if (s.baseId) scenBaseIds.add(s.baseId);
+    if (!s.baseId || !asIsById[s.baseId]) { added.push(s); return; }
+    const base = asIsById[s.baseId];
+    if (base.amount!==s.amount || base.frequency!==s.frequency || (base.interval||1)!==(s.interval||1) || base.type!==s.type) {
+      modified.push({ before: base, after: s });
+    }
+  });
+  asIs.forEach(a => { if (!scenBaseIds.has(a.id)) removed.push(a); });
+  return { added, removed, modified };
+}
+
 function asIsScenarioItems() {
   return bills.recurring.filter(r=>r.active!==false && !r._deleted);
 }
@@ -2806,7 +2854,7 @@ function freshScenarioItems() {
 
 function ensureScenarioDraft() {
   if (!_scenarioDraft) {
-    _scenarioDraft = { id: null, name: '', items: freshScenarioItems() };
+    _scenarioDraft = { id: null, name: '', note: '', items: freshScenarioItems() };
   }
 }
 
@@ -2818,7 +2866,7 @@ function resetScenarioDraft() {
 }
 
 function newScenarioDraft() {
-  _scenarioDraft = { id: null, name: '', items: freshScenarioItems() };
+  _scenarioDraft = { id: null, name: '', note: '', items: freshScenarioItems() };
   renderScenarioTab();
 }
 function renderBillsRecurring() {
@@ -2850,16 +2898,29 @@ function renderBillsRecurring() {
 }
 
 // ── Scenario tab rendering ──────────────────────────────────────
+// Returns an actual colour, not a class name — the previous version
+// used bare class="ok"/"warn" which only exist scoped to .stat-card-sub
+// and .log-entry, so delta cells rendered with no colour at all despite
+// the code looking right. Inline colour sidesteps that entirely.
+function deltaColor(v) {
+  if (v > 0) return 'var(--accent)';
+  if (v < 0) return 'var(--red)';
+  return 'var(--ink2)';
+}
+function fmtSigned(v) {
+  return (v>=0?'+':'-') + '£' + Math.abs(v).toFixed(2);
+}
+
 function renderScenarioTab() {
   ensureScenarioDraft();
   const el = document.getElementById('bills-scenario');
-  const asIs = scenarioTotals(asIsScenarioItems());
+  const asIsItems = asIsScenarioItems();
+  const asIs = scenarioTotals(asIsItems);
   const scen = scenarioTotals(_scenarioDraft.items);
   const deltaIncome = scen.income - asIs.income;
   const deltaOutgoing = scen.outgoing - asIs.outgoing;
   const deltaNet = scen.net - asIs.net;
-  const fmtDelta = (v) => (v>=0?'+':'-') + '£' + Math.abs(v).toFixed(2);
-  const deltaCls = (v) => v>0 ? 'ok' : v<0 ? 'warn' : '';
+  const diff = diffScenario(asIsItems, _scenarioDraft.items);
 
   let html = `
   <div class="stat-card" style="margin-bottom:10px">
@@ -2882,11 +2943,44 @@ function renderScenarioTab() {
       </tr>
       <tr style="border-top:1px solid var(--border)">
         <td style="color:var(--ink2);padding-top:4px">Delta</td>
-        <td class="${deltaCls(deltaIncome)}" style="text-align:right;padding-top:4px">${fmtDelta(deltaIncome)}</td>
-        <td class="${deltaCls(-deltaOutgoing)}" style="text-align:right;padding-top:4px">${fmtDelta(-deltaOutgoing)}</td>
-        <td class="${deltaCls(deltaNet)}" style="text-align:right;padding-top:4px;font-weight:700">${fmtDelta(deltaNet)}</td>
+        <td style="text-align:right;padding-top:4px;color:${deltaColor(deltaIncome)}">${fmtSigned(deltaIncome)}</td>
+        <td style="text-align:right;padding-top:4px;color:${deltaColor(-deltaOutgoing)}">${fmtSigned(-deltaOutgoing)}</td>
+        <td style="text-align:right;padding-top:4px;font-weight:700;color:${deltaColor(deltaNet)}">${fmtSigned(deltaNet)}</td>
       </tr>
     </table>
+  </div>
+
+  <div class="stat-card" style="margin-bottom:10px;background:${deltaNet>0?'var(--accent-dim)':deltaNet<0?'var(--red-dim)':'var(--surface2)'};border-color:${deltaNet>0?'var(--accent-border)':deltaNet<0?'var(--red-border)':'var(--border)'}">
+    <div class="stat-card-label">Overall change</div>
+    <div class="stat-card-val" style="color:${deltaColor(deltaNet)}">${fmtSigned(deltaNet)}/mo</div>
+    <div class="stat-card-sub" style="color:var(--ink3)">${deltaNet>0?'This scenario leaves you better off overall':deltaNet<0?'This scenario leaves you worse off overall':'No net change from as-is'}</div>
+  </div>`;
+
+  // What changed and why — itemized, not just the aggregate totals.
+  // Only shows things that actually differ; nothing to say about items
+  // left alone.
+  if (diff.added.length || diff.removed.length || diff.modified.length) {
+    html += `<div class="stat-card" style="margin-bottom:10px">
+      <div class="stat-card-label">What changed</div>`;
+    diff.added.forEach(i => {
+      const d = netImpact(i);
+      html += `<div class="breakdown-row"><span class="breakdown-week-label">+ Added: ${i.name}<span style="color:var(--ink3);font-size:10px;display:block">${i.type==='income'?'New income':'New outgoing'}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
+    });
+    diff.removed.forEach(i => {
+      const d = -netImpact(i);
+      html += `<div class="breakdown-row"><span class="breakdown-week-label">− Removed: ${i.name}<span style="color:var(--ink3);font-size:10px;display:block">${i.type==='income'?'Lost income':'No longer paying this'}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
+    });
+    diff.modified.forEach(m => {
+      const d = netImpact(m.after) - netImpact(m.before);
+      html += `<div class="breakdown-row"><span class="breakdown-week-label">~ Changed: ${m.after.name}<span style="color:var(--ink3);font-size:10px;display:block">£${m.before.amount.toFixed(2)} → £${m.after.amount.toFixed(2)} ${m.before.frequency!==m.after.frequency?`(${m.before.frequency}→${m.after.frequency})`:''}</span></span><span class="breakdown-week-amt" style="color:${deltaColor(d)}">${fmtSigned(d)}</span></div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `
+  <div class="field-group" style="margin-bottom:10px">
+    <label class="field-label">Note <span style="text-transform:none;font-weight:400;color:var(--ink3)">— what's this scenario, and why?</span></label>
+    <textarea id="scenario-note" placeholder="e.g. Modelling the effect of taking the promotion and cancelling the gym membership" rows="2" style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--ink);font-size:13px;font-family:inherit;resize:vertical" oninput="_scenarioDraft.note=this.value">${(_scenarioDraft.note||'')}</textarea>
   </div>
 
   <div class="btn-row" style="margin-bottom:10px">
@@ -2924,13 +3018,16 @@ function renderScenarioTab() {
   if (!saved.length) {
     html += `<div class="ledger-list"><div class="ledger-empty">No saved scenarios yet</div></div>`;
   } else {
+    const asIsForList = scenarioTotals(asIsItems);
     html += `<div class="ledger-list">`;
     saved.forEach(s => {
       const t = scenarioTotals(s.items);
+      const d = t.net - asIsForList.net;
+      const noteSnippet = s.note ? (s.note.length>60 ? s.note.slice(0,60)+'…' : s.note) : '';
       html += `<div class="ledger-row" onclick="loadScenario('${s.id}')">
         <div class="ledger-body">
           <div class="ledger-name">${s.name || 'Untitled scenario'}</div>
-          <div class="ledger-date">Net £${t.net.toFixed(2)}/mo · ${s.items.length} item${s.items.length===1?'':'s'}</div>
+          <div class="ledger-date">Net £${t.net.toFixed(2)}/mo (<span style="color:${deltaColor(d)}">${fmtSigned(d)}</span> vs as-is) · ${s.items.length} item${s.items.length===1?'':'s'}${noteSnippet?'<br>'+noteSnippet:''}</div>
         </div>
         <button class="tx-del" onclick="event.stopPropagation();deleteScenario('${s.id}')">✕</button>
       </div>`;
@@ -3005,18 +3102,21 @@ function deleteScenarioItem() {
 function saveScenario() {
   ensureScenarioDraft();
   const nameEl = document.getElementById('scenario-name');
+  const noteEl = document.getElementById('scenario-note');
   const name = (nameEl ? nameEl.value : _scenarioDraft.name || '').trim();
+  const note = (noteEl ? noteEl.value : _scenarioDraft.note || '').trim();
   if (!name) { toast('Give the scenario a name first'); return; }
   const now = new Date().toISOString();
   const rec = {
     id: _scenarioDraft.id || uid(),
-    name, items: _scenarioDraft.items,
+    name, note, items: _scenarioDraft.items,
     updated_at: now
   };
   const idx = bills.scenarios.findIndex(s=>s.id===rec.id);
   if (idx>-1) bills.scenarios[idx] = rec; else bills.scenarios.push(rec);
   _scenarioDraft.id = rec.id;
   _scenarioDraft.name = name;
+  _scenarioDraft.note = note;
   save(true);
   syncUpsertScenario(rec);
   renderScenarioTab();
@@ -3027,7 +3127,7 @@ function loadScenario(id) {
   if (!s) return;
   // Deep-ish copy so editing the loaded draft never mutates the saved
   // record until Save is tapped again.
-  _scenarioDraft = { id: s.id, name: s.name, items: s.items.map(i=>({...i})) };
+  _scenarioDraft = { id: s.id, name: s.name, note: s.note||'', items: s.items.map(i=>({...i})) };
   renderScenarioTab();
   toast(`Loaded "${s.name}"`);
 }
@@ -3050,31 +3150,83 @@ function deleteScenario(id) {
 //    Android/desktop share & print sheets. ──
 function exportScenarioPdf() {
   ensureScenarioDraft();
-  const asIs = scenarioTotals(asIsScenarioItems());
+  const asIsItems = asIsScenarioItems();
+  const asIs = scenarioTotals(asIsItems);
   const scen = scenarioTotals(_scenarioDraft.items);
+  const deltaIncome = scen.income - asIs.income;
+  const deltaOutgoing = scen.outgoing - asIs.outgoing;
+  const deltaNet = scen.net - asIs.net;
+  const diff = diffScenario(asIsItems, _scenarioDraft.items);
+  // Fixed hex values, not var(--...) — this renders in a standalone
+  // popup window with no access to the app's CSS custom properties.
+  // Light-theme values regardless of the app's current theme, since
+  // that's how print output should look either way.
+  const GREEN = '#5a8a00', RED = '#dc2626', INK = '#111827', INK2 = '#6b7280', INK3 = '#9ca3af';
+  const clr = (v) => v>0 ? GREEN : v<0 ? RED : INK2;
+  const sign = (v) => (v>=0?'+':'-') + '£' + Math.abs(v).toFixed(2);
+
   const rows = _scenarioDraft.items.map(i =>
     `<tr><td>${i.name}</td><td>${i.type==='income'?'Income':'Outgoing'}</td><td>${i.frequency}${i.frequency==='custom'?' (every '+i.interval+'w)':''}</td><td style="text-align:right">£${i.amount.toFixed(2)}</td><td style="text-align:right">£${monthlyEquivalent(i).toFixed(2)}</td></tr>`
   ).join('');
+
+  let changesHtml = '';
+  if (diff.added.length || diff.removed.length || diff.modified.length) {
+    const lines = [];
+    diff.added.forEach(i => lines.push([`+ Added: ${i.name}`, i.type==='income'?'New income':'New outgoing', netImpact(i)]));
+    diff.removed.forEach(i => lines.push([`− Removed: ${i.name}`, i.type==='income'?'Lost income':'No longer paying this', -netImpact(i)]));
+    diff.modified.forEach(m => lines.push([`~ Changed: ${m.after.name}`, `£${m.before.amount.toFixed(2)} → £${m.after.amount.toFixed(2)}`, netImpact(m.after)-netImpact(m.before)]));
+    changesHtml = `
+    <div class="section-label">What changed</div>
+    <table>
+      ${lines.map(([name,desc,d]) => `<tr><td>${name}<div style="color:${INK3};font-size:11px">${desc}</div></td><td style="text-align:right;color:${clr(d)};font-weight:700">${sign(d)}</td></tr>`).join('')}
+    </table>`;
+  }
+
+  const noteHtml = _scenarioDraft.note ? `
+    <div class="note-box"><strong>Note</strong><br>${_scenarioDraft.note.replace(/</g,'&lt;')}</div>` : '';
+
   const win = window.open('', '_blank');
   if (!win) { toast('Pop-up blocked — allow pop-ups to export'); return; }
   win.document.write(`
     <html><head><title>${(_scenarioDraft.name||'Scenario')} — On Budget</title>
     <style>
-      body{font-family:-apple-system,sans-serif;color:#111;padding:24px;max-width:700px;margin:0 auto}
-      h1{font-size:20px;margin-bottom:4px} .sub{color:#666;font-size:12px;margin-bottom:20px}
+      body{font-family:-apple-system,'Segoe UI',sans-serif;color:${INK};padding:24px;max-width:700px;margin:0 auto}
+      .brand{display:flex;align-items:center;gap:8px;color:${GREEN};font-weight:700;font-size:13px;margin-bottom:16px}
+      h1{font-size:20px;margin:0 0 4px}
+      .sub{color:${INK2};font-size:12px;margin-bottom:16px}
+      .note-box{background:#f4f6f8;border-left:3px solid ${GREEN};padding:10px 14px;border-radius:0 8px 8px 0;font-size:13px;margin-bottom:20px}
       table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px}
-      th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}
-      th{text-transform:uppercase;font-size:10px;color:#888;letter-spacing:0.04em}
-      .totals{background:#f4f6f8;padding:12px 16px;border-radius:8px;margin-bottom:20px}
-      .totals div{display:flex;justify-content:space-between;padding:3px 0;font-size:13px}
-      .totals strong{font-weight:700}
+      th,td{padding:7px 8px;border-bottom:1px solid #e5e7eb;text-align:left}
+      th{text-transform:uppercase;font-size:10px;color:${INK3};letter-spacing:0.04em}
+      .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:${INK2};margin:0 0 8px}
+      .totals{background:#f4f6f8;padding:14px 16px;border-radius:8px;margin-bottom:16px}
+      .totals table{margin-bottom:0}
+      .totals td{border-bottom:1px solid #e0e3e8;padding:5px 4px}
+      .overall{padding:16px;border-radius:10px;margin-bottom:20px;color:#fff;background:${deltaNet>0?GREEN:deltaNet<0?RED:INK2}}
+      .overall .label{font-size:11px;text-transform:uppercase;letter-spacing:0.05em;opacity:0.85}
+      .overall .val{font-size:28px;font-weight:700;margin:2px 0}
+      .overall .desc{font-size:12px;opacity:0.9}
+      @media print{ body{padding:12px} }
     </style></head><body>
+    <div class="brand">🪙 On Budget — Bills Scenario</div>
     <h1>${_scenarioDraft.name || 'Untitled scenario'}</h1>
-    <div class="sub">On Budget · Bills scenario · exported ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})}</div>
-    <div class="totals">
-      <div><span>As-is</span><span>Income £${asIs.income.toFixed(2)} · Outgoing £${asIs.outgoing.toFixed(2)} · Net £${asIs.net.toFixed(2)}</span></div>
-      <div><strong>Scenario</strong><strong>Income £${scen.income.toFixed(2)} · Outgoing £${scen.outgoing.toFixed(2)} · Net £${scen.net.toFixed(2)}</strong></div>
+    <div class="sub">Exported ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})}</div>
+    ${noteHtml}
+    <div class="overall">
+      <div class="label">Overall monthly change</div>
+      <div class="val">${sign(deltaNet)}/mo</div>
+      <div class="desc">${deltaNet>0?'This scenario leaves you better off overall':deltaNet<0?'This scenario leaves you worse off overall':'No net change from as-is'}</div>
     </div>
+    <div class="totals">
+      <table>
+        <tr><th></th><th style="text-align:right">Income</th><th style="text-align:right">Outgoing</th><th style="text-align:right">Net</th></tr>
+        <tr><td>As-is</td><td style="text-align:right">£${asIs.income.toFixed(2)}</td><td style="text-align:right">£${asIs.outgoing.toFixed(2)}</td><td style="text-align:right;font-weight:700">£${asIs.net.toFixed(2)}</td></tr>
+        <tr><td>Scenario</td><td style="text-align:right">£${scen.income.toFixed(2)}</td><td style="text-align:right">£${scen.outgoing.toFixed(2)}</td><td style="text-align:right;font-weight:700">£${scen.net.toFixed(2)}</td></tr>
+        <tr><td style="font-weight:700">Delta</td><td style="text-align:right;color:${clr(deltaIncome)};font-weight:700">${sign(deltaIncome)}</td><td style="text-align:right;color:${clr(-deltaOutgoing)};font-weight:700">${sign(-deltaOutgoing)}</td><td style="text-align:right;color:${clr(deltaNet)};font-weight:700">${sign(deltaNet)}</td></tr>
+      </table>
+    </div>
+    ${changesHtml}
+    <div class="section-label">All scenario items</div>
     <table>
       <tr><th>Name</th><th>Type</th><th>Frequency</th><th>Amount</th><th>£/month equiv</th></tr>
       ${rows}
