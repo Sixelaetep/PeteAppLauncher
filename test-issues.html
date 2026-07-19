@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.45</title>
+<title>Test &amp; Issues v1.46</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -470,7 +470,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.45</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.46</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -1422,7 +1422,7 @@ function openKanbanTestActions(appId, version, testId) {
   _kbActions = [];
   _kbPendingTest = { appId, version }; // for auto-advance after action
   if (cur !== 'pass') _kbActions.push({ label: '✓ Pass',       fn: () => { setTestStatus(appId, version, testId, 'pass'); } });
-  if (cur !== 'fail') _kbActions.push({ label: '✗ Fail',       fn: () => { promptFailNote(appId, version, testId); } });
+  if (cur !== 'fail') _kbActions.push({ label: '✗ Fail',       fn: () => { promptFailNote(appId, version, testId); }, isFail: true });
   if (cur !== 'skip') _kbActions.push({ label: '~ Skip',       fn: () => { setTestStatus(appId, version, testId, 'skip'); } });
   if (cur !== 'open') _kbActions.push({ label: '↩ Reset',      fn: () => { setTestStatus(appId, version, testId, 'open'); } });
   if (cur === 'fail') _kbActions.push({ label: '🔸 Log Issue', fn: () => { _kbPendingTest = null; logIssueFromTest(appId, version, testId); } });
@@ -1449,26 +1449,110 @@ let _kbPendingTest = null; // { appId, version } — context for auto-advance
 function kbActionDispatch(i) {
   const sheet = document.getElementById('kb-action-sheet');
   if (sheet) sheet.remove();
+  const action  = _kbActions[i];
   const pending = _kbPendingTest;
   _kbPendingTest = null;
-  if (_kbActions[i]) _kbActions[i].fn();
+  if (action) action.fn();
+  // If Fail was chosen, don't re-render — the fail-note modal is now open
+  // confirmFailNote will handle the advance via kbAdvanceWorkflow
+  if (action?.isFail) return;
   if (currentTab === 'kanban') {
     setTimeout(() => {
       renderKanban();
-      // TI-059: auto-open next untested test after a status change action
-      if (pending) {
-        const selVer = document.getElementById('kb-version-select')?.value || null;
-        const remaining = allTests().filter(t =>
-          t.appId === pending.appId &&
-          (!selVer || t.version === selVer) &&
-          (!t.status || t.status === 'open')
-        );
-        if (remaining.length) {
-          openKanbanTestActions(remaining[0].appId, remaining[0].version, remaining[0].id);
-        }
-      }
-    }, 130);
+      kbAdvanceWorkflow(pending);
+    }, 80);
   }
+}
+
+// ── Guided Kanban workflow (TI-065) ─────────────────────────────
+function kbAdvanceWorkflow(pending) {
+  if (!pending || currentTab !== 'kanban') return;
+  const selVer = document.getElementById('kb-version-select')?.value || null;
+  const scopedTests = allTests().filter(t =>
+    t.appId === pending.appId && (!selVer || t.version === selVer)
+  );
+  // Phase 1: still untested? Open next.
+  const nextUntested = scopedTests.find(t => !t.status || t.status === 'open');
+  if (nextUntested) {
+    openKanbanTestActions(nextUntested.appId, nextUntested.version, nextUntested.id);
+    return;
+  }
+  // Phase 2: failed cards? Open first one to log.
+  const failedTests = scopedTests.filter(t => t.status === 'fail');
+  if (failedTests.length) {
+    toast(`All tested — ${failedTests.length} failed test${failedTests.length!==1?'s':''} to log`);
+    setTimeout(() => openKanbanTestActions(failedTests[0].appId, failedTests[0].version, failedTests[0].id), 200);
+    return;
+  }
+  // Phase 3: all clear — cleanup sheet
+  kbShowCleanupSheet(pending.appId, selVer);
+}
+
+function kbAdvanceAfterFail(appId, version) {
+  if (currentTab !== 'kanban') return;
+  renderKanban();
+  setTimeout(() => kbAdvanceWorkflow({ appId, version }), 80);
+}
+
+function kbShowCleanupSheet(appId, selVer) {
+  const deployedCount = Object.values(state.issues).filter(i =>
+    !i.archived && i.appId === appId && (i.status==='deployed'||i.status==='fixed')
+  ).length;
+  const passedCount = allTests().filter(t =>
+    t.appId === appId && (!selVer || t.version === selVer) && t.status === 'pass'
+  ).length;
+  const skippedCount = allTests().filter(t =>
+    t.appId === appId && (!selVer || t.version === selVer) && t.status === 'skip'
+  ).length;
+  let existing = document.getElementById('kb-cleanup-sheet');
+  if (existing) existing.remove();
+  const sheet = document.createElement('div');
+  sheet.id = 'kb-cleanup-sheet';
+  sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:600;display:flex;align-items:flex-end;justify-content:center;padding:16px';
+  sheet.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:400px;padding:20px">
+    <div style="font-size:22px;text-align:center;margin-bottom:6px">🎉</div>
+    <div style="font-size:15px;font-weight:700;color:var(--ink);text-align:center;margin-bottom:4px">All tests done</div>
+    <div style="font-size:12px;color:var(--ink2);text-align:center;margin-bottom:18px">${passedCount} passed · ${skippedCount} skipped · ${deployedCount} deployed issue${deployedCount!==1?'s':''}</div>
+    ${deployedCount&&passedCount?`<button onclick="kbCleanupBoth('${esc(appId)}','${esc(selVer||'')}');document.getElementById('kb-cleanup-sheet').remove()" style="display:block;width:100%;text-align:center;padding:13px 14px;margin-bottom:8px;background:rgba(249,115,22,0.08);border:1px solid var(--ti);border-radius:8px;color:var(--ti);font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">✨ Archive deployed + Clear passed</button>`:''}
+    ${deployedCount?`<button onclick="kbCleanupArchiveDeploy('${esc(appId)}');document.getElementById('kb-cleanup-sheet').remove()" style="display:block;width:100%;text-align:left;padding:11px 14px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--ink);font-size:13px;font-family:inherit;cursor:pointer"><span style="font-weight:600">📦 Archive deployed issues</span> <span style="color:var(--ink3);font-size:11px">(${deployedCount})</span></button>`:''}
+    ${passedCount?`<button onclick="kbCleanupClearPassed('${esc(appId)}','${esc(selVer||'')}');document.getElementById('kb-cleanup-sheet').remove()" style="display:block;width:100%;text-align:left;padding:11px 14px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--ink);font-size:13px;font-family:inherit;cursor:pointer"><span style="font-weight:600">🗑 Clear passed tests</span> <span style="color:var(--ink3);font-size:11px">(${passedCount})</span></button>`:''}
+    <button onclick="document.getElementById('kb-cleanup-sheet').remove()" style="display:block;width:100%;text-align:center;padding:8px;background:none;border:none;color:var(--ink3);font-size:13px;cursor:pointer;font-family:inherit">Dismiss</button>
+  </div>`;
+  sheet.addEventListener('click', e => { if (e.target === sheet) sheet.remove(); });
+  document.body.appendChild(sheet);
+}
+
+function kbCleanupArchiveDeploy(appId) {
+  let count = 0;
+  Object.values(state.issues).forEach(i => {
+    if (!i.archived && i.appId === appId && (i.status==='deployed'||i.status==='fixed')) {
+      i.archived = true; i.updatedAt = new Date().toISOString(); count++;
+    }
+  });
+  saveState(); renderKanban(); refreshStats();
+  if (window.PalSync?.hasSession()) Object.values(state.issues).filter(i=>i.archived&&i.appId===appId).forEach(i=>syncIssue(i));
+  toast(`📦 Archived ${count} deployed issue${count!==1?'s':''}`);
+}
+
+function kbCleanupClearPassed(appId, selVer) {
+  let count = 0;
+  Object.values(state.apps).forEach(app => {
+    if (app.id !== appId) return;
+    (app.versions||[]).forEach(ver => {
+      if (selVer && ver.version !== selVer) return;
+      const before = (ver.tests||[]).length;
+      ver.tests = (ver.tests||[]).filter(t => t.status !== 'pass');
+      count += before - ver.tests.length;
+    });
+  });
+  saveState(); renderKanban(); refreshStats();
+  if (window.PalSync?.hasSession()) syncApp(state.apps[appId]);
+  toast(`🗑 Cleared ${count} passed test${count!==1?'s':''}`);
+}
+
+function kbCleanupBoth(appId, selVer) {
+  kbCleanupArchiveDeploy(appId);
+  kbCleanupClearPassed(appId, selVer);
 }
 
 function resetTestFilter() {
@@ -1960,7 +2044,12 @@ function confirmFailNote() {
   refreshStats();
   toast('✗ Marked failed');
   syncApp(state.apps[appId]);
-  checkAutoSwitchToFailed();
+  // TI-065: on Kanban, advance workflow (next untested or next failed or cleanup)
+  if (currentTab === 'kanban') {
+    kbAdvanceAfterFail(appId, version);
+  } else {
+    checkAutoSwitchToFailed();
+  }
 }
 
 function logIssueFromTest(appId, version, testId) {
@@ -2195,11 +2284,14 @@ function saveIssue() {
   if (currentTab === 'tests') renderTests();
   refreshStats();
   toast(editingIssueId ? 'Issue updated' : 'Issue logged — test removed');
-  // Sync issue to cloud
   if (savedIssueId && state.issues[savedIssueId]) syncIssue(state.issues[savedIssueId]);
-  // Sync the app whose test was deleted
   if (originatingAppId && state.apps[originatingAppId]) syncApp(state.apps[originatingAppId]);
   syncMeta();
+  // TI-065: if on Kanban and this came from a failed test, advance to next failed or cleanup
+  if (currentTab === 'kanban' && originatingAppId) {
+    renderKanban();
+    setTimeout(() => kbAdvanceWorkflow({ appId: originatingAppId, version: null }), 100);
+  }
 }
 
 function deleteCurrentIssue() {
