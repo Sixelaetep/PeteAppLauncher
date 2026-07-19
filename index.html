@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.16</title>
+<title>P Apps v10.17</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -563,7 +563,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.16</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.17</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn" data-target="reading" style="--app-color:#ffa657" onclick="switchTo('reading', this)" title="Reading Tracker">📚</button>
@@ -1012,6 +1012,82 @@ function pingFrame(frame) {
     }, window.location.origin);
   } catch(e) {}
 }
+
+// ── Proactive session refresh (PET-041, v10.17 — idle/token audit) ──
+// Until now the launcher only ever refreshed its own Supabase token
+// once, at boot (see boot() above) — never again while the tab stayed
+// open. pingFrame() only fires when a frame first loads, so a session
+// left open for hours ran on an increasingly stale token with nothing
+// to renew it, for the launcher itself and for every child app that
+// inherits its token via PAL_SESSION. Gym Tracker (v2.29) already
+// anticipated this and sends a PAL_REQUEST_SESSION postMessage every
+// 5 min whenever it has something queued — that's been a no-op purely
+// because nothing was listening for it. Two mechanisms below, both
+// funnelling through refreshLauncherSession():
+//  (1) a timer well inside Supabase's ~1hr token lifetime, so an open
+//      dashboard is refreshed regardless of whether any app asks;
+//  (2) an explicit PAL_REQUEST_SESSION listener, so an app that's
+//      already hit a 401 doesn't have to wait for the next tick.
+// Either path ends by re-pushing PAL_SESSION to every iframe currently
+// loaded — not just whichever one asked — so a stale token can't cause
+// a second app to fail right after the first one already noticed.
+// GigsAndTrips and Reading Tracker's standalone-auth path both already
+// listen for PAL_SESSION and update their own token on receipt, so
+// they benefit from the periodic broadcast with no code change needed
+// on their side.
+let _lastSessionRefresh = Date.now();
+const SESSION_REFRESH_INTERVAL_MS = 45 * 60 * 1000; // 45 min — comfortably inside Supabase's ~1hr expiry
+
+function broadcastSessionToAllFrames() {
+  document.querySelectorAll('.app-frame').forEach(frame => {
+    if (loaded[frame.id.replace('frame-', '')]) pingFrame(frame);
+  });
+}
+
+async function refreshLauncherSession() {
+  if (!sbSession?.refresh_token) return false;
+  try {
+    const refreshed = await sbRefreshSession(sbSession.refresh_token);
+    if (!refreshed) return false;
+    sbSession = refreshed;
+    localStorage.setItem('sb_session', JSON.stringify(refreshed));
+    _lastSessionRefresh = Date.now();
+    broadcastSessionToAllFrames();
+    return true;
+  } catch(e) { return false; }
+}
+
+setInterval(() => { if (sbSession) refreshLauncherSession(); }, SESSION_REFRESH_INTERVAL_MS);
+
+// Catch up immediately if the dashboard was backgrounded (mobile tab
+// suspension, laptop sleep) long enough that the timer above may have
+// been throttled or simply never got a chance to fire.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && sbSession && (Date.now() - _lastSessionRefresh) > SESSION_REFRESH_INTERVAL_MS) {
+    refreshLauncherSession();
+  }
+});
+
+// A child app asking directly for a fresh session (e.g. Gym Tracker
+// after a 401) gets answered straight away rather than waiting for the
+// next timer tick — refresh if due, then always hand back whatever
+// session we currently hold to that specific frame.
+window.addEventListener('message', function(e) {
+  if (e.origin !== window.location.origin) return;
+  if (e.data && e.data.type === 'PAL_REQUEST_SESSION') {
+    refreshLauncherSession().finally(() => {
+      if (!sbSession || !e.source) return;
+      try {
+        e.source.postMessage({
+          type:         'PAL_SESSION',
+          access_token: sbSession.access_token,
+          user_id:      sbSession.user.id,
+          user_key:     currentUser?.key || 'pete'
+        }, window.location.origin);
+      } catch(err) {}
+    });
+  }
+});
 
 // ── Global theme (v8.9, revised v9.0) ───────────────────────────────
 // Single device-level preference, broadcast to every child app via
