@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.34</title>
+<title>On Budget v3.35</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.34</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.35</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -833,7 +833,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.34
+// On Budget v3.35
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1181,6 +1181,20 @@
 // Outgoing — "who it's going to" is the item's own name, so grouping
 // by that is just an alphabetical sort within each type, with a small
 // section label between them). Ledger view is unchanged, as requested.
+// v3.35 (ON--039): brought the same sort toggle to the Scenario tab's
+// item list, with three modes instead of two since scenario items
+// don't have their own due date the way real recurring items do.
+// Date: only an item linked back to a real recurring item (baseId) has
+// an actual schedule — reuses THAT item's own next-due date (not the
+// scenario item's possibly-edited frequency, to avoid a mismatch
+// between an edited amount/frequency and the real anchor date); an
+// unlinked/new hypothetical item has nothing to sort by, so it's
+// pushed to the end, same treatment paused items get in Recurring's
+// Next due sort. Value: Income then Outgoing, each ordered by monthly-
+// equivalent magnitude, highest first. Type: same Income/Outgoing
+// grouping, alphabetical within each (unchanged concept from
+// Recurring's By type). Extracted renderScenItemCard() so all three
+// modes render identical cards from shared logic.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1763,7 +1777,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.34', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.35', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1772,7 +1786,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.34', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.35', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3329,23 +3343,42 @@ function renderScenarioTab() {
     <button class="btn btn-ghost btn-sm" onclick="exportScenarioPdf()">Export PDF</button>
   </div>
 
+  <div class="freq-row" style="margin-bottom:10px">
+    <button class="freq-btn ${_scenSort==='date'?'active':''}" onclick="setScenSort('date')">Date</button>
+    <button class="freq-btn ${_scenSort==='value'?'active':''}" onclick="setScenSort('value')">Value</button>
+    <button class="freq-btn ${_scenSort==='type'?'active':''}" onclick="setScenSort('type')">Type</button>
+  </div>
+
   <button class="add-btn" onclick="openScenarioItemSheet()"><span class="add-btn-icon">+</span> Add item to scenario</button>`;
 
   if (!_scenarioDraft.items.length) {
     html += `<div class="ledger-list"><div class="ledger-empty">No items in this scenario</div></div>`;
-  } else {
-    _scenarioDraft.items.forEach(item => {
-      const freqTxt = item.frequency==='weekly' ? 'Weekly'
-        : item.frequency==='custom' ? `Every ${item.interval} weeks`
-        : item.frequency==='monthly' ? 'Monthly' : 'Yearly';
-      html += `<div class="recur-card" onclick="openScenarioItemSheet('${item.id}')">
-        <div class="recur-body">
-          <div class="recur-name">${item.name}${item.baseId?' <span class="recur-badge">from real</span>':' <span class="recur-badge">new</span>'}</div>
-          <div class="recur-meta">${freqTxt} · £${monthlyEquivalent(item).toFixed(2)}/mo equiv${item.note?' · '+item.note:''}</div>
-        </div>
-        <div class="recur-right"><div class="recur-amt ${item.type}">${item.type==='income'?'+':'−'}£${item.amount.toFixed(2)}</div></div>
-      </div>`;
+  } else if (_scenSort==='date') {
+    // Scenario items don't carry their own due date — only an item
+    // linked back to a real recurring item (baseId) has one, via that
+    // real item's own schedule. Unlinked/new hypothetical items have
+    // nothing to sort by here, so they're pushed to the end, same
+    // treatment as paused items get in Recurring's Next due sort.
+    const ordered = _scenarioDraft.items.slice().sort((a,b) => {
+      const an = scenItemNextDue(a), bn = scenItemNextDue(b);
+      if (!an && !bn) return a.name.localeCompare(b.name);
+      if (!an) return 1;
+      if (!bn) return -1;
+      return an - bn;
     });
+    html += ordered.map(renderScenItemCard).join('');
+  } else {
+    // Value and Type both group Income-then-Outgoing; Value orders by
+    // magnitude (highest first) within each group, Type orders
+    // alphabetically within each group.
+    const byValue = _scenSort==='value';
+    const sortFn = byValue
+      ? (a,b) => monthlyEquivalent(b) - monthlyEquivalent(a)
+      : (a,b) => a.name.localeCompare(b.name);
+    const income   = _scenarioDraft.items.filter(i=>i.type==='income').sort(sortFn);
+    const outgoing = _scenarioDraft.items.filter(i=>i.type==='outgoing').sort(sortFn);
+    if (income.length)   html += `<div class="ledger-section-label">💰 Income</div>` + income.map(renderScenItemCard).join('');
+    if (outgoing.length) html += `<div class="ledger-section-label" style="margin-top:${income.length?'12px':'0'}">📤 Outgoing</div>` + outgoing.map(renderScenItemCard).join('');
   }
 
   // Saved scenarios list
@@ -3378,6 +3411,32 @@ function renderScenarioTab() {
 let _scenItemEditId = null;
 let _scenItemType = 'outgoing';
 let _scenItemFreq = 'monthly';
+let _scenSort = 'date'; // 'date' | 'value' | 'type' — mirrors the Recurring sort toggle
+function setScenSort(mode) { _scenSort = mode; renderScenarioTab(); }
+
+// Only an item linked back to a real recurring item (baseId) has an
+// actual schedule — reuses that item's own next-due date rather than
+// the scenario item's possibly-edited frequency, avoiding a mismatch
+// between an edited scenario amount/frequency and the real anchor date.
+function scenItemNextDue(item) {
+  if (!item.baseId) return null;
+  const base = bills.recurring.find(r=>r.id===item.baseId && !r._deleted);
+  if (!base) return null;
+  return nextDueRaw(base);
+}
+
+function renderScenItemCard(item) {
+  const freqTxt = item.frequency==='weekly' ? 'Weekly'
+    : item.frequency==='custom' ? `Every ${item.interval} weeks`
+    : item.frequency==='monthly' ? 'Monthly' : 'Yearly';
+  return `<div class="recur-card" onclick="openScenarioItemSheet('${item.id}')">
+    <div class="recur-body">
+      <div class="recur-name">${item.name}${item.baseId?' <span class="recur-badge">from real</span>':' <span class="recur-badge">new</span>'}</div>
+      <div class="recur-meta">${freqTxt} · £${monthlyEquivalent(item).toFixed(2)}/mo equiv${item.note?' · '+item.note:''}</div>
+    </div>
+    <div class="recur-right"><div class="recur-amt ${item.type}">${item.type==='income'?'+':'−'}£${item.amount.toFixed(2)}</div></div>
+  </div>`;
+}
 
 function openScenarioItemSheet(id) {
   ensureScenarioDraft();
