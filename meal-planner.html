@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.3</title>
+<title>Meal Planner v1.4</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -145,7 +145,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.3</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.4</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -194,11 +194,19 @@
 
   <!-- MEAL PLAN -->
   <div class="tab" id="tab-plan" style="display:none">
-    <div class="row" style="margin-bottom:12px;">
+    <div class="row" style="margin-bottom:8px;">
       <label class="lbl" style="margin:0;">Week starting</label>
       <input type="date" id="weekStart" class="grow" style="max-width:180px" onchange="renderPlan()">
       <button class="btn sm" onclick="shiftWeek(-7)">‹ Prev</button>
       <button class="btn sm" onclick="shiftWeek(7)">Next ›</button>
+    </div>
+    <div class="row" style="margin-bottom:12px;">
+      <label class="lbl" style="margin:0;">Week starts on</label>
+      <select id="weekStartDaySelect" style="max-width:150px" onchange="changeWeekStartDay(this.value)">
+        <option value="mon">Monday</option>
+        <option value="sun">Sunday</option>
+        <option value="sat">Saturday</option>
+      </select>
     </div>
     <div id="planDays"></div>
   </div>
@@ -289,6 +297,7 @@
     </div>
     <div class="li-sub" style="margin-top:4px;">% breakdown of the meal (protein / veg or fruit / carbs), not weight. Leave blank if unknown — ask Claude to research a recipe link and fill this in for you at import time.</div>
     <button class="btn sm" style="margin-top:8px;" onclick="openGoogleNutritionSearch()">🔍 Search Google: calories, nutrition &amp; % breakdown</button>
+    <div class="li-sub" style="margin-top:4px;">Google's own answer box may still default to the standard protein/carbs/fat split — if so, use the ingredient list to estimate veg-or-fruit % by eye.</div>
 
     <div class="card-title" style="margin-top:18px;">Ingredients</div>
     <div id="rIngredients"></div>
@@ -383,12 +392,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.3 ────────────────────────────────────────────────
+// ── Meal Planner v1.4 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.3';
+const VERSION = '1.4';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -576,7 +585,7 @@ const CATEGORY_LABELS = { produce:'Produce', meat:'Meat/Fish', dairy:'Dairy', fr
 const FIXED_SLOTS = ['Breakfast','Lunch','Dinner'];
 const SNACK_PREFIX = 'Snack_';
 function defaultData() {
-  return { ingredients: [], recipes: [], mealPlans: {}, shoppingLists: {}, settings: { hideCategories: { pantry: false, store: false } } };
+  return { ingredients: [], recipes: [], mealPlans: {}, shoppingLists: {}, settings: { hideCategories: { pantry: false, store: false }, weekStartDay: 'mon' } };
 }
 
 let DB = load();
@@ -598,6 +607,8 @@ function normalizeEnv(env) {
   if (!env.data.settings.categoryOrder) env.data.settings.categoryOrder = [...CATEGORY_ORDER];
   CATEGORY_ORDER.forEach(c => { if (!env.data.settings.categoryOrder.includes(c)) env.data.settings.categoryOrder.push(c); });
   env.data.settings.collapsedCategories = env.data.settings.collapsedCategories || {};
+  // v1.4: week can start on Monday/Sunday/Saturday instead of always Monday.
+  if (!env.data.settings.weekStartDay) env.data.settings.weekStartDay = 'mon';
   // v0.4: shopping lists gained an explicit `order` array and item `type`.
   // Backfill both for any list saved by an earlier version so it renders
   // immediately rather than looking empty until the user rebuilds it.
@@ -830,7 +841,12 @@ function saveRecipe() {
 function openGoogleNutritionSearch() {
   const name = document.getElementById('rName').value.trim();
   if (!name) return toast('Enter a recipe name first');
-  window.open('https://www.google.com/search?q=' + encodeURIComponent(name + ' calories nutrition facts per serving protein veg fruit carbs percentage breakdown'), '_blank');
+  // Deliberately avoids "nutrition facts" — that phrase is a strong trigger
+  // for Google's standard protein/carbs/fat panel, which is exactly what
+  // we don't want (MP-003). Spelling out protein vs veg-or-fruit vs carbs
+  // and explicitly excluding fat biases results/answer boxes more reliably.
+  const q = name + ' calories per serving and percentage split of protein vs vegetables or fruit vs carbohydrates for this dish (not the standard protein carbs fat breakdown)';
+  window.open('https://www.google.com/search?q=' + encodeURIComponent(q), '_blank');
 }
 function openGoogleTextSearch() {
   const desc = document.getElementById('slotText').value.trim();
@@ -964,8 +980,29 @@ function slotLabel(key, day) {
   const idx = day.snackIds.indexOf(key.slice(SNACK_PREFIX.length));
   return 'Snack ' + (idx + 1);
 }
-function mondayOf(d) { const dt=new Date(d); const day=(dt.getDay()+6)%7; dt.setDate(dt.getDate()-day); return dt.toISOString().slice(0,10); }
-if (!document.getElementById('weekStart').value) document.getElementById('weekStart').value = mondayOf(new Date());
+// MP-002: week can start on Monday (default), Sunday, or Saturday.
+// getDay(): Sun=0, Mon=1, ... Sat=6.
+function weekStartDayIndex() {
+  const s = (DB.data.settings && DB.data.settings.weekStartDay) || 'mon';
+  return s === 'sun' ? 0 : s === 'sat' ? 6 : 1;
+}
+function weekStartOf(d) {
+  const dt = new Date(d);
+  const startIdx = weekStartDayIndex();
+  const diff = (dt.getDay() - startIdx + 7) % 7;
+  dt.setDate(dt.getDate() - diff);
+  return dt.toISOString().slice(0,10);
+}
+function changeWeekStartDay(val) {
+  const oldKey = document.getElementById('weekStart').value || todayStrLocal();
+  DB.data.settings.weekStartDay = val;
+  save();
+  document.getElementById('weekStart').value = weekStartOf(oldKey);
+  renderPlan();
+  toast('Week now starts on ' + ({mon:'Monday',sun:'Sunday',sat:'Saturday'}[val]));
+}
+function todayStrLocal() { return new Date().toISOString().slice(0,10); }
+if (!document.getElementById('weekStart').value) document.getElementById('weekStart').value = weekStartOf(new Date());
 function shiftWeek(days) {
   const d = new Date(document.getElementById('weekStart').value);
   d.setDate(d.getDate()+days);
@@ -1036,7 +1073,9 @@ function renderPlan() {
   const key = currentWeekKey();
   const week = ensureWeek(key);
   const el = document.getElementById('planDays');
-  const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const daySelect = document.getElementById('weekStartDaySelect');
+  if (daySelect) daySelect.value = (DB.data.settings && DB.data.settings.weekStartDay) || 'mon';
+  const DAY_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; // matches Date#getDay() indices
   el.innerHTML = week.days.map((day, di) => {
     const sum = daySummary(week, day);
     const summaryHtml = sum.mealCount === 0 ? '' : `
@@ -1047,7 +1086,7 @@ function renderPlan() {
       </div>`;
     return `
     <div class="card day-card">
-      <div class="day-title">${dayNames[di]} <span class="li-sub">${day.date}</span></div>
+      <div class="day-title">${DAY_SHORT[new Date(day.date).getDay()]} <span class="li-sub">${day.date}</span></div>
       ${daySlotKeys(day).map(sl => {
         const slot = day.slots[sl];
         let content = '<span class="li-sub">Tap to assign</span>';
