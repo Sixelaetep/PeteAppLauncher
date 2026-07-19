@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.8</title>
+<title>Meal Planner v1.9</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -150,7 +150,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.8</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.9</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -370,7 +370,9 @@
     </div>
 
     <div class="card-title" style="margin-top:18px;">Sync Log</div>
+    <div class="li-sub" style="margin-bottom:6px;">If one of you can't see the other's data, look for a red "cloud returned 0 rows" line below — that means Supabase isn't recognising both accounts as the same shared user group, usually an RLS policy or Auth UUID mismatch, not something fixable from in the app.</div>
     <div class="sync-log" id="syncLog"></div>
+    <button class="btn sm" style="margin-top:8px;" onclick="copySyncDiagnostics()">Copy Diagnostics</button>
 
     <div class="card-title" style="margin-top:18px;">Storage</div>
     <div class="sync-info-row"><span>Ingredients</span><span id="storeIngCount">0</span></div>
@@ -408,12 +410,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.8 ────────────────────────────────────────────────
+// ── Meal Planner v1.9 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.8';
+const VERSION = '1.9';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -430,12 +432,28 @@ function toast(msg, ms) { const t=document.getElementById('toast'); t.textConten
 // established pattern rather than bending the shared library to fit.
 let _syncToken = null, _syncUserId = null;
 function hasSyncSession() { return !!(_syncToken && _syncUserId); }
+// MP-015: overlapping pull/push calls (e.g. the launcher sending
+// PAL_SESSION more than once in quick succession) previously had no
+// guard against running concurrently — two in-flight syncs reading and
+// writing DB.data at the same time is exactly the kind of race that can
+// make a merge look like it "emptied" a device. One shared lock now
+// prevents pull and push (and repeat calls to either) from ever running
+// at the same time; a call that arrives while busy is skipped rather
+// than allowed to interleave.
+let _syncBusy = false;
+let _lastAutoPullAt = 0;
 window.addEventListener('message', function (e) {
   if (e.origin !== window.location.origin) return;
   if (e.data && (e.data.type === 'PAL_SESSION' || e.data.type === 'PAL_UNLOCKED')) {
     _syncToken = e.data.access_token || null;
     _syncUserId = e.data.user_id || null;
-    if (_syncToken && _syncUserId) { setSyncState('syncing', 'Connecting…'); syncPullAll(false); }
+    if (_syncToken && _syncUserId) {
+      const now = Date.now();
+      if (now - _lastAutoPullAt < 5000) return; // debounce rapid repeat session events
+      _lastAutoPullAt = now;
+      setSyncState('syncing', 'Connecting…');
+      syncPullAll(false);
+    }
   }
 });
 
@@ -453,6 +471,9 @@ async function sbFetch(path, method, body) {
 }
 // No user_id filter on the GET — every row in the table is visible to
 // both Pete and Lex, which is what makes the data genuinely shared.
+// If this ever returns rows only one of you can see, that's a Supabase
+// RLS/auth mismatch (e.g. a Supabase Auth UUID that doesn't match
+// pal-config.js), not something this function is filtering client-side.
 async function fetchAllRows(table) {
   const res = await sbFetch('/' + table + '?select=record_key,data,updated_at');
   if (!res.ok) { const err = new Error(res.status + ' ' + await res.text()); err.status = res.status; throw err; }
@@ -476,7 +497,11 @@ async function upsertRow(table, id, data) {
 }
 // Bidirectional last-write-wins merge, tombstone-aware, pushes
 // local-only records up — same canonical logic as pal-sync.js's
-// pull(), just without the user_id scoping.
+// pull(), just without the user_id scoping. Now also reports raw remote
+// row count so the caller can log/flag a suspicious "cloud came back
+// empty" result (MP-015 diagnostics) — the merge logic itself already
+// keeps local-only records either way, but a 0-row response back from a
+// table you know has data is a strong RLS/auth signal worth surfacing.
 async function genericPull(table, localRecords, idField, updatedAtField) {
   idField = idField || 'id'; updatedAtField = updatedAtField || 'updatedAt';
   const rows = await fetchAllRows(table);
@@ -494,7 +519,7 @@ async function genericPull(table, localRecords, idField, updatedAtField) {
   const localOnly = Object.values(localMap).filter(r => !cloudIds.has(r[idField]));
   for (const r of localOnly) await upsertRow(table, r[idField], r);
   const merged = Object.values(localMap).filter(r => !r._deleted);
-  return { merged, pushedCount: localOnly.length };
+  return { merged, pushedCount: localOnly.length, remoteCount: rows.length };
 }
 function setSyncState(state, text) {
   const chip = document.getElementById('syncChip');
@@ -520,19 +545,41 @@ function renderSyncLog() {
   ).join('') || '<div class="sync-log-entry info">No sync activity yet</div>';
 }
 function renderAllTabs() { renderRecipes(); renderIngredients(); renderPlan(); renderShop(); }
+// Logs a per-table pull result, including a loud warning if the cloud
+// returned zero rows while this device already has local records for
+// that table — the strongest available signal of an RLS/auth mismatch
+// between users, which is the most likely cause of "sync empties my
+// wife's app" (MP-015): if her Supabase Auth UUID doesn't match the
+// policy in Supabase, every fetch silently returns 0 rows (RLS filters
+// rather than errors) rather than throwing anything this code can catch.
+function logPullResult(table, localCountBefore, result) {
+  logSync('ok', `${table}: ${result.remoteCount} remote row(s), ${result.pushedCount} pushed up, ${result.merged.length} total after merge`);
+  if (result.remoteCount === 0 && localCountBefore > 0) {
+    logSync('err', `${table}: cloud returned 0 rows while this device has ${localCountBefore} — if this persists, check the Supabase RLS policy and that both users' Auth UUIDs match pal-config.js`);
+  }
+}
 async function syncPullAll(manual) {
+  if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
   if (!hasSyncSession()) { logSync('err', 'Pull skipped — not connected'); if (manual) toast('Not connected — open via the launcher to sync'); return; }
+  _syncBusy = true;
   setSyncState('syncing', 'Syncing…');
   try {
     let r = await genericPull('meal_ingredients', DB.data.ingredients);
+    logPullResult('meal_ingredients', DB.data.ingredients.length, r);
     DB.data.ingredients = r.merged;
+
+    const recBefore = DB.data.recipes.length;
     r = await genericPull('meal_recipes', DB.data.recipes);
+    logPullResult('meal_recipes', recBefore, r);
     DB.data.recipes = r.merged;
+
     // v1.5: meal_plans now stores per-day records (record_key = date), not
     // per-week bundles. A stale row pushed by a pre-v1.5 client would have
     // `.days`/no `.slots` — skip anything that doesn't look like a real
     // day record instead of letting it corrupt the new flat model.
+    const planBefore = Object.keys(DB.data.mealPlanDays).length;
     r = await genericPull('meal_plans', Object.values(DB.data.mealPlanDays));
+    logPullResult('meal_plans', planBefore, r);
     DB.data.mealPlanDays = {};
     r.merged.forEach(d => {
       if (d && d.slots && typeof d.slots === 'object' && Array.isArray(d.snackIds)) {
@@ -541,8 +588,12 @@ async function syncPullAll(manual) {
         logSync('err', 'Skipped an old-format meal plan row: ' + (d && d.id));
       }
     });
+
+    const shopBefore = Object.keys(DB.data.shoppingLists).length;
     r = await genericPull('meal_shopping', Object.values(DB.data.shoppingLists));
+    logPullResult('meal_shopping', shopBefore, r);
     DB.data.shoppingLists = {}; r.merged.forEach(s => DB.data.shoppingLists[s.id] = s);
+
     save();
     localStorage.setItem('meal_planner_last_pull', nowIso());
     renderAllTabs();
@@ -552,12 +603,16 @@ async function syncPullAll(manual) {
   } catch (e) {
     setSyncState('error', 'Sync error');
     logSync('err', 'Pull failed: ' + e.message);
-    if (manual) toast('Pull failed: ' + e.message);
+    toast('Pull failed: ' + e.message);
+  } finally {
+    _syncBusy = false;
   }
   refreshSyncModal();
 }
 async function syncPushAll(manual) {
+  if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
   if (!hasSyncSession()) { if (manual) toast('Not connected — open via the launcher to sync'); return; }
+  _syncBusy = true;
   setSyncState('syncing', 'Syncing…');
   try {
     for (const ing of DB.data.ingredients) await upsertRow('meal_ingredients', ing.id, ing);
@@ -566,12 +621,14 @@ async function syncPushAll(manual) {
     for (const s of Object.values(DB.data.shoppingLists)) await upsertRow('meal_shopping', s.id, s);
     localStorage.setItem('meal_planner_last_push', nowIso());
     setSyncState('synced', 'Synced');
-    logSync('ok', 'Push complete');
+    logSync('ok', `Push complete: ${DB.data.ingredients.length} ingredients, ${DB.data.recipes.length} recipes, ${Object.keys(DB.data.mealPlanDays).length} plan days, ${Object.keys(DB.data.shoppingLists).length} shopping lists`);
     if (manual) toast('Pushed to cloud');
   } catch (e) {
     setSyncState('error', 'Sync error');
     logSync('err', 'Push failed: ' + e.message);
-    if (manual) toast('Push failed: ' + e.message);
+    toast('Push failed: ' + e.message);
+  } finally {
+    _syncBusy = false;
   }
   refreshSyncModal();
 }
@@ -586,6 +643,28 @@ function refreshSyncModal() {
   document.getElementById('storeRecCount').textContent = DB.data.recipes.length;
   document.getElementById('storePlanCount').textContent = Object.keys(DB.data.mealPlanDays).length;
   document.getElementById('storeShopCount').textContent = Object.keys(DB.data.shoppingLists).length;
+}
+function copySyncDiagnostics() {
+  const log = JSON.parse(localStorage.getItem('meal_planner_sync_log') || '[]');
+  const lines = [
+    'Meal Planner sync diagnostics — ' + new Date().toLocaleString(),
+    'Version: ' + VERSION,
+    'Session connected: ' + hasSyncSession(),
+    'Current user id: ' + (_syncUserId || '(none)'),
+    'Local counts: ' + DB.data.ingredients.length + ' ingredients, ' + DB.data.recipes.length + ' recipes, ' + Object.keys(DB.data.mealPlanDays).length + ' plan days, ' + Object.keys(DB.data.shoppingLists).length + ' shopping lists',
+    'Last pull: ' + (localStorage.getItem('meal_planner_last_pull') || 'never'),
+    'Last push: ' + (localStorage.getItem('meal_planner_last_push') || 'never'),
+    '',
+    'Recent sync log:',
+    ...log.slice(-30).map(e => `[${e.kind}] ${e.ts} — ${e.msg}`)
+  ];
+  const text = lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => toast('Diagnostics copied')).catch(() => toast('Copy failed — check console'));
+  } else {
+    toast('Clipboard unavailable');
+  }
+  console.log(text);
 }
 function resetLocalData() {
   if (!confirm('This clears ALL local data on THIS DEVICE (ingredients, recipes, meal plans, shopping lists). It does not delete anything from the shared cloud copy. Continue?')) return;
