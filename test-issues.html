@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.39</title>
+<title>Test &amp; Issues v1.40</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -433,6 +433,7 @@
     transition: border-color 0.15s, background 0.15s;
   }
   .kb-card:hover { border-color: var(--ti); background: var(--surface2); }
+  .kb-card-sel { border-color: var(--ti) !important; background: rgba(249,115,22,0.07) !important; }
   .kb-card-id   { font-size: 9px; font-family: monospace; color: var(--ink3); margin-bottom: 3px; }
   .kb-card-title{ font-size: 12px; font-weight: 600; color: var(--ink); line-height: 1.4; }
   .kb-card-meta { font-size: 10px; color: var(--ink3); margin-top: 4px; }
@@ -452,7 +453,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.39</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.40</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -1114,7 +1115,6 @@ function renderKanban() {
   const prevApp = kbAppSel.value;
   kbAppSel.innerHTML = `<option value="">All Apps</option>` +
     apps.map(a => `<option value="${esc(a.id)}">${a.emoji} ${esc(a.name)}</option>`).join('');
-  // Default to last app imported if no selection yet
   if (!prevApp && apps.length) {
     const lastApp = [...apps].sort((a,b) => {
       const av = (a.versions||[]).slice(-1)[0]?.date || '';
@@ -1127,14 +1127,15 @@ function renderKanban() {
   }
   const selAppId = kbAppSel.value || null;
 
-  // Populate version selector based on selected app
+  // Populate version selector — TI-055: default to All (empty) so all tests show
   const kbVerSel = document.getElementById('kb-version-select');
-  const prevVer = kbVerSel.value;
-  const selApp  = selAppId ? state.apps[selAppId] : null;
+  const prevVer  = kbVerSel.value;
+  const selApp   = selAppId ? state.apps[selAppId] : null;
   const versions = selApp ? [...(selApp.versions||[])].reverse() : [];
   kbVerSel.innerHTML = `<option value="">All versions</option>` +
     versions.map(v => `<option value="${esc(v.version)}">v${esc(v.version)}</option>`).join('');
-  kbVerSel.value = prevVer || (versions[0]?.version || '');
+  // Keep previous selection if it still exists; otherwise default to All
+  kbVerSel.value = (prevVer && versions.find(v => v.version === prevVer)) ? prevVer : '';
   const selVer = kbVerSel.value || null;
 
   const content = document.getElementById('kb-content');
@@ -1146,6 +1147,7 @@ function renderKanban() {
     cards.forEach(card => {
       const key = cardFn.key(card);
       if (byCol[key]) byCol[key].push(card);
+      else byCol[cols[0].key]?.push(card); // unknown status → first col
     });
     return `<div class="kb-board">` +
       cols.map(col => {
@@ -1163,7 +1165,7 @@ function renderKanban() {
     `</div>`;
   }
 
-  // ── Issues board ────────────────────────────────────────────────
+  // ── Issues board with selection for Create Brief (TI-055) ────────
   const issueCols = [
     { key:'open',    label:'Open',     cls:'col-open'    },
     { key:'build',   label:'Build',    cls:'col-build'   },
@@ -1171,20 +1173,28 @@ function renderKanban() {
     { key:'fixed',   label:'Fixed',    cls:'col-fixed'   },
     { key:'wontfix', label:"Won't Fix",cls:'col-wontfix' },
   ];
-  let issues = allIssues().filter(i => i.status !== 'fixed' || true); // show all
+  let issues = allIssues();
   if (selAppId) issues = issues.filter(i => i.appId === selAppId);
 
   const issueCardFn = {
-    key: i => i.status || 'open',
+    // TI-056: if issue has resolvesIn it was fixed by import — show in Fixed column
+    key: i => (i.resolvesIn && i.status !== 'open' && i.status !== 'build') ? 'fixed' : (i.status || 'open'),
     render: i => {
-      const app = state.apps[i.appId];
-      return `<div class="kb-card" onclick="openEditIssue('${esc(i.id)}')">
-        <div class="kb-card-id">${esc(i.id)}</div>
+      const sel = _kbSelected.has(i.id);
+      return `<div class="kb-card${sel?' kb-card-sel':''}" onclick="toggleKbIssueSelect('${esc(i.id)}')">
+        <div class="kb-card-id">${esc(i.id)} ${sel?'<span style="color:var(--ti)">✓</span>':''}</div>
         <div class="kb-card-title">${priorityIcon(i.priority)} ${esc(i.title)}</div>
-        ${!selAppId && app ? `<div class="kb-card-meta">${app.emoji||''} ${esc(app.name)}</div>` : ''}
+        ${i.resolvesIn?`<div class="kb-card-meta" style="color:var(--green)">Fixed in v${esc(i.resolvesIn)}</div>`:''}
       </div>`;
     }
   };
+
+  // Brief bar for selected issues
+  const selCount = _kbSelected.size;
+  const briefBar = selCount ? `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+    <button class="action-btn green" onclick="generateKbBrief()" style="font-size:11px">📋 Create Brief (${selCount})</button>
+    <button class="action-btn" onclick="_kbSelected.clear();renderKanban()" style="font-size:11px">Clear</button>
+  </div>` : '';
 
   // ── Tests board ─────────────────────────────────────────────────
   const testCols = [
@@ -1209,12 +1219,69 @@ function renderKanban() {
 
   content.innerHTML =
     `<div class="kb-section-label">Issues</div>` +
+    briefBar +
     board(issueCols, issues, issueCardFn) +
     `<div class="kb-section-label">Tests</div>` +
     board(testCols, tests, testCardFn);
 }
 
-let _kbActions = [];
+let _kbActions  = [];
+let _kbSelected = new Set(); // issue IDs selected in Kanban board
+
+function toggleKbIssueSelect(issueId) {
+  if (_kbSelected.has(issueId)) _kbSelected.delete(issueId);
+  else _kbSelected.add(issueId);
+  renderKanban();
+}
+
+function generateKbBrief() {
+  if (!_kbSelected.size) { toast('No issues selected'); return; }
+  const issues = [..._kbSelected].map(id => state.issues[id]).filter(Boolean);
+  const appIds = [...new Set(issues.map(i => i.appId))];
+  if (appIds.length > 1) {
+    toast(`⚠ Issues span ${appIds.length} apps — select one app only`);
+    return;
+  }
+  const appId = appIds[0];
+  const app   = state.apps[appId];
+  const latest = app?.versions?.[app.versions.length-1];
+  let txt = `## Build Brief — ${app?.name||'App'}\n`;
+  txt += `Generated: ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}\n`;
+  if (latest) txt += `Current version: v${latest.version}\n`;
+  txt += `\n### Issues / Requirements\n\n`;
+  issues.forEach((issue, i) => {
+    txt += `**${i+1}. [${issue.id}] ${issue.title}**\n`;
+    txt += `Priority: ${issue.priority}  |  Status: ${issue.status}\n`;
+    if (issue.desc) txt += `${issue.desc}\n`;
+    txt += '\n';
+  });
+  txt += `### Issue IDs (for resolvesIssues in manifest)\n`;
+  txt += issues.map(i=>i.id).join(', ');
+  txt += '\n\n---\n';
+  txt += 'Please deliver:\n';
+  txt += '1. Updated HTML file — as a downloadable file attachment\n';
+  txt += '2. Copy-paste text box: GitHub heading ≤50 characters\n';
+  txt += '3. Copy-paste text box: GitHub description paragraph\n';
+  txt += '4. Copy-paste code block: release manifest JSON using schema:\n';
+  txt += '   { schemaVersion, type, app [canonical slug], appPrefix, appName, appEmoji,\n';
+  txt += '     version, date, heading, description, changes[],\n';
+  txt += '     resolvesIssues[], tests[{ id, title, steps[], expected }] }';
+  // Set to Build and sync
+  issues.forEach(issue => {
+    if (state.issues[issue.id]) {
+      state.issues[issue.id].status = 'build';
+      state.issues[issue.id].updatedAt = new Date().toISOString();
+    }
+  });
+  saveState();
+  issues.forEach(issue => { if (state.issues[issue.id]) syncIssue(state.issues[issue.id]); });
+  _kbSelected.clear();
+  navigator.clipboard.writeText(txt)
+    .then(()=>toast('Brief copied to clipboard!'))
+    .catch(()=>toast('Brief ready — paste manually'));
+  renderKanban();
+  refreshStats();
+}
 
 // Tap a test card in Kanban — show inline action sheet
 function openKanbanTestActions(appId, version, testId) {
