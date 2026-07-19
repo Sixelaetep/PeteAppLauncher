@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.32</title>
+<title>On Budget v3.33</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.32</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.33</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -833,7 +833,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.32
+// On Budget v3.33
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1145,6 +1145,35 @@
 // the colour still follows net-impact (green when outgoing decreased,
 // red when it increased) — same fix applied to the totals table's
 // Delta row and the PDF export's equivalents.
+// v3.33 (ON--037): fixed real data loss — a Food & Travel transaction
+// created and closed before its push finished could be silently
+// dropped on the next pull. Root cause, found by reading pal-sync.js
+// (v1.4) directly rather than guessing: Food & Travel transactions
+// never carried their own monthKey field — saveSpend() only relied on
+// which months[mk] array held them. syncUpsertTx() knew to stamp
+// monthKey onto the pushed data by hand, but pal-sync's pull() ALSO
+// auto-pushes any local-only record it finds (exactly the case when
+// the original push never reached the cloud) via upsert(r.id, r) using
+// only the record's own fields — no way for it to know which month
+// array the record came from. The pushed row ended up with no
+// monthKey, and syncPull()'s own rebuild step (`if (!mk) return`)
+// silently discarded it. Reproduced the exact sequence against the
+// real pal-sync.js with a mock Supabase layer before and after the fix
+// to confirm both the failure and the recovery. Fixed three ways:
+// (1) saveSpend() now stamps monthKey on every transaction at creation,
+// so any push path — explicit or pal-sync's own fallback — carries it;
+// (2) syncPull() backfills monthKey for any transaction that predates
+// this fix before merging; (3) if a stale cloud row from before this
+// fix still wins the merge without monthKey, recovery falls back to
+// where the transaction lived locally, then to a month derived from
+// its own date field if there's no local trace left at all (covers a
+// transaction already lost from a past occurrence of this exact bug,
+// even with no other information to go on) — and re-pushes the
+// recovered record so the cloud copy is corrected too, not just local.
+// Also added a beforeunload warning while a sync is actively in
+// flight, targeting the reported trigger directly (closing the app
+// mid-sync) — not a complete fix on its own since a request can still
+// be interrupted, but it gives a chance to wait rather than force-close.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1252,6 +1281,23 @@ const _obSavingsTx    = window.PalSync.table(SB_TABLE, { prefix: 'savingstx_' })
 let _syncState = 'local';   // local | connecting | syncing | synced | error
 let _syncLog   = [];        // [{ts, msg, type}] newest first, cap 120
 let _syncInFlight = false;  // ON--024: guards against overlapping syncPull()/syncPush() calls racing on shared state
+
+// ON--037: a transaction added right before the app was closed mid-sync
+// came back missing after the next pull. pal-sync.js is a separate,
+// shared file this app doesn't control, so its internal merge logic
+// can't be inspected or patched from here — but this app can refuse to
+// silently accept the outcome regardless of the cause. After every
+// pull(), compare the local array going in against the merged result:
+// anything that existed locally (and wasn't itself a tombstone) but is
+// missing afterwards gets restored rather than allowed to vanish, and
+// is logged loudly so a real drop is visible rather than silent.
+function guardAgainstDroppedRecords(preArray, mergedArray, idField, label) {
+  const mergedIds = new Set(mergedArray.map(r=>r[idField]));
+  const dropped = preArray.filter(r => !r._deleted && !mergedIds.has(r[idField]));
+  if (!dropped.length) return { merged: mergedArray, restored: [] };
+  addSyncLog(`⚠️ Pull would have dropped ${dropped.length} local ${label} record(s) — restored`,'err');
+  return { merged: [...mergedArray, ...dropped], restored: dropped };
+}
 
 function setSyncState(state, label) {
   _syncState = state;
@@ -1513,17 +1559,49 @@ async function syncPull() {
     // Food & Travel transactions — flatten across ALL months into one
     // array (ids are generated via uid(), globally unique, so this is
     // safe), merge, then redistribute back into their owning month by
-    // the monthKey each transaction already carries.
+    // the monthKey each transaction carries.
+    //
+    // ON--037 root cause: transactions never carried their own monthKey
+    // until this fix — saveSpend() only relied on which months[mk] array
+    // held them. That's invisible to pal-sync.js's pull(), which pushes
+    // "local-only" records (ones with no cloud row yet — e.g. a push
+    // that was in flight when the app closed) via upsert(r.id, r) using
+    // only the record's own fields, with no way to know which month
+    // array it came from. The pushed row ended up with no monthKey, and
+    // the rebuild step below (`if (!mk) return`) silently dropped it —
+    // exactly the "added a transaction, closed the app while still
+    // syncing, reopened, pulled, it was gone" sequence reported. Backfill
+    // here covers every transaction saved before this fix; saveSpend()
+    // now stamps monthKey at creation so this is only ever a safety net.
     const flatTx = [];
-    Object.keys(months).forEach(mk => (months[mk].transactions||[]).forEach(t => flatTx.push(t)));
+    const txMonthLookup = {}; // id -> monthKey, from local state before the merge — recovery fallback below
+    Object.keys(months).forEach(mk => (months[mk].transactions||[]).forEach(t => {
+      if (!t.monthKey) t.monthKey = mk;
+      txMonthLookup[t.id] = mk;
+      flatTx.push(t);
+    }));
     const txResult = await _obTx.pull(flatTx, 'id', 'updated_at', rows);
     Object.keys(months).forEach(mk => { months[mk].transactions = []; });
+    let txRecovered = 0;
+    const txToRepush = [];
     txResult.merged.forEach(t => {
-      const mk = t.monthKey;
+      // A stale cloud row from before this fix could still be missing
+      // monthKey and win the merge (newer/equal timestamp) — recover it
+      // rather than drop the transaction a second time. Two fallbacks,
+      // weakest last: (1) where it lived locally just before this merge,
+      // for a transaction still present locally; (2) derived from the
+      // transaction's own date, for one that's been fully missing since
+      // an earlier occurrence of this exact bug, with no local trace left.
+      const mk = t.monthKey || txMonthLookup[t.id] || (t.date ? mKey(new Date(t.date+'T00:00:00')) : null);
       if (!mk) return;
+      if (!t.monthKey) { t.monthKey = mk; txRecovered++; txToRepush.push(t); }
       if (!months[mk]) months[mk] = { startBalance:null, transactions:[] };
       months[mk].transactions.push(t);
     });
+    if (txRecovered) {
+      addSyncLog(`Recovered ${txRecovered} transaction(s) missing monthKey from a pre-fix sync`,'info');
+      txToRepush.forEach(t => syncUpsertTx(t.monthKey, t)); // fix the cloud copy too, not just local
+    }
 
     // Bills recurring / bills transactions / occurrence overrides — each
     // already a flat array locally, so these map onto pal-sync directly.
@@ -1678,7 +1756,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.32', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.33', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1687,7 +1765,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.32', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.33', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2484,7 +2562,7 @@ function saveSpend() {
     if (idx===-1) return;
     m.transactions[idx] = {
       ...m.transactions[idx],
-      date, type:_ftType, category: isIncome?null:_cat,
+      monthKey: mk, date, type:_ftType, category: isIncome?null:_cat,
       amount:Math.round(amt*100)/100, label,
       updated_at: new Date().toISOString()
     };
@@ -2500,7 +2578,7 @@ function saveSpend() {
   if (!months[k]) months[k] = { startBalance:null, transactions:[] };
 
   const entry = {
-    id:uid(), date, type:_ftType, category: isIncome?null:_cat,
+    id:uid(), monthKey:k, date, type:_ftType, category: isIncome?null:_cat,
     amount:Math.round(amt*100)/100, label,
     _ts: Date.now(), updated_at: new Date().toISOString()
   };
@@ -4115,6 +4193,16 @@ populateSettings();
 renderDash();
 if ((meta.changesSinceBackup||0) >= BACKUP_THRESHOLD) showBackupBanner();
 setSyncState('local');
+
+// ON--037: closing the app while a push/pull is still in flight was the
+// exact trigger reported — the request gets aborted mid-way, before the
+// data has actually reached (or, for a pull, actually left) the cloud.
+// This can't fully prevent it (browsers may ignore this on mobile, and
+// a determined user can still force-close), but it gives a chance to
+// wait the extra moment rather than close immediately.
+window.addEventListener('beforeunload', function(e) {
+  if (_syncInFlight) { e.preventDefault(); e.returnValue = ''; }
+});
 </script>
 </body>
 </html>
