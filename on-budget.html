@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.33</title>
+<title>On Budget v3.34</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.33</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.34</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -833,7 +833,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.33
+// On Budget v3.34
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1174,6 +1174,13 @@
 // flight, targeting the reported trigger directly (closing the app
 // mid-sync) — not a complete fix on its own since a request can still
 // be interrupted, but it gives a chance to wait rather than force-close.
+// v3.34 (ON--038): added a sort toggle to Bills > Recurring — "Next
+// due" (chronological by next occurrence, paused items and anything
+// with no computable next date pushed to the end rather than sorted
+// arbitrarily among real dates) and "By type" (Income first, then
+// Outgoing — "who it's going to" is the item's own name, so grouping
+// by that is just an alphabetical sort within each type, with a small
+// section label between them). Ledger view is unchanged, as requested.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1756,7 +1763,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.33', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.34', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1765,7 +1772,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.33', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.34', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3135,6 +3142,12 @@ function newScenarioDraft() {
   _scenarioDraft = { id: null, name: '', items: freshScenarioItems(), removedNotes: {} };
   renderScenarioTab();
 }
+let _recurSort = 'nextDue'; // 'nextDue' | 'byType' — session only, matches the Bills forecast-mode toggle pattern
+function setRecurSort(mode) {
+  _recurSort = mode;
+  renderBillsRecurring();
+}
+
 function renderBillsRecurring() {
   const el = document.getElementById('bills-recurring');
   let html = `<button class="add-btn" onclick="openRecurSheet()"><span class="add-btn-icon">+</span> Add recurring item</button>`;
@@ -3143,24 +3156,66 @@ function renderBillsRecurring() {
   if (!visible.length) {
     html += `<div class="ledger-list"><div class="ledger-empty">No recurring bills or income yet</div></div>`;
   } else {
-    visible.forEach(item => {
+    html += `
+    <div class="freq-row" style="margin-bottom:10px">
+      <button class="freq-btn ${_recurSort==='nextDue'?'active':''}" onclick="setRecurSort('nextDue')">Next due</button>
+      <button class="freq-btn ${_recurSort==='byType'?'active':''}" onclick="setRecurSort('byType')">By type</button>
+    </div>`;
+
+    // Pre-compute next-due once per item so both sort modes and the
+    // card itself (which already shows "Next ...") share the same value.
+    const withNextDue = visible.map(item => {
       const nd = nextDueRaw(item);
-      const shown = nd ? shiftWeekend(nd, item.weekendShift||'none') : null;
-      const freqTxt = item.frequency==='weekly' ? 'Weekly'
-        : item.frequency==='custom' ? `Every ${item.interval} weeks`
-        : item.frequency==='monthly' ? 'Monthly' : 'Yearly';
-      const shiftTxt = item.weekendShift==='before' ? ' · Fri before weekends'
-        : item.weekendShift==='after' ? ' · Mon after weekends' : '';
-      html += `<div class="recur-card ${item.active===false?'paused':''}" onclick="openRecurSheet('${item.id}')">
-        <div class="recur-body">
-          <div class="recur-name">${item.name}${item.active===false?' <span class="recur-badge">Paused</span>':''}</div>
-          <div class="recur-meta">${freqTxt}${shiftTxt}${shown?` · Next ${fmtShort(shown)}`:''}</div>
-        </div>
-        <div class="recur-right"><div class="recur-amt ${item.type}">${item.type==='income'?'+':'−'}£${item.amount.toFixed(2)}</div></div>
-      </div>`;
+      return { item, nd, shown: nd ? shiftWeekend(nd, item.weekendShift||'none') : null };
     });
+
+    let ordered;
+    if (_recurSort==='nextDue') {
+      // Chronological by next occurrence — paused items (and any with
+      // no computable next date) have nothing meaningful to sort by, so
+      // they're pushed to the end rather than sorted arbitrarily among
+      // real dates.
+      ordered = withNextDue.slice().sort((a,b) => {
+        const aPaused = a.item.active===false, bPaused = b.item.active===false;
+        if (aPaused !== bPaused) return aPaused ? 1 : -1;
+        if (!a.nd && !b.nd) return a.item.name.localeCompare(b.item.name);
+        if (!a.nd) return 1;
+        if (!b.nd) return -1;
+        return a.nd - b.nd;
+      });
+      html += ordered.map(renderRecurCard).join('');
+    } else {
+      // Income first, then Outgoing — "who it's going to" is the item's
+      // own name (Netflix, Council Tax, Landlord...), so grouping by
+      // that is just an alphabetical sort within each type.
+      const income   = withNextDue.filter(x=>x.item.type==='income').sort((a,b)=>a.item.name.localeCompare(b.item.name));
+      const outgoing = withNextDue.filter(x=>x.item.type==='outgoing').sort((a,b)=>a.item.name.localeCompare(b.item.name));
+      if (income.length) {
+        html += `<div class="ledger-section-label">💰 Income</div>` + income.map(renderRecurCard).join('');
+      }
+      if (outgoing.length) {
+        html += `<div class="ledger-section-label" style="margin-top:${income.length?'12px':'0'}">📤 Outgoing</div>` + outgoing.map(renderRecurCard).join('');
+      }
+    }
   }
   el.innerHTML = html;
+}
+
+// Extracted so both sort modes render identical cards from the same
+// precomputed {item, nd, shown} shape.
+function renderRecurCard({item, shown}) {
+  const freqTxt = item.frequency==='weekly' ? 'Weekly'
+    : item.frequency==='custom' ? `Every ${item.interval} weeks`
+    : item.frequency==='monthly' ? 'Monthly' : 'Yearly';
+  const shiftTxt = item.weekendShift==='before' ? ' · Fri before weekends'
+    : item.weekendShift==='after' ? ' · Mon after weekends' : '';
+  return `<div class="recur-card ${item.active===false?'paused':''}" onclick="openRecurSheet('${item.id}')">
+    <div class="recur-body">
+      <div class="recur-name">${item.name}${item.active===false?' <span class="recur-badge">Paused</span>':''}</div>
+      <div class="recur-meta">${freqTxt}${shiftTxt}${shown?` · Next ${fmtShort(shown)}`:''}</div>
+    </div>
+    <div class="recur-right"><div class="recur-amt ${item.type}">${item.type==='income'?'+':'−'}£${item.amount.toFixed(2)}</div></div>
+  </div>`;
 }
 
 // ── Scenario tab rendering ──────────────────────────────────────
