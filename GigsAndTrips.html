@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.1</title>
+<title>Gigs &amp; Trips v7.2</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -426,7 +426,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.1</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.2</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
@@ -702,11 +702,12 @@ function normaliseVenues(raw){
 function getData(){
   try{
     const raw=JSON.parse(localStorage.getItem(SK)||'null');
-    if(!raw) return {events:[],venues:getDefaultVenues()};
+    if(!raw) return {events:[],venues:getDefaultVenues(),lastExported:''};
     if(!raw.events) raw.events=[];
+    if(!('lastExported' in raw)) raw.lastExported='';
     raw.venues=normaliseVenues(raw.venues);
     return raw;
-  } catch(e){ return {events:[],venues:getDefaultVenues()}; }
+  } catch(e){ return {events:[],venues:getDefaultVenues(),lastExported:''}; }
 }
 let _pulling=false; // vestigial as of v5.3 (GT-003) — saveData() no longer auto-pushes venues, so this no longer changes behavior. Left in place at its existing call sites rather than touching them for a pure cleanup.
 
@@ -998,19 +999,6 @@ async function pushResetVenues(oldVenues, newVenueList, log){
   return normalizedNew;
 }
 
-async function resetVenuesInSupabase(venueList){
-  const user_id=getUserId();
-  if(!user_id){ showToast('❌ Not signed in'); return; }
-  showToast('Resetting venues…');
-  const d=getData();
-  const oldVenues=normaliseVenues(d.venues);
-  const normalized=await pushResetVenues(oldVenues, venueList);
-  d.venues=normalized;
-  _pulling=true; saveData(d); _pulling=false;
-  showToast('✓ '+normalized.length+' venues saved to cloud');
-  renderVenues();
-}
-
 async function confirmResetVenuesLogged(venueList){
   const user_id=getUserId();
   if(!user_id){ syncLog('Not signed in','err'); return; }
@@ -1220,7 +1208,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.1</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.2</span>';
   document.getElementById('hdrAction').style.display='none';
 }
 
@@ -3461,31 +3449,23 @@ function clearSyncLog(){
 
 function exportJSON(){
   const d=getData();
+  // v7.2 (GIG-0xx): stamped and saved to localStorage (not just the
+  // downloaded file) so the launcher's Health Check can read it
+  // directly — previously untracked, so this app was hardcoded as a
+  // 'known-exception' and skipped from the backup-staleness scan.
+  d.lastExported=new Date().toISOString();
+  saveData(d);
   const exportData={...d,events:(d.events||[]).filter(ev=>!ev._deleted)};
   window.dlJSON(exportData,'gigs-and-trips.json');
   showToast('Backup downloaded ✓');
 }
 
-function confirmResetVenues(){
-  const d=getData();
-  const venues=normaliseVenues(d.venues);
-  showModal(`<div class="modal-hdr">
-      <div class="modal-title">📍 Reset cloud venues</div>
-      <button class="modal-close" onclick="closeModal()">✕</button>
-    </div>
-    <div class="modal-body">
-      <p style="font-size:14px;color:var(--ink2);line-height:1.6;margin-bottom:16px">
-        This will overwrite the cloud venue list with your <strong>${venues.length} local venues</strong>. All other devices will get this list on their next pull.
-      </p>
-      <p style="font-size:13px;color:var(--ink3);line-height:1.5;margin-bottom:16px">
-        Make sure you're on the device with the most complete venue list before doing this.
-      </p>
-      <div class="form-actions">
-        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-pri" onclick="closeModal();resetVenuesInSupabase(normaliseVenues(getData().venues))">Reset venues</button>
-      </div>
-    </div>`);
-}
+// v7.2 (GIG-0xx): removed confirmResetVenues() and resetVenuesInSupabase()
+// — a fully-built, never-called confirm-modal + reset pair left over
+// from an earlier refactor. dmResetVenues() (below) is the only
+// reachable path for this action, and already shows an equivalent
+// confirm modal before calling confirmResetVenuesLogged(); this was
+// dead code duplicating that same safety gate.
 
 function handleImport(inp){
   const f=inp.files[0]; if(!f) return;
