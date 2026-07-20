@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.14</title>
+<title>Meal Planner v1.15</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -150,7 +150,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.14</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.15</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -410,12 +410,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.14 ────────────────────────────────────────────────
+// ── Meal Planner v1.15 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.14';
+const VERSION = '1.15';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1258,7 +1258,29 @@ function closeCook() { document.getElementById('cookOverlay').classList.remove('
 // is a flat map keyed by date, and a "week" is just a computed view (7
 // consecutive dates) over it. Changing the start-day setting can no longer
 // orphan anything, because there's no week bucket left to fall out of.
-function daySlotKeys(day) { return [...FIXED_SLOTS, ...day.snackIds.map(id => SNACK_PREFIX + id)]; }
+// MP-024: slots (Breakfast/Lunch/Dinner + snacks) can be reordered within
+// the day — specifically, snacks can move up/down past fixed slots. The
+// order is persisted in day.slotOrder; getSlotOrder keeps it self-healing
+// (adds newly-created snacks, drops removed ones) so old data without a
+// slotOrder yet just falls back to the previous default arrangement.
+function getSlotOrder(day) {
+  const validKeys = new Set([...FIXED_SLOTS, ...day.snackIds.map(id => SNACK_PREFIX + id)]);
+  if (!day.slotOrder) day.slotOrder = [...FIXED_SLOTS, ...day.snackIds.map(id => SNACK_PREFIX + id)];
+  day.slotOrder = day.slotOrder.filter(k => validKeys.has(k));
+  validKeys.forEach(k => { if (!day.slotOrder.includes(k)) day.slotOrder.push(k); });
+  return day.slotOrder;
+}
+function daySlotKeys(day) { return getSlotOrder(day); }
+function moveSlot(date, key, dir) {
+  const day = ensureDay(date);
+  const order = getSlotOrder(day);
+  const idx = order.indexOf(key);
+  const swapIdx = idx + dir;
+  if (idx < 0 || swapIdx < 0 || swapIdx >= order.length) return;
+  [order[idx], order[swapIdx]] = [order[swapIdx], order[idx]];
+  day.updatedAt = nowIso();
+  save(); renderPlan();
+}
 function isSnackKey(key) { return key.startsWith(SNACK_PREFIX); }
 function slotLabel(key, day) {
   if (!isSnackKey(key)) return key;
@@ -1445,7 +1467,7 @@ function dayCardHtml(day, dayLabel) {
       <span>${dayLabel} <span class="li-sub">${day.date}</span></span>
       <button class="btn sm ${allDevoured?'pri':''}" onclick="toggleDayComplete('${day.date}',true)">✓ Complete Day</button>
     </div>
-    ${daySlotKeys(day).map(sl => {
+    ${daySlotKeys(day).map((sl, slotIdx, allSlots) => {
       const slot = day.slots[sl];
       let content = '<span class="li-sub">Tap to assign</span>';
       let cookBtn = '';
@@ -1475,10 +1497,14 @@ function dayCardHtml(day, dayLabel) {
             ? `<button class="btn icon sm danger" style="padding:2px 7px;font-size:10px;" onclick="event.stopPropagation();removeSnack('${day.date}','${sl}')">✕</button>`
             : `<button class="btn icon sm danger" style="padding:2px 7px;font-size:10px;" onclick="event.stopPropagation();clearSlot('${day.date}','${sl}')">✕</button>`)
         : '';
+      const moveBtns = isSnackKey(sl) ? `
+        <button class="btn icon sm" style="padding:2px 6px;font-size:10px;" onclick="event.stopPropagation();moveSlot('${day.date}','${sl}',-1)" ${slotIdx===0?'disabled':''}>↑</button>
+        <button class="btn icon sm" style="padding:2px 6px;font-size:10px;" onclick="event.stopPropagation();moveSlot('${day.date}','${sl}',1)" ${slotIdx===allSlots.length-1?'disabled':''}>↓</button>
+      ` : '';
       return `<div class="slot" onclick="openSlotModal('${day.date}','${sl}')">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div class="slot-lbl">${slotLabel(sl, day)}</div>
-          ${removeBtn}
+          <div class="row" style="gap:4px;">${moveBtns}${removeBtn}</div>
         </div>
         <div class="slot-content">
           <div class="slot-left">${content}</div>
