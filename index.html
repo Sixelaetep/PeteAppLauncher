@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.21</title>
+<title>P Apps v10.22</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -558,7 +558,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.21</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.22</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn pete-only" data-target="onbudget" style="--app-color:#a3e635" onclick="switchTo('onbudget', this)" title="On Budget">🪙</button>
@@ -1567,29 +1567,112 @@ function statMeal() {
     const raw = localStorage.getItem('meal_planner_data');
     if (!raw) { setCardStat('stat-meal', 'Open app to load', 'muted'); return; }
     const parsed = JSON.parse(raw);
-    const data = parsed.data || {};
-    const recipes = data.recipes || [];
-    if (!recipes.length) { setCardStat('stat-meal', 'No recipes yet', 'muted'); return; }
+    const data   = parsed.data || {};
+    const recipes   = data.recipes       || [];
+    const planDays  = data.mealPlanDays  || {};
 
-    // Count today's assigned meal slots across this week's plan, if present
     const todayStr = todayISO();
-    const dow = (new Date().getDay() + 6) % 7; // Mon=0
-    const weekStart = new Date(); weekStart.setHours(0,0,0,0); weekStart.setDate(weekStart.getDate() - dow);
-    const weekKey = weekStart.toISOString().slice(0,10);
-    const week = (data.mealPlans || {})[weekKey];
-    const today = week && week.days && week.days.find(d => d.date === todayStr);
-    let todayCount = 0;
-    if (today && today.slots) todayCount = Object.values(today.slots).filter(Boolean).length;
+    const day      = planDays[todayStr];
+
+    // Helper: resolve kcal for a slot (recipe lookup or inline kcal)
+    function slotKcal(slot) {
+      if (!slot) return 0;
+      if (slot.type === 'recipe' && slot.recipeId) {
+        const r = recipes.find(r => r.id === slot.recipeId);
+        return (r && r.macros && r.macros.caloriesPerServing != null) ? r.macros.caloriesPerServing : 0;
+      }
+      return slot.kcal || 0;
+    }
+
+    // Helper: resolve display name for a slot
+    function slotName(slot) {
+      if (!slot) return '';
+      if (slot.type === 'recipe' && slot.recipeId) {
+        const r = recipes.find(r => r.id === slot.recipeId);
+        return r ? r.name : 'Recipe';
+      }
+      return slot.name || 'Meal';
+    }
+
+    // Slot label from key
+    const FIXED = ['Breakfast', 'Lunch', 'Dinner'];
+    function slotLabel(key) {
+      if (FIXED.includes(key)) return key;
+      if (key.startsWith('Snack_')) return 'Snack';
+      return key;
+    }
+
+    if (!day || !day.slots) {
+      setCardStat('stat-meal', 'Nothing planned today', 'muted');
+      return;
+    }
+
+    const slotEntries = Object.entries(day.slots).filter(([, s]) => s && (s.type || s.name || s.recipeId));
+
+    if (!slotEntries.length) {
+      setCardStat('stat-meal', 'Nothing planned today', 'muted');
+      return;
+    }
+
+    // Calculate kcal totals
+    let totalKcal = 0, devouredKcal = 0;
+    slotEntries.forEach(([, slot]) => {
+      const k = slotKcal(slot);
+      totalKcal += k;
+      if (slot.devoured) devouredKcal += k;
+    });
+
+    // Undevoured slots to show
+    const remaining = slotEntries.filter(([, s]) => !s.devoured);
+    const allDevoured = remaining.length === 0;
+
+    // Kcal bar (only if any kcal data present)
+    let kcalBar = '';
+    if (totalKcal > 0) {
+      const pct     = Math.min(100, Math.round((devouredKcal / totalKcal) * 100));
+      const colour  = pct >= 100 ? '#3fb950' : pct >= 50 ? '#f59e0b' : '#38bdf8';
+      kcalBar = `<div style="margin-top:6px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+          <span style="font-size:10px;color:var(--ink2)">🔥 kcal eaten</span>
+          <span style="font-size:10px;font-weight:700;color:${colour}">${devouredKcal} <span style="font-weight:400;color:var(--ink3)">/ ${totalKcal}</span></span>
+        </div>
+        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${colour};border-radius:3px;transition:width .3s"></div>
+        </div>
+      </div>`;
+    }
 
     const statEl = document.getElementById('stat-meal');
     if (!statEl) return;
-    statEl.className = 'card-stat' + (todayCount ? ' ok' : ' muted');
+
+    if (allDevoured) {
+      // All eaten — show summary
+      statEl.className = 'card-stat ok';
+      statEl.innerHTML =
+        `<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span>` +
+        `<span>All meals devoured ✓</span></div>` + kcalBar;
+      return;
+    }
+
+    // List undevoured meals
+    const mealLines = remaining.map(([key, slot]) => {
+      const label = slotLabel(key);
+      const name  = slotName(slot);
+      const k     = slotKcal(slot);
+      const kcalStr = k > 0 ? ` <span style="color:var(--ink3)">${k} kcal</span>` : '';
+      return `<div style="font-size:11px;color:var(--ink);margin-top:3px"><span style="color:var(--ink3)">${label}:</span> ${name}${kcalStr}</div>`;
+    }).join('');
+
+    const devouredNote = devouredKcal > 0
+      ? `<div style="font-size:10px;color:var(--ink3);margin-top:2px">${slotEntries.length - remaining.length} of ${slotEntries.length} devoured</div>`
+      : '';
+
+    statEl.className = 'card-stat';
     statEl.innerHTML =
       `<div class="card-stat-row"><span class="card-stat-dot"></span>` +
-      `<span>${recipes.length} recipe${recipes.length !== 1 ? 's' : ''} in library</span></div>` +
-      (todayCount
-        ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">${todayCount} meal${todayCount!==1?'s':''} planned today</div>`
-        : `<div style="font-size:10px;color:var(--ink3);margin-top:3px">Nothing planned today</div>`);
+      `<span><span class="val">${remaining.length}</span> meal${remaining.length !== 1 ? 's' : ''} to go today</span></div>` +
+      mealLines + devouredNote + kcalBar;
+
   } catch(e) {
     setCardStat('stat-meal', 'Open app to load', 'muted');
   }
