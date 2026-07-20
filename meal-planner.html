@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.11</title>
+<title>Meal Planner v1.12</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -150,7 +150,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.11</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.12</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -410,12 +410,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.11 ────────────────────────────────────────────────
+// ── Meal Planner v1.12 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.11';
+const VERSION = '1.12';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -477,7 +477,11 @@ async function sbFetch(path, method, body) {
 async function fetchAllRows(table) {
   const res = await sbFetch('/' + table + '?select=record_key,data,updated_at');
   if (!res.ok) { const err = new Error(res.status + ' ' + await res.text()); err.status = res.status; throw err; }
-  return res.json();
+  const body = await res.json();
+  if (!Array.isArray(body)) {
+    throw new Error(`expected an array from ${table} but got ${typeof body}: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  return body;
 }
 // PATCH-first, then POST if nothing matched — same upsert pattern used
 // suite-wide. record_key is the record's own id; no user_id column at
@@ -505,6 +509,8 @@ async function upsertRow(table, id, data) {
 async function genericPull(table, localRecords, idField, updatedAtField) {
   idField = idField || 'id'; updatedAtField = updatedAtField || 'updatedAt';
   const rows = await fetchAllRows(table);
+  if (!Array.isArray(rows)) throw new Error(`cloud response for ${table} was not an array (got ${typeof rows})`);
+  if (!Array.isArray(localRecords)) throw new Error(`local records for ${table} were not an array (got ${typeof localRecords})`);
   const localMap = {};
   localRecords.forEach(r => { localMap[r[idField]] = r; });
   rows.forEach(row => {
@@ -574,54 +580,72 @@ function safeToApplyPull(table, localCountBefore, result) {
   }
   return true;
 }
+// MP-020: a failure processing ONE table (e.g. an unexpected shape making
+// a .forEach throw) was aborting the entire pull via one shared try/catch —
+// including the single save() at the end, so tables that succeeded before
+// the failure were never persisted either. Each table now pulls, validates,
+// and saves independently: one bad table can no longer take the others
+// down with it, and defensive Array.isArray checks turn a crash into a
+// specific, diagnosable log line instead.
+async function pullOneTable(table, getLocal, applyMerged) {
+  try {
+    const localRecords = getLocal();
+    if (!Array.isArray(localRecords)) {
+      logSync('err', `${table}: local records were not an array (got ${typeof localRecords}) — skipped this table this pull`);
+      return false;
+    }
+    const localCountBefore = localRecords.length;
+    const r = await genericPull(table, localRecords);
+    logPullResult(table, localCountBefore, r);
+    if (!r || !Array.isArray(r.merged)) {
+      logSync('err', `${table}: merge result was not an array (got ${typeof (r && r.merged)}) — skipped this table this pull`);
+      return false;
+    }
+    if (!safeToApplyPull(table, localCountBefore, r)) return false;
+    applyMerged(r.merged);
+    save();
+    return true;
+  } catch (e) {
+    logSync('err', `${table}: pull failed — ${e.message}`);
+    return false;
+  }
+}
 async function syncPullAll(manual) {
   if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
   if (!hasSyncSession()) { logSync('err', 'Pull skipped — not connected'); if (manual) toast('Not connected — open via the launcher to sync'); return; }
   _syncBusy = true;
   setSyncState('syncing', 'Syncing…');
-  let anyRefused = false;
+  let anyFailed = false;
   try {
-    let r = await genericPull('meal_ingredients', DB.data.ingredients);
-    logPullResult('meal_ingredients', DB.data.ingredients.length, r);
-    if (safeToApplyPull('meal_ingredients', DB.data.ingredients.length, r)) DB.data.ingredients = r.merged; else anyRefused = true;
+    if (!(await pullOneTable('meal_ingredients', () => DB.data.ingredients, merged => { DB.data.ingredients = merged; }))) anyFailed = true;
 
-    const recBefore = DB.data.recipes.length;
-    r = await genericPull('meal_recipes', DB.data.recipes);
-    logPullResult('meal_recipes', recBefore, r);
-    if (safeToApplyPull('meal_recipes', recBefore, r)) DB.data.recipes = r.merged; else anyRefused = true;
+    if (!(await pullOneTable('meal_recipes', () => DB.data.recipes, merged => { DB.data.recipes = merged; }))) anyFailed = true;
 
     // v1.5: meal_plans now stores per-day records (record_key = date), not
     // per-week bundles. A stale row pushed by a pre-v1.5 client would have
     // `.days`/no `.slots` — skip anything that doesn't look like a real
     // day record instead of letting it corrupt the new flat model.
-    const planBefore = Object.keys(DB.data.mealPlanDays).length;
-    r = await genericPull('meal_plans', Object.values(DB.data.mealPlanDays));
-    logPullResult('meal_plans', planBefore, r);
-    if (safeToApplyPull('meal_plans', planBefore, r)) {
-      DB.data.mealPlanDays = {};
-      r.merged.forEach(d => {
-        if (d && d.slots && typeof d.slots === 'object' && Array.isArray(d.snackIds)) {
-          DB.data.mealPlanDays[d.id] = d;
-        } else {
-          logSync('err', 'Skipped an old-format meal plan row: ' + (d && d.id));
-        }
+    if (!(await pullOneTable('meal_plans', () => Object.values(DB.data.mealPlanDays), merged => {
+      const next = {};
+      merged.forEach(d => {
+        if (d && d.slots && typeof d.slots === 'object' && Array.isArray(d.snackIds)) next[d.id] = d;
+        else logSync('err', 'Skipped an old-format meal plan row: ' + (d && d.id));
       });
-    } else { anyRefused = true; }
+      DB.data.mealPlanDays = next;
+    }))) anyFailed = true;
 
-    const shopBefore = Object.keys(DB.data.shoppingLists).length;
-    r = await genericPull('meal_shopping', Object.values(DB.data.shoppingLists));
-    logPullResult('meal_shopping', shopBefore, r);
-    if (safeToApplyPull('meal_shopping', shopBefore, r)) {
-      DB.data.shoppingLists = {}; r.merged.forEach(s => DB.data.shoppingLists[s.id] = s);
-    } else { anyRefused = true; }
+    if (!(await pullOneTable('meal_shopping', () => Object.values(DB.data.shoppingLists), merged => {
+      const next = {};
+      merged.forEach(s => { if (s && s.id) next[s.id] = s; else logSync('err', 'Skipped a malformed shopping list row'); });
+      DB.data.shoppingLists = next;
+    }))) anyFailed = true;
 
-    save();
     localStorage.setItem('meal_planner_last_pull', nowIso());
     renderAllTabs();
-    if (anyRefused) {
+    if (anyFailed) {
       setSyncState('error', 'Sync issue');
-      logSync('err', 'Pull completed with at least one table refused — local data was protected, not lost. See the log above for which table and check Supabase.');
-      toast('Sync issue detected — local data protected. See Sync Log for details.');
+      logSync('err', 'Pull completed with at least one table failed or refused — other tables still synced and saved. See the log above for which table.');
+      toast('Sync issue on one table — others still synced. See Sync Log.');
     } else {
       setSyncState('synced', 'Synced');
       logSync('ok', 'Pull complete');
@@ -636,20 +660,42 @@ async function syncPullAll(manual) {
   }
   refreshSyncModal();
 }
+async function pushOneTable(table, getRecords) {
+  try {
+    const records = getRecords();
+    if (!Array.isArray(records)) {
+      logSync('err', `${table}: local records were not an array (got ${typeof records}) — skipped this table this push`);
+      return false;
+    }
+    for (const r of records) await upsertRow(table, r.id, r);
+    return true;
+  } catch (e) {
+    logSync('err', `${table}: push failed — ${e.message}`);
+    return false;
+  }
+}
 async function syncPushAll(manual) {
   if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
   if (!hasSyncSession()) { if (manual) toast('Not connected — open via the launcher to sync'); return; }
   _syncBusy = true;
   setSyncState('syncing', 'Syncing…');
+  let anyFailed = false;
   try {
-    for (const ing of DB.data.ingredients) await upsertRow('meal_ingredients', ing.id, ing);
-    for (const r of DB.data.recipes) await upsertRow('meal_recipes', r.id, r);
-    for (const w of Object.values(DB.data.mealPlanDays)) await upsertRow('meal_plans', w.id, w);
-    for (const s of Object.values(DB.data.shoppingLists)) await upsertRow('meal_shopping', s.id, s);
+    if (!(await pushOneTable('meal_ingredients', () => DB.data.ingredients))) anyFailed = true;
+    if (!(await pushOneTable('meal_recipes', () => DB.data.recipes))) anyFailed = true;
+    if (!(await pushOneTable('meal_plans', () => Object.values(DB.data.mealPlanDays)))) anyFailed = true;
+    if (!(await pushOneTable('meal_shopping', () => Object.values(DB.data.shoppingLists)))) anyFailed = true;
+
     localStorage.setItem('meal_planner_last_push', nowIso());
-    setSyncState('synced', 'Synced');
-    logSync('ok', `Push complete: ${DB.data.ingredients.length} ingredients, ${DB.data.recipes.length} recipes, ${Object.keys(DB.data.mealPlanDays).length} plan days, ${Object.keys(DB.data.shoppingLists).length} shopping lists`);
-    if (manual) toast('Pushed to cloud');
+    if (anyFailed) {
+      setSyncState('error', 'Sync issue');
+      logSync('err', 'Push completed with at least one table failed — other tables still pushed. See the log above for which table.');
+      toast('Push issue on one table — others still pushed. See Sync Log.');
+    } else {
+      setSyncState('synced', 'Synced');
+      logSync('ok', `Push complete: ${DB.data.ingredients.length} ingredients, ${DB.data.recipes.length} recipes, ${Object.keys(DB.data.mealPlanDays).length} plan days, ${Object.keys(DB.data.shoppingLists).length} shopping lists`);
+      if (manual) toast('Pushed to cloud');
+    }
   } catch (e) {
     setSyncState('error', 'Sync error');
     logSync('err', 'Push failed: ' + e.message);
