@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.13</title>
+<title>Meal Planner v1.14</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -150,7 +150,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.13</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.14</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -410,12 +410,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.13 ────────────────────────────────────────────────
+// ── Meal Planner v1.14 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.13';
+const VERSION = '1.14';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1349,6 +1349,12 @@ function removeSnack(date, key) {
   day.updatedAt = nowIso();
   save(); renderPlan();
 }
+function clearSlot(date, key) {
+  const day = ensureDay(date);
+  delete day.slots[key];
+  day.updatedAt = nowIso();
+  save(); renderPlan();
+}
 function toggleSlotDevoured(date, key, val) {
   const day = ensureDay(date);
   if (!day.slots[key]) return;
@@ -1382,22 +1388,40 @@ function recipeForSlot(slot) {
 }
 function daySummary(day) {
   let totalCal = 0, missing = 0, pSum = 0, vSum = 0, cSum = 0, macroCount = 0, mealCount = 0;
+  let devouredCal = 0, devouredCount = 0, dpSum = 0, dvSum = 0, dcSum = 0, devouredMacroCount = 0;
   daySlotKeys(day).forEach(sl => {
     const slot = day.slots[sl];
     if (!slot) return;
     mealCount++;
     if (slot.type === 'text') {
-      if (slot.kcal != null) totalCal += slot.kcal; else missing++;
+      if (slot.kcal != null) {
+        totalCal += slot.kcal;
+        if (slot.devoured) { devouredCal += slot.kcal; devouredCount++; }
+      } else missing++;
       return; // free text has no macro breakdown
     }
     const r = recipeForSlot(slot);
     const m = r && r.macros;
-    if (m && m.caloriesPerServing != null) totalCal += m.caloriesPerServing; else missing++;
+    if (m && m.caloriesPerServing != null) {
+      totalCal += m.caloriesPerServing;
+      if (slot.devoured) { devouredCal += m.caloriesPerServing; devouredCount++; }
+    } else missing++;
     if (m && (m.proteinPct != null || m.vegPct != null || m.carbPct != null)) {
       pSum += m.proteinPct || 0; vSum += m.vegPct || 0; cSum += m.carbPct || 0; macroCount++;
+      if (slot.devoured) { dpSum += m.proteinPct || 0; dvSum += m.vegPct || 0; dcSum += m.carbPct || 0; devouredMacroCount++; }
     }
   });
-  return { totalCal, missing, mealCount, avgP: macroCount ? Math.round(pSum/macroCount) : null, avgV: macroCount ? Math.round(vSum/macroCount) : null, avgC: macroCount ? Math.round(cSum/macroCount) : null };
+  return {
+    totalCal, missing, mealCount,
+    avgP: macroCount ? Math.round(pSum/macroCount) : null,
+    avgV: macroCount ? Math.round(vSum/macroCount) : null,
+    avgC: macroCount ? Math.round(cSum/macroCount) : null,
+    devouredCal, devouredCount,
+    devouredPct: totalCal > 0 ? Math.round((devouredCal / totalCal) * 100) : null,
+    devAvgP: devouredMacroCount ? Math.round(dpSum/devouredMacroCount) : null,
+    devAvgV: devouredMacroCount ? Math.round(dvSum/devouredMacroCount) : null,
+    devAvgC: devouredMacroCount ? Math.round(dcSum/devouredMacroCount) : null
+  };
 }
 function dayCardHtml(day, dayLabel) {
   const sum = daySummary(day);
@@ -1408,6 +1432,12 @@ function dayCardHtml(day, dayLabel) {
       <strong style="color:var(--text)">${sum.totalCal ? sum.totalCal.toLocaleString() + ' kcal' : 'No calorie data yet'}</strong>
       ${sum.missing ? ` · ${sum.missing} meal${sum.missing>1?'s':''} missing calorie data` : ''}
       ${sum.avgP!=null ? `<div class="macro-bar" style="margin-top:6px;"><span style="width:${sum.avgP}%;background:var(--protein)"></span><span style="width:${sum.avgV}%;background:var(--veg)"></span><span style="width:${sum.avgC}%;background:var(--carb)"></span></div>${macroKeyHtml()}` : ''}
+      ${sum.devouredPct!=null ? `
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+          <strong style="color:var(--accent)">${sum.devouredPct}% devoured</strong>
+          <span class="li-sub">— ${sum.devouredCal.toLocaleString()} of ${sum.totalCal.toLocaleString()} kcal</span>
+          ${sum.devAvgP!=null ? `<div class="macro-bar" style="margin-top:6px;"><span style="width:${sum.devAvgP}%;background:var(--protein)"></span><span style="width:${sum.devAvgV}%;background:var(--veg)"></span><span style="width:${sum.devAvgC}%;background:var(--carb)"></span></div>` : ''}
+        </div>` : ''}
     </div>`;
   return `
   <div class="card day-card">
@@ -1440,7 +1470,11 @@ function dayCardHtml(day, dayLabel) {
         }
         devouredBtn = `<button class="btn sm ${slot.devoured?'pri':''}" onclick="event.stopPropagation();toggleSlotDevoured('${day.date}','${sl}',${!slot.devoured})">${slot.devoured?'Devoured!! ✓':'Devoured?'}</button>`;
       }
-      const removeBtn = isSnackKey(sl) ? `<button class="btn icon sm danger" style="padding:2px 7px;font-size:10px;" onclick="event.stopPropagation();removeSnack('${day.date}','${sl}')">✕</button>` : '';
+      const removeBtn = slot
+        ? (isSnackKey(sl)
+            ? `<button class="btn icon sm danger" style="padding:2px 7px;font-size:10px;" onclick="event.stopPropagation();removeSnack('${day.date}','${sl}')">✕</button>`
+            : `<button class="btn icon sm danger" style="padding:2px 7px;font-size:10px;" onclick="event.stopPropagation();clearSlot('${day.date}','${sl}')">✕</button>`)
+        : '';
       return `<div class="slot" onclick="openSlotModal('${day.date}','${sl}')">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div class="slot-lbl">${slotLabel(sl, day)}</div>
