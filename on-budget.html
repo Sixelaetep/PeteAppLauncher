@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.37</title>
+<title>On Budget v3.38</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -310,6 +310,7 @@
   .ledger-row:last-child{border-bottom:none}
   .ledger-row.overdraft{background:var(--red-dim)}
   .ledger-row.overdue{border-left:3px solid var(--amber)}
+  .recur-card.scen-changed{border-left:3px solid var(--accent);background:var(--accent-dim)}
   .ledger-row.cleared{opacity:0.7;cursor:default}
   .ledger-row.cleared:active{opacity:0.9}
   .ledger-body{flex:1;min-width:0}
@@ -352,7 +353,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.37</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.38</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -838,7 +839,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.37
+// On Budget v3.38
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1218,6 +1219,17 @@
 // the whole chain end to end: recurring item → uncleared occurrence →
 // clear sheet context → cleared bills.tx entry → cleared row display,
 // confirming the note survives every step unchanged.
+// v3.38 (ON--042): scenario item rows are now visually highlighted
+// (left border + tinted background) when they're added or modified
+// relative to as-is, reusing the same diffScenario() classification
+// already powering the What Changed section rather than a separate
+// check. A modified item (linked to a real recurring item, values
+// edited) also gets a "Changed" badge; an added item doesn't need one
+// since its existing "new" badge already says as much — showing both
+// would be redundant. Unchanged items (linked, values identical to the
+// real item) get no highlight at all. Removed items aren't in the
+// scenario's item list to begin with, so there's no row for them here —
+// that's still covered by the What Changed section, unaffected by this.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1800,7 +1812,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.37', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.38', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
   if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
@@ -1809,7 +1821,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.37', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.38', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3289,6 +3301,11 @@ function renderScenarioTab() {
   const deltaOutgoing = scen.outgoing - asIs.outgoing;
   const deltaNet = scen.net - asIs.net;
   const diff = diffScenario(asIsItems, _scenarioDraft.items);
+  // Which item rows to highlight — anything added or modified relative
+  // to as-is. Removed items aren't in _scenarioDraft.items at all (that's
+  // what "removed" means), so there's no row for them to highlight here —
+  // covered instead in the What Changed section.
+  const changedIds = new Set([...diff.added.map(i=>i.id), ...diff.modified.map(m=>m.after.id)]);
 
   let html = `
   <div class="stat-card" style="margin-bottom:10px">
@@ -3399,7 +3416,7 @@ function renderScenarioTab() {
       if (!bn) return -1;
       return an - bn;
     });
-    html += ordered.map(renderScenItemCard).join('');
+    html += ordered.map(item=>renderScenItemCard(item, changedIds)).join('');
   } else {
     // Value and Type both group Income-then-Outgoing; Value orders by
     // magnitude (highest first) within each group, Type orders
@@ -3410,8 +3427,8 @@ function renderScenarioTab() {
       : (a,b) => a.name.localeCompare(b.name);
     const income   = _scenarioDraft.items.filter(i=>i.type==='income').sort(sortFn);
     const outgoing = _scenarioDraft.items.filter(i=>i.type==='outgoing').sort(sortFn);
-    if (income.length)   html += `<div class="ledger-section-label">💰 Income</div>` + income.map(renderScenItemCard).join('');
-    if (outgoing.length) html += `<div class="ledger-section-label" style="margin-top:${income.length?'12px':'0'}">📤 Outgoing</div>` + outgoing.map(renderScenItemCard).join('');
+    if (income.length)   html += `<div class="ledger-section-label">💰 Income</div>` + income.map(item=>renderScenItemCard(item, changedIds)).join('');
+    if (outgoing.length) html += `<div class="ledger-section-label" style="margin-top:${income.length?'12px':'0'}">📤 Outgoing</div>` + outgoing.map(item=>renderScenItemCard(item, changedIds)).join('');
   }
 
   // Saved scenarios list
@@ -3458,13 +3475,18 @@ function scenItemNextDue(item) {
   return nextDueRaw(base);
 }
 
-function renderScenItemCard(item) {
+function renderScenItemCard(item, changedIds) {
   const freqTxt = item.frequency==='weekly' ? 'Weekly'
     : item.frequency==='custom' ? `Every ${item.interval} weeks`
     : item.frequency==='monthly' ? 'Monthly' : 'Yearly';
-  return `<div class="recur-card" onclick="openScenarioItemSheet('${item.id}')">
+  const isChanged = changedIds && changedIds.has(item.id);
+  // "new" already says this is a change for an added item — the extra
+  // "Changed" badge is only useful on a modified item, which otherwise
+  // just reads "from real" with nothing to flag it's been edited.
+  const changedBadge = isChanged && item.baseId ? ' <span class="recur-badge" style="background:var(--accent);color:#0d1117">Changed</span>' : '';
+  return `<div class="recur-card ${isChanged?'scen-changed':''}" onclick="openScenarioItemSheet('${item.id}')">
     <div class="recur-body">
-      <div class="recur-name">${item.name}${item.baseId?' <span class="recur-badge">from real</span>':' <span class="recur-badge">new</span>'}</div>
+      <div class="recur-name">${item.name}${item.baseId?' <span class="recur-badge">from real</span>':' <span class="recur-badge">new</span>'}${changedBadge}</div>
       <div class="recur-meta">${freqTxt} · £${monthlyEquivalent(item).toFixed(2)}/mo equiv${item.note?' · '+item.note:''}</div>
     </div>
     <div class="recur-right"><div class="recur-amt ${item.type}">${item.type==='income'?'+':'−'}£${item.amount.toFixed(2)}</div></div>
