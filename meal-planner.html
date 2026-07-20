@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.10</title>
+<title>Meal Planner v1.11</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -150,7 +150,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.10</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.11</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -410,12 +410,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.10 ────────────────────────────────────────────────
+// ── Meal Planner v1.11 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.10';
+const VERSION = '1.11';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -558,20 +558,37 @@ function logPullResult(table, localCountBefore, result) {
     logSync('err', `${table}: cloud returned 0 rows while this device has ${localCountBefore} — if this persists, check the Supabase RLS policy and that both users' Auth UUIDs match pal-config.js`);
   }
 }
+// MP-019: a pull whose cloud query returns 0 rows (e.g. a silent RLS/auth
+// failure — Postgres RLS filters rows rather than erroring, so this looks
+// exactly like "no data" from the client's point of view) must NEVER be
+// allowed to overwrite local data that already exists. This is what
+// actually wiped both devices: an empty result was applied unconditionally.
+// Note this loses nothing legitimate — genericPull already pushes any
+// local-only records up to the cloud as a side effect *before* this check
+// runs, so a real first-ever sync still uploads local data correctly;
+// this only blocks *applying* a suspicious empty result back to local state.
+function safeToApplyPull(table, localCountBefore, result) {
+  if (result.remoteCount === 0 && localCountBefore > 0) {
+    logSync('err', `${table}: cloud returned 0 rows while this device has ${localCountBefore} — REFUSING to overwrite local data. Check the Supabase RLS policy and that both users' Auth UUIDs match pal-config.js.`);
+    return false;
+  }
+  return true;
+}
 async function syncPullAll(manual) {
   if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
   if (!hasSyncSession()) { logSync('err', 'Pull skipped — not connected'); if (manual) toast('Not connected — open via the launcher to sync'); return; }
   _syncBusy = true;
   setSyncState('syncing', 'Syncing…');
+  let anyRefused = false;
   try {
     let r = await genericPull('meal_ingredients', DB.data.ingredients);
     logPullResult('meal_ingredients', DB.data.ingredients.length, r);
-    DB.data.ingredients = r.merged;
+    if (safeToApplyPull('meal_ingredients', DB.data.ingredients.length, r)) DB.data.ingredients = r.merged; else anyRefused = true;
 
     const recBefore = DB.data.recipes.length;
     r = await genericPull('meal_recipes', DB.data.recipes);
     logPullResult('meal_recipes', recBefore, r);
-    DB.data.recipes = r.merged;
+    if (safeToApplyPull('meal_recipes', recBefore, r)) DB.data.recipes = r.merged; else anyRefused = true;
 
     // v1.5: meal_plans now stores per-day records (record_key = date), not
     // per-week bundles. A stale row pushed by a pre-v1.5 client would have
@@ -580,26 +597,36 @@ async function syncPullAll(manual) {
     const planBefore = Object.keys(DB.data.mealPlanDays).length;
     r = await genericPull('meal_plans', Object.values(DB.data.mealPlanDays));
     logPullResult('meal_plans', planBefore, r);
-    DB.data.mealPlanDays = {};
-    r.merged.forEach(d => {
-      if (d && d.slots && typeof d.slots === 'object' && Array.isArray(d.snackIds)) {
-        DB.data.mealPlanDays[d.id] = d;
-      } else {
-        logSync('err', 'Skipped an old-format meal plan row: ' + (d && d.id));
-      }
-    });
+    if (safeToApplyPull('meal_plans', planBefore, r)) {
+      DB.data.mealPlanDays = {};
+      r.merged.forEach(d => {
+        if (d && d.slots && typeof d.slots === 'object' && Array.isArray(d.snackIds)) {
+          DB.data.mealPlanDays[d.id] = d;
+        } else {
+          logSync('err', 'Skipped an old-format meal plan row: ' + (d && d.id));
+        }
+      });
+    } else { anyRefused = true; }
 
     const shopBefore = Object.keys(DB.data.shoppingLists).length;
     r = await genericPull('meal_shopping', Object.values(DB.data.shoppingLists));
     logPullResult('meal_shopping', shopBefore, r);
-    DB.data.shoppingLists = {}; r.merged.forEach(s => DB.data.shoppingLists[s.id] = s);
+    if (safeToApplyPull('meal_shopping', shopBefore, r)) {
+      DB.data.shoppingLists = {}; r.merged.forEach(s => DB.data.shoppingLists[s.id] = s);
+    } else { anyRefused = true; }
 
     save();
     localStorage.setItem('meal_planner_last_pull', nowIso());
     renderAllTabs();
-    setSyncState('synced', 'Synced');
-    logSync('ok', 'Pull complete');
-    if (manual) toast('Pulled latest from cloud');
+    if (anyRefused) {
+      setSyncState('error', 'Sync issue');
+      logSync('err', 'Pull completed with at least one table refused — local data was protected, not lost. See the log above for which table and check Supabase.');
+      toast('Sync issue detected — local data protected. See Sync Log for details.');
+    } else {
+      setSyncState('synced', 'Synced');
+      logSync('ok', 'Pull complete');
+      if (manual) toast('Pulled latest from cloud');
+    }
   } catch (e) {
     setSyncState('error', 'Sync error');
     logSync('err', 'Pull failed: ' + e.message);
