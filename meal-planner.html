@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.9</title>
+<title>Meal Planner v1.10</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -150,19 +150,38 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.9</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.10</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
-      <button class="nav-btn on" data-tab="recipes">Recipes</button>
+      <button class="nav-btn on" data-tab="plan">Meal Plan</button>
+      <button class="nav-btn" data-tab="recipes">Recipes</button>
       <button class="nav-btn" data-tab="ingredients">Ingredients</button>
-      <button class="nav-btn" data-tab="plan">Meal Plan</button>
       <button class="nav-btn" data-tab="shop">Shopping List</button>
     </div>
   </div>
 
+  <!-- MEAL PLAN -->
+  <div class="tab" id="tab-plan">
+    <div class="row" style="margin-bottom:8px;">
+      <label class="lbl" style="margin:0;">Week starting</label>
+      <input type="date" id="weekStart" class="grow" style="max-width:180px" onchange="renderPlan()">
+      <button class="btn sm" onclick="shiftWeek(-7)">‹ Prev</button>
+      <button class="btn sm" onclick="shiftWeek(7)">Next ›</button>
+    </div>
+    <div class="row" style="margin-bottom:12px;">
+      <label class="lbl" style="margin:0;">Week starts on</label>
+      <select id="weekStartDaySelect" style="max-width:150px" onchange="changeWeekStartDay(this.value)">
+        <option value="mon">Monday</option>
+        <option value="sun">Sunday</option>
+        <option value="sat">Saturday</option>
+      </select>
+    </div>
+    <div id="planDays"></div>
+  </div>
+
   <!-- RECIPES -->
-  <div class="tab" id="tab-recipes">
+  <div class="tab" id="tab-recipes" style="display:none">
     <details class="card collapsible">
       <summary>Ask Claude to Convert a Recipe</summary>
       <div class="li-sub" style="margin:10px 0;">Paste a raw recipe below (from a website, a photo transcription, or just typed out). This builds a ready-to-paste request for a Claude chat — it does not call Claude directly from this page. Copy the result, paste it into a Claude conversation, then paste Claude's JSON reply into Import Recipe JSON below.</div>
@@ -220,25 +239,6 @@
       </div>
     </div>
     <div id="ingredientList"></div>
-  </div>
-
-  <!-- MEAL PLAN -->
-  <div class="tab" id="tab-plan" style="display:none">
-    <div class="row" style="margin-bottom:8px;">
-      <label class="lbl" style="margin:0;">Week starting</label>
-      <input type="date" id="weekStart" class="grow" style="max-width:180px" onchange="renderPlan()">
-      <button class="btn sm" onclick="shiftWeek(-7)">‹ Prev</button>
-      <button class="btn sm" onclick="shiftWeek(7)">Next ›</button>
-    </div>
-    <div class="row" style="margin-bottom:12px;">
-      <label class="lbl" style="margin:0;">Week starts on</label>
-      <select id="weekStartDaySelect" style="max-width:150px" onchange="changeWeekStartDay(this.value)">
-        <option value="mon">Monday</option>
-        <option value="sun">Sunday</option>
-        <option value="sat">Saturday</option>
-      </select>
-    </div>
-    <div id="planDays"></div>
   </div>
 
   <!-- SHOPPING LIST -->
@@ -410,12 +410,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.9 ────────────────────────────────────────────────
+// ── Meal Planner v1.10 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.9';
+const VERSION = '1.10';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1198,12 +1198,31 @@ function weekStartDayIndex() {
   const s = (DB.data.settings && DB.data.settings.weekStartDay) || 'mon';
   return s === 'sun' ? 0 : s === 'sat' ? 6 : 1;
 }
+// MP-017: the previous code combined Date objects built from local
+// calendar fields with `.toISOString().slice(0,10)` to turn them back
+// into a "YYYY-MM-DD" string. toISOString() always converts to UTC
+// first, which shifts the date backward by a day in any positive-UTC-
+// offset timezone (e.g. UK British Summer Time, UTC+1) — exactly the
+// "Saturday shows as Friday" bug. These two helpers keep every date-only
+// string parsed and formatted in LOCAL time throughout, with no UTC
+// round-trip in either direction.
+function parseLocalDate(d) {
+  if (d instanceof Date) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const [y, m, day] = String(d).split('-').map(Number);
+  return new Date(y, m - 1, day);
+}
+function toLocalDateStr(dt) {
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 function weekStartOf(d) {
-  const dt = new Date(d);
+  const dt = parseLocalDate(d);
   const startIdx = weekStartDayIndex();
   const diff = (dt.getDay() - startIdx + 7) % 7;
   dt.setDate(dt.getDate() - diff);
-  return dt.toISOString().slice(0,10);
+  return toLocalDateStr(dt);
 }
 function changeWeekStartDay(val) {
   const oldKey = document.getElementById('weekStart').value || todayStrLocal();
@@ -1215,19 +1234,19 @@ function changeWeekStartDay(val) {
   renderPlan();
   toast('Week now starts on ' + ({mon:'Monday',sun:'Sunday',sat:'Saturday'}[val]));
 }
-function todayStrLocal() { return new Date().toISOString().slice(0,10); }
+function todayStrLocal() { return toLocalDateStr(new Date()); }
 if (!document.getElementById('weekStart').value) document.getElementById('weekStart').value = weekStartOf(new Date());
 function shiftWeek(days) {
-  const d = new Date(document.getElementById('weekStart').value);
+  const d = parseLocalDate(document.getElementById('weekStart').value);
   d.setDate(d.getDate()+days);
-  document.getElementById('weekStart').value = d.toISOString().slice(0,10);
+  document.getElementById('weekStart').value = toLocalDateStr(d);
   renderPlan();
 }
 function currentWeekKey() { return document.getElementById('weekStart').value; }
 function currentWeekDates() {
   const start = currentWeekKey();
   const dates = [];
-  for (let i=0;i<7;i++) { const d = new Date(start); d.setDate(d.getDate()+i); dates.push(d.toISOString().slice(0,10)); }
+  for (let i=0;i<7;i++) { const d = parseLocalDate(start); d.setDate(d.getDate()+i); dates.push(toLocalDateStr(d)); }
   return dates;
 }
 // Get-or-create — use when the app is about to show/edit a day (materialising
@@ -1509,8 +1528,10 @@ function addFreeTextItem() {
   const existingIng = DB.data.ingredients.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (existingIng) {
     addIngredientToShoppingList(existingIng.id, list);
+    list.updatedAt = nowIso();
     toast('Added ' + existingIng.name + ' to the list');
     resetFreeTextInput();
+    save(); renderShop();
     return;
   }
 
@@ -1577,7 +1598,7 @@ function toggleHideCategory(cat, val) {
 }
 function toggleKeepItem(k, val) {
   const list = ensureShoppingList(currentWeekKey());
-  if (list.items[k]) { list.items[k].keep = val; save(); renderShop(); }
+  if (list.items[k]) { list.items[k].keep = val; list.updatedAt = nowIso(); save(); renderShop(); }
 }
 function toggleCollapseCategory(cat) {
   DB.data.settings.collapsedCategories[cat] = !DB.data.settings.collapsedCategories[cat];
@@ -1698,8 +1719,8 @@ function renderShop() {
       </div>`).join('')}
   ` : '';
 }
-function markGot(k, val) { const list = ensureShoppingList(currentWeekKey()); if (list.items[k]) { list.items[k].got = val; save(); renderShop(); } }
-function setBuyAmount(k, val) { const list = ensureShoppingList(currentWeekKey()); if (list.items[k]) { list.items[k].buyAmount = val; save(); } }
+function markGot(k, val) { const list = ensureShoppingList(currentWeekKey()); if (list.items[k]) { list.items[k].got = val; list.updatedAt = nowIso(); save(); renderShop(); } }
+function setBuyAmount(k, val) { const list = ensureShoppingList(currentWeekKey()); if (list.items[k]) { list.items[k].buyAmount = val; list.updatedAt = nowIso(); save(); } }
 function moveItem(k, dir) {
   const list = ensureShoppingList(currentWeekKey());
   const item = list.items[k];
@@ -1719,17 +1740,20 @@ function moveItem(k, dir) {
   if (!swapKey) return;
   const i1 = list.order.indexOf(k), i2 = list.order.indexOf(swapKey);
   [list.order[i1], list.order[i2]] = [list.order[i2], list.order[i1]];
+  list.updatedAt = nowIso();
   save(); renderShop();
 }
 function removeShopItem(k) {
   const list = ensureShoppingList(currentWeekKey());
   delete list.items[k];
   list.order = list.order.filter(o => o !== k);
+  list.updatedAt = nowIso();
   save(); renderShop();
 }
 function removeAllBought() {
   const list = ensureShoppingList(currentWeekKey());
   Object.keys(list.items).forEach(k => { if (list.items[k].got) { delete list.items[k]; list.order = list.order.filter(o=>o!==k); } });
+  list.updatedAt = nowIso();
   save(); renderShop();
 }
 
@@ -1867,6 +1891,7 @@ function importBackup(evt) {
 // ── Init ──
 renderRecipes();
 renderIngredients();
+renderPlan();
 </script>
 </body>
 </html>
