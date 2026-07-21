@@ -171,7 +171,7 @@
   .nav-left {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -180,7 +180,7 @@
   .nav-icons-group {
     display: flex;
     align-items: center;
-    gap: 1px;
+    gap: 5px;
     min-width: 0;
     overflow: hidden;
   }
@@ -2360,13 +2360,8 @@ function statOnBudget() {
     const payinStr   = obFmtShort(nextPayin);
 
     // getWeeks mirrors app exactly — cycle starts day AFTER pay-in
-    // getWeeks mirrors app exactly (v3.40+) — cycle starts day AFTER
-    // pay-in. baselineWeeklyFood is the month's own snapshotted budget
-    // (ON--044: no longer live settings, see call site below);
-    // currentAdjustment, if set, only affects current+future weeks —
-    // a finished week always keeps its original snapshotted budget.
-    function getWeeks(last, next, baselineWeeklyFood, currentAdjustment) {
-      const baseline = baselineWeeklyFood ?? settings.weeklyFood;
+    function getWeeks(last, next) {
+      const daily = settings.weeklyFood / 7;
       const weeks = [];
       const cycleStart = new Date(last.getTime() + 86400000);
       let cursor = weekAnchor(cycleStart);
@@ -2378,26 +2373,21 @@ function statOnBudget() {
           num++;
           const isFinal  = we >= next;
           const isFirst  = ws < cycleStart;
-          const isPast   = we < today;
-          const effectiveWeekly = (!isPast && currentAdjustment != null) ? currentAdjustment : baseline;
-          const daily    = effectiveWeekly / 7;
           const effStart = isFirst ? cycleStart : ws;
           const effEndEx = isFinal ? next : new Date(we.getTime()+86400000);
           const days     = (isFirst || isFinal) ? obDaysBetween(effStart, effEndEx) : 7;
-          const budget   = (isFirst || isFinal) ? Math.round(daily*days*100)/100 : effectiveWeekly;
+          const budget   = (isFirst || isFinal) ? Math.round(daily*days*100)/100 : settings.weeklyFood;
           weeks.push({ start:new Date(ws), end:new Date(we), budget,
-            isCurrent: today>=ws && today<=we, isPast, isFinal, isFirst });
+            isCurrent: today>=ws && today<=we, isPast: we<today, isFinal, isFirst });
         }
         cursor.setDate(cursor.getDate()+7);
       }
       return weeks;
     }
 
-    // calcReserve — exact port of app v3.40+: returns { food, travel, travelSpent, travelBudget, total }
-    // travelBudgetOverride is the month's own snapshotted+adjusted travel
-    // budget (ON--044), falling back to live settings only for a month
-    // that predates this feature.
-    function calcReserve(weeks, tx, travelBudgetOverride) {
+    // calcReserve — exact port of app v3.13+: returns { food, travel, travelSpent, total }
+    // travel reserve = remaining monthly travel budget (monthlyTravel - travelSpent, floored at 0)
+    function calcReserve(weeks, tx) {
       const food = weeks.reduce((tot, w) => {
         if (w.isPast) return tot;
         const ws = obIso(w.start), we = obIso(w.end);
@@ -2406,9 +2396,8 @@ function statOnBudget() {
         return tot + Math.max(0, w.budget - spent);
       }, 0);
       const travelSpent = tx.filter(t=>t.category==='travel'&&!t._deleted).reduce((s,t)=>s+(t.amount||0),0);
-      const travelBudget = travelBudgetOverride ?? settings.monthlyTravel;
-      const travel = Math.max(0, (travelBudget||0) - travelSpent);
-      return { food, travel, travelSpent, travelBudget, total: food + travel };
+      const travel = Math.max(0, (settings.monthlyTravel||0) - travelSpent);
+      return { food, travel, travelSpent, total: food + travel };
     }
 
     // ── Food & Travel pot section ──────────────────────────────────
@@ -2421,22 +2410,15 @@ function statOnBudget() {
       const totalSpent  = txs.filter(t => t.type !== 'income').reduce((s,t) => s+(t.amount||0), 0);
       const incomeTot   = txs.filter(t => t.type === 'income').reduce((s,t) => s+(t.amount||0), 0);
 
-      // ON--044: read this month's own snapshotted budgets, not live
-      // settings — a month already in progress must not be affected by
-      // a later Settings edit, only a month that hasn't started yet.
-      // Falls back to live settings only for a month saved before this
-      // feature existed and never got its own snapshot.
-      const monthWeeklyFood   = monthData.weeklyFoodBudget ?? settings.weeklyFood;
-      const monthTravelBudget = monthData.travelBudget ?? settings.monthlyTravel;
-      const weeks      = getWeeks(lastPayin, nextPayin, monthWeeklyFood, monthData.weeklyFoodAdjustment ?? null);
-      const reserveBd  = calcReserve(weeks, txs, monthTravelBudget);
+      const weeks      = getWeeks(lastPayin, nextPayin);
+      const reserveBd  = calcReserve(weeks, txs);
       const reserve    = reserveBd.total;
       const pot        = startBalance + incomeTot - totalSpent;
       const headroom   = pot - reserve;
 
       // This week food spend
       const curWeek = weeks.find(w => w.isCurrent);
-      const wFoodBudget = curWeek?.budget || monthWeeklyFood;
+      const wFoodBudget = curWeek?.budget || settings.weeklyFood;
       const wFood = curWeek ? txs.filter(t => {
         const ws=obIso(curWeek.start), we=obIso(curWeek.end);
         return t.category==='weekly' && t.date>=ws && t.date<=we;
@@ -2444,7 +2426,7 @@ function statOnBudget() {
       const wFoodLeft = Math.max(0, wFoodBudget - wFood);
 
       // Travel spend this month
-      const mTravelBudget = reserveBd.travelBudget || 0;
+      const mTravelBudget = settings.monthlyTravel || 0;
       const mTravelLeft   = Math.max(0, mTravelBudget - reserveBd.travelSpent);
 
       const headFmt    = Math.abs(headroom).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
