@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.38</title>
+<title>Gym Tracker v2.40</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -235,6 +235,8 @@
   .repeat-toggle-row.on .repeat-toggle-state{color:var(--accent)}
   .cal-plan-row{padding:7px 0;border-bottom:1px solid var(--border)}
   .cal-plan-row:last-of-type{border-bottom:none}
+  .cal-day-card.done{opacity:0.55}
+  .cal-day-card.done .cal-plan-name{color:var(--ink2)}
   .cat-link:hover{text-decoration:underline}
 
   .area-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px}
@@ -294,7 +296,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.38</div></span>
+      <span>Gym Tracker<div class="ver">v2.40</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -717,7 +719,24 @@
 // Per-plan "Change" removed — ambiguous under multi-plan; Remove+Add
 // covers it. Data shapes unchanged; existing entries and rules render
 // as-is. No storage, sync, or backup format changes.
-const VERSION = '2.38';
+// v2.39 (GYM-037): done days. Each day card gets a Done toggle in its
+// header; done days grey slightly and, in the CURRENT week only, sink
+// to the bottom with today pinned to the top (then remaining days
+// chronologically, done days last). Past/future weeks keep Mon–Sun
+// order — reshuffling a week under review would be chaos — but done
+// days still grey there. State is kind:'dayDone' records in the
+// existing schedule array/table: syncs cross-device, tombstones for
+// Undo, round-trips in backups, ignored gracefully by older versions.
+// v2.40 (GYM-037 rework): done days are now automatic — any day before
+// today counts as done, so the manual Done/Undo button and the
+// kind:'dayDone' records are retired (existing records are inert and
+// ignored). Current week: today pinned top and highlighted, future
+// days chronological, past days greyed and sunk to the bottom. At
+// midnight the old today drops into that bottom group. Past weeks
+// render plain Mon–Sun at full strength — greying whole historical
+// weeks would make review miserable — so browsing back shows the week
+// exactly as it originally read. No data, sync, or backup changes.
+const VERSION = '2.40';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -1834,9 +1853,19 @@ function renderCalendar() {
   label.textContent = fmtDate(_calWeekStart) + ' – ' + fmtDate(weekEnd);
   const today = todayISO();
   const DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  // GYM-037 (v2.40): done is automatic — days before today. Current week
+  // orders today → future days → past days (greyed); other weeks stay
+  // Mon–Sun at full strength.
+  let dates = [];
+  for (let i=0;i<7;i++) dates.push(addDaysIso(_calWeekStart, i));
+  const isCurrentWeek = dates.includes(today);
+  if (isCurrentWeek) {
+    const past = dates.filter(d => d < today);
+    const future = dates.filter(d => d > today);
+    dates = [today, ...future, ...past];
+  }
   let html = '';
-  for (let i=0;i<7;i++) {
-    const date = addDaysIso(_calWeekStart, i);
+  for (const date of dates) {
     const dayPlans = resolvePlansForDate(date);
     const isToday = date === today;
     // v2.37: Start actions on TODAY only — sessions happen now.
@@ -1874,9 +1903,10 @@ function renderCalendar() {
     const daySessions = getSessions().filter(s => s.date === date)
       .sort((a,b) => (a.completedAt||'').localeCompare(b.completedAt||''));
     body += daySessions.map(calSessionChip).join('');
-    html += `<div class="cal-day-card ${isToday?'today':''}">
+    const done = isCurrentWeek && date < today;
+    html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}">
       <div class="cal-day-head">
-        <span class="cal-day-label">${DAY_NAMES[i]}${isToday?' · Today':''}</span>
+        <span class="cal-day-label">${DAY_NAMES[weekdayIdx(date)]}${isToday?' · Today':''}</span>
         <span class="cal-day-date">${fmtDate(date)}</span>
       </div>
       ${body}
