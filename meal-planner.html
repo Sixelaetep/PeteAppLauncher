@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.20</title>
+<title>Meal Planner v1.21</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -179,7 +179,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.20</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.21</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -420,6 +420,7 @@
     <div class="sync-info-row"><span>Recipes</span><span id="storeRecCount">0</span></div>
     <div class="sync-info-row"><span>Meal plan days</span><span id="storePlanCount">0</span></div>
     <div class="sync-info-row"><span>Shopping lists</span><span id="storeShopCount">0</span></div>
+    <div class="sync-info-row"><span>Custom sections</span><span id="storeCatCount">0</span></div>
 
     <div class="card-title" style="margin-top:18px;">Backup</div>
     <div class="row">
@@ -451,12 +452,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.20 ────────────────────────────────────────────────
+// ── Meal Planner v1.21 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.20';
+const VERSION = '1.21';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -671,6 +672,19 @@ async function syncPullAll(manual) {
   setSyncState('syncing', 'Syncing…');
   let anyFailed = false;
   try {
+    // MP-031 root cause: custom sections (settings.customCategories) never
+    // synced — only ingredients/recipes/plans/shopping lists did. A section
+    // created on one device was invisible to the other, so an item tagged
+    // with it fell back to 'Other' there (looking like it "disappeared"),
+    // and elsewhere in the code an unrecognised category key could crash
+    // the shopping list render entirely, which is what actually made
+    // shopping-list sync look broken even when the underlying data synced.
+    if (!(await pullOneTable('meal_categories', () => DB.data.settings.customCategories, merged => {
+      DB.data.settings.customCategories = merged;
+      mergeCustomCategoriesIntoGlobals(merged);
+      merged.forEach(c => { if (!DB.data.settings.categoryOrder.includes(c.key)) DB.data.settings.categoryOrder.push(c.key); });
+    }))) anyFailed = true;
+
     if (!(await pullOneTable('meal_ingredients', () => DB.data.ingredients, merged => { DB.data.ingredients = merged; }))) anyFailed = true;
 
     if (!(await pullOneTable('meal_recipes', () => DB.data.recipes, merged => { DB.data.recipes = merged; }))) anyFailed = true;
@@ -695,7 +709,7 @@ async function syncPullAll(manual) {
     }))) anyFailed = true;
 
     localStorage.setItem('meal_planner_last_pull', nowIso());
-    renderAllTabs();
+    try { renderAllTabs(); } catch (renderErr) { logSync('err', 'Pull succeeded but the screen failed to redraw: ' + renderErr.message + ' — switch tabs to refresh.'); }
     if (anyFailed) {
       setSyncState('error', 'Sync issue');
       logSync('err', 'Pull completed with at least one table failed or refused — other tables still synced and saved. See the log above for which table.');
@@ -735,6 +749,7 @@ async function syncPushAll(manual) {
   setSyncState('syncing', 'Syncing…');
   let anyFailed = false;
   try {
+    if (!(await pushOneTable('meal_categories', () => DB.data.settings.customCategories))) anyFailed = true;
     if (!(await pushOneTable('meal_ingredients', () => DB.data.ingredients))) anyFailed = true;
     if (!(await pushOneTable('meal_recipes', () => DB.data.recipes))) anyFailed = true;
     if (!(await pushOneTable('meal_plans', () => Object.values(DB.data.mealPlanDays)))) anyFailed = true;
@@ -770,6 +785,7 @@ function refreshSyncModal() {
   document.getElementById('storeRecCount').textContent = DB.data.recipes.length;
   document.getElementById('storePlanCount').textContent = Object.keys(DB.data.mealPlanDays).length;
   document.getElementById('storeShopCount').textContent = Object.keys(DB.data.shoppingLists).length;
+  document.getElementById('storeCatCount').textContent = DB.data.settings.customCategories.length;
 }
 function copySyncDiagnostics() {
   const log = JSON.parse(localStorage.getItem('meal_planner_sync_log') || '[]');
@@ -778,7 +794,7 @@ function copySyncDiagnostics() {
     'Version: ' + VERSION,
     'Session connected: ' + hasSyncSession(),
     'Current user id: ' + (_syncUserId || '(none)'),
-    'Local counts: ' + DB.data.ingredients.length + ' ingredients, ' + DB.data.recipes.length + ' recipes, ' + Object.keys(DB.data.mealPlanDays).length + ' plan days, ' + Object.keys(DB.data.shoppingLists).length + ' shopping lists',
+    'Local counts: ' + DB.data.ingredients.length + ' ingredients, ' + DB.data.recipes.length + ' recipes, ' + Object.keys(DB.data.mealPlanDays).length + ' plan days, ' + Object.keys(DB.data.shoppingLists).length + ' shopping lists, ' + DB.data.settings.customCategories.length + ' custom sections',
     'Last pull: ' + (localStorage.getItem('meal_planner_last_pull') || 'never'),
     'Last push: ' + (localStorage.getItem('meal_planner_last_push') || 'never'),
     '',
@@ -822,7 +838,7 @@ const CATEGORY_LABELS = { unassigned:'Unassigned', produce:'Produce', meat:'Meat
 function mergeCustomCategoriesIntoGlobals(customCategories) {
   (customCategories || []).forEach(c => {
     if (!c || !c.key) return;
-    if (!CATEGORY_LABELS[c.key]) CATEGORY_LABELS[c.key] = c.label || c.key;
+    CATEGORY_LABELS[c.key] = c.label || c.key;
     if (!CATEGORY_ORDER.includes(c.key)) CATEGORY_ORDER.push(c.key);
   });
 }
@@ -831,9 +847,9 @@ function addCustomCategory(label) {
   if (!trimmed) return null;
   const key = 'custom_' + trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   if (!key || key === 'custom_') return null;
-  if (!DB.data.settings.customCategories.some(c => c.key === key)) {
-    DB.data.settings.customCategories.push({ key, label: trimmed });
-  }
+  const existing = DB.data.settings.customCategories.find(c => c.key === key);
+  if (existing) { existing.label = trimmed; existing.updatedAt = nowIso(); }
+  else DB.data.settings.customCategories.push({ id: key, key, label: trimmed, updatedAt: nowIso() });
   mergeCustomCategoriesIntoGlobals(DB.data.settings.customCategories);
   if (!DB.data.settings.categoryOrder.includes(key)) DB.data.settings.categoryOrder.push(key);
   save();
@@ -878,6 +894,7 @@ function normalizeEnv(env) {
   // below, so they're automatically included in the shopping list's
   // section order too, not just the ingredient picker.
   env.data.settings.customCategories = env.data.settings.customCategories || [];
+  env.data.settings.customCategories.forEach(c => { if (!c.id) c.id = c.key; if (!c.updatedAt) c.updatedAt = nowIso(); });
   mergeCustomCategoriesIntoGlobals(env.data.settings.customCategories);
   // v0.7: shopping sections can be reordered/collapsed.
   if (!env.data.settings.categoryOrder) env.data.settings.categoryOrder = [...CATEGORY_ORDER];
@@ -1896,7 +1913,7 @@ function getShopGroups() {
     const item = list.items[k];
     const cat = categoryOf(k, item);
     if (isHiddenCategory(cat) && !item.keep) { hiddenCounts[cat] = (hiddenCounts[cat]||0) + 1; return; }
-    grouped[cat].push(k);
+    (grouped[cat] || grouped.other).push(k);
   });
   return { list, grouped, hiddenCounts };
 }
