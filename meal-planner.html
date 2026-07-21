@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.23</title>
+<title>Meal Planner v1.24</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -181,7 +181,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.23</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.24</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -454,12 +454,12 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.23 ────────────────────────────────────────────────
+// ── Meal Planner v1.24 ────────────────────────────────────────────────
 // Standalone test build. No sync, no launcher integration yet — data
 // lives in localStorage only. Data envelope and per-record id/updatedAt
 // shape are deliberately written to be compatible with pal-sync.js's
 // record_key + jsonb pattern, so wiring in sync later is additive only.
-const VERSION = '1.23';
+const VERSION = '1.24';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -674,6 +674,26 @@ async function syncPullAll(manual) {
   setSyncState('syncing', 'Syncing…');
   let anyFailed = false;
   try {
+    // MP-034: weekStartDay determines the key shopping lists are stored
+    // under (currentWeekKey() -> weekStartOf()), but it only ever lived in
+    // local settings. Two devices disagreeing on it compute different keys
+    // for "this week", so one device's shopping list is invisible to the
+    // other even though the data itself synced fine. Synced as a single
+    // record so it uses the exact same generic pull/push machinery as
+    // everything else, with last-write-wins via weekStartDayUpdatedAt.
+    if (!(await pullOneTable('meal_settings', () => [{ id: 'shared', weekStartDay: DB.data.settings.weekStartDay, updatedAt: DB.data.settings.weekStartDayUpdatedAt }], merged => {
+      const shared = merged.find(m => m.id === 'shared');
+      if (!shared) return;
+      const changed = shared.weekStartDay && shared.weekStartDay !== DB.data.settings.weekStartDay;
+      if (shared.weekStartDay) DB.data.settings.weekStartDay = shared.weekStartDay;
+      DB.data.settings.weekStartDayUpdatedAt = shared.updatedAt;
+      if (changed) {
+        // Realign the currently-viewed week to the (now agreed) convention.
+        const anchor = document.getElementById('weekStart').value || todayStrLocal();
+        document.getElementById('weekStart').value = weekStartOf(anchor);
+      }
+    }))) anyFailed = true;
+
     // MP-031 root cause: custom sections (settings.customCategories) never
     // synced — only ingredients/recipes/plans/shopping lists did. A section
     // created on one device was invisible to the other, so an item tagged
@@ -751,6 +771,7 @@ async function syncPushAll(manual) {
   setSyncState('syncing', 'Syncing…');
   let anyFailed = false;
   try {
+    if (!(await pushOneTable('meal_settings', () => [{ id: 'shared', weekStartDay: DB.data.settings.weekStartDay, updatedAt: DB.data.settings.weekStartDayUpdatedAt }]))) anyFailed = true;
     if (!(await pushOneTable('meal_categories', () => DB.data.settings.customCategories))) anyFailed = true;
     if (!(await pushOneTable('meal_ingredients', () => DB.data.ingredients))) anyFailed = true;
     if (!(await pushOneTable('meal_recipes', () => DB.data.recipes))) anyFailed = true;
@@ -904,6 +925,7 @@ function normalizeEnv(env) {
   env.data.settings.collapsedCategories = env.data.settings.collapsedCategories || {};
   // v1.4: week can start on Monday/Sunday/Saturday instead of always Monday.
   if (!env.data.settings.weekStartDay) env.data.settings.weekStartDay = 'mon';
+  if (!env.data.settings.weekStartDayUpdatedAt) env.data.settings.weekStartDayUpdatedAt = '1970-01-01T00:00:00.000Z';
   // v0.4: shopping lists gained an explicit `order` array and item `type`.
   // Backfill both for any list saved by an earlier version so it renders
   // immediately rather than looking empty until the user rebuilds it.
@@ -1429,11 +1451,13 @@ function weekStartOf(d) {
 function changeWeekStartDay(val) {
   const oldKey = document.getElementById('weekStart').value || todayStrLocal();
   DB.data.settings.weekStartDay = val;
+  DB.data.settings.weekStartDayUpdatedAt = nowIso();
   save();
   // No data migration needed — mealPlanDays is addressed by date, not by
   // week bucket, so nothing to remap. Just move the displayed window.
   document.getElementById('weekStart').value = weekStartOf(oldKey);
   renderPlan();
+  renderShop(); // shopping lists are keyed by week-start date, so this changes too
   toast('Week now starts on ' + ({mon:'Monday',sun:'Sunday',sat:'Saturday'}[val]));
 }
 function todayStrLocal() { return toLocalDateStr(new Date()); }
