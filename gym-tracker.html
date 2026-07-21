@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.34</title>
+<title>Gym Tracker v2.35</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -226,6 +226,13 @@
   .repeat-custom-panel{border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;background:var(--surface)}
   .repeat-kind-row{display:flex;gap:6px;margin-bottom:4px}
   .cal-repeat-badge{font-size:11px;color:var(--ink3);margin-top:2px}
+  .upnext-card{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);margin-bottom:7px;cursor:pointer}
+  .upnext-card.today{border-color:var(--accent);background:rgba(56,189,248,0.06)}
+  .upnext-card:hover{border-color:var(--accent)}
+  .upnext-daylabel{font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink3)}
+  .upnext-plan{font-size:14px;font-weight:600;color:var(--accent);margin-top:2px}
+  .upnext-none{font-size:12px;color:var(--ink3);margin-top:2px}
+  .upnext-done{font-size:12px;font-weight:600;color:var(--green,#4ade80);white-space:nowrap}
   .cat-link:hover{text-decoration:underline}
 
   .area-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px}
@@ -285,7 +292,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.34</div></span>
+      <span>Gym Tracker<div class="ver">v2.35</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -314,6 +321,8 @@
       <p>Start a blank session and search-add exercises as you go</p>
       <button class="btn btn-primary btn-block" onclick="startSession(null)">▶ Start Blank Session</button>
     </div>
+
+    <div id="homeUpNext" style="margin-bottom:10px"></div>
 
     <div class="hero">
       <div class="hero-label">This week</div>
@@ -686,7 +695,15 @@
 // endDate), or delete the whole rule (tombstone). Older app versions
 // ignore rule records harmlessly (no `date` field ⇒ never matched), so
 // backups round-trip safely in both directions. No SQL migration needed.
-const VERSION = '2.34';
+// v2.35 (GYM-034): "Up Next" on Home — Today and Tomorrow from the
+// calendar, shown between the CTA and hero stats. Today's plan gets a
+// direct Start button (or a Done tick once a session is logged against
+// it today); tapping a day card jumps to the Calendar tab at that day's
+// week, so a tomorrow that falls into next week lands on the right
+// week. Nothing scheduled either day collapses to a one-line prompt
+// linking to the calendar. Schedule mutations now also refresh Home so
+// Up Next never goes stale.
+const VERSION = '2.35';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -1217,6 +1234,7 @@ function renderSyncPanel() {
 // ═══════════════════════════════════════════════════════════════════
 function renderHome() {
   renderHomeWeight();
+  renderHomeUpNext();
   const sessions = getSessions().slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.completedAt||'').localeCompare(a.completedAt||''));
   const wk = sessionsThisWeek(sessions);
   document.getElementById('homeWeekCount').textContent = wk.length;
@@ -1821,6 +1839,55 @@ function addExerciseToPlanItems(exerciseId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// UP NEXT (GYM-034) — Today + Tomorrow from the calendar, on Home.
+// Today's undone plan gets a direct Start; tapping a card opens the
+// Calendar tab at that day's week (matters when tomorrow is next week).
+// ═══════════════════════════════════════════════════════════════════
+function renderHomeUpNext() {
+  const el = document.getElementById('homeUpNext');
+  if (!el) return;
+  const today = todayISO();
+  const days = [{ date: today, label: 'Today' }, { date: addDaysIso(today, 1), label: 'Tomorrow' }];
+  const anyScheduled = days.some(d => resolvePlanForDate(d.date));
+  if (!anyScheduled) {
+    el.innerHTML = `<div class="upnext-card" onclick="goToCalendarDate('${today}')">
+      <div><div class="upnext-daylabel">Up next</div>
+      <div class="upnext-none">Nothing scheduled for today or tomorrow — tap to open the calendar</div></div>
+      <span style="color:var(--ink3)">📅</span>
+    </div>`;
+    return;
+  }
+  el.innerHTML = days.map(d => {
+    const resolved = resolvePlanForDate(d.date);
+    const plan = resolved ? planById(resolved.type === 'oneoff' ? resolved.entry.planId : resolved.rule.planId) : null;
+    const isToday = d.date === today;
+    let right = '';
+    let planLine;
+    if (plan) {
+      const repeatBit = resolved.type === 'repeat' ? ' <span style="font-size:11px;color:var(--ink3)">🔁</span>' : '';
+      planLine = `<div class="upnext-plan">${escHtml(plan.name)}${repeatBit}</div>`;
+      if (isToday) {
+        const doneToday = getSessions().some(s => s.date === d.date && s.planId === plan.id);
+        right = doneToday
+          ? '<span class="upnext-done">✓ Done</span>'
+          : `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();startSession('${plan.id}')">▶ Start</button>`;
+      }
+    } else {
+      planLine = '<div class="upnext-none">Nothing scheduled</div>';
+    }
+    return `<div class="upnext-card ${isToday ? 'today' : ''}" onclick="goToCalendarDate('${d.date}')">
+      <div><div class="upnext-daylabel">${d.label} · ${fmtDate(d.date)}</div>${planLine}</div>
+      ${right}
+    </div>`;
+  }).join('');
+}
+function goToCalendarDate(date) {
+  _calWeekStart = mondayOf(date);
+  renderCalendar();
+  switchTab('calendar');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // CALENDAR (GYM-032) — schedule a plan against a real date, then launch
 // straight into tracking it from the gym. Week view, not a full month
 // grid, matching Meal Planner's actual pattern (its "calendar" is a week
@@ -1971,6 +2038,7 @@ function pickPlanForDate(date, planId) {
   sbUpsert('schedule', rule, null);
   closeModal('modalSchedule');
   renderCalendar();
+  renderHome();
   toast('Scheduled — ' + repeatLabel(rule).toLowerCase() + ' ✓');
 }
 function assignPlanToDate(date, planId) {
@@ -1982,6 +2050,7 @@ function assignPlanToDate(date, planId) {
   sbUpsert('schedule', entry, null);
   closeModal('modalSchedule');
   renderCalendar();
+  renderHome();
   toast('Scheduled ✓');
 }
 function unassignDate(date) {
@@ -1995,6 +2064,7 @@ function unassignDate(date) {
   save(_env);
   sbUpsert('schedule', entry, null);
   renderCalendar();
+  renderHome();
   toast('Removed');
 }
 
@@ -2019,6 +2089,7 @@ function _finishRepeatRemove(rule, msg) {
   sbUpsert('schedule', rule, null);
   closeModal('modalRepeatRemove');
   renderCalendar();
+  renderHome();
   toast(msg);
 }
 function repeatRemoveJustDate() {
