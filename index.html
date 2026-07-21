@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.25</title>
+<title>P Apps v10.26</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -558,7 +558,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.25</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.26</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn pete-only" data-target="onbudget" style="--app-color:#a3e635" onclick="switchTo('onbudget', this)" title="On Budget">🪙</button>
@@ -2213,18 +2213,62 @@ async function runHealthCheck() {
 }
 
 // ── Gym Tracker card stat ───────────────────────────────────────────
+// v10.26 (PET-050): Gym Tracker v2.33 added a calendar (GYM-032) that
+// stores scheduleEntries ({id, date, planId}) in the same gym_tracker_v1
+// envelope this card already reads. The card now surfaces today's
+// scheduled plan as the hero when no session has been logged yet, and
+// tomorrow's scheduled plan as a smaller line — mirroring the Gigs &
+// Trips today/tomorrow pattern. A session logged today still wins the
+// hero (the plan is considered fulfilled). Plan names are resolved
+// against the FULL plans array (archived + tombstoned included) so a
+// rename or delete never blanks the card. Freshness note: like the rest
+// of this card, schedule data is read from localStorage only — it is as
+// fresh as the last time Gym Tracker ran on this device (GYM_DATA_UPDATED
+// already refreshes the card whenever the app syncs).
 function statGym() {
   try {
     const raw = localStorage.getItem('gym_tracker_v1');
     if (!raw) { setCardStat('stat-gym', 'No sessions yet', 'muted'); return; }
     const parsed = JSON.parse(raw);
-    // Envelope format: { version, lastUpdated, data: { sessions, exercises, plans } }
+    // Envelope format: { version, lastUpdated, data: { sessions, exercises, plans, scheduleEntries } }
     const data = (parsed.data && parsed.data.sessions) ? parsed.data : parsed;
     const sessions = (data.sessions || []).filter(s => !s._deleted);
 
-    if (!sessions.length) { setCardStat('stat-gym', 'No sessions yet', 'muted'); return; }
+    // ── Scheduled plans (PET-050) ──────────────────────────────────
+    const schedule = (data.scheduleEntries || []).filter(e => !e._deleted);
+    const allPlans = data.plans || []; // deliberately unfiltered — name resolution only
+    const planName = id => { const p = allPlans.find(p => p.id === id); return (p && p.name) ? p.name : 'Plan'; };
 
     const todayStr = todayISO();
+    const tmrw = new Date(); tmrw.setDate(tmrw.getDate() + 1);
+    const tomorrowStr = tmrw.getFullYear() + '-' + String(tmrw.getMonth()+1).padStart(2,'0') + '-' + String(tmrw.getDate()).padStart(2,'0');
+    const todayPlanned    = schedule.filter(e => e.date === todayStr).map(e => planName(e.planId));
+    const tomorrowPlanned = schedule.filter(e => e.date === tomorrowStr).map(e => planName(e.planId));
+
+    const tomorrowLine = tomorrowPlanned.length
+      ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">📋 Tomorrow: ${tomorrowPlanned.join(', ')}</div>`
+      : '';
+
+    if (!sessions.length) {
+      // No session history — but a scheduled plan can still make the card useful
+      const statEl0 = document.getElementById('stat-gym');
+      if (!statEl0) return;
+      if (todayPlanned.length) {
+        statEl0.className = 'card-stat';
+        statEl0.innerHTML =
+          `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--accent)"></span>` +
+          `<span>Planned today: <span class="val" style="color:var(--accent)">${todayPlanned.join(', ')}</span></span></div>` +
+          tomorrowLine;
+      } else if (tomorrowPlanned.length) {
+        statEl0.className = 'card-stat muted';
+        statEl0.innerHTML =
+          `<div class="card-stat-row"><span class="card-stat-dot"></span><span>No sessions yet</span></div>` +
+          tomorrowLine;
+      } else {
+        setCardStat('stat-gym', 'No sessions yet', 'muted');
+      }
+      return;
+    }
 
     // Sessions today
     const todaySessions = sessions.filter(s => (s.date || '').slice(0, 10) === todayStr);
@@ -2274,7 +2318,18 @@ function statGym() {
       statEl.innerHTML =
         `<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span>` +
         `<span>Today: <span class="val">${names}</span>${exLine}</span></div>` +
-        streakLine;
+        streakLine + tomorrowLine;
+    } else if (todayPlanned.length) {
+      // Plan scheduled for today, nothing logged yet — planned hero (PET-050)
+      const streakLine = streak > 0
+        ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">🔥 ${streak} week streak · ${weekSessions.length} this week</div>`
+        : `<div style="font-size:10px;color:var(--ink3);margin-top:3px">${weekSessions.length} session${weekSessions.length !== 1 ? 's' : ''} this week</div>`;
+
+      statEl.className = 'card-stat';
+      statEl.innerHTML =
+        `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--accent)"></span>` +
+        `<span>Planned today: <span class="val" style="color:var(--accent)">${todayPlanned.join(', ')}</span></span></div>` +
+        streakLine + tomorrowLine;
     } else {
       // No session today — show last session + this week count
       const last = sortedDesc[0];
@@ -2291,7 +2346,7 @@ function statGym() {
       statEl.innerHTML =
         `<div class="card-stat-row"><span class="card-stat-dot"></span>` +
         `<span>Last: <span class="val">${lastName}</span>${lastStr ? ' · ' + lastStr : ''}</span></div>` +
-        streakLine;
+        streakLine + tomorrowLine;
     }
   } catch(e) {
     setCardStat('stat-gym', 'Open app to load', 'muted');
