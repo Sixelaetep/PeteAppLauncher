@@ -105,6 +105,36 @@
  * (2) PalSync.errorHint(status, message) — Gym Tracker's syncErrorHint()
  * pulled out into the shared library, so every app gets the same plain-
  * English translation of a 401/403/404 instead of a bare status code.
+ * v1.9 — two latent-bug fixes, no API changes, no app-side changes needed:
+ * (1) PAGINATION. fetchTableRows() did one GET with no Range header, and
+ * Supabase/PostgREST caps a single response at 1,000 rows by default. No
+ * table is near that yet, but Reading Tracker history and Gym sessions
+ * grow forever and tombstones accelerate it — and a capped pull wouldn't
+ * error, it would silently truncate. Worse, pull()'s push-local-only-up
+ * step would then treat the missing rows as "not in cloud" and re-push
+ * them. fetchTableRows() now requests pages of 1,000 with a Range header
+ * (ordered by record_key for stable pages) and Prefer: count=exact, then
+ * loops until the Content-Range total confirms every row is in hand —
+ * robust even if the server's max-rows is ever configured lower than
+ * 1,000. Single-page tables behave exactly as before: one request.
+ * (2) PERSISTED RETRY QUEUE. The v1.8 401 retry queue was memory-only —
+ * a queued write followed by a tab close or launcher iframe eviction was
+ * gone until the next full pull happened to reconcile it. The queue now
+ * mirrors to localStorage ('pal_retry_queue_v1') on every change and
+ * rehydrates at script load, so a stranded write survives eviction and
+ * flushes on the next session arrival. Queue entries no longer hold live
+ * table() references (unserialisable) — they store {tableName, prefix,
+ * id, data} and the flush reconstructs a table() on demand. Deliberate
+ * consequence: localStorage is shared across the suite's origin, so ANY
+ * app with a live session flushes ANY app's stranded writes — a write
+ * stranded by Gym Tracker gets rescued the moment On Budget next opens,
+ * instead of waiting for Gym specifically. A double-flush race between
+ * two simultaneously-open apps is harmless (upserts are last-write-wins
+ * with a fresh updated_at); a read-modify-write race on the stored queue
+ * between two apps queueing at the exact same moment could in theory
+ * drop one entry, accepted as vanishingly unlikely at this scale and
+ * self-healing via the next pull. Non-401 failures during a flush are
+ * dropped, same as v1.8 (documented behaviour, not a regression).
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -122,28 +152,65 @@ window.PalSync = (function () {
   let _listenerAttached = false;
   let _sessionCallbacks  = [];   // fns called with (token, userId) on every PAL_SESSION/PAL_UNLOCKED
   let _retryFlushCallbacks = []; // fns called with ({flushed, stillQueued}) after an auto-flush attempt
-  let _retryQueue = [];          // [{ tableApi, id, data }] — queued upsert()s awaiting a fresh session
+  let _retryQueue = [];          // [{ tableName, prefix, id, data }] — queued upsert()s awaiting a fresh session
+
+  // v1.9: the queue survives tab close / iframe eviction by mirroring to
+  // localStorage on every change. Entries are plain serialisable objects
+  // (tableName + prefix instead of a live table() reference); the flush
+  // reconstructs a table() on demand. Shared across the whole origin by
+  // design — any app with a live session can flush any app's strays.
+  const RETRY_QUEUE_KEY = 'pal_retry_queue_v1';
+
+  function _persistRetryQueue() {
+    try {
+      if (_retryQueue.length) localStorage.setItem(RETRY_QUEUE_KEY, JSON.stringify(_retryQueue));
+      else localStorage.removeItem(RETRY_QUEUE_KEY);
+    } catch (e) { /* storage full/unavailable — queue still works in-memory for this page's lifetime */ }
+  }
+
+  function _rehydrateRetryQueue() {
+    try {
+      const raw = localStorage.getItem(RETRY_QUEUE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        _retryQueue = parsed.filter(function (q) {
+          return q && typeof q.tableName === 'string' && q.id !== undefined && q.data !== undefined;
+        });
+      }
+    } catch (e) { /* corrupt entry — start clean rather than wedge every app on the origin */ _retryQueue = []; }
+  }
+  _rehydrateRetryQueue();
 
   // Every 401 upsert lands here (see table().upsert() below); flushed
   // automatically the next time a session arrives via _onSessionArrived,
-  // so ordinary apps never need to call this directly.
-  function _queueForRetry(tableApi, id, data) {
-    _retryQueue = _retryQueue.filter(function (q) { return !(q.tableApi === tableApi && q.id === id); });
-    _retryQueue.push({ tableApi: tableApi, id: id, data: data });
+  // so ordinary apps never need to call this directly. Re-read the stored
+  // queue first so a queue written by another app moments ago isn't
+  // clobbered by this app's stale in-memory copy.
+  function _queueForRetry(tableName, prefix, id, data) {
+    _rehydrateRetryQueue();
+    _retryQueue = _retryQueue.filter(function (q) {
+      return !(q.tableName === tableName && (q.prefix || '') === (prefix || '') && q.id === id);
+    });
+    _retryQueue.push({ tableName: tableName, prefix: prefix || '', id: id, data: data });
+    _persistRetryQueue();
   }
 
   function retryQueueLength() { return _retryQueue.length; }
 
   // Re-attempts every queued upsert. Safe to call with an empty queue or
-  // no session (no-op). A record that fails again (still no valid
-  // session, or a different error) is re-queued rather than dropped.
+  // no session (no-op). A record that fails again with a 401 is re-queued
+  // by upsert()'s own 401 path; any other failure is dropped, same as any
+  // other failed upsert (unchanged v1.8 behaviour).
   async function flushRetryQueue() {
+    _rehydrateRetryQueue(); // pick up strays queued by other apps on this origin
     if (!_retryQueue.length || !hasSession()) return { flushed: 0, stillQueued: _retryQueue.length };
     const queue = _retryQueue; _retryQueue = [];
+    _persistRetryQueue();
     let flushed = 0;
     for (const q of queue) {
-      try { await q.tableApi.upsert(q.id, q.data); flushed++; }
-      catch (e) { /* upsert() re-queues on its own 401 path; other errors are dropped same as any other failed upsert */ }
+      try { await table(q.tableName, { prefix: q.prefix }).upsert(q.id, q.data); flushed++; }
+      catch (e) { /* 401 → upsert() re-queued (and re-persisted) it; other errors dropped as documented */ }
     }
     return { flushed: flushed, stillQueued: _retryQueue.length };
   }
@@ -219,7 +286,10 @@ window.PalSync = (function () {
 
 
   // ── Low-level REST wrapper ────────────────────────────────────────
-  async function sbFetch(path, method, body) {
+  // extraHeaders (optional, v1.9): merged over the defaults — used by the
+  // paginated fetchTableRows() for Range/Prefer. No existing caller passes
+  // it, so all prior behaviour is unchanged.
+  async function sbFetch(path, method, body, extraHeaders) {
     method = method || 'GET';
     const headers = {
       'apikey':        window.PAL_CONFIG.SB_KEY,
@@ -228,6 +298,7 @@ window.PalSync = (function () {
       'Prefer':        method === 'PATCH' ? 'return=representation'
                        : method === 'DELETE' ? 'return=minimal' : ''
     };
+    if (extraHeaders) Object.keys(extraHeaders).forEach(function (k) { headers[k] = extraHeaders[k]; });
     const opts = { method: method, headers: headers };
     if (body) opts.body = JSON.stringify(body);
     return fetch(window.PAL_CONFIG.SB_URL + '/rest/v1' + path, opts);
@@ -238,11 +309,39 @@ window.PalSync = (function () {
   // Budget's 7 kinds under one table), fetch once and pass the result
   // into each table() instance's pull() as preFetchedRows, instead of
   // each instance doing its own identical full-table GET.
+  // v1.9: paginated. PostgREST caps a single response at 1,000 rows by
+  // default, and an over-cap fetch doesn't error — it silently truncates,
+  // which pull() would then misread as "those records aren't in cloud".
+  // Pages are ordered by record_key (stable pagination needs a total
+  // order) and the loop is driven by the Content-Range total rather than
+  // page size, so it stays correct even if the server's max-rows is ever
+  // configured below our requested page size. A table that fits in one
+  // page costs exactly one request, same as before.
   async function fetchTableRows(tableName) {
     if (!hasSession()) return [];
-    const res = await sbFetch('/' + tableName + '?user_id=eq.' + _userId + '&select=record_key,data,updated_at');
-    if (!res.ok) { const err = new Error(res.status + ' ' + (await res.text())); err.status = res.status; throw err; }
-    return res.json();
+    const PAGE = 1000;
+    const basePath = '/' + tableName + '?user_id=eq.' + _userId +
+                     '&select=record_key,data,updated_at&order=record_key.asc';
+    let all = [];
+    for (;;) {
+      const res = await sbFetch(basePath, 'GET', null, {
+        'Range-Unit': 'items',
+        'Range':      all.length + '-' + (all.length + PAGE - 1),
+        'Prefer':     'count=exact'
+      });
+      if (!res.ok) { const err = new Error(res.status + ' ' + (await res.text())); err.status = res.status; throw err; }
+      const page = await res.json();
+      all = all.concat(page);
+      // Content-Range: "0-999/2345" (or "*/0" for an empty table).
+      const cr = res.headers.get('Content-Range') || '';
+      const total = parseInt(cr.split('/')[1], 10);
+      if (isNaN(total) || all.length >= total) break;   // done, or header unavailable — what we have is what one request yields (pre-v1.9 behaviour)
+      if (!page.length) {                               // server says more rows exist but returned none — bail loudly rather than loop forever
+        const err = new Error('pagination stalled fetching ' + tableName + ' (' + all.length + ' of ' + total + ' rows)');
+        err.status = 500; throw err;
+      }
+    }
+    return all;
   }
 
   // ── Per-table helper ──────────────────────────────────────────────
@@ -256,7 +355,6 @@ window.PalSync = (function () {
   // Create one table() instance per kind sharing the same tableName.
   function table(tableName, opts) {
     const prefix = (opts && opts.prefix) || '';
-    let api; // forward reference so upsert() below can queue *itself* for retry
 
     // PATCH first (matches existing row for this user_id + record_key);
     // POST if nothing matched. Throws on failure so callers can log it.
@@ -284,7 +382,7 @@ window.PalSync = (function () {
           const err = new Error('PATCH failed: ' + (await patch.text())); err.status = patch.status; throw err;
         }
       } catch (err) {
-        if (err && err.status === 401) _queueForRetry(api, id, data);
+        if (err && err.status === 401) _queueForRetry(tableName, prefix, id, data);
         throw err;
       }
     }
@@ -375,7 +473,7 @@ window.PalSync = (function () {
       return { merged: merged, pushedCount: localOnly.length, rows: allRows, skipped: false };
     }
 
-    return (api = { upsert: upsert, tombstone: tombstone, pull: pull });
+    return { upsert: upsert, tombstone: tombstone, pull: pull };
   }
 
   return {
