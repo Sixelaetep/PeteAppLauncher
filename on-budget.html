@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.38</title>
+<title>On Budget v3.39</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -96,12 +96,6 @@
   }
   .panel.active{display:block}
   .account-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink3);margin-bottom:10px}
-
-  /* ── Backup reminder banner ── */
-  .backup-banner{display:none;position:sticky;top:calc(var(--nav-h)+var(--tab-h));z-index:90;background:var(--accent-dim);border-bottom:1px solid var(--accent-border);padding:10px 14px;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-  .backup-banner.show{display:flex}
-  .backup-banner-text{font-size:12px;color:var(--ink);flex:1;min-width:170px}
-  .backup-banner-actions{display:flex;gap:6px;flex-shrink:0}
 
   /* ── Setup ── */
   .setup-wrap{display:flex;flex-direction:column;align-items:center;padding:40px 0;text-align:center}
@@ -353,7 +347,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.38</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.39</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -363,14 +357,6 @@
       <button class="tab-btn" onclick="switchTab('savings')"   id="tab-savings"><span class="ti">🎯</span>Savings</button>
       <button class="tab-btn" onclick="switchTab('history')"   id="tab-history"><span class="ti">🗂️</span>History</button>
       <button class="tab-btn" onclick="switchTab('settings')"  id="tab-settings"><span class="ti">⚙️</span>Settings</button>
-    </div>
-  </div>
-
-  <div class="backup-banner" id="backup-banner">
-    <div class="backup-banner-text" id="backup-banner-text">📦 Quite a few changes since your last backup — worth exporting?</div>
-    <div class="backup-banner-actions">
-      <button class="btn btn-primary btn-sm" onclick="exportJSON()">Export</button>
-      <button class="btn btn-ghost btn-sm" onclick="dismissBackupPrompt()">Not now</button>
     </div>
   </div>
 
@@ -839,7 +825,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.38
+// On Budget v3.39
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1230,6 +1216,15 @@
 // real item) get no highlight at all. Removed items aren't in the
 // scenario's item list to begin with, so there's no row for them here —
 // that's still covered by the What Changed section, unaffected by this.
+// v3.39 (ON--043): removed the dismissible "worth exporting?" backup
+// nag banner (BACKUP_THRESHOLD counter, showBackupBanner/hideBackupBanner/
+// dismissBackupPrompt, and the boot-time/post-save trigger checks). The
+// Export function itself, the Sync & Backup drawer's "Last backup: …"
+// status line, and the underlying txCountsSinceBackup()/txCountsPhrase()
+// helpers that feed it are untouched — only the nagging banner is gone.
+// meta.changesSinceBackup is still reset to 0 on export and still read
+// back from old JSON backups without erroring, so nothing breaks on
+// existing exports; it's just no longer acted on.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1280,9 +1275,11 @@ let _scenarioDraft = null; // { id, name, items:[{id,baseId,name,type,amount,fre
 // self-building list of shop/label names. items: [{name, count, lastUsed}]
 let ftLabels = { items:[], updated_at:null };
 
-// Backup-nudge tracking — see save(trackChange) below. Not part of
-// settings/months/bills; it's app housekeeping, not user data.
-const BACKUP_THRESHOLD = 15;
+// meta is app housekeeping, not user data — not part of settings/months/
+// bills. changesSinceBackup is kept only for backward-compat with older
+// JSON backups that still carry the field (ON--043 removed the nag
+// banner that used to act on it); lastBackupAt still drives the "Last
+// backup: …" status line in the Sync & Backup drawer.
 let meta = { changesSinceBackup:0, lastBackupAt:null };
 
 // ══════════════════════════════════════════════════════════════
@@ -1812,16 +1809,15 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.38', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.39', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
-  if (trackChange && meta.changesSinceBackup >= BACKUP_THRESHOLD) showBackupBanner();
   // Notify launcher so the dashboard card refreshes live
   try { window.parent.postMessage({ type:'OB_DATA_UPDATED' }, window.location.origin); } catch(e) {}
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.38', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.39', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -1829,7 +1825,6 @@ function exportJSON() {
   meta.changesSinceBackup = 0;
   meta.lastBackupAt = new Date().toISOString();
   save();
-  hideBackupBanner();
   populateSettings();
   toast('Backup downloaded ✓');
 }
@@ -1853,7 +1848,6 @@ function importJSON(e) {
       migrateCategories();
       backfillSyncTimestamps();
       save(); populateSettings(); renderDash(); renderHist(); renderSavings();
-      hideBackupBanner();
       if (window.PalSync.hasSession()) { addSyncLog('Import complete — pushing to cloud','info'); syncPush(); }
       toast('Import successful ✓');
     } catch(err) { toast('Import failed — invalid file'); }
@@ -4298,19 +4292,14 @@ function toggleOtherBreakdown() {
   if (chevron) chevron.classList.toggle('open', _otherBreakdown);
 }
 
-// ── Backup reminder ──────────────────────────────────────────────
-// A nudge, not a nag: after BACKUP_THRESHOLD real edits since the last
-// export, a dismissible banner appears (doesn't block anything). "Not
-// now" doesn't cancel it forever — it halves the counter so it comes
-// back after roughly half as many more changes, rather than going
-// silent until the person remembers on their own.
-//
-// The banner's TRIGGER stays a simple edit counter (covers settings/
-// recurring changes too, not just transactions). But what it SHOWS is
-// computed fresh from the actual data every time, by comparing each
-// transaction's timestamp against lastBackupAt — that's self-correcting
-// and can't drift out of sync the way a second manually-incremented
-// counter could. If never backed up, everything counts.
+// ── Backup status (Sync & Backup drawer) ──────────────────────────
+// ON--043 removed the dismissible nag banner that used to sit on top of
+// this. These two helpers remain — they feed the "Last backup: … · N
+// transactions since" status line in the Sync & Backup drawer. Computed
+// fresh from the actual data every time, by comparing each transaction's
+// timestamp against lastBackupAt — self-correcting, can't drift out of
+// sync the way a manually-incremented counter could. If never backed up,
+// everything counts.
 function txCountsSinceBackup() {
   const cutoff = meta.lastBackupAt ? new Date(meta.lastBackupAt).getTime() : 0;
   let food = 0;
@@ -4329,22 +4318,6 @@ function txCountsPhrase() {
   if (!parts.length) return null;
   return parts.join(' and ') + ' transaction' + ((food+billsN)===1?'':'s');
 }
-function showBackupBanner() {
-  const el  = document.getElementById('backup-banner');
-  const txt = document.getElementById('backup-banner-text');
-  if (txt) txt.textContent = `📦 ${txCountsPhrase() || 'Some changes'} since your last backup — worth exporting?`;
-  if (el) el.classList.add('show');
-}
-function hideBackupBanner() {
-  const el = document.getElementById('backup-banner');
-  if (el) el.classList.remove('show');
-}
-function dismissBackupPrompt() {
-  meta.changesSinceBackup = Math.floor((meta.changesSinceBackup||0) / 2);
-  save();
-  hideBackupBanner();
-}
-
 // ── Toast ──────────────────────────────────────────────────────
 let _tt;
 function toast(msg) {
@@ -4362,7 +4335,6 @@ function toast(msg) {
 load();
 populateSettings();
 renderDash();
-if ((meta.changesSinceBackup||0) >= BACKUP_THRESHOLD) showBackupBanner();
 setSyncState('local');
 
 // ON--037: closing the app while a push/pull is still in flight was the
