@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.28</title>
+<title>Meal Planner v1.29</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -182,7 +182,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.28</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.29</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -466,7 +466,7 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.28 ────────────────────────────────────────────────
+// ── Meal Planner v1.29 ────────────────────────────────────────────────
 // Originally a standalone test build (no sync, no launcher integration).
 // Now live in the launcher with its own bespoke Supabase sync (see
 // syncPullAll/syncPushAll below) — this note is left for history; the
@@ -477,7 +477,13 @@
 // close. Re-centred as proper dialogs (full radius, shadow) and added
 // click-outside. Cook Mode is untouched — it's a fullscreen step-by-
 // step view with no backdrop, not a dialog over content.
-const VERSION = '1.28';
+// v1.29 (MP-039): recipe editor ingredient rows now use the shopping
+// list's search-and-pills pattern — type to filter items, tap a pill to
+// pick, "＋ Add as new item" pill (or Enter) creates a new Unassigned
+// item inline. Replaces the full-library dropdown and the MP-038
+// prompt()-based "+ New Item" button. Save auto-resolves typed-but-
+// unpicked text so rows aren't silently dropped.
+const VERSION = '1.29';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1188,36 +1194,81 @@ function applyRecipeJsonToForm(text) {
 }
 function renderIngRows() {
   const el = document.getElementById('rIngredients');
-  el.innerHTML = editingIngRows.map((row, idx) => `
+  el.innerHTML = editingIngRows.map((row, idx) => {
+    const ing = row.ingredientId ? DB.data.ingredients.find(i => i.id === row.ingredientId) : null;
+    const shown = ing ? ing.name : (row.pendingText || '');
+    return `
     <div style="margin-bottom:8px;">
       <div class="row" style="margin-bottom:4px;">
-        <select class="grow" onchange="editingIngRows[${idx}].ingredientId=this.value">
-          <option value="">Select item...</option>
-          ${DB.data.ingredients.map(i => `<option value="${i.id}" ${i.id===row.ingredientId?'selected':''}>${esc(i.name)}</option>`).join('')}
-        </select>
-        <button class="btn sm" onclick="addNewItemForRecipeRow(${idx})">+ New Item</button>
+        <input class="grow" id="rIngSearch_${idx}" value="${esc(shown)}" placeholder="Search items, or type a new item..."
+          oninput="searchRecipeIngredients(${idx}, this.value)"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();resolveRecipeIngRow(${idx});}">
       </div>
+      <div id="rIngSug_${idx}" class="li-sub" style="margin-bottom:4px;"></div>
       <div class="ing-row" style="grid-template-columns: 1fr 1fr auto;">
         <input type="number" placeholder="Qty" value="${row.qty ?? ''}" oninput="editingIngRows[${idx}].qty=this.value">
         <input placeholder="Unit" value="${esc(row.unit||'')}" oninput="editingIngRows[${idx}].unit=this.value">
         <button class="btn icon sm danger" onclick="removeIngRow(${idx})">✕</button>
       </div>
-    </div>`).join('') || '<div class="li-sub">No items added yet.</div>';
+    </div>`;
+  }).join('') || '<div class="li-sub">No items added yet.</div>';
 }
-// MP-038: create a brand-new Item directly from the recipe editor, without
-// leaving to the Items tab first. Defaults to Unassigned, same as the
-// shopping list's "add new item" flow — findOrCreateIngredient already
-// reuses an existing item of the same name rather than duplicating it.
-function addNewItemForRecipeRow(idx) {
-  const name = prompt('New item name (or an existing item\'s name, to select it):');
-  if (!name || !name.trim()) return;
-  const trimmed = name.trim();
-  const alreadyExisted = DB.data.ingredients.some(i => i.name.toLowerCase() === trimmed.toLowerCase());
-  const ing = findOrCreateIngredient(trimmed, 'each', 'unassigned');
+// MP-039: shopping-list-style search for recipe ingredients — type in the
+// row's search box, matching items appear as tap-to-pick pills, with an
+// "add as new item" pill when there's no exact match. Replaces both the
+// full-library <select> dropdown and MP-038's prompt()-based "+ New Item"
+// button (this flow now covers new-item creation too, still defaulting
+// new items to Unassigned). Typing clears the row's selection until a
+// pill is picked; saveRecipe() auto-resolves any typed-but-unpicked text
+// via findOrCreateIngredient so rows aren't silently dropped on save.
+// Only the suggestion div updates per keystroke — no full re-render, so
+// the input keeps focus while typing.
+function searchRecipeIngredients(idx, q) {
+  const row = editingIngRows[idx];
+  row.pendingText = q;
+  row.ingredientId = '';
+  const el = document.getElementById('rIngSug_' + idx);
+  const term = q.trim().toLowerCase();
+  if (!term) { el.innerHTML = ''; return; }
+  const matches = DB.data.ingredients.filter(i => i.name.toLowerCase().includes(term)).slice(0, 6);
+  const exact = DB.data.ingredients.some(i => i.name.toLowerCase() === term);
+  let html = '';
+  if (matches.length) {
+    html += '<div class="li-sub" style="margin-bottom:4px;">Tap to pick:</div><div style="display:flex;flex-wrap:wrap;">' +
+      matches.map(i => `<span class="pick-pill" onclick="pickRecipeIngredient(${idx},'${i.id}')">${esc(i.name)}</span>`).join('');
+  } else {
+    html += '<div style="display:flex;flex-wrap:wrap;">';
+  }
+  if (!exact) html += `<span class="pick-pill" onclick="createRecipeIngredient(${idx})">＋ Add as new item</span>`;
+  html += '</div>';
+  el.innerHTML = html;
+}
+function pickRecipeIngredient(idx, ingId) {
+  editingIngRows[idx].ingredientId = ingId;
+  delete editingIngRows[idx].pendingText;
+  renderIngRows();
+}
+function createRecipeIngredient(idx) {
+  const input = document.getElementById('rIngSearch_' + idx);
+  const name = (input ? input.value : '').trim();
+  if (!name) return;
+  const alreadyExisted = DB.data.ingredients.some(i => i.name.toLowerCase() === name.toLowerCase());
+  const ing = findOrCreateIngredient(name, 'each', 'unassigned');
   save();
   editingIngRows[idx].ingredientId = ing.id;
+  delete editingIngRows[idx].pendingText;
   renderIngRows();
   toast(alreadyExisted ? 'Selected existing item: ' + ing.name : 'Added "' + ing.name + '" to Items (Unassigned)');
+}
+// Enter key in the row's search box: pick the exact-name match if there is
+// one, otherwise create the typed text as a new item (mirrors the shopping
+// list's add-item Enter behaviour).
+function resolveRecipeIngRow(idx) {
+  const input = document.getElementById('rIngSearch_' + idx);
+  const name = (input ? input.value : '').trim();
+  if (!name) return;
+  const exact = DB.data.ingredients.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (exact) pickRecipeIngredient(idx, exact.id); else createRecipeIngredient(idx);
 }
 function addIngRow() { editingIngRows.push({ ingredientId:'', qty:'', unit:'' }); renderIngRows(); }
 function removeIngRow(i) { editingIngRows.splice(i,1); renderIngRows(); }
@@ -1236,6 +1287,15 @@ function removeStepRow(i) { editingStepRows.splice(i,1); renderStepRows(); }
 function saveRecipe() {
   const name = document.getElementById('rName').value.trim();
   if (!name) return toast('Recipe needs a name');
+  // MP-039: any row where text was typed but no pill picked gets resolved
+  // here (exact-name match or created as a new Unassigned item) rather
+  // than being silently dropped by the ingredientId filter below.
+  editingIngRows.forEach(r => {
+    if (!r.ingredientId && (r.pendingText || '').trim()) {
+      r.ingredientId = findOrCreateIngredient(r.pendingText.trim(), 'each', 'unassigned').id;
+      delete r.pendingText;
+    }
+  });
   const id = document.getElementById('recipeId').value || uid();
   const existing = DB.data.recipes.find(r => r.id === id);
   const recipe = {
