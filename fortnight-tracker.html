@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.19</title>
+<title>9-Day Fortnight Tracker v3.20</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -349,6 +349,9 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .ts-day-date{font-size:.8rem;font-weight:600;}
 .ts-day-sub{font-size:.68rem;color:var(--muted);}
 .ts-day-amt{font-family:'DM Mono',monospace;font-size:.74rem;}
+.ts-abs-badge{font-size:.62rem;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;}
+.ts-abs-badge.holiday{background:rgba(96,165,250,.18);color:#60a5fa;}
+.ts-abs-badge.sick{background:rgba(239,68,68,.18);color:#ef4444;}
 .alloc-row{display:flex;align-items:center;gap:8px;margin-top:8px;}
 .alloc-name{flex:1;min-width:0;font-size:.76rem;}
 .alloc-task{font-size:.64rem;color:var(--muted);}
@@ -381,7 +384,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.19</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.20</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -551,6 +554,19 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // match the reduced target. Marking Done/Conference/Training still
 // jumps to the Timesheet tab (pure navigation, not a calculation) —
 // flagged in the release notes in case that's also unwanted.
+// v3.20 (FT-022): reverted the v3.19 target reduction, at Pete's
+// follow-up request — the week target is back to a flat, unconditional
+// 38:00 (week 1) / 32:00 (week 2), with holiday/sick time counting
+// toward it exactly as any other allocation (matching the pre-v3.19
+// mental model: leave fills the target rather than shrinking it, since
+// no extra hours are worked elsewhere to compensate). weekAbsenceMins
+// and weekAdjustedTarget removed; weekWorkAllocated reverted to a plain
+// weekAllocated summing every allocation with no leave-code exclusion.
+// In their place: a small highlight badge on any Holiday/Sick day
+// showing "Full day" or "Partial H:MM" (comparing the day's recorded
+// holidayMins — already full/partial-aware — against that day's
+// standard hours), so the fact of the absence is visible without
+// touching the week total at all.
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 // v3.2: security fix — the PAL_SESSION message listener accepted a session
 // handoff from ANY origin (no e.origin check), unlike every other app in the
@@ -917,24 +933,20 @@ function autoCodeFor(status){
   return null;
 }
 function allocTotal(d){ return (d.alloc||[]).reduce(function(s,a){ return s+(a.mins||0); },0); }
-// FT-021: the only bundle-derived input to the target is recorded
-// holiday/sickness time — full or partial, whatever's in holidayMins.
-function weekAbsenceMins(b,w){
-  return tsWeekDays(b,w).reduce(function(s,x){
-    return s+((x.d.status==='holiday'||x.d.status==='sick')?(x.d.holidayMins||0):0);
-  },0);
+// FT-022: target is flat 38:00/32:00 — holiday/sick allocations count
+// toward it like any other code, so this is a plain sum, no exclusions.
+function weekAllocated(b,w){
+  return tsWeekDays(b,w).reduce(function(s,x){ return s+allocTotal(x.d); },0);
 }
-function weekAdjustedTarget(b,w){ return Math.max(0, tsWeekTarget(w)-weekAbsenceMins(b,w)); }
-// Work allocated = all allocations EXCLUDING the auto-leave code(s) —
-// that time is already accounted for by the reduced target, so counting
-// it again here would double-subtract it from what's left to fill.
-function weekWorkAllocated(b,w){
-  return tsWeekDays(b,w).reduce(function(s,x){
-    return s+(x.d.alloc||[]).reduce(function(ss,a){
-      var c=codeById(a.codeId);
-      return ss+((c&&(c.autoHoliday||c.autoSick))?0:(a.mins||0));
-    },0);
-  },0);
+// FT-022: is this day's recorded absence a full day or a partial one?
+// Compares holidayMins (already free-entry, full/partial-aware) against
+// that day's own standard length — Friday of week 1 is shorter (360)
+// than every other day (480), so the comparison is per-day, not a flat
+// 480. Returns null for a non-absence day.
+function dayAbsenceLabel(d,i){
+  if(d.status!=='holiday'&&d.status!=='sick') return null;
+  var mins=d.holidayMins||0;
+  return (mins>=stdMins(i)) ? 'Full day' : 'Partial '+hmm(mins);
 }
 function hmm(m){ m=Math.max(0,m|0); return Math.floor(m/60)+':'+String(m%60).padStart(2,'0'); }
 // Absence auto-allocation: only ever overwrites an empty alloc or a
@@ -1148,23 +1160,23 @@ function renderTimesheet(root){
   var h='<div style="margin-bottom:12px"><select onchange="tsSelectBundle(this.value)" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:8px;color:inherit;padding:8px 10px;font-size:.8rem;">'+opts+'</select></div>';
 
   [1,2].forEach(function(w){
-    var fixedTarget=tsWeekTarget(w);
-    var absence=weekAbsenceMins(b,w);
-    var target=weekAdjustedTarget(b,w);
+    var target=tsWeekTarget(w);
     var days=tsWeekDays(b,w);
-    var wTot=weekWorkAllocated(b,w);
+    var wTot=weekAllocated(b,w);
     var cls=wTot===target?'ts-ok':(wTot>target?'ts-over':'ts-under');
-    var absNote=absence>0?' <span class="ts-day-sub">('+hmm(fixedTarget)+' \u2212 '+hmm(absence)+' leave)</span>':'';
     h+='<div class="ts-week">';
     h+='<div class="ts-week-head"><span class="ts-week-title">Week '+w+' <span class="ts-day-sub">'+esc(fmtDate(parseDate(days[0].d.date)))+' \u2013 '+esc(fmtDate(parseDate(days[days.length-1].d.date)))+'</span></span>'
-      +'<span class="ts-week-tot '+cls+'">'+hmm(wTot)+' of '+hmm(target)+absNote+(wTot>target?' \u2014 over!':wTot<target?' \u00b7 '+hmm(target-wTot)+' left':' \u2713')+'</span></div>';
+      +'<span class="ts-week-tot '+cls+'">'+hmm(wTot)+' of '+hmm(target)+(wTot>target?' \u2014 over!':wTot<target?' \u00b7 '+hmm(target-wTot)+' left':' \u2713')+'</span></div>';
     days.forEach(function(x){
       var d=x.d, di=x.i;
       var at=allocTotal(d);
       var stTxt=d.status?d.status.charAt(0).toUpperCase()+d.status.slice(1):'\u2014';
-      // FT-021: no per-day target — display allocated time only, plain.
+      // FT-022: absence gets a highlighted full/partial badge; the
+      // amount still shown is allocated time only, no per-day target.
+      var absLbl=dayAbsenceLabel(d,di);
+      var absBadge=absLbl?' <span class="ts-abs-badge '+d.status+'">'+esc(absLbl)+'</span>':'';
       h+='<div class="ts-day"><div class="ts-day-head" onclick="tsToggleDay('+di+')">'
-        +'<span><span class="ts-day-date">'+esc(fmtDate(parseDate(d.date)))+'</span> <span class="ts-day-sub">'+stTxt+'</span></span>'
+        +'<span><span class="ts-day-date">'+esc(fmtDate(parseDate(d.date)))+'</span> <span class="ts-day-sub">'+stTxt+'</span>'+absBadge+'</span>'
         +'<span class="ts-day-amt">'+(at>0?hmm(at):'\u00b7')+'</span></div>';
       if(tsOpenDay===di){
         (d.alloc||[]).forEach(function(a,ai){
@@ -1257,14 +1269,13 @@ function render(){
   var tcArchive=document.getElementById('tc-archive');
   if(tcLive) tcLive.textContent=liveCount;
   if(tcArchive) tcArchive.textContent=doneBundles.length;
-  // FT-021: timesheet badge = weeks (0-2) in the shown bundle whose
-  // work allocation doesn't yet match the reduced (holiday/sick-aware)
-  // target — week-level now, since there's no per-day target any more.
+  // FT-022: timesheet badge = weeks (0-2) in the shown bundle whose
+  // allocated total doesn't yet match the flat 38:00/32:00 target.
   var tcTs=document.getElementById('tc-timesheet');
   if(tcTs){
     var tb=tsBundle();
     var n=0;
-    if(tb) [1,2].forEach(function(w){ if(weekWorkAllocated(tb,w)!==weekAdjustedTarget(tb,w)) n++; });
+    if(tb) [1,2].forEach(function(w){ if(weekAllocated(tb,w)!==tsWeekTarget(w)) n++; });
     tcTs.textContent=n;
   }
   if(currentTab==='timesheet'){ renderTimesheet(root); return; }
