@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.43</title>
+<title>On Budget v3.44</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -347,7 +347,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.43</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.44</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -863,7 +863,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.43
+// On Budget v3.44
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1326,6 +1326,35 @@
 // enough history exists (trend/average/left-over need 2+ completed
 // months; top shops need any labelled spending), so sparse data
 // degrades gracefully rather than showing empty charts.
+// v3.44 (ON--046, ON--047): phantom-month fix + F&T scope labelling.
+// ON--046 root cause: the ON--036 recovery path's weakest fallback
+// derived a missing monthKey from the transaction's CALENDAR month —
+// but month keys here are pay-CYCLE keys (the month of the pay-in that
+// started the cycle). With payin day 28, a tx dated 10 July belongs to
+// cycle 2026-06 but got filed under 2026-07, creating a phantom month
+// (startBalance:null) holding refugee transactions. The phantom isn't
+// the current key, so it rendered as a History card and fed the v3.43
+// insight cards with wrong splits (£0.00 in whatever didn't get
+// misfiled). Fixed three ways: (1) cycleKeyForDate() now derives the
+// true cycle key from a date, and the recovery fallback uses it;
+// (2) repairPhantomMonths() runs at boot and after every pull — any
+// transaction sitting in a null-startBalance month whose date maps to
+// a different cycle key is refiled to that key, its cloud copy is
+// re-upserted under the new record_key and the old-key row tombstoned
+// (tombstone timestamped 1s older so LWW-by-id deterministically keeps
+// the live copy, and repairs on two devices converge on the same id
+// instead of duplicating). Repair only ever touches null-startBalance
+// months, so genuinely-started months are never rearranged even if the
+// payin day changed historically. Refiles are logged to the sync log,
+// never silent; (3) History skips months that end up with no
+// transactions and no start balance, so an emptied phantom can't
+// render a ghost card. ON--047: month cards and every insight card
+// compute from Food & Travel transactions only — Bills run on their
+// own cleared-balance ledger and never enter months[].transactions.
+// That was always true (by design, not a bug) but nothing said so:
+// month totals now read "F&T £x of £y", the left-over row is labelled
+// "(F&T pot)", and the trend and left-over cards carry a one-line
+// note that Bills are tracked separately.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1763,7 +1792,7 @@ async function syncPull() {
       // for a transaction still present locally; (2) derived from the
       // transaction's own date, for one that's been fully missing since
       // an earlier occurrence of this exact bug, with no local trace left.
-      const mk = t.monthKey || txMonthLookup[t.id] || (t.date ? mKey(new Date(t.date+'T00:00:00')) : null);
+      const mk = t.monthKey || txMonthLookup[t.id] || (t.date ? cycleKeyForDate(t.date) : null); // ON--046: cycle key, not calendar month
       if (!mk) return;
       if (!t.monthKey) { t.monthKey = mk; txRecovered++; txToRepush.push(t); }
       if (!months[mk]) months[mk] = { startBalance:null, transactions:[] };
@@ -1773,6 +1802,7 @@ async function syncPull() {
       addSyncLog(`Recovered ${txRecovered} transaction(s) missing monthKey from a pre-fix sync`,'info');
       txToRepush.forEach(t => syncUpsertTx(t.monthKey, t)); // fix the cloud copy too, not just local
     }
+    repairPhantomMonths(); // ON--046: refile anything a pre-fix recovery misfiled into a phantom month
 
     // Bills recurring / bills transactions / occurrence overrides — each
     // already a flat array locally, so these map onto pal-sync directly.
@@ -1939,7 +1969,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.43', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.44', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
   // Notify launcher so the dashboard card refreshes live
@@ -1947,7 +1977,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.43', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.44', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2007,6 +2037,60 @@ function getBoundaries() {
   const pm = today.getMonth()===0?11:today.getMonth()-1;
   const py = today.getMonth()===0?today.getFullYear()-1:today.getFullYear();
   return { last:payinDate(py,pm,pd), next:thisP };
+}
+
+// ON--046: the pay-cycle key a given date belongs to — the month of the
+// pay-in date on or before it. Mirrors getBoundaries() exactly; used by
+// the pull recovery fallback and repairPhantomMonths(), never for
+// display. A calendar-month mKey(date) is WRONG for any payin day ≠ 1.
+function cycleKeyForDate(iso) {
+  const d  = new Date(iso + 'T00:00:00'); d.setHours(0,0,0,0);
+  const pd = settings.payinDay;
+  const thisP = payinDate(d.getFullYear(), d.getMonth(), pd);
+  if (thisP <= d) return mKey(thisP);
+  const pm = d.getMonth()===0 ? 11 : d.getMonth()-1;
+  const py = d.getMonth()===0 ? d.getFullYear()-1 : d.getFullYear();
+  return mKey(payinDate(py, pm, pd));
+}
+
+// ON--046: refile transactions stranded in phantom months. A phantom is
+// a months[] entry with startBalance:null — only ever created by the
+// pull rebuild, never by startMonth(). Any transaction in one whose
+// date maps to a different cycle key is moved there, re-pushed under
+// the new record_key, and the old-key cloud row tombstoned (1s older
+// timestamp, so LWW by id keeps the live copy and two devices repairing
+// independently converge on the same id). Started months are never
+// touched, so a historic payin-day change can't trigger a rearrange.
+// Idempotent; runs at boot and after every pull.
+function repairPhantomMonths() {
+  let moved = 0;
+  Object.keys(months).forEach(mk => {
+    const m = months[mk];
+    if (m.startBalance !== null && m.startBalance !== undefined) return; // real month — never rearrange
+    const keep = [];
+    (m.transactions || []).forEach(t => {
+      if (t._deleted || !t.date) { keep.push(t); return; }
+      const trueKey = cycleKeyForDate(t.date);
+      if (trueKey === mk) { keep.push(t); return; }
+      const now = new Date();
+      const oldSnapshot = { ...t, updated_at: new Date(now.getTime()-1000).toISOString() };
+      t.monthKey = trueKey;
+      t.updated_at = now.toISOString();
+      if (!months[trueKey]) months[trueKey] = { startBalance:null, transactions:[] };
+      months[trueKey].transactions.push(t);
+      moved++;
+      if (window.PalSync && window.PalSync.hasSession()) {
+        syncTombstoneTx(mk, oldSnapshot);   // retire the misfiled cloud row
+        syncUpsertTx(trueKey, t);           // live copy under the correct key
+      }
+    });
+    m.transactions = keep;
+  });
+  if (moved) {
+    save();
+    addSyncLog(`Refiled ${moved} transaction(s) from phantom month(s) to their true pay cycle`,'info');
+  }
+  return moved;
 }
 
 // Projects next month's headroom from whatever pot/food/travel values are
@@ -2913,7 +2997,15 @@ function histRemainderSvg(keysAsc, aggs) {
 function renderHist() {
   const el  = document.getElementById('hist');
   const cur = curKey();
-  const past = Object.keys(months).filter(k=>k!==cur).sort((a,b)=>b.localeCompare(a));
+  // ON--046: a month with no live transactions AND no start balance is
+  // display-noise (typically an emptied phantom) — never render it.
+  const past = Object.keys(months).filter(k => {
+    if (k === cur) return false;
+    const m = months[k];
+    const hasTx = (m.transactions||[]).some(t=>!t._deleted);
+    const hasStart = m.startBalance !== null && m.startBalance !== undefined;
+    return hasTx || hasStart;
+  }).sort((a,b)=>b.localeCompare(a));
   if (!past.length) { el.innerHTML=`<div style="text-align:center;padding:32px;color:var(--ink3);font-size:13px">No previous months yet</div>`; return; }
 
   const aggs = {};
@@ -2927,6 +3019,7 @@ function renderHist() {
     html += `<div class="stat-card" style="margin-bottom:10px;padding:13px 14px">
       <div class="stat-card-label">Spending by month</div>
       ${histTrendSvg(trendKeys, aggs)}
+      <div style="font-size:10.5px;color:var(--ink3);margin-top:2px">Food &amp; Travel transactions only — Bills are tracked separately.</div>
       <div style="display:flex;gap:12px;margin-top:6px;font-size:10.5px;color:var(--ink2)">
         <span><span class="hist-dot" style="background:var(--weekly);display:inline-block;margin-right:4px"></span>Food</span>
         <span><span class="hist-dot" style="background:var(--travel);display:inline-block;margin-right:4px"></span>Travel</span>
@@ -2976,7 +3069,7 @@ function renderHist() {
     html += `<div class="stat-card" style="margin-bottom:14px;padding:13px 14px">
       <div class="stat-card-label">Left over each month</div>
       ${histRemainderSvg(pastAsc.slice(-12), aggs)}
-      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">Start balance + income − spend. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
+      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">Start balance + income − spend, Food &amp; Travel pot only — Bills run on their own cleared balance. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
     </div>`;
   }
 
@@ -2991,13 +3084,13 @@ function renderHist() {
     html += `<div class="hist-month">
       <div class="hist-month-header">
         <div class="hist-month-name">${label}</div>
-        <div class="hist-month-total">£${tot.toFixed(2)} of £${(d.startBalance||0).toFixed(2)}</div>
+        <div class="hist-month-total">F&amp;T £${tot.toFixed(2)} of £${(d.startBalance||0).toFixed(2)}</div>
       </div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--weekly)"></div><div class="hist-label">🛒 Food</div><div class="hist-amt">£${weekly.toFixed(2)}</div></div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--travel)"></div><div class="hist-label">🚗 Travel</div><div class="hist-amt">£${trav.toFixed(2)}</div></div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--other)"></div><div class="hist-label">📦 Other</div><div class="hist-amt">£${oth.toFixed(2)}</div></div>
       ${inc>0 ? `<div class="hist-cat-row"><div class="hist-dot" style="background:var(--accent)"></div><div class="hist-label">💰 Income</div><div class="hist-amt" style="color:var(--accent)">+£${inc.toFixed(2)}</div></div>` : ''}
-      ${a.hasStart ? `<div class="hist-cat-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:7px"><div class="hist-label">${a.remainder<0?'Overspent by':'Left over'}</div><div class="hist-amt" style="color:${remClr}">£${Math.abs(a.remainder).toFixed(2)}</div></div>` : ''}
+      ${a.hasStart ? `<div class="hist-cat-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:7px"><div class="hist-label">${a.remainder<0?'Overspent by (F&amp;T pot)':'Left over (F&amp;T pot)'}</div><div class="hist-amt" style="color:${remClr}">£${Math.abs(a.remainder).toFixed(2)}</div></div>` : ''}
       ${a.topShop ? `<div class="hist-cat-row"><div class="hist-label">Top shop</div><div class="hist-amt" style="font-weight:500">${esc(a.topShop.name)} <span style="color:var(--ink3)">· £${a.topShop.total.toFixed(2)}</span></div></div>` : ''}
     </div>`;
   });
@@ -4675,6 +4768,7 @@ function toast(msg) {
   if (el) el.addEventListener('input', updateProjectionPreview);
 });
 load();
+repairPhantomMonths(); // ON--046: local-only repair pass (cloud fix-up happens on next authed pull)
 populateSettings();
 renderDash();
 setSyncState('local');
