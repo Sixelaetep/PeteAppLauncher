@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.20</title>
+<title>9-Day Fortnight Tracker v3.21</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -384,7 +384,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.20</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.21</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -567,6 +567,22 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // holidayMins — already full/partial-aware — against that day's
 // standard hours), so the fact of the absence is visible without
 // touching the week total at all.
+// v3.21 (FT-023): restores the per-day target, colour coding and
+// remainder-based code population Pete missed after v3.19's removal —
+// but WITHOUT reintroducing the old requirement that a day be marked
+// Done/Conference/Training for its target to exist. dayTarget(d,i) is
+// now unconditional: every working day's target is its own standard
+// length (stdMins — 8h normally, 6h the short Friday), falling back to
+// the recorded absence amount (full or partial) on a Holiday/Sick day.
+// Day rows show "logged / target" again with the familiar green/amber/
+// red states, and the code picker pre-fills a new row with whatever the
+// day still owes (dayTarget minus what's already allocated) — so the
+// first code on an 8-hour day gets 8:00, and if that's edited down to
+// 4:00, the next code added picks up the remaining 4:00 automatically.
+// The flat week target (v3.20) and the absence Full day/Partial badge
+// (v3.20) are unchanged and sit alongside this. The tab badge reverts
+// to counting unreconciled DAYS (matching the restored day-level
+// target) rather than weeks.
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 // v3.2: security fix — the PAL_SESSION message listener accepted a session
 // handoff from ANY origin (no e.origin check), unlike every other app in the
@@ -938,6 +954,13 @@ function allocTotal(d){ return (d.alloc||[]).reduce(function(s,a){ return s+(a.m
 function weekAllocated(b,w){
   return tsWeekDays(b,w).reduce(function(s,x){ return s+allocTotal(x.d); },0);
 }
+// FT-023: every day's own target — its standard length, or the
+// recorded absence amount (full or partial) on a Holiday/Sick day. No
+// status-gating: a day with no status at all still has a target.
+function dayTarget(d,i){
+  if(d.status==='holiday'||d.status==='sick') return d.holidayMins||0;
+  return stdMins(i);
+}
 // FT-022: is this day's recorded absence a full day or a partial one?
 // Compares holidayMins (already free-entry, full/partial-aware) against
 // that day's own standard length — Friday of week 1 is shorter (360)
@@ -1007,9 +1030,11 @@ function tsAddAlloc(codeId){
   if(!d.alloc) d.alloc=[];
   var exists=d.alloc.some(function(a){return a.codeId===codeId;});
   if(!exists){
-    // FT-021: no per-day target exists any more — new rows start at 0
-    // and Pete fills them in (per his own request to keep this manual).
-    d.alloc.push({codeId:codeId,mins:0});
+    // FT-023: pre-fill with whatever the day still owes against its
+    // target — the first code on an 8h day gets 8:00; edit it down and
+    // the next code added picks up exactly what's left.
+    var remain=Math.max(0,dayTarget(d,tsPickerDay)-allocTotal(d));
+    d.alloc.push({codeId:codeId,mins:remain});
   }
   tsPickerDay=null; tsPickerQ='';
   save(state.bundles[bi]); render();
@@ -1170,14 +1195,14 @@ function renderTimesheet(root){
     days.forEach(function(x){
       var d=x.d, di=x.i;
       var at=allocTotal(d);
+      var dTarget=dayTarget(d,di);
+      var amtCls=at===dTarget?'ts-ok':(at>dTarget?'ts-over':'ts-under');
       var stTxt=d.status?d.status.charAt(0).toUpperCase()+d.status.slice(1):'\u2014';
-      // FT-022: absence gets a highlighted full/partial badge; the
-      // amount still shown is allocated time only, no per-day target.
       var absLbl=dayAbsenceLabel(d,di);
       var absBadge=absLbl?' <span class="ts-abs-badge '+d.status+'">'+esc(absLbl)+'</span>':'';
       h+='<div class="ts-day"><div class="ts-day-head" onclick="tsToggleDay('+di+')">'
         +'<span><span class="ts-day-date">'+esc(fmtDate(parseDate(d.date)))+'</span> <span class="ts-day-sub">'+stTxt+'</span>'+absBadge+'</span>'
-        +'<span class="ts-day-amt">'+(at>0?hmm(at):'\u00b7')+'</span></div>';
+        +'<span class="ts-day-amt '+amtCls+'">'+hmm(at)+' / '+hmm(dTarget)+'</span></div>';
       if(tsOpenDay===di){
         (d.alloc||[]).forEach(function(a,ai){
           var c=codeById(a.codeId);
@@ -1269,13 +1294,13 @@ function render(){
   var tcArchive=document.getElementById('tc-archive');
   if(tcLive) tcLive.textContent=liveCount;
   if(tcArchive) tcArchive.textContent=doneBundles.length;
-  // FT-022: timesheet badge = weeks (0-2) in the shown bundle whose
-  // allocated total doesn't yet match the flat 38:00/32:00 target.
+  // FT-023: timesheet badge = days in the shown bundle whose logged
+  // total doesn't yet match that day's own target.
   var tcTs=document.getElementById('tc-timesheet');
   if(tcTs){
     var tb=tsBundle();
     var n=0;
-    if(tb) [1,2].forEach(function(w){ if(weekAllocated(tb,w)!==tsWeekTarget(w)) n++; });
+    if(tb) tb.days.forEach(function(d,i){ if(allocTotal(d)!==dayTarget(d,i)) n++; });
     tcTs.textContent=n;
   }
   if(currentTab==='timesheet'){ renderTimesheet(root); return; }
