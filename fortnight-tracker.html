@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.17</title>
+<title>9-Day Fortnight Tracker v3.18</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -352,7 +352,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .alloc-row{display:flex;align-items:center;gap:8px;margin-top:8px;}
 .alloc-name{flex:1;min-width:0;font-size:.76rem;}
 .alloc-task{font-size:.64rem;color:var(--muted);}
-.alloc-row input[type=number]{width:52px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:inherit;padding:5px 6px;font-family:'DM Mono',monospace;font-size:.74rem;text-align:center;}
+.alloc-row select{width:60px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:inherit;padding:5px 4px;font-family:'DM Mono',monospace;font-size:.74rem;text-align:center;}
 .alloc-x{background:none;border:none;color:var(--muted);cursor:pointer;font-size:.85rem;padding:2px 6px;}
 .pickwrap{margin-top:9px;}
 .pickwrap input[type=text]{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:inherit;padding:7px 10px;font-size:.76rem;box-sizing:border-box;}
@@ -381,7 +381,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.17</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.18</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -513,6 +513,22 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // compatible: pre-3.17 backups and bundles migrate (alloc:[] added,
 // codes normalised to []), and a day without allocations behaves
 // exactly as v3.16.
+// v3.18 (FT-016): timesheet refinements from first real use. (1) Hour /
+// minute free-type inputs replaced with select pickers — hours 0-10,
+// minutes in 5-minute steps (an off-grid stored value gets its own
+// option rather than being silently snapped). (2) Absence backfill: the
+// v3.17 auto-allocation only fired on the Holiday/Sick TOGGLE, so any
+// day already marked absent before deploy never got its Leave &
+// Sickness row and the code was missing from reports. migrateDays now
+// backfills an empty-alloc absence day with the flagged auto code —
+// idempotent, deterministic on every device, and applies to archived
+// bundles too so historical reports become correct. (3) "Copy previous
+// day" in the day editor duplicates the nearest earlier day's codes
+// (skipping codes already present, keeping their minutes for a
+// like-for-like day and adjustable after). (4) The weekly report is now
+// a per-day grid — codes down the left, Mon-Fri (or Mon-Thu) columns,
+// per-day decimal hours and a Total column; Copy exports the same grid
+// as TSV including the day columns.
 // ── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 // v3.2: security fix — the PAL_SESSION message listener accepted a session
 // handoff from ANY origin (no e.origin check), unlike every other app in the
@@ -750,6 +766,15 @@ function migrateDays(b) {
     if (d.lunch === undefined) d.lunch = 30;
     if (d.timesheetDone === undefined) d.timesheetDone = (i === 4 || i === 8) ? false : null;
     if (d.alloc === undefined) d.alloc = []; // FT-020: [{codeId, mins}]
+    // FT-016: absence days marked before v3.17 never had the auto
+    // allocation applied (it only fired on the toggle). Backfill any
+    // empty-alloc holiday/sick day with the flagged leave code so the
+    // week totals and report include it. Deterministic + idempotent —
+    // safe to run on every load/pull, and correct for archived history.
+    if ((d.status === 'holiday' || d.status === 'sick') && d.alloc.length === 0) {
+      var _ac = (typeof autoCodeFor === 'function') ? autoCodeFor(d.status) : null;
+      if (_ac) d.alloc = [{ codeId: _ac.id, mins: d.holidayMins || 0 }];
+    }
     delete d.manualOverride;
   });
   if (b.active === undefined) b.active = false;
@@ -961,27 +986,71 @@ function tsRemAlloc(di,ai){
   d.alloc.splice(ai,1);
   save(state.bundles[bi]); render();
 }
+// FT-016: select pickers — hours 0-10, minutes in 5-min steps. A stored
+// value off the grid gets its own option so nothing is silently snapped.
+function tsHourSel(di,ai,cur){
+  var o='';
+  var seen=false;
+  for(var hv=0;hv<=10;hv++){ if(hv===cur)seen=true; o+='<option value="'+hv+'"'+(hv===cur?' selected':'')+'>'+hv+'</option>'; }
+  if(!seen) o+='<option value="'+cur+'" selected>'+cur+'</option>';
+  return '<select id="al-h-'+di+'-'+ai+'" onchange="tsUpdAlloc('+di+','+ai+')">'+o+'</select>';
+}
+function tsMinSel(di,ai,cur){
+  var o='', seen=false;
+  for(var mv=0;mv<=55;mv+=5){ if(mv===cur)seen=true; o+='<option value="'+mv+'"'+(mv===cur?' selected':'')+'>'+String(mv).padStart(2,'0')+'</option>'; }
+  if(!seen) o+='<option value="'+cur+'" selected>'+String(cur).padStart(2,'0')+'</option>';
+  return '<select id="al-m-'+di+'-'+ai+'" onchange="tsUpdAlloc('+di+','+ai+')">'+o+'</select>';
+}
+// FT-016: duplicate the nearest earlier day's codes into this day.
+// Codes already present are skipped; minutes copy as-is (like-for-like
+// day) and stay adjustable. Nothing is removed.
+function tsCopyPrevDay(di){
+  var bi=tsBundleIdx(); if(bi<0) return;
+  var b=state.bundles[bi];
+  var src=null;
+  for(var j=di-1;j>=0;j--){ if((b.days[j].alloc||[]).length){ src=b.days[j]; break; } }
+  if(!src){ toast('No earlier day with codes to copy','error'); return; }
+  var d=b.days[di];
+  if(!d.alloc) d.alloc=[];
+  var added=0;
+  src.alloc.forEach(function(a){
+    if(!d.alloc.some(function(x){return x.codeId===a.codeId;})){ d.alloc.push({codeId:a.codeId,mins:a.mins}); added++; }
+  });
+  if(!added){ toast('All of that day\'s codes are already here','error'); return; }
+  save(b); render();
+  toast('Copied '+added+' code(s) from '+fmtDate(parseDate(src.date)),'ok');
+}
 function tsWeekDays(b,w){ var idx=w===1?[0,1,2,3,4]:[5,6,7,8]; return idx.map(function(i){return {d:b.days[i],i:i};}); }
 function tsWeekTarget(w){ var idx=w===1?[0,1,2,3,4]:[5,6,7,8]; return idx.reduce(function(s,i){return s+stdMins(i);},0); }
-function tsWeekReport(b,w){
-  var totals={};
-  tsWeekDays(b,w).forEach(function(x){
+// FT-016: per-day matrix — codes down the left, one column per day of
+// the week, plus Total. Feeds both the on-screen grid and the TSV copy.
+function tsWeekMatrix(b,w){
+  var days=tsWeekDays(b,w);
+  var map={};
+  days.forEach(function(x,col){
     (x.d.alloc||[]).forEach(function(a){
       if(!a.mins) return;
-      if(!totals[a.codeId]) totals[a.codeId]=0;
-      totals[a.codeId]+=a.mins;
+      if(!map[a.codeId]){ map[a.codeId]={perDay:days.map(function(){return 0;}),total:0}; }
+      map[a.codeId].perDay[col]+=a.mins;
+      map[a.codeId].total+=a.mins;
     });
   });
-  return Object.keys(totals).map(function(id){
+  var rows=Object.keys(map).map(function(id){
     var c=codeById(id);
-    return { desc:c?c.desc:'(deleted code)', project:c?c.project:'', task:c?c.task:'', code:c?c.code:'', mins:totals[id] };
-  }).sort(function(a,b){return b.mins-a.mins;});
+    return { desc:c?c.desc:'(deleted code)', project:c?c.project:'', task:c?c.task:'', code:c?c.code:'',
+             perDay:map[id].perDay, total:map[id].total };
+  }).sort(function(a,b){return b.total-a.total;});
+  var dayLabels=days.map(function(x){ return parseDate(x.d.date).toLocaleDateString('en-GB',{weekday:'short'}); });
+  return { rows:rows, dayLabels:dayLabels };
 }
 function tsCopyWeek(w){
   var b=tsBundle(); if(!b) return;
-  var rows=tsWeekReport(b,w);
-  var tsv='Description\tProject\tTask\tCode\tHours\n'+rows.map(function(r){
-    return r.desc+'\t'+r.project+'\t'+r.task+'\t'+r.code+'\t'+m2hrs(r.mins).toFixed(2);
+  var m=tsWeekMatrix(b,w);
+  var head='Description\tProject\tTask\tCode\t'+m.dayLabels.join('\t')+'\tTotal';
+  var tsv=head+'\n'+m.rows.map(function(r){
+    return r.desc+'\t'+r.project+'\t'+r.task+'\t'+r.code+'\t'
+      +r.perDay.map(function(v){return v?m2hrs(v).toFixed(2):'';}).join('\t')
+      +'\t'+m2hrs(r.total).toFixed(2);
   }).join('\n');
   if(navigator.clipboard&&navigator.clipboard.writeText){
     navigator.clipboard.writeText(tsv).then(function(){toast('Week '+w+' report copied','ok');},function(){toast('Copy failed','error');});
@@ -1066,27 +1135,32 @@ function renderTimesheet(root){
         (d.alloc||[]).forEach(function(a,ai){
           var c=codeById(a.codeId);
           h+='<div class="alloc-row"><span class="alloc-name">'+esc(c?c.desc:'(deleted code)')+'<span class="alloc-task"> '+esc(c?c.task:'')+'</span></span>'
-            +'<input type="number" min="0" max="38" id="al-h-'+di+'-'+ai+'" value="'+Math.floor((a.mins||0)/60)+'" onchange="tsUpdAlloc('+di+','+ai+')">h'
-            +'<input type="number" min="0" max="59" step="5" id="al-m-'+di+'-'+ai+'" value="'+((a.mins||0)%60)+'" onchange="tsUpdAlloc('+di+','+ai+')">m'
+            +tsHourSel(di,ai,Math.floor((a.mins||0)/60))+'h'
+            +tsMinSel(di,ai,(a.mins||0)%60)+'m'
             +'<button class="alloc-x" onclick="tsRemAlloc('+di+','+ai+')" aria-label="Remove allocation">\u2715</button></div>';
         });
         if(tsPickerDay===di){
           h+='<div class="pickwrap"><input type="text" id="ts-pick-q" placeholder="Search codes\u2026" value="'+esc(tsPickerQ)+'" oninput="tsPickerInput(this.value)"><div class="pick-pills" id="ts-pick-pills">'+tsPickerPillsHtml()+'</div></div>';
         } else {
-          h+='<button class="ts-add-btn" onclick="tsTogglePicker('+di+')">\uFF0B Add code</button>';
+          h+='<button class="ts-add-btn" onclick="tsTogglePicker('+di+')">\uFF0B Add code</button>'
+            +'<button class="ts-add-btn" onclick="tsCopyPrevDay('+di+')" style="margin-left:6px">\u29C9 Copy previous day</button>';
         }
       }
       h+='</div>';
     });
-    // report
-    var rep=tsWeekReport(b,w);
-    if(rep.length){
+    // report — FT-016: per-day grid, codes left, day columns, Total
+    var mtx=tsWeekMatrix(b,w);
+    if(mtx.rows.length){
       h+='<div style="padding:10px 14px 13px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="ts-day-sub">Week '+w+' timesheet report</span><button class="ts-copy" onclick="tsCopyWeek('+w+')">Copy</button></div>';
-      h+='<table class="ts-report"><tr><th>Description</th><th>Project</th><th>Task</th><th>Code</th><th style="text-align:right">Hours</th></tr>';
-      rep.forEach(function(r){
-        h+='<tr><td>'+esc(r.desc)+'</td><td>'+esc(r.project)+'</td><td>'+esc(r.task)+'</td><td class="num">'+esc(r.code)+'</td><td class="num" style="text-align:right">'+m2hrs(r.mins).toFixed(2)+'<span class="ts-day-sub"> ('+hmm(r.mins)+')</span></td></tr>';
+      h+='<div style="overflow-x:auto"><table class="ts-report"><tr><th>Code</th>';
+      mtx.dayLabels.forEach(function(dl){ h+='<th style="text-align:right">'+esc(dl)+'</th>'; });
+      h+='<th style="text-align:right">Total</th></tr>';
+      mtx.rows.forEach(function(r){
+        h+='<tr><td>'+esc(r.desc)+'<br><span class="cm-meta">'+esc(r.project)+' \u00b7 '+esc(r.task)+' \u00b7 '+esc(r.code)+'</span></td>';
+        r.perDay.forEach(function(v){ h+='<td class="num" style="text-align:right">'+(v?m2hrs(v).toFixed(2):'\u00b7')+'</td>'; });
+        h+='<td class="num" style="text-align:right"><b>'+m2hrs(r.total).toFixed(2)+'</b></td></tr>';
       });
-      h+='</table></div>';
+      h+='</table></div></div>';
     }
     h+='</div>';
   });
