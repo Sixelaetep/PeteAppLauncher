@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.40</title>
+<title>Gym Tracker v2.41</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -235,6 +235,8 @@
   .repeat-toggle-row.on .repeat-toggle-state{color:var(--accent)}
   .cal-plan-row{padding:7px 0;border-bottom:1px solid var(--border)}
   .cal-plan-row:last-of-type{border-bottom:none}
+  .cal-plan-tap{cursor:pointer;border-radius:6px;margin:-2px -4px 0;padding:2px 4px 0}
+  .cal-plan-tap:hover{background:rgba(56,189,248,0.06)}
   .cal-day-card.done{opacity:0.55}
   .cal-day-card.done .cal-plan-name{color:var(--ink2)}
   .cat-link:hover{text-decoration:underline}
@@ -296,7 +298,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.40</div></span>
+      <span>Gym Tracker<div class="ver">v2.41</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -551,6 +553,7 @@
       </div>
       <p style="font-size:11px;color:var(--ink3);margin:6px 0 8px" id="repeatHint"></p>
       <button class="btn btn-primary btn-block" id="confirmAddPlanBtn" onclick="confirmAddPlan()">Add</button>
+      <button class="btn btn-secondary btn-block" id="editExercisesBtn" style="display:none;margin-top:8px" onclick="editExercisesFromPicker()">✏️ Edit exercises in this plan</button>
     </div>
   </div>
 </div>
@@ -736,7 +739,15 @@
 // render plain Mon–Sun at full strength — greying whole historical
 // weeks would make review miserable — so browsing back shows the week
 // exactly as it originally read. No data, sync, or backup changes.
-const VERSION = '2.40';
+// v2.41 (GYM-038): scheduled plans are tap-to-edit. Tapping a plan row
+// on a day card opens the picker prefilled (plan selected, Repeats
+// toggle mirroring its real state) with a Save button. Repeat edits
+// apply to the whole series; toggling repeat CONVERTS — one-off→rule
+// starts the repeat at that date, rule→one-off keeps only the tapped
+// date — via tombstone+create so nothing resurrects on pull. Duplicate
+// guard excludes the item being edited. An Edit-exercises button jumps
+// into the plan editor for the underlying plan. Data shapes unchanged.
+const VERSION = '2.41';
 const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
 
 const TAG_GROUPS = {
@@ -1878,9 +1889,12 @@ function renderCalendar() {
         const removeBtn = r.type === 'repeat'
           ? `<button class="btn btn-danger btn-sm" onclick="openRepeatRemove('${r.rule.id}','${date}')">Remove</button>`
           : `<button class="btn btn-danger btn-sm" onclick="unassignEntry('${r.entry.id}')">Remove</button>`;
+        const itemId = r.type === 'repeat' ? r.rule.id : r.entry.id;
         return `<div class="cal-plan-row">
-          <div class="cal-plan-name">${escHtml(plan.name)}</div>
-          ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}</div>` : ''}
+          <div class="cal-plan-tap" onclick="openScheduleEdit('${r.type}','${itemId}','${date}')">
+            <div class="cal-plan-name">${escHtml(plan.name)}</div>
+            ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}</div>` : ''}
+          </div>
           <div class="li-actions">
             ${isToday ? `<button class="btn btn-primary btn-sm" onclick="startSession('${plan.id}')">▶ Start</button>` : ''}
             ${removeBtn}
@@ -1943,6 +1957,7 @@ let _repeatDays = [];                 // Mon=0 … Sun=6
 function openSchedulePicker(date) {
   _schedulePickerDate = date;
   _pickerAction = 'schedule';
+  _pickerEditTarget = null;
   _pickerSelectedPlanId = null;
   _repeatOn = false;
   _repeatMode = 'daily';
@@ -1957,11 +1972,43 @@ function openSchedulePicker(date) {
 // config, no Add button.
 function openStartPlanPicker() {
   _pickerAction = 'start';
+  _pickerEditTarget = null;
   _pickerSelectedPlanId = null;
   document.getElementById('scheduleModalTitle').textContent = 'Start from a plan';
   document.getElementById('repeatSection').style.display = 'none';
   fillPlanPickerList();
   openModal('modalSchedule');
+}
+// GYM-038: edit mode — same modal, prefilled from the tapped item.
+let _pickerEditTarget = null; // { kind:'oneoff'|'repeat', id, date }
+function openScheduleEdit(kind, id, date) {
+  const item = getScheduleEntries().find(e => e.id === id);
+  if (!item) return;
+  _pickerAction = 'edit';
+  _pickerEditTarget = { kind, id, date };
+  _schedulePickerDate = kind === 'repeat' ? item.startDate : item.date;
+  _pickerSelectedPlanId = item.planId;
+  if (kind === 'repeat') {
+    _repeatOn = true;
+    _repeatMode = (item.freq === 'daily' || item.freq === 'weekly') ? item.freq : 'custom';
+    _repeatCustomKind = item.freq === 'everyN' ? 'everyN' : 'days';
+    _repeatDays = (item.days || [weekdayIdx(item.startDate)]).slice();
+    if (item.freq === 'everyN') document.getElementById('repIntervalInput').value = item.interval || 2;
+  } else {
+    _repeatOn = false;
+    _repeatMode = 'daily';
+    _repeatCustomKind = 'days';
+    _repeatDays = [weekdayIdx(item.date)];
+  }
+  document.getElementById('scheduleModalTitle').textContent = 'Edit — ' + fmtDate(date);
+  fillPlanPickerList();
+  renderRepeatControls();
+  openModal('modalSchedule');
+}
+function editExercisesFromPicker() {
+  if (!_pickerSelectedPlanId) return;
+  closeModal('modalSchedule');
+  openPlanEditor(_pickerSelectedPlanId);
 }
 function fillPlanPickerList() {
   const plans = getPickablePlans();
@@ -2021,16 +2068,27 @@ function renderRepeatControls() {
       ? '🔁 Repeats on the chosen days from ' + fmtDate(date) + ' until ended.'
       : '🔁 Repeats every N days from ' + fmtDate(date) + ' until ended.';
   document.getElementById('repeatHint').textContent = hint;
-  document.getElementById('confirmAddPlanBtn').textContent = _repeatOn ? 'Add repeating plan' : 'Add to ' + fmtDate(date);
+  const editing = _pickerAction === 'edit';
+  if (editing && _repeatOn && _pickerEditTarget && _pickerEditTarget.kind === 'repeat') {
+    document.getElementById('repeatHint').textContent += ' Changes apply to the whole repeat.';
+  }
+  document.getElementById('confirmAddPlanBtn').textContent =
+    editing ? 'Save changes' : (_repeatOn ? 'Add repeating plan' : 'Add to ' + fmtDate(date));
+  document.getElementById('editExercisesBtn').style.display = editing ? '' : 'none';
 }
 function confirmAddPlan() {
-  const date = _schedulePickerDate;
+  const editing = _pickerAction === 'edit' && _pickerEditTarget;
+  const date = editing ? _pickerEditTarget.date : _schedulePickerDate;
   const planId = _pickerSelectedPlanId;
   if (!planId) { toast('Select a plan first'); return; }
-  // Duplicate guard: already on this day directly or via a rule.
-  if (resolvePlansForDate(date).some(r => r.planId === planId)) {
+  // Duplicate guard: already on this day directly or via a rule —
+  // excluding the item being edited (GYM-038).
+  const editId = editing ? _pickerEditTarget.id : null;
+  if (resolvePlansForDate(date).some(r =>
+    r.planId === planId && (r.type === 'oneoff' ? r.entry.id : r.rule.id) !== editId)) {
     toast('That plan is already on this day'); return;
   }
+  if (editing) { saveScheduleEdit(planId); return; }
   const now = new Date().toISOString();
   let record;
   if (!_repeatOn) {
@@ -2056,6 +2114,56 @@ function confirmAddPlan() {
   renderHome();
   toast(record.kind === 'repeat' ? 'Added — ' + repeatLabel(record).toLowerCase() + ' ✓' : 'Added ✓');
 }
+// GYM-038: apply edits. In-kind edits mutate; kind changes convert via
+// tombstone+create so old records can't resurrect on pull.
+function saveScheduleEdit(planId) {
+  const t = _pickerEditTarget;
+  const item = getScheduleEntries().find(e => e.id === t.id);
+  if (!item) { closeModal('modalSchedule'); return; }
+  const now = new Date().toISOString();
+  const touched = [];
+  const buildRuleFields = rec => {
+    if (_repeatMode === 'daily') { rec.freq = 'daily'; delete rec.days; delete rec.interval; }
+    else if (_repeatMode === 'weekly') { rec.freq = 'weekly'; delete rec.days; delete rec.interval; }
+    else if (_repeatCustomKind === 'days') {
+      if (!_repeatDays.length) { toast('Pick at least one day'); return false; }
+      rec.freq = 'days'; rec.days = _repeatDays.slice().sort((a,b)=>a-b); delete rec.interval;
+    } else {
+      const n = parseInt(document.getElementById('repIntervalInput').value, 10);
+      if (!n || n < 1 || n > 60) { toast('Enter an interval between 1 and 60 days'); return false; }
+      rec.freq = 'everyN'; rec.interval = n; delete rec.days;
+    }
+    return true;
+  };
+  if (t.kind === 'repeat' && _repeatOn) {
+    // rule → rule: whole-series edit; keep startDate, endDate, exceptions
+    item.planId = planId;
+    if (!buildRuleFields(item)) return;
+    item.updatedAt = now; touched.push(item);
+  } else if (t.kind === 'oneoff' && !_repeatOn) {
+    item.planId = planId; item.updatedAt = now; touched.push(item);
+  } else if (t.kind === 'oneoff' && _repeatOn) {
+    // one-off → repeat starting at its date
+    const rule = { id: uid('scr'), kind: 'repeat', planId, startDate: item.date, exceptions: [], createdAt: now, updatedAt: now };
+    if (!buildRuleFields(rule)) return;
+    item._deleted = true; item.updatedAt = now;
+    _env.data.scheduleEntries.push(rule);
+    touched.push(item, rule);
+  } else {
+    // repeat → one-off: keep only the tapped date
+    const entry = { id: uid('sc'), date: t.date, planId, createdAt: now, updatedAt: now };
+    item._deleted = true; item.updatedAt = now;
+    _env.data.scheduleEntries.push(entry);
+    touched.push(item, entry);
+  }
+  save(_env);
+  touched.forEach(rec => sbUpsert('schedule', rec, null));
+  closeModal('modalSchedule');
+  renderCalendar();
+  renderHome();
+  toast('Saved ✓');
+}
+
 // GYM-036: removal is per-entry now that days hold multiple plans.
 function unassignEntry(entryId) {
   const entry = getScheduleEntries().find(e => e.id === entryId);
