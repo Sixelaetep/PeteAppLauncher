@@ -329,9 +329,6 @@
   #app-filter-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 
   /* Modal */
-  /* v1.53: TI-070 — allIssues() now filters _deleted tombstones; archived-but-open
-     issues show a "not on Kanban" hint in the Issues list so orphaned records are
-     immediately self-explanatory rather than mysteriously absent from the board. */
   /* v1.52: suite-wide modal audit — this modal system was already
      centred (align-items:center, full radius). Added click-outside-
      to-close to the 6 modals that lacked it (New Issue, Build Brief,
@@ -660,6 +657,13 @@
         </div>
       </div>
       <div class="sync-log" id="sb-log"><div class="log-entry info">No sync activity yet</div></div>
+
+      <!-- TI-018 (v1.53): tombstone compact pilot — the suite's first app
+           to surface pal-sync v1.10's count-then-confirm hard delete of
+           stale tombstones. Scoped to this app's own table only. -->
+      <div class="section-head" style="margin-top:16px">🧹 Housekeeping</div>
+      <button class="action-btn" id="compact-btn" onclick="compactOldDeletes()" style="font-size:11px;padding:5px 12px">🧹 Compact old deletes</button>
+      <p style="font-size:11px;color:var(--ink3);margin-top:6px;line-height:1.6">Permanently removes deleted-record tombstones older than 90 days from this app's cloud table. Counts first and asks before removing anything — live records and recent deletes are never touched.</p>
     </div>
 
     <div class="section-head" style="margin-top:20px">Storage</div>
@@ -1087,11 +1091,7 @@ function allTests() {
 }
 
 function allIssues() {
-  // TI-070: filter out _deleted tombstones that may linger in state after a
-  // cross-device delete — they are not real issues and must not appear anywhere.
-  return Object.values(state.issues)
-    .filter(i => !i._deleted)
-    .sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
+  return Object.values(state.issues).sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
 }
 
 function statusPill(status) {
@@ -2117,11 +2117,6 @@ function renderIssues() {
   function issueCard(issue) {
     const app = state.apps[issue.appId];
     const sel = selectedIssues.has(issue.id);
-    // TI-070: warn when an archived issue still has status 'open' — it won't
-    // appear on the Kanban (which always hides archived), so surface a hint.
-    const archivedOpenHint = (issue.archived && (issue.status === 'open' || !issue.status))
-      ? `<div style="font-size:10px;color:var(--ink3);margin-top:4px">📦 Archived — not shown on Kanban board</div>`
-      : '';
     return `<div class="card" id="icard-${esc(issue.id)}">
       <div class="issue-row" style="padding:12px 14px">
         <div class="issue-sel${sel?' selected':''}" onclick="toggleIssueSelect('${esc(issue.id)}')">${sel?'✓':''}</div>
@@ -2134,7 +2129,6 @@ function renderIssues() {
             <span>${fmtDate(issue.createdAt)}</span>
             ${issue.resolvesIn?`<span style="color:var(--green);font-size:10px">Deployed in v${esc(issue.resolvesIn)}</span>`:''}
           </div>
-          ${archivedOpenHint}
           ${issue.desc?`<div class="issue-desc">${esc(issue.desc)}</div>`:''}
         </div>
       </div>
@@ -2724,7 +2718,39 @@ function addSyncLog(msg, type) {
   _syncLog.unshift({ ts, msg, type: type||'info' });
   if (_syncLog.length > 120) _syncLog.length = 120;
   const el = document.getElementById('sb-log');
-  if (el) el.innerHTML = _syncLog.map(e=>`<div class="log-entry ${e.type}">${e.ts} — ${e.msg}</div>`).join('');
+  if (el) el.innerHTML = _syncLog.map(e=>`<div class="log-entry ${e.type}">${e.ts} — ${esc(e.msg)}</div>`).join(''); // v1.53: msg can carry server error text — escape at render, suite convention
+}
+
+// TI-018 (v1.53): tombstone compact pilot. Count-then-confirm wrapper
+// around pal-sync v1.10's compactTombstones — the suite's one sanctioned
+// hard DELETE. Only ever targets ti_records rows that are BOTH
+// tombstoned and 90+ days stale; RLS additionally scopes to this user.
+// Deliberately manual (archive-over-delete instinct): nothing is
+// removed without the count being shown and confirmed first.
+async function compactOldDeletes() {
+  if (!window.PalSync.hasSession()) { addSyncLog('Compact needs a live session — open via the launcher','err'); return; }
+  const btn = document.getElementById('compact-btn');
+  btn.disabled = true;
+  try {
+    addSyncLog('Counting compactable tombstones…','info');
+    const { count } = await window.PalSync.countCompactableTombstones(SB_TABLE, 90);
+    if (!count) { addSyncLog('Nothing to compact — no tombstones older than 90 days','ok'); return; }
+    if (!confirm(`Permanently remove ${count} deleted-record tombstone(s) older than 90 days from the cloud?\n\nLive records and recent deletes are never touched. This cannot be undone.`)) {
+      addSyncLog('Compact cancelled — nothing removed','info'); return;
+    }
+    const { deleted } = await window.PalSync.compactTombstones(SB_TABLE, 90);
+    if (deleted === null) {
+      // server didn't report a count — verify by re-counting
+      const after = await window.PalSync.countCompactableTombstones(SB_TABLE, 90);
+      addSyncLog(`Compact done — ${count - after.count} tombstone(s) removed (verified by re-count)`,'ok');
+    } else {
+      addSyncLog(`Compact done — ${deleted} tombstone(s) removed`,'ok');
+    }
+  } catch (err) {
+    addSyncLog('Compact failed: ' + window.PalSync.errorHint(err.status, err.message),'err');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Per-entity sync helpers ─────────────────────────────────────

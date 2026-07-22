@@ -135,6 +135,21 @@
  * drop one entry, accepted as vanishingly unlikely at this scale and
  * self-healing via the next pull. Non-401 failures during a flush are
  * dropped, same as v1.8 (documented behaviour, not a regression).
+ * v1.10 — tombstone compaction, the suite's ONE sanctioned use of hard
+ * DELETE. Soft-delete tombstones are kept forever by design (they stop
+ * resurrection on pull), but they accumulate without bound and every
+ * pull fetches all of them. countCompactableTombstones(table, days) and
+ * compactTombstones(table, days) target only rows that are BOTH
+ * tombstoned (data->>_deleted = true) AND stale (updated_at older than
+ * the threshold, default 90 days, clamped to a 30-day minimum). Safety
+ * argument: a device offline longer than the threshold does a fresh
+ * bootstrap on return, and bootstrap treats cloud as authoritative — a
+ * compacted tombstone therefore has nothing left to protect against.
+ * Live rows and recent tombstones are untouchable by construction (the
+ * WHERE clause, plus RLS scoping everything to the caller's own rows).
+ * Deliberately NOT automatic: apps surface it as a count-then-confirm
+ * button. GigsAndTrips and Meal Planner (bespoke shared sync) are out
+ * of scope — their shared-data tombstone policy needs its own thinking.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -344,6 +359,44 @@ window.PalSync = (function () {
     return all;
   }
 
+  // ── Tombstone compaction (v1.10) ─────────────────────────────────
+  // Shared WHERE for both functions: this user's rows, tombstoned, and
+  // older than the cutoff. olderThanDays defaults to 90 and is clamped
+  // to a 30-day floor — below that, a rarely-used device could plausibly
+  // still be relying on the tombstone to learn about the delete.
+  function _compactFilter(tableName, olderThanDays) {
+    const days = Math.max(30, olderThanDays || 90);
+    const cutoff = new Date(Date.now() - days*86400000).toISOString();
+    return '/' + tableName + '?user_id=eq.' + _userId +
+           '&data->>_deleted=eq.true&updated_at=lt.' + encodeURIComponent(cutoff);
+  }
+
+  // How many tombstones WOULD be removed — zero-row GET, count from the
+  // Content-Range header. Always call this first and show the number.
+  async function countCompactableTombstones(tableName, olderThanDays) {
+    if (!hasSession()) return { count: 0 };
+    const res = await sbFetch(_compactFilter(tableName, olderThanDays) + '&select=record_key', 'GET', null, {
+      'Range-Unit': 'items', 'Range': '0-0', 'Prefer': 'count=exact'
+    });
+    if (!res.ok) { const err = new Error(res.status + ' ' + (await res.text())); err.status = res.status; throw err; }
+    const total = parseInt((res.headers.get('Content-Range') || '').split('/')[1], 10);
+    return { count: isNaN(total) ? 0 : total };
+  }
+
+  // The hard DELETE. Same filter, so it can never touch a live row or a
+  // recent tombstone. Returns the server-reported removed count when
+  // available (Content-Range with count=exact), else null — callers can
+  // re-count to verify.
+  async function compactTombstones(tableName, olderThanDays) {
+    if (!hasSession()) return { deleted: 0 };
+    const res = await sbFetch(_compactFilter(tableName, olderThanDays), 'DELETE', null, {
+      'Prefer': 'return=minimal,count=exact'
+    });
+    if (!res.ok) { const err = new Error(res.status + ' ' + (await res.text())); err.status = res.status; throw err; }
+    const total = parseInt((res.headers.get('Content-Range') || '').split('/')[1], 10);
+    return { deleted: isNaN(total) ? null : total };
+  }
+
   // ── Per-table helper ──────────────────────────────────────────────
   // tableName: the Supabase table (record_key + jsonb data + updated_at,
   // RLS scoped to auth.uid() = user_id — see the reference tables already
@@ -483,6 +536,8 @@ window.PalSync = (function () {
     setSession:       setSession,
     sbFetch:          sbFetch,
     fetchTableRows:   fetchTableRows,
+    countCompactableTombstones: countCompactableTombstones,
+    compactTombstones: compactTombstones,
     table:            table,
     errorHint:        errorHint,
     flushRetryQueue:  flushRetryQueue,
