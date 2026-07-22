@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.33</title>
+<title>Meal Planner v1.34</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -194,7 +194,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.33</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.34</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -342,9 +342,19 @@
       <div id="insightsMostEaten"><div class="empty">No devoured meals logged yet.</div></div>
     </div>
     <div class="card" style="margin-top:14px;">
+      <div class="card-title">🔁 Haven't Had in a While</div>
+      <div class="li-sub" style="margin-bottom:10px;">Longest gap since last planned — nothing already scheduled ahead. Handy when picking next week's meals.</div>
+      <div id="insightsRotation"><div class="empty">Plan some meals first — gaps appear once recipes have history.</div></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
       <div class="card-title" style="color:var(--danger);">⚠️ Tummy Reaction Log</div>
-      <div class="li-sub" style="margin-bottom:10px;">Meals flagged as causing a reaction — shown with reaction count vs times devoured.</div>
+      <div class="li-sub" style="margin-bottom:10px;">Meals flagged as causing a reaction — reaction count vs times eaten (devoured or flagged).</div>
       <div id="insightsReactions"><div class="empty">No reactions flagged yet.</div></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="card-title" style="color:var(--danger);">🧪 Ingredient Patterns</div>
+      <div class="li-sub" style="margin-bottom:10px;">Ingredients appearing in 2+ reaction-flagged meals, by reaction rate. Pattern-spotting, not proof — ingredients that always appear together can't be told apart. Recipe meals only (free-text meals carry no ingredient list).</div>
+      <div id="insightsIngredients"><div class="empty">Not enough flagged meals yet for ingredient patterns.</div></div>
     </div>
   </div>
 </div>
@@ -493,7 +503,7 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.30 ────────────────────────────────────────────────
+// ── Meal Planner v1.34 ────────────────────────────────────────────────
 // Originally a standalone test build (no sync, no launcher integration).
 // Now live in the launcher with its own bespoke Supabase sync (see
 // syncPullAll/syncPushAll below) — this note is left for history; the
@@ -515,13 +525,36 @@
 //   new sections can be created directly from the inline category selector.
 // v1.32 (MP-042): recipe cards now show warning tags for missing ingredients
 //   or instructions, so incomplete recipes are visible at a glance.
+// v1.34 (MP-044): rotation prompts + reaction insight refinements.
+// (1) The slot-assignment modal's Recipe view now shows up to three
+// "Haven't had lately" pills above the picker — recipes matching the
+// slot's category, not already planned for a future date, last had 3+
+// weeks ago (or never), oldest gap first. Tapping a pill selects it in
+// the picker; Save works as normal. (2) Insights gains a "Haven't had
+// in a while" card — the same ranking across all recipes, top 10, so
+// rotation gaps are visible outside the planning flow too. (3) Reaction
+// stats refined: meal names now merge case-insensitively ("chilli" and
+// "Chilli" were split rows, diluting exactly the pattern the flag
+// exists to catch), and a slot flagged with a reaction now counts as
+// eaten even if devoured wasn't ticked — the old maths showed a
+// confusing 100% fallback for reaction-without-devoured. Denominators
+// now read "x of y eaten". (4) New "Ingredient patterns" card: for
+// recipe slots, each eaten occurrence is attributed to the recipe's
+// ingredients, surfacing ingredients with 2+ reactions across 2+
+// eaten meals, sorted by reaction rate — the "is it always that food?"
+// view, since a culprit shows up across different meals. Free-text and
+// leftover slots carry no ingredient data so they can't contribute
+// (noted in the card). Counts are pattern-spotting, not proof —
+// ingredients that always appear together can't be told apart.
+// Also: JS header version comment re-synced (it was stuck at v1.30
+// while title/badge moved to v1.33 — bump-everywhere rule).
 // v1.31 (MP-041): tummy reaction flag — tap 😐 on any assigned slot to
 // flag a meal caused a reaction. Slots show ⚠️ Reaction label and a
 // red border. New Insights tab shows most-eaten meals (by devoured
 // count) and a Reaction Log listing flagged meals with reaction count
 // vs devoured count, plus a percentage bar. Stored as slot.reaction
 // boolean — fully backwards-compatible; absent = false.
-const VERSION = '1.33';
+const VERSION = '1.34';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1848,6 +1881,61 @@ function renderPlan() {
   }
   el.innerHTML = html;
 }
+// ── MP-044: recipe usage map for rotation prompts ────────────────
+// Per recipe: most recent planned date up to today (lastPast), whether
+// it's already on the plan for a future date (hasFuture), and total
+// planned occurrences. Pure read of mealPlanDays — no writes.
+function recipeUsageMap() {
+  const todayIso = new Date().toISOString().slice(0,10);
+  const map = {};
+  Object.values(DB.data.mealPlanDays || {}).forEach(day => {
+    if (!day.slots) return;
+    Object.values(day.slots).forEach(slot => {
+      if (!slot || slot.type !== 'recipe' || !slot.recipeId) return;
+      if (!map[slot.recipeId]) map[slot.recipeId] = { lastPast: null, hasFuture: false, planned: 0 };
+      const u = map[slot.recipeId];
+      u.planned++;
+      if (day.date > todayIso) u.hasFuture = true;
+      else if (!u.lastPast || day.date > u.lastPast) u.lastPast = day.date;
+    });
+  });
+  return map;
+}
+function gapDays(iso) {
+  return Math.round((new Date().setHours(0,0,0,0) - new Date(iso+'T00:00:00').getTime()) / 86400000);
+}
+function gapLabel(iso) {
+  const d = gapDays(iso);
+  return d < 14 ? d + 'd ago' : Math.round(d/7) + 'w ago';
+}
+// Recipes worth suggesting for a slot: match the category filter (same
+// rule as the picker — 'any' always matches), nothing already scheduled
+// ahead, and either never had or last had 3+ weeks ago. Oldest first;
+// never-had entries after the dated ones (rotation before exploration).
+function rotationCandidates(filterCategory, limit) {
+  const usage = recipeUsageMap();
+  const matches = r => !filterCategory || (r.mealCategory||'any') === 'any' || r.mealCategory === filterCategory;
+  const dated = [], never = [];
+  DB.data.recipes.filter(matches).forEach(r => {
+    const u = usage[r.id];
+    if (u && u.hasFuture) return;
+    if (u && u.lastPast) { if (gapDays(u.lastPast) >= 21) dated.push({ r, last: u.lastPast }); }
+    else never.push({ r, last: null });
+  });
+  dated.sort((a,b) => a.last.localeCompare(b.last));
+  never.sort((a,b) => a.r.name.localeCompare(b.r.name));
+  return dated.concat(never).slice(0, limit || 3);
+}
+function pickRotationSuggestion(recipeId) {
+  const sel = document.getElementById('slotRecipeId');
+  if (!sel) return;
+  // The suggestion might be filtered out of the current picker view
+  // (e.g. 'any'-category recipe while a filter is on) — it never is
+  // with the shared matcher, but guard anyway rather than half-select.
+  if (![...sel.options].some(o => o.value === recipeId)) return;
+  sel.value = recipeId;
+}
+
 let slotCtx = {};
 function openSlotModal(date, meal) {
   slotCtx = { date, meal };
@@ -1898,7 +1986,12 @@ function renderSlotTypeFields(existing) {
   const el = document.getElementById('slotFields');
   if (type === 'recipe') {
     const filterCat = showAllRecipesInPicker ? null : slotMealCategory(slotCtx.meal);
-    el.innerHTML = `<label class="lbl">Recipe</label><select id="slotRecipeId">${recipeOptionGroupsHtml(existing&&existing.recipeId, filterCat)}</select>
+    const rot = rotationCandidates(filterCat, 3);
+    const rotHtml = rot.length ? `<div class="lbl" style="margin-bottom:4px;">🔁 Haven't had lately</div>
+      <div class="row" style="flex-wrap:wrap;gap:5px;margin-bottom:10px;">${rot.map(c =>
+        `<span class="pick-pill" onclick="pickRotationSuggestion('${c.r.id}')">${esc(c.r.name)} <span style="opacity:.65;">· ${c.last ? gapLabel(c.last) : 'not tried yet'}</span></span>`
+      ).join('')}</div>` : '';
+    el.innerHTML = `${rotHtml}<label class="lbl">Recipe</label><select id="slotRecipeId">${recipeOptionGroupsHtml(existing&&existing.recipeId, filterCat)}</select>
       ${filterCat ? `<label class="slot-done" style="margin-top:8px;font-size:12px;"><input type="checkbox" ${showAllRecipesInPicker?'checked':''} onchange="toggleShowAllRecipes(this.checked)"><span>Showing ${MEAL_CATEGORY_LABELS[filterCat]} recipes only — show all</span></label>` : ''}`;
   } else if (type === 'text') {
     el.innerHTML = `<label class="lbl">Description</label><input id="slotText" value="${existing&&existing.text?esc(existing.text):''}" placeholder="e.g. Toast and eggs">
@@ -2281,24 +2374,47 @@ function removeAllBought() {
 // "Devoured" = slot.devoured=true. "Reaction" = slot.reaction=true.
 // Name is resolved to: recipe name, slot.text, or slot.label.
 function renderInsights() {
-  // tally: name -> { devoured, reaction, total }
+  // tally: lowercased name -> { name, devoured, reaction, eaten, total }
+  // v1.34: keyed case-insensitively — "chilli" and "Chilli" were split
+  // rows before, diluting exactly the pattern the reaction flag exists
+  // to catch. Display name = first casing seen. "eaten" counts a slot
+  // as eaten when it's devoured OR reaction-flagged: a flagged reaction
+  // means it was eaten even if devoured never got ticked.
   const tally = {};
+  const ingStats = {}; // ingredientId -> { eaten, reaction } (recipe slots only)
   function tallySlot(slot) {
     if (!slot || slot.type === 'none') return;
-    let name = '';
+    let name = '', recipe = null;
     if (slot.type === 'recipe') {
-      const r = DB.data.recipes.find(x => x.id === slot.recipeId);
-      name = r ? r.name : null;
+      recipe = DB.data.recipes.find(x => x.id === slot.recipeId);
+      name = recipe ? recipe.name : null;
     } else if (slot.type === 'text') {
       name = slot.text || null;
     } else if (slot.type === 'leftover') {
       name = slot.label ? slot.label.replace(/ \(leftover\)$/, '') : 'Leftover';
     }
     if (!name) return;
-    if (!tally[name]) tally[name] = { devoured: 0, reaction: 0, total: 0 };
-    tally[name].total++;
-    if (slot.devoured) tally[name].devoured++;
-    if (slot.reaction) tally[name].reaction++;
+    const key = name.trim().toLowerCase();
+    if (!tally[key]) tally[key] = { name: name.trim(), devoured: 0, reaction: 0, eaten: 0, total: 0 };
+    const t = tally[key];
+    const eaten = !!(slot.devoured || slot.reaction);
+    t.total++;
+    if (slot.devoured) t.devoured++;
+    if (slot.reaction) t.reaction++;
+    if (eaten) t.eaten++;
+    // MP-044: attribute eaten recipe occurrences to their ingredients —
+    // a culprit food shows up across different meals, which meal-level
+    // counts can't see.
+    if (eaten && recipe && Array.isArray(recipe.ingredients)) {
+      const seen = new Set();
+      recipe.ingredients.forEach(row => {
+        if (!row.ingredientId || seen.has(row.ingredientId)) return;
+        seen.add(row.ingredientId);
+        if (!ingStats[row.ingredientId]) ingStats[row.ingredientId] = { eaten: 0, reaction: 0 };
+        ingStats[row.ingredientId].eaten++;
+        if (slot.reaction) ingStats[row.ingredientId].reaction++;
+      });
+    }
   }
   Object.values(DB.data.mealPlanDays || {}).forEach(day => {
     if (!day.slots) return;
@@ -2307,38 +2423,80 @@ function renderInsights() {
 
   // Most eaten — sorted by devoured count desc, then total desc
   const meatEl = document.getElementById('insightsMostEaten');
-  const devouredEntries = Object.entries(tally)
-    .filter(([,v]) => v.devoured > 0)
-    .sort((a,b) => b[1].devoured - a[1].devoured || b[1].total - a[1].total)
+  const devouredEntries = Object.values(tally)
+    .filter(v => v.devoured > 0)
+    .sort((a,b) => b.devoured - a.devoured || b.total - a.total)
     .slice(0, 20);
   if (devouredEntries.length === 0) {
     meatEl.innerHTML = '<div class="empty">No devoured meals logged yet.</div>';
   } else {
-    meatEl.innerHTML = devouredEntries.map(([name, v]) => `
+    meatEl.innerHTML = devouredEntries.map(v => `
       <div class="insight-row">
-        <span class="insight-name">${esc(name)}</span>
+        <span class="insight-name">${esc(v.name)}</span>
         <span class="insight-count">${v.devoured} devoured${v.total > v.devoured ? ` of ${v.total} planned` : ''}</span>
+      </div>`).join('');
+  }
+
+  // ── MP-044: rotation card — same ranking as the modal pills, unfiltered ──
+  const rotEl = document.getElementById('insightsRotation');
+  const rotList = rotationCandidates(null, 10);
+  if (!rotList.length) {
+    rotEl.innerHTML = '<div class="empty">Nothing overdue — everything\'s either recent or already planned ahead.</div>';
+  } else {
+    rotEl.innerHTML = rotList.map(c => `
+      <div class="insight-row">
+        <span class="insight-name">${esc(c.r.name)}</span>
+        <span class="insight-count">${c.last ? esc(gapLabel(c.last)) : 'not tried yet'}</span>
       </div>`).join('');
   }
 
   // Reactions — only meals that have at least one reaction flag
   const reactEl = document.getElementById('insightsReactions');
-  const reactionEntries = Object.entries(tally)
-    .filter(([,v]) => v.reaction > 0)
-    .sort((a,b) => b[1].reaction - a[1].reaction);
+  const reactionEntries = Object.values(tally)
+    .filter(v => v.reaction > 0)
+    .sort((a,b) => b.reaction - a.reaction);
   if (reactionEntries.length === 0) {
     reactEl.innerHTML = '<div class="empty">No reactions flagged yet — tap 😐 on a meal slot after eating to flag a reaction.</div>';
   } else {
-    reactEl.innerHTML = reactionEntries.map(([name, v]) => {
-      const pct = v.devoured > 0 ? Math.round((v.reaction / v.devoured) * 100) : 100;
+    reactEl.innerHTML = reactionEntries.map(v => {
+      // v1.34: denominator is times eaten (devoured OR flagged) — a
+      // reaction-only slot was clearly eaten, and the old maths showed
+      // a confusing flat 100% for it. eaten >= reaction always holds.
+      const pct = Math.round((v.reaction / v.eaten) * 100);
       return `<div class="insight-reaction-row">
         <div style="flex:1;min-width:0;">
-          <div class="insight-reaction-name">${esc(name)}</div>
+          <div class="insight-reaction-name">${esc(v.name)}</div>
           <div class="insight-reaction-bar"><div class="insight-reaction-bar-fill" style="width:${pct}%"></div></div>
         </div>
         <div class="insight-reaction-stats">
           <span style="color:var(--danger);font-weight:700;">${v.reaction}×</span>
-          <span style="color:var(--muted);"> of ${v.devoured > 0 ? v.devoured : v.total} ${v.devoured > 0 ? 'devoured' : 'total'}</span>
+          <span style="color:var(--muted);"> of ${v.eaten} eaten</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // ── MP-044: ingredient patterns — 2+ reactions across 2+ eaten meals ──
+  const ingEl = document.getElementById('insightsIngredients');
+  const ingRows = Object.entries(ingStats)
+    .map(([id, st]) => ({ ing: DB.data.ingredients.find(i => i.id === id), st }))
+    .filter(x => x.ing && st_ok(x.st))
+    .sort((a,b) => (b.st.reaction/b.st.eaten) - (a.st.reaction/a.st.eaten) || b.st.reaction - a.st.reaction)
+    .slice(0, 12);
+  function st_ok(st) { return st.reaction >= 2 && st.eaten >= 2; }
+  if (!ingRows.length) {
+    ingEl.innerHTML = '<div class="empty">Not enough flagged meals yet for ingredient patterns.</div>';
+  } else {
+    ingEl.innerHTML = ingRows.map(x => {
+      const pct = Math.round((x.st.reaction / x.st.eaten) * 100);
+      return `<div class="insight-reaction-row">
+        <div style="flex:1;min-width:0;">
+          <div class="insight-reaction-name">${esc(x.ing.name)}</div>
+          <div class="insight-reaction-bar"><div class="insight-reaction-bar-fill" style="width:${pct}%"></div></div>
+        </div>
+        <div class="insight-reaction-stats">
+          <span style="color:var(--danger);font-weight:700;">${x.st.reaction}</span>
+          <span style="color:var(--muted);"> of ${x.st.eaten} meals with it</span>
         </div>
       </div>`;
     }).join('');
