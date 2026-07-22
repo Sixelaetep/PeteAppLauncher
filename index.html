@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.26</title>
+<title>P Apps v10.27</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -558,7 +558,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.26</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.27</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gat" style="--app-color:#f97316" onclick="switchTo('gat', this)" title="Gigs &amp; Trips">📅</button>
         <button class="nav-btn pete-only" data-target="onbudget" style="--app-color:#a3e635" onclick="switchTo('onbudget', this)" title="On Budget">🪙</button>
@@ -2230,124 +2230,146 @@ function statGym() {
     const raw = localStorage.getItem('gym_tracker_v1');
     if (!raw) { setCardStat('stat-gym', 'No sessions yet', 'muted'); return; }
     const parsed = JSON.parse(raw);
-    // Envelope format: { version, lastUpdated, data: { sessions, exercises, plans, scheduleEntries } }
-    const data = (parsed.data && parsed.data.sessions) ? parsed.data : parsed;
-    const sessions = (data.sessions || []).filter(s => !s._deleted);
-
-    // ── Scheduled plans (PET-050) ──────────────────────────────────
-    const schedule = (data.scheduleEntries || []).filter(e => !e._deleted);
-    const allPlans = data.plans || []; // deliberately unfiltered — name resolution only
-    const planName = id => { const p = allPlans.find(p => p.id === id); return (p && p.name) ? p.name : 'Plan'; };
+    const data     = (parsed.data && parsed.data.sessions != null) ? parsed.data : parsed;
+    const sessions = (data.sessions       || []).filter(s => !s._deleted);
+    const allPlans = (data.plans          || []);
+    const entries  = (data.scheduleEntries|| []).filter(e => !e._deleted);
 
     const todayStr = todayISO();
-    const tmrw = new Date(); tmrw.setDate(tmrw.getDate() + 1);
-    const tomorrowStr = tmrw.getFullYear() + '-' + String(tmrw.getMonth()+1).padStart(2,'0') + '-' + String(tmrw.getDate()).padStart(2,'0');
-    const todayPlanned    = schedule.filter(e => e.date === todayStr).map(e => planName(e.planId));
-    const tomorrowPlanned = schedule.filter(e => e.date === tomorrowStr).map(e => planName(e.planId));
+    const now = new Date(); now.setHours(0,0,0,0);
 
-    const tomorrowLine = tomorrowPlanned.length
-      ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">📋 Tomorrow: ${tomorrowPlanned.join(', ')}</div>`
-      : '';
+    // ── Schedule helpers — exact port of gym-tracker resolvePlansForDate ──
+    const planName = id => { const p = allPlans.find(p => p.id === id); return (p && p.name) ? p.name : 'Workout'; };
 
-    if (!sessions.length) {
-      // No session history — but a scheduled plan can still make the card useful
-      const statEl0 = document.getElementById('stat-gym');
-      if (!statEl0) return;
-      if (todayPlanned.length) {
-        statEl0.className = 'card-stat';
-        statEl0.innerHTML =
-          `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--accent)"></span>` +
-          `<span>Planned today: <span class="val" style="color:var(--accent)">${todayPlanned.join(', ')}</span></span></div>` +
-          tomorrowLine;
-      } else if (tomorrowPlanned.length) {
-        statEl0.className = 'card-stat muted';
-        statEl0.innerHTML =
-          `<div class="card-stat-row"><span class="card-stat-dot"></span><span>No sessions yet</span></div>` +
-          tomorrowLine;
-      } else {
-        setCardStat('stat-gym', 'No sessions yet', 'muted');
-      }
-      return;
+    function isoFromDate(d) {
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
     }
 
-    // Sessions today
-    const todaySessions = sessions.filter(s => (s.date || '').slice(0, 10) === todayStr);
+    function weekdayIdx(dateStr) {
+      const [y,m,d] = dateStr.split('-').map(Number);
+      return (new Date(y,m-1,d).getDay()+6)%7; // Mon=0
+    }
 
-    // Sessions this week (Mon-based, matches gym tracker startOfWeek)
-    const now = new Date(); now.setHours(0, 0, 0, 0);
-    const dow = (now.getDay() + 6) % 7; // Mon=0
-    const weekStart = new Date(now); weekStart.setDate(now.getDate() - dow);
-    const weekStartStr = weekStart.toISOString().slice(0, 10);
+    function dayDiff(fromStr, toStr) {
+      const [y1,m1,d1] = fromStr.split('-').map(Number);
+      const [y2,m2,d2] = toStr.split('-').map(Number);
+      return Math.round((new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1)) / 86400000);
+    }
+
+    function ruleMatchesDate(rule, date) {
+      if (date < rule.startDate) return false;
+      if (rule.endDate && date > rule.endDate) return false;
+      if ((rule.exceptions || []).includes(date)) return false;
+      if (rule.freq === 'daily')  return true;
+      if (rule.freq === 'weekly') return weekdayIdx(date) === weekdayIdx(rule.startDate);
+      if (rule.freq === 'days')   return (rule.days || []).includes(weekdayIdx(date));
+      if (rule.freq === 'everyN') return dayDiff(rule.startDate, date) % Math.max(1, rule.interval || 1) === 0;
+      return false;
+    }
+
+    // Returns [{planId}] for a given date — one-offs + matching repeat rules, deduped
+    function resolvePlansForDate(dateStr) {
+      const out = [], seen = new Set();
+      entries.filter(e => !e.kind && e.date === dateStr).forEach(e => {
+        if (!seen.has(e.planId)) { seen.add(e.planId); out.push(e.planId); }
+      });
+      entries.filter(e => e.kind === 'repeat' && ruleMatchesDate(e, dateStr)).forEach(e => {
+        if (!seen.has(e.planId)) { seen.add(e.planId); out.push(e.planId); }
+      });
+      return out;
+    }
+
+    // ── Today's planned plan IDs + done sessions ────────────────────
+    const todayPlanIds   = resolvePlansForDate(todayStr);
+    const todaySessions  = sessions.filter(s => (s.date || '').slice(0,10) === todayStr);
+    const donePlanIds    = new Set(todaySessions.map(s => s.planId).filter(Boolean));
+
+    // Plans still to do today (planned but not yet logged)
+    const pendingToday = todayPlanIds.filter(id => !donePlanIds.has(id));
+    // Plans completed today
+    const doneToday    = todaySessions;
+
+    // ── Streak ──────────────────────────────────────────────────────
+    const dow = (now.getDay()+6)%7;
+    const weekStart = new Date(now); weekStart.setDate(now.getDate()-dow);
+    let streak = 0, cursor = new Date(weekStart);
+    for (let i = 0; i < 52; i++) {
+      const ws = isoFromDate(cursor);
+      const we = isoFromDate(new Date(cursor.getTime()+6*86400000));
+      const has = sessions.some(s => { const d=(s.date||'').slice(0,10); return d>=ws&&d<=we; });
+      if (!has) { if (streak===0&&i===0){cursor.setDate(cursor.getDate()-7);continue;} break; }
+      streak++;
+      cursor.setDate(cursor.getDate()-7);
+    }
+    const weekStartStr = isoFromDate(weekStart);
     const weekSessions = sessions.filter(s => {
-      const d = (s.date || '').slice(0, 10);
-      return d >= weekStartStr && d <= todayStr;
+      const d=(s.date||'').slice(0,10); return d>=weekStartStr&&d<=todayStr;
     });
 
-    // Streak (weeks with at least one session, going back from current/last week)
-    const sortedDesc = sessions.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    let streak = 0;
-    let cursor = new Date(weekStart);
-    for (let i = 0; i < 52; i++) {
-      const ws = new Date(cursor);
-      const we = new Date(cursor); we.setDate(we.getDate() + 6);
-      const wsStr = ws.toISOString().slice(0, 10);
-      const weStr = we.toISOString().slice(0, 10);
-      const hasSession = sessions.some(s => { const d = (s.date || '').slice(0, 10); return d >= wsStr && d <= weStr; });
-      if (!hasSession) {
-        // Allow gap in current week (it may not be over yet)
-        if (streak === 0 && i === 0) { cursor.setDate(cursor.getDate() - 7); continue; }
-        break;
-      }
-      streak++;
-      cursor.setDate(cursor.getDate() - 7);
+    // ── Next planned session (from tomorrow, up to 60 days) ─────────
+    let nextPlanned = null;
+    for (let i = 1; i <= 60; i++) {
+      const d = new Date(now.getTime() + i*86400000);
+      const ds = isoFromDate(d);
+      const ids = resolvePlansForDate(ds);
+      if (ids.length) { nextPlanned = { dateStr: ds, names: ids.map(planName), daysAway: i }; break; }
     }
 
+    // ── Build card ──────────────────────────────────────────────────
     const statEl = document.getElementById('stat-gym');
     if (!statEl) return;
 
-    if (todaySessions.length > 0) {
-      // Show today's session(s)
-      const names = todaySessions.map(s => s.name || 'Session').join(', ');
-      const exercises = todaySessions.reduce((sum, s) => sum + (s.items || []).length, 0);
-      const exLine = exercises > 0 ? ` · ${exercises} exercise${exercises !== 1 ? 's' : ''}` : '';
-      const streakLine = streak > 0
-        ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">🔥 ${streak} week streak · ${weekSessions.length} session${weekSessions.length !== 1 ? 's' : ''} this week</div>`
-        : `<div style="font-size:10px;color:var(--ink3);margin-top:3px">${weekSessions.length} session${weekSessions.length !== 1 ? 's' : ''} this week</div>`;
+    let html = '';
 
-      statEl.className = 'card-stat ok';
-      statEl.innerHTML =
-        `<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span>` +
-        `<span>Today: <span class="val">${names}</span>${exLine}</span></div>` +
-        streakLine + tomorrowLine;
-    } else if (todayPlanned.length) {
-      // Plan scheduled for today, nothing logged yet — planned hero (PET-050)
-      const streakLine = streak > 0
-        ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">🔥 ${streak} week streak · ${weekSessions.length} this week</div>`
-        : `<div style="font-size:10px;color:var(--ink3);margin-top:3px">${weekSessions.length} session${weekSessions.length !== 1 ? 's' : ''} this week</div>`;
-
-      statEl.className = 'card-stat';
-      statEl.innerHTML =
-        `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--accent)"></span>` +
-        `<span>Planned today: <span class="val" style="color:var(--accent)">${todayPlanned.join(', ')}</span></span></div>` +
-        streakLine + tomorrowLine;
-    } else {
-      // No session today — show last session + this week count
-      const last = sortedDesc[0];
-      const lastDate = last ? last.date : null;
-      const daysAgo = lastDate ? Math.round((now - new Date(lastDate + 'T00:00:00')) / 86400000) : null;
-      const lastStr = daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : daysAgo !== null ? `${daysAgo}d ago` : '';
-      const lastName = last ? (last.name || 'Session') : '';
-
-      const streakLine = streak > 0
-        ? `<div style="font-size:10px;color:var(--ink3);margin-top:3px">🔥 ${streak} week streak · ${weekSessions.length} this week</div>`
-        : `<div style="font-size:10px;color:var(--ink3);margin-top:3px">${weekSessions.length} session${weekSessions.length !== 1 ? 's' : ''} this week</div>`;
-
-      statEl.className = 'card-stat' + (weekSessions.length > 0 ? '' : ' muted');
-      statEl.innerHTML =
-        `<div class="card-stat-row"><span class="card-stat-dot"></span>` +
-        `<span>Last: <span class="val">${lastName}</span>${lastStr ? ' · ' + lastStr : ''}</span></div>` +
-        streakLine + tomorrowLine;
+    // 1. Today's planned (pending)
+    if (pendingToday.length) {
+      html += `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--accent)"></span>` +
+        `<span>Planned today: <span class="val" style="color:var(--accent)">${pendingToday.map(planName).join(', ')}</span></span></div>`;
     }
+
+    // 2. Done sessions today
+    if (doneToday.length) {
+      doneToday.forEach(s => {
+        const exCount = (s.items||[]).length;
+        const exStr   = exCount > 0 ? ` · ${exCount} exercise${exCount!==1?'s':''}` : '';
+        html += `<div class="card-stat-row" style="margin-top:3px"><span class="card-stat-dot" style="background:#3fb950"></span>` +
+          `<span>Done: <span class="val" style="color:#3fb950">${s.name||'Session'}</span>${exStr}</span></div>`;
+      });
+    }
+
+    // 3. Streak + week count
+    const streakStr = streak > 0
+      ? `🔥 ${streak} week streak · ${weekSessions.length} session${weekSessions.length!==1?'s':''} this week`
+      : `${weekSessions.length} session${weekSessions.length!==1?'s':''} this week`;
+    html += `<div style="font-size:10px;color:var(--ink3);margin-top:4px">${streakStr}</div>`;
+
+    // 4. Next planned session
+    if (nextPlanned) {
+      const dStr = nextPlanned.daysAway === 1 ? 'Tomorrow' : `in ${nextPlanned.daysAway}d`;
+      html += `<div style="font-size:10px;color:var(--ink3);margin-top:2px">📋 Next: ${nextPlanned.names.join(', ')} <span style="color:var(--ink2)">${dStr}</span></div>`;
+    }
+
+    // If nothing at all to show today
+    if (!pendingToday.length && !doneToday.length && !sessions.length) {
+      setCardStat('stat-gym', 'No sessions yet', 'muted');
+      return;
+    }
+
+    // If no plan or session today, show last session as fallback hero
+    if (!pendingToday.length && !doneToday.length) {
+      const sorted = sessions.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+      const last = sorted[0];
+      const lastDate = last ? (last.date||'').slice(0,10) : null;
+      const daysAgo  = lastDate ? Math.round((now - new Date(lastDate+'T00:00:00'))/86400000) : null;
+      const agoStr   = daysAgo===1?'yesterday':daysAgo!=null?`${daysAgo}d ago`:'';
+      html = `<div class="card-stat-row"><span class="card-stat-dot"></span>` +
+        `<span>Last: <span class="val">${last?last.name||'Session':''}</span>${agoStr?' · '+agoStr:''}</span></div>` +
+        `<div style="font-size:10px;color:var(--ink3);margin-top:4px">${streakStr}</div>` +
+        (nextPlanned ? `<div style="font-size:10px;color:var(--ink3);margin-top:2px">📋 Next: ${nextPlanned.names.join(', ')} <span style="color:var(--ink2)">${nextPlanned.daysAway===1?'Tomorrow':'in '+nextPlanned.daysAway+'d'}</span></div>` : '');
+    }
+
+    statEl.className = 'card-stat' + (pendingToday.length ? '' : doneToday.length ? ' ok' : weekSessions.length ? '' : ' muted');
+    statEl.innerHTML = html;
   } catch(e) {
     setCardStat('stat-gym', 'Open app to load', 'muted');
   }
