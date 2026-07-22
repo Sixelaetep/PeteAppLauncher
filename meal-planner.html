@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.29</title>
+<title>Meal Planner v1.30</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -182,7 +182,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.29</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.30</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -466,7 +466,7 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.29 ────────────────────────────────────────────────
+// ── Meal Planner v1.30 ────────────────────────────────────────────────
 // Originally a standalone test build (no sync, no launcher integration).
 // Now live in the launcher with its own bespoke Supabase sync (see
 // syncPullAll/syncPushAll below) — this note is left for history; the
@@ -483,7 +483,7 @@
 // item inline. Replaces the full-library dropdown and the MP-038
 // prompt()-based "+ New Item" button. Save auto-resolves typed-but-
 // unpicked text so rows aren't silently dropped.
-const VERSION = '1.29';
+const VERSION = '1.30';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1629,11 +1629,14 @@ function toggleDayComplete(date, val) {
 function recipeForSlot(slot) {
   if (!slot) return null;
   if (slot.type === 'recipe') return DB.data.recipes.find(r => r.id === slot.recipeId) || null;
-  if (slot.type === 'leftover' && slot.leftoverOf) {
-    const [odate, omeal] = slot.leftoverOf.split('|');
-    const oday = getDay(odate);
-    const oslot = oday && oday.slots[omeal];
-    if (oslot && oslot.type === 'recipe') return DB.data.recipes.find(r => r.id === oslot.recipeId) || null;
+  if (slot.type === 'leftover') {
+    if (slot.recipeId) return DB.data.recipes.find(r => r.id === slot.recipeId) || null; // MP-040 format
+    if (slot.leftoverOf) { // pre-MP-040 format — resolve via the referenced slot instance
+      const [odate, omeal] = slot.leftoverOf.split('|');
+      const oday = getDay(odate);
+      const oslot = oday && oday.slots[omeal];
+      if (oslot && oslot.type === 'recipe') return DB.data.recipes.find(r => r.id === oslot.recipeId) || null;
+    }
   }
   return null;
 }
@@ -1839,29 +1842,13 @@ function renderSlotTypeFields(existing) {
         <button class="btn sm" onclick="addTextAsRecipe()">+ Add to Recipe List</button>
       </div>`;
   } else if (type === 'leftover') {
-    const allSlots = collectCookSlots();
-    el.innerHTML = `<label class="lbl">Leftover of</label><select id="slotLeftoverOf">
-      <option value="">Select a cook slot...</option>
-      ${allSlots.map(s=>`<option value="${s.key}" ${existing&&existing.leftoverOf===s.key?'selected':''}>${s.label}</option>`).join('')}
-    </select>`;
+    const filterCat = showAllRecipesInPicker ? null : slotMealCategory(slotCtx.meal);
+    el.innerHTML = `<label class="lbl">Recipe (as leftovers)</label><select id="slotRecipeId">${recipeOptionGroupsHtml(existing&&existing.recipeId, filterCat)}</select>
+      ${filterCat ? `<label class="slot-done" style="margin-top:8px;font-size:12px;"><input type="checkbox" ${showAllRecipesInPicker?'checked':''} onchange="toggleShowAllRecipes(this.checked)"><span>Showing ${MEAL_CATEGORY_LABELS[filterCat]} recipes only — show all</span></label>` : ''}
+      <div class="li-sub" style="margin-top:8px;">Marked as a leftover — its ingredients won't be added to the shopping list.</div>`;
   } else {
     el.innerHTML = '';
   }
-}
-function collectCookSlots() {
-  const out = [];
-  currentWeekDates().forEach(date => {
-    const day = getDay(date);
-    if (!day) return;
-    daySlotKeys(day).forEach(sl => {
-      const s = day.slots[sl];
-      if (s && s.type === 'recipe') {
-        const r = DB.data.recipes.find(x=>x.id===s.recipeId);
-        out.push({ key: day.date+'|'+sl, label: `${day.date} ${slotLabel(sl,day)} — ${r?r.name:'?'}` });
-      }
-    });
-  });
-  return out;
 }
 function saveSlot() {
   const { date, meal } = slotCtx;
@@ -1878,12 +1865,10 @@ function saveSlot() {
     const kcalVal = document.getElementById('slotKcal').value;
     day.slots[meal] = { type:'text', text: txt, kcal: kcalVal === '' ? null : Number(kcalVal) };
   } else if (type === 'leftover') {
-    const of = document.getElementById('slotLeftoverOf').value;
-    if (!of) return toast('Select which cook slot this is a leftover of');
-    const [odate, omeal] = of.split('|');
-    const oday = getDay(odate);
-    const orec = oday && DB.data.recipes.find(x=>x.id===oday.slots[omeal].recipeId);
-    day.slots[meal] = { type:'leftover', leftoverOf: of, label: (orec?orec.name:'Leftover') + ' (leftover)' };
+    const rid = document.getElementById('slotRecipeId').value;
+    if (!rid) return toast('Select a recipe');
+    const orec = DB.data.recipes.find(x => x.id === rid);
+    day.slots[meal] = { type:'leftover', recipeId: rid, label: (orec?orec.name:'Leftover') + ' (leftover)' };
   }
   day.updatedAt = nowIso();
   save(); closeModal('slotModal'); renderPlan();
