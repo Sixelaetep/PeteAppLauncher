@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.42</title>
+<title>On Budget v3.43</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -347,7 +347,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.42</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.43</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -863,7 +863,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.42
+// On Budget v3.43
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1307,6 +1307,25 @@
 // gained aria-labels. Zero data-model or behaviour change: labels,
 // names and notes render identically unless they contained markup,
 // which now displays literally instead of being interpreted.
+// v3.43 (ON--047): History insights. The History tab, previously a flat
+// list of month cards, gains four read-only insight cards computed from
+// existing data (no schema change): (1) a stacked spend-trend chart of
+// Food/Travel/Other across the last 12 completed months, inline SVG, no
+// chart library; (2) latest completed month vs the average of up to six
+// completed months before it, per category, with above/below deltas;
+// (3) all-time top shops, aggregated from transaction labels across
+// every month including the current one — the labels feature has been
+// quietly building a merchant dataset that was only used for
+// autocomplete until now; (4) a "left over" trend line — startBalance
+// plus income minus spend per completed month. Deliberately labelled
+// "left over" rather than "headroom": live headroom is time-dependent
+// (pot minus the reserve still needed before pay-in) and has no
+// meaningful value for a finished month, so the honest retrospective
+// figure is what actually remained. Each month card also gains a
+// left-over line and that month's top shop. Cards appear only when
+// enough history exists (trend/average/left-over need 2+ completed
+// months; top shops need any labelled spending), so sparse data
+// degrades gracefully rather than showing empty charts.
 // ══════════════════════════════════════════════════════════════
 
 // ── Theme (v2.9) ───────────────────────────────────────────────
@@ -1920,7 +1939,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.42', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.43', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, savings }, meta
   }));
   // Notify launcher so the dashboard card refreshes live
@@ -1928,7 +1947,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.42', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.43', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2819,22 +2838,156 @@ function saveSpend() {
 }
 
 // ── History ────────────────────────────────────────────────────
+// ── History insights helpers (v3.43, ON--047) ──────────────────
+// All read-only aggregation over months{} — no writes, no schema change.
+
+// Per-month aggregate. Works for any month key; remainder is the
+// retrospective "what was left": startBalance + income − spend.
+function monthAgg(k) {
+  const d  = months[k];
+  const tx = (d.transactions||[]).filter(t=>!t._deleted);
+  const cat = c => tx.filter(t=>t.type!=='income' && t.category===c).reduce((s,t)=>s+(t.amount||0),0);
+  const food = cat('weekly'), travel = cat('travel'), other = cat('other');
+  const income = tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const spend  = food + travel + other;
+  const shops = {};
+  tx.filter(t=>t.type!=='income' && (t.label||'').trim()).forEach(t=>{
+    const key = t.label.trim();
+    if (!shops[key]) shops[key] = { name:key, total:0, count:0 };
+    shops[key].total += t.amount||0; shops[key].count++;
+  });
+  const topShop = Object.values(shops).sort((a,b)=>b.total-a.total)[0] || null;
+  return { food, travel, other, income, spend,
+           remainder: (d.startBalance??0) + income - spend,
+           hasStart: d.startBalance !== null && d.startBalance !== undefined,
+           shops, topShop };
+}
+
+// Stacked Food/Travel/Other bars for up to the last 12 completed
+// months, oldest on the left. Inline SVG, theme colours via CSS vars.
+function histTrendSvg(keysAsc, aggs) {
+  const W=320, H=132, padB=16, padT=14;
+  const max = Math.max(...keysAsc.map(k=>aggs[k].spend), 1);
+  const n = keysAsc.length, slot = W/n, bw = Math.min(26, slot*0.55);
+  let bars='';
+  keysAsc.forEach((k,i)=>{
+    const a = aggs[k], x = i*slot + (slot-bw)/2;
+    const hOf = v => (v/max)*(H-padB-padT);
+    let y = H-padB;
+    [['other','var(--other)'],['travel','var(--travel)'],['food','var(--weekly)']].forEach(([c,fill])=>{
+      const h = hOf(a[c]);
+      if (h>0.5){ y-=h; bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${fill}"/>`; }
+    });
+    const [yr,mo]=k.split('-').map(Number);
+    const mL = new Date(yr,mo-1,1).toLocaleDateString('en-GB',{month:'short'});
+    bars += `<text x="${(i*slot+slot/2).toFixed(1)}" y="${H-4}" text-anchor="middle" font-size="8.5" fill="var(--ink3)">${mL}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Monthly spending by category">
+    <text x="0" y="${padT-5}" font-size="8.5" fill="var(--ink3)">£${Math.round(max)}</text>
+    <line x1="0" y1="${H-padB}" x2="${W}" y2="${H-padB}" stroke="var(--border)" stroke-width="1"/>
+    ${bars}</svg>`;
+}
+
+// "Left over" line across completed months — the honest retrospective
+// stand-in for headroom, which only exists mid-cycle.
+function histRemainderSvg(keysAsc, aggs) {
+  const W=320, H=96, padB=16, padT=12, padX=10;
+  const vals = keysAsc.map(k=>aggs[k].remainder);
+  const lo = Math.min(...vals,0), hi = Math.max(...vals,0), span = (hi-lo)||1;
+  const px = i => padX + (keysAsc.length===1?0:(i/(keysAsc.length-1))*(W-2*padX));
+  const py = v => padT + (1-((v-lo)/span))*(H-padB-padT);
+  const pts = vals.map((v,i)=>`${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+  const zero = (lo<0) ? `<line x1="0" y1="${py(0).toFixed(1)}" x2="${W}" y2="${py(0).toFixed(1)}" stroke="var(--border)" stroke-dasharray="3,3" stroke-width="1"/>` : '';
+  let labels='';
+  keysAsc.forEach((k,i)=>{
+    const [yr,mo]=k.split('-').map(Number);
+    labels += `<text x="${px(i).toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="8.5" fill="var(--ink3)">${new Date(yr,mo-1,1).toLocaleDateString('en-GB',{month:'short'})}</text>`;
+  });
+  const dots = vals.map((v,i)=>`<circle cx="${px(i).toFixed(1)}" cy="${py(v).toFixed(1)}" r="2.4" fill="${v<0?'var(--red)':'var(--accent)'}"/>`).join('');
+  const last = vals[vals.length-1];
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Left over per month">
+    ${zero}<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linejoin="round"/>${dots}${labels}
+    <text x="${W}" y="${padT-3}" text-anchor="end" font-size="9" font-weight="700" fill="${last<0?'var(--red)':'var(--accent)'}">${last<0?'−':''}£${Math.abs(last).toFixed(0)} last month</text></svg>`;
+}
+
 function renderHist() {
   const el  = document.getElementById('hist');
   const cur = curKey();
   const past = Object.keys(months).filter(k=>k!==cur).sort((a,b)=>b.localeCompare(a));
   if (!past.length) { el.innerHTML=`<div style="text-align:center;padding:32px;color:var(--ink3);font-size:13px">No previous months yet</div>`; return; }
+
+  const aggs = {};
+  Object.keys(months).forEach(k => { aggs[k] = monthAgg(k); });
+  const pastAsc = [...past].sort((a,b)=>a.localeCompare(b));
   let html = '';
+
+  // ── Insight cards (ON--047) — degrade gracefully on sparse data ──
+  if (pastAsc.length >= 2) {
+    const trendKeys = pastAsc.slice(-12);
+    html += `<div class="stat-card" style="margin-bottom:10px;padding:13px 14px">
+      <div class="stat-card-label">Spending by month</div>
+      ${histTrendSvg(trendKeys, aggs)}
+      <div style="display:flex;gap:12px;margin-top:6px;font-size:10.5px;color:var(--ink2)">
+        <span><span class="hist-dot" style="background:var(--weekly);display:inline-block;margin-right:4px"></span>Food</span>
+        <span><span class="hist-dot" style="background:var(--travel);display:inline-block;margin-right:4px"></span>Travel</span>
+        <span><span class="hist-dot" style="background:var(--other);display:inline-block;margin-right:4px"></span>Other</span>
+      </div>
+    </div>`;
+
+    // Latest completed month vs the average of up to 6 before it.
+    const latestK = pastAsc[pastAsc.length-1];
+    const baseKeys = pastAsc.slice(0,-1).slice(-6);
+    if (baseKeys.length) {
+      const [lyr,lmo] = latestK.split('-').map(Number);
+      const latestLabel = new Date(lyr,lmo-1,1).toLocaleDateString('en-GB',{month:'long'});
+      const avg = c => baseKeys.reduce((s,k)=>s+aggs[k][c],0)/baseKeys.length;
+      const rows = [['food','🛒 Food'],['travel','🚗 Travel'],['other','📦 Other']].map(([c,lbl])=>{
+        const v = aggs[latestK][c], a = avg(c), diff = v - a;
+        const dir  = Math.abs(diff) < 0.005 ? 'level with' : (diff > 0 ? 'above' : 'below');
+        const clr  = diff > 0.005 ? 'var(--red)' : diff < -0.005 ? 'var(--accent)' : 'var(--ink2)';
+        const dTxt = dir==='level with' ? 'level with average' : `£${Math.abs(diff).toFixed(2)} ${dir} average`;
+        return `<div class="hist-cat-row"><div class="hist-label">${lbl}</div>
+          <div class="hist-amt">£${v.toFixed(2)} <span style="color:${clr};font-weight:600">· ${dTxt}</span></div></div>`;
+      }).join('');
+      html += `<div class="stat-card" style="margin-bottom:10px;padding:13px 14px">
+        <div class="stat-card-label">${latestLabel} vs your ${baseKeys.length}-month average</div>${rows}
+      </div>`;
+    }
+  }
+
+  // Top shops — all months including the current one; the labels
+  // dataset finally earns its keep beyond autocomplete.
+  const shopTotals = {};
+  Object.keys(aggs).forEach(k => Object.values(aggs[k].shops).forEach(s => {
+    const key = s.name.toLowerCase();
+    if (!shopTotals[key]) shopTotals[key] = { name:s.name, total:0, count:0 };
+    shopTotals[key].total += s.total; shopTotals[key].count += s.count;
+  }));
+  const topShops = Object.values(shopTotals).sort((a,b)=>b.total-a.total).slice(0,5);
+  if (topShops.length) {
+    html += `<div class="stat-card" style="margin-bottom:10px;padding:13px 14px">
+      <div class="stat-card-label">Top shops — all time</div>
+      ${topShops.map(sh=>`<div class="hist-cat-row"><div class="hist-label">${esc(sh.name)}</div>
+        <div class="hist-amt">£${sh.total.toFixed(2)} <span style="color:var(--ink3);font-weight:400">· ${sh.count} visit${sh.count===1?'':'s'}</span></div></div>`).join('')}
+    </div>`;
+  }
+
+  if (pastAsc.length >= 2) {
+    html += `<div class="stat-card" style="margin-bottom:14px;padding:13px 14px">
+      <div class="stat-card-label">Left over each month</div>
+      ${histRemainderSvg(pastAsc.slice(-12), aggs)}
+      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">Start balance + income − spend. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
+    </div>`;
+  }
+
+  // ── Month cards (existing list, plus left-over and top shop) ──
   past.forEach(k => {
     const d = months[k];
+    const a = aggs[k];
     const [yr,mo] = k.split('-').map(Number);
     const label = new Date(yr,mo-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-    const tx    = (d.transactions||[]).filter(t=>!t._deleted);
-    const weekly = tx.filter(t=>t.category==='weekly').reduce((s,t)=>s+(t.amount||0),0);
-    const trav   = tx.filter(t=>t.category==='travel').reduce((s,t)=>s+(t.amount||0),0);
-    const oth    = tx.filter(t=>t.category==='other').reduce((s,t)=>s+(t.amount||0),0);
-    const inc    = tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
-    const tot    = weekly+trav+oth;
+    const weekly = a.food, trav = a.travel, oth = a.other, inc = a.income, tot = a.spend;
+    const remClr = a.remainder < 0 ? 'var(--red)' : 'var(--accent)';
     html += `<div class="hist-month">
       <div class="hist-month-header">
         <div class="hist-month-name">${label}</div>
@@ -2844,6 +2997,8 @@ function renderHist() {
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--travel)"></div><div class="hist-label">🚗 Travel</div><div class="hist-amt">£${trav.toFixed(2)}</div></div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--other)"></div><div class="hist-label">📦 Other</div><div class="hist-amt">£${oth.toFixed(2)}</div></div>
       ${inc>0 ? `<div class="hist-cat-row"><div class="hist-dot" style="background:var(--accent)"></div><div class="hist-label">💰 Income</div><div class="hist-amt" style="color:var(--accent)">+£${inc.toFixed(2)}</div></div>` : ''}
+      ${a.hasStart ? `<div class="hist-cat-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:7px"><div class="hist-label">${a.remainder<0?'Overspent by':'Left over'}</div><div class="hist-amt" style="color:${remClr}">£${Math.abs(a.remainder).toFixed(2)}</div></div>` : ''}
+      ${a.topShop ? `<div class="hist-cat-row"><div class="hist-label">Top shop</div><div class="hist-amt" style="font-weight:500">${esc(a.topShop.name)} <span style="color:var(--ink3)">· £${a.topShop.total.toFixed(2)}</span></div></div>` : ''}
     </div>`;
   });
   el.innerHTML = html;
