@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.41</title>
+<title>Gym Tracker v2.42</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -298,7 +298,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.41</div></span>
+      <span>Gym Tracker<div class="ver">v2.42</div></span>
     </div>
     <div class="header-actions">
       <div class="sync-wrap" onclick="openDataDrawer()" title="Sync status">
@@ -739,6 +739,14 @@
 // render plain Mon–Sun at full strength — greying whole historical
 // weeks would make review miserable — so browsing back shows the week
 // exactly as it originally read. No data, sync, or backup changes.
+// v2.42 (GYM-039): cross-app schedule sharing. On every save, a lightweight
+// summary (plan names + schedule/repeat rules, no sessions/exercises/weight)
+// is written to localStorage under GYM_XAPP_KEY ('gym_pal_xapp'). Other
+// apps on the same origin (currently GigsAndTrips) can read this key to
+// surface gym plans on matching dates — no postMessage wiring needed, no
+// sensitive health data exposed beyond plan names. The key is tombstone-free
+// (deleted plans and _deleted entries are excluded) and backwards-compatible:
+// apps that don't know the key simply ignore it.
 // v2.41 (GYM-038): scheduled plans are tap-to-edit. Tapping a plan row
 // on a day card opens the picker prefilled (plan selected, Repeats
 // toggle mirroring its real state) with a Save button. Repeat edits
@@ -747,8 +755,9 @@
 // date — via tombstone+create so nothing resurrects on pull. Duplicate
 // guard excludes the item being edited. An Edit-exercises button jumps
 // into the plan editor for the underlying plan. Data shapes unchanged.
-const VERSION = '2.41';
-const LS_KEY  = 'gym_tracker_v1'; // storage key retained across versions for continuity
+const VERSION = '2.42';
+const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
+const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
 const TAG_GROUPS = {
   'Chest':     ['Chest','Upper Chest'],
@@ -862,7 +871,26 @@ function migrateSessions(env) {
 function save(envelope) {
   envelope.lastUpdated = new Date().toISOString();
   localStorage.setItem(LS_KEY, JSON.stringify(envelope));
+  writeXAppSummary(envelope);
   reportToLauncher();
+}
+
+// GYM-039: write a tombstone-free cross-app summary so GigsAndTrips (and
+// any future app on the same origin) can overlay gym plans on dates without
+// reading the full gym storage key.
+function writeXAppSummary(envelope) {
+  try {
+    const summary = {
+      version: 1,
+      updatedAt: envelope.lastUpdated,
+      plans: (envelope.data.plans || [])
+        .filter(p => !p._deleted && !p.archived)
+        .map(p => ({ id: p.id, name: p.name })),
+      scheduleEntries: (envelope.data.scheduleEntries || [])
+        .filter(e => !e._deleted)
+    };
+    localStorage.setItem(GYM_XAPP_KEY, JSON.stringify(summary));
+  } catch(e) { /* non-critical — silently skip if storage full */ }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -989,7 +1017,7 @@ function buildDefaultSet(type) {
 // ═══════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════
-function init() { _env = load(); renderAll(); restoreActiveSessionDraft(); }
+function init() { _env = load(); writeXAppSummary(_env); renderAll(); restoreActiveSessionDraft(); }
 
 function applyTheme(theme) {
   const dark = theme !== 'light';

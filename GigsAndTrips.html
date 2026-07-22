@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.2</title>
+<title>Gigs &amp; Trips v7.4</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -199,10 +199,16 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .dayoff-banner{background:var(--amber-dim);border:1.5px solid #fcd34d;color:#92400e}
 
 /* ── Modal overlay ──────────────────────────────────────────────── */
-.movl{position:fixed;inset:0;z-index:300;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0);pointer-events:none;transition:background .22s}
+/* v7.3: suite-wide modal audit — was a bottom-sheet slide-up
+   (align-items:flex-end, translateY animation, top-radius-only).
+   Re-centred as a proper dialog: uniform radius, shadow, and the
+   slide-up swapped for a scale+fade transition to suit the centred
+   position. Click-outside-to-close (handleOverlayClick) was already
+   wired up, untouched. */
+.movl{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,0);pointer-events:none;transition:background .22s}
 .movl.on{background:rgba(0,0,0,.45);pointer-events:auto}
-.modal{background:var(--card);border-radius:var(--rlg) var(--rlg) 0 0;width:100%;max-width:540px;max-height:92vh;overflow-y:auto;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,0,.67,0);padding-bottom:env(safe-area-inset-bottom)}
-.movl.on .modal{transform:translateY(0)}
+.modal{background:var(--card);border-radius:var(--rlg);width:100%;max-width:540px;max-height:88vh;overflow-y:auto;transform:scale(.96);opacity:0;transition:transform .22s cubic-bezier(.32,0,.67,0),opacity .22s;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.movl.on .modal{transform:scale(1);opacity:1}
 .modal-hdr{display:flex;align-items:center;padding:18px 16px 12px;border-bottom:1px solid var(--bdr);position:sticky;top:0;background:var(--card);z-index:1}
 .modal-title{font-size:17px;font-weight:700;flex:1;letter-spacing:-.02em}
 .modal-close{background:none;border:none;font-size:22px;cursor:pointer;color:var(--ink3);padding:2px 6px;line-height:1}
@@ -412,6 +418,12 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .filter-bar select{padding:7px 10px;border:1.5px solid var(--bdr);border-radius:var(--rsm);font-size:16px;font-family:var(--f);color:var(--ink);background:var(--card);outline:none;flex:1;min-width:0}
 .filter-bar select:focus{border-color:var(--acc)}
+
+/* ── GYM-039: gym plan badge on event cards ─────────────────────── */
+.gym-plans-row{display:flex;align-items:center;gap:6px;padding:7px 12px;border-top:1px solid var(--bdr);background:rgba(56,189,248,.04);font-size:12px;color:var(--ink3);flex-wrap:wrap}
+.gym-plan-badge{display:inline-flex;align-items:center;gap:3px;background:rgba(56,189,248,.12);color:#0369a1;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:600;cursor:pointer;border:none;font-family:var(--f);white-space:nowrap}
+.gym-plan-badge:hover{background:rgba(56,189,248,.22)}
+[data-theme="dark"] .gym-plan-badge{color:#7dd3fc;background:rgba(56,189,248,.15)}
 </style>
 </head>
 <body>
@@ -426,7 +438,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.2</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.4</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
@@ -1208,7 +1220,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.2</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.4</span>';
   document.getElementById('hdrAction').style.display='none';
 }
 
@@ -1257,6 +1269,137 @@ function handleHdrAction(){
         <button class="btn btn-danger" style="width:100%" onclick="confirmDeleteDay('${esc(_curTripId)}','${esc(_curDayId)}')">🗑 Delete this day</button>
       </div>`);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GYM-039: CROSS-APP GYM SCHEDULE READER
+// Reads the lightweight summary written by Gym Tracker (v2.42+) from
+// localStorage key 'gym_pal_xapp'. Computes which plan names fall on
+// a given ISO date — mirrors the gym's resolvePlansForDate logic but
+// operates on the summary structure only. Graceful no-op if the key
+// is absent (gym not installed / not yet saved on this device).
+// ═══════════════════════════════════════════════════════════════════
+const GYM_XAPP_KEY = 'gym_pal_xapp';
+let _gymXApp = null; // cached summary; refreshed per render cycle
+
+function loadGymXApp() {
+  try {
+    const raw = localStorage.getItem(GYM_XAPP_KEY);
+    _gymXApp = raw ? JSON.parse(raw) : null;
+  } catch(e) { _gymXApp = null; }
+}
+
+// Returns array of { date, names[] } for each date in [startDate, endDate]
+// that has gym plans — capped at 14 days to keep render fast.
+function gymPlansInRange(startDate, endDate) {
+  if (!_gymXApp || !startDate) return [];
+  const end = endDate || startDate;
+  const results = [];
+  let cur = startDate;
+  let limit = 0;
+  while (cur <= end && limit < 14) {
+    const names = gymPlansForDate(cur);
+    if (names.length) results.push({ date: cur, names });
+    // increment date
+    const [y, m, d] = cur.split('-').map(Number);
+    const next = new Date(y, m - 1, d + 1);
+    cur = next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0') + '-' + String(next.getDate()).padStart(2, '0');
+    limit++;
+  }
+  return results;
+}
+// Replicates gym's rule-match logic (daily / weekly / chosen-days / every-N).
+function gymPlansForDate(dateStr) {
+  if (!_gymXApp || !dateStr) return [];
+  const { plans = [], scheduleEntries = [] } = _gymXApp;
+  const planMap = {};
+  plans.forEach(p => { planMap[p.id] = p.name; });
+
+  const seen = new Set();
+  const result = [];
+
+  function push(planId) {
+    if (seen.has(planId) || !planMap[planId]) return;
+    seen.add(planId);
+    result.push(planMap[planId]);
+  }
+
+  // One-off entries (no 'kind' field, has 'date')
+  scheduleEntries
+    .filter(e => !e.kind && e.date === dateStr)
+    .forEach(e => push(e.planId));
+
+  // Repeat rules
+  scheduleEntries
+    .filter(e => e.kind === 'repeat' && e.startDate && e.startDate <= dateStr)
+    .forEach(r => {
+      if (r.endDate && r.endDate < dateStr) return;
+      if ((r.exceptions || []).includes(dateStr)) return;
+      // Check frequency match
+      const start = r.startDate;
+      const freq = r.freq || 'weekly';
+      // Compute day-of-week index (0=Mon … 6=Sun) for a date string
+      function dowIdx(iso) {
+        const [y, m, d] = iso.split('-').map(Number);
+        return (new Date(y, m - 1, d).getDay() + 6) % 7; // Mon=0
+      }
+      // Compute days between two ISO dates
+      function dayDiff(a, b) {
+        const da = new Date(a + 'T00:00:00'), db = new Date(b + 'T00:00:00');
+        return Math.round((db - da) / 86400000);
+      }
+      let match = false;
+      if (freq === 'daily') {
+        match = true;
+      } else if (freq === 'weekly') {
+        match = dowIdx(dateStr) === dowIdx(start);
+      } else if (freq === 'days') {
+        match = (r.days || []).includes(dowIdx(dateStr));
+      } else if (freq === 'everyN') {
+        const n = r.interval || 1;
+        match = dayDiff(start, dateStr) % n === 0;
+      }
+      if (match) push(r.planId);
+    });
+
+  return result;
+}
+
+// Render a gym plans row for an event card. Returns '' when no plans.
+function renderGymPlansRow(dateStr) {
+  const names = gymPlansForDate(dateStr);
+  if (!names.length) return '';
+  const badges = names.map(n =>
+    `<button class="gym-plan-badge" onclick="openGymTracker(event)">🏋️ ${esc(n)}</button>`
+  ).join('');
+  return `<div class="gym-plans-row">Gym: ${badges}</div>`;
+}
+
+// Render gym plans for a date range (trips). Shows up to 3 date hits compactly.
+function renderGymPlansInRange(startDate, endDate) {
+  const hits = gymPlansInRange(startDate, endDate);
+  if (!hits.length) return '';
+  const DAY_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const badges = hits.map(h => {
+    const [y, m, d] = h.date.split('-').map(Number);
+    const dow = DAY_SHORT[new Date(y, m - 1, d).getDay()];
+    const label = `${dow} ${d} — ${h.names.join(', ')}`;
+    return `<button class="gym-plan-badge" onclick="openGymTracker(event)">🏋️ ${esc(label)}</button>`;
+  }).join('');
+  return `<div class="gym-plans-row">Gym during trip: ${badges}</div>`;
+}
+
+// Navigate to Gym Tracker: postMessage to launcher if embedded, else follow link.
+function openGymTracker(e) {
+  e.stopPropagation();
+  try {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: 'PAL_NAVIGATE', app: 'gym-tracker' }, window.location.origin);
+      return;
+    }
+  } catch(_) {}
+  // Standalone fallback — open sibling file
+  window.location.href = 'gym-tracker.html';
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1322,6 +1465,7 @@ function toggleYearGroup(yr,tab){
   render();
 }
 function render(){
+  loadGymXApp(); // GYM-039: refresh gym schedule summary each render
   if(_tab==='reviews'){ showPanel('list'); renderReviews(); return; }
   if(_tab==='venues'){  showPanel('list'); renderVenues();  return; }
   showPanel('list');
@@ -1489,6 +1633,7 @@ function renderGigCard(g, d){
         </div>
       </div>
       ${conflictHtml}
+      ${(!g.done&&!g.missed)?renderGymPlansRow(g.date):''}
     </div>
   </div>`;
 }
@@ -1545,6 +1690,7 @@ function renderTripCard(t, d){
       ${tripConflictHtml}
     </div>
     ${gigsHtml}
+    ${(t.status!=='Completed'&&t.status!=='Cancelled')?renderGymPlansInRange(t.startDate,t.endDate):''}
   </div>`;
 }
 
