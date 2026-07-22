@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.30</title>
+<title>Meal Planner v1.31</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -144,6 +144,18 @@
   .day-title { font-family:'Playfair Display',serif; font-size:16px; margin-bottom:8px; }
   .slot { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-bottom:6px; }
   .slot.slot-devoured { opacity:.5; }
+  .slot.slot-reaction { border-color:rgba(224,92,92,.5); }
+  .slot-reaction-badge { font-size:10px; color:var(--danger); font-weight:700; margin-left:4px; }
+  .insight-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .insight-row:last-child { border-bottom:none; }
+  .insight-name { font-weight:500; }
+  .insight-count { font-size:12px; color:var(--muted); text-align:right; flex-shrink:0; margin-left:12px; }
+  .insight-reaction-row { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .insight-reaction-row:last-child { border-bottom:none; }
+  .insight-reaction-name { font-weight:500; }
+  .insight-reaction-stats { font-size:12px; text-align:right; flex-shrink:0; margin-left:12px; }
+  .insight-reaction-bar { height:4px; border-radius:2px; background:var(--border); margin-top:4px; overflow:hidden; }
+  .insight-reaction-bar-fill { height:100%; background:var(--danger); border-radius:2px; }
   .slot-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:4px; }
   .slot-content { display:flex; justify-content:space-between; align-items:center; gap:10px; }
   .slot-name { font-size:13px; font-weight:500; }
@@ -182,7 +194,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.30</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.31</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -190,6 +202,7 @@
       <button class="nav-btn" data-tab="recipes">Recipes</button>
       <button class="nav-btn" data-tab="ingredients">Items</button>
       <button class="nav-btn" data-tab="shop">Shopping List</button>
+      <button class="nav-btn" data-tab="insights">Insights</button>
     </div>
   </div>
 
@@ -319,6 +332,20 @@
     </div>
     <div id="shopList"></div>
     <div id="shopBought"></div>
+  </div>
+
+  <!-- INSIGHTS TAB -->
+  <div class="tab" id="tab-insights" style="display:none">
+    <div class="card">
+      <div class="card-title">Most Eaten Meals</div>
+      <div class="li-sub" style="margin-bottom:10px;">Across all logged days — meals marked as devoured.</div>
+      <div id="insightsMostEaten"><div class="empty">No devoured meals logged yet.</div></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="card-title" style="color:var(--danger);">⚠️ Tummy Reaction Log</div>
+      <div class="li-sub" style="margin-bottom:10px;">Meals flagged as causing a reaction — shown with reaction count vs times devoured.</div>
+      <div id="insightsReactions"><div class="empty">No reactions flagged yet.</div></div>
+    </div>
   </div>
 </div>
 
@@ -483,7 +510,14 @@
 // item inline. Replaces the full-library dropdown and the MP-038
 // prompt()-based "+ New Item" button. Save auto-resolves typed-but-
 // unpicked text so rows aren't silently dropped.
-const VERSION = '1.30';
+// v1.30: (no issue) — version bump after suite-wide modal audit deploy.
+// v1.31 (MP-041): tummy reaction flag — tap 😐 on any assigned slot to
+// flag a meal caused a reaction. Slots show ⚠️ Reaction label and a
+// red border. New Insights tab shows most-eaten meals (by devoured
+// count) and a Reaction Log listing flagged meals with reaction count
+// vs devoured count, plus a percentage bar. Stored as slot.reaction
+// boolean — fully backwards-compatible; absent = false.
+const VERSION = '1.31';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1032,6 +1066,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     if (btn.dataset.tab==='ingredients') renderIngredients();
     if (btn.dataset.tab==='recipes') renderRecipes();
     if (btn.dataset.tab==='shop') renderShop();
+    if (btn.dataset.tab==='insights') renderInsights();
   });
 });
 
@@ -1613,6 +1648,16 @@ function toggleSlotDevoured(date, key, val) {
   day.updatedAt = nowIso();
   save(); renderPlan();
 }
+// MP-041: tummy reaction flag — lightweight boolean on each slot
+function toggleSlotReaction(date, key, val) {
+  const day = ensureDay(date);
+  if (!day.slots[key]) return;
+  day.slots[key].reaction = val;
+  day.updatedAt = nowIso();
+  save(); renderPlan();
+  if (val) toast('😣 Reaction flagged');
+  else toast('Reaction flag removed');
+}
 function toggleDayComplete(date, val) {
   const day = ensureDay(date);
   if (val) {
@@ -1709,6 +1754,7 @@ function dayCardHtml(day, dayLabel) {
       let content = '<span class="li-sub">Tap to assign</span>';
       let cookBtn = '';
       let devouredBtn = '';
+      let reactionBtn = '';
       if (slot) {
         if (slot.type === 'recipe') {
           const r = DB.data.recipes.find(x=>x.id===slot.recipeId);
@@ -1728,6 +1774,7 @@ function dayCardHtml(day, dayLabel) {
           if (r && r.instructions && r.instructions.length) cookBtn = `<button class="btn sm pri" onclick="event.stopPropagation();startCook('${r.id}')">▶ Cook</button>`;
         }
         devouredBtn = `<button class="btn sm ${slot.devoured?'pri':''}" onclick="event.stopPropagation();toggleSlotDevoured('${day.date}','${sl}',${!slot.devoured})">${slot.devoured?'Devoured!! ✓':'Devoured?'}</button>`;
+        reactionBtn = `<button class="btn sm${slot.reaction?' danger':''}" title="${slot.reaction?'Remove reaction flag':'Flag tummy reaction'}" onclick="event.stopPropagation();toggleSlotReaction('${day.date}','${sl}',${!slot.reaction})" style="padding:4px 8px;font-size:12px;">${slot.reaction?'😣':'😐'}</button>`;
       }
       const removeBtn = slot
         ? (isSnackKey(sl)
@@ -1738,14 +1785,14 @@ function dayCardHtml(day, dayLabel) {
         <button class="btn icon sm" style="padding:2px 6px;font-size:10px;" onclick="event.stopPropagation();moveSlot('${day.date}','${sl}',-1)" ${slotIdx===0?'disabled':''}>↑</button>
         <button class="btn icon sm" style="padding:2px 6px;font-size:10px;" onclick="event.stopPropagation();moveSlot('${day.date}','${sl}',1)" ${slotIdx===allSlots.length-1?'disabled':''}>↓</button>
       ` : '';
-      return `<div class="slot${slot&&slot.devoured?' slot-devoured':''}" onclick="openSlotModal('${day.date}','${sl}')">
+      return `<div class="slot${slot&&slot.devoured?' slot-devoured':''}${slot&&slot.reaction?' slot-reaction':''}" onclick="openSlotModal('${day.date}','${sl}')">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div class="slot-lbl">${slotLabel(sl, day)}</div>
+          <div class="slot-lbl">${slotLabel(sl, day)}${slot&&slot.reaction?'<span class="slot-reaction-badge">⚠️ Reaction</span>':''}</div>
           <div class="row" style="gap:4px;">${moveBtns}${removeBtn}</div>
         </div>
         <div class="slot-content">
           <div class="slot-left">${content}</div>
-          <div class="row" style="gap:6px;flex-shrink:0;">${cookBtn}${devouredBtn}</div>
+          <div class="row" style="gap:6px;flex-shrink:0;">${cookBtn}${devouredBtn}${slot?reactionBtn:''}</div>
         </div>
       </div>`;
     }).join('')}
@@ -2207,6 +2254,76 @@ function removeAllBought() {
   Object.keys(list.items).forEach(k => { if (list.items[k].got) { delete list.items[k]; list.order = list.order.filter(o=>o!==k); } });
   list.updatedAt = nowIso();
   save(); renderShop();
+}
+
+// ── Insights (MP-041) ──
+// Scans ALL mealPlanDays to build meal-frequency and reaction tables.
+// A "serving" is any slot that has content (recipe/text/leftover).
+// "Devoured" = slot.devoured=true. "Reaction" = slot.reaction=true.
+// Name is resolved to: recipe name, slot.text, or slot.label.
+function renderInsights() {
+  // tally: name -> { devoured, reaction, total }
+  const tally = {};
+  function tallySlot(slot) {
+    if (!slot || slot.type === 'none') return;
+    let name = '';
+    if (slot.type === 'recipe') {
+      const r = DB.data.recipes.find(x => x.id === slot.recipeId);
+      name = r ? r.name : null;
+    } else if (slot.type === 'text') {
+      name = slot.text || null;
+    } else if (slot.type === 'leftover') {
+      name = slot.label ? slot.label.replace(/ \(leftover\)$/, '') : 'Leftover';
+    }
+    if (!name) return;
+    if (!tally[name]) tally[name] = { devoured: 0, reaction: 0, total: 0 };
+    tally[name].total++;
+    if (slot.devoured) tally[name].devoured++;
+    if (slot.reaction) tally[name].reaction++;
+  }
+  Object.values(DB.data.mealPlanDays || {}).forEach(day => {
+    if (!day.slots) return;
+    Object.values(day.slots).forEach(slot => tallySlot(slot));
+  });
+
+  // Most eaten — sorted by devoured count desc, then total desc
+  const meatEl = document.getElementById('insightsMostEaten');
+  const devouredEntries = Object.entries(tally)
+    .filter(([,v]) => v.devoured > 0)
+    .sort((a,b) => b[1].devoured - a[1].devoured || b[1].total - a[1].total)
+    .slice(0, 20);
+  if (devouredEntries.length === 0) {
+    meatEl.innerHTML = '<div class="empty">No devoured meals logged yet.</div>';
+  } else {
+    meatEl.innerHTML = devouredEntries.map(([name, v]) => `
+      <div class="insight-row">
+        <span class="insight-name">${esc(name)}</span>
+        <span class="insight-count">${v.devoured} devoured${v.total > v.devoured ? ` of ${v.total} planned` : ''}</span>
+      </div>`).join('');
+  }
+
+  // Reactions — only meals that have at least one reaction flag
+  const reactEl = document.getElementById('insightsReactions');
+  const reactionEntries = Object.entries(tally)
+    .filter(([,v]) => v.reaction > 0)
+    .sort((a,b) => b[1].reaction - a[1].reaction);
+  if (reactionEntries.length === 0) {
+    reactEl.innerHTML = '<div class="empty">No reactions flagged yet — tap 😐 on a meal slot after eating to flag a reaction.</div>';
+  } else {
+    reactEl.innerHTML = reactionEntries.map(([name, v]) => {
+      const pct = v.devoured > 0 ? Math.round((v.reaction / v.devoured) * 100) : 100;
+      return `<div class="insight-reaction-row">
+        <div style="flex:1;min-width:0;">
+          <div class="insight-reaction-name">${esc(name)}</div>
+          <div class="insight-reaction-bar"><div class="insight-reaction-bar-fill" style="width:${pct}%"></div></div>
+        </div>
+        <div class="insight-reaction-stats">
+          <span style="color:var(--danger);font-weight:700;">${v.reaction}×</span>
+          <span style="color:var(--muted);"> of ${v.devoured > 0 ? v.devoured : v.total} ${v.devoured > 0 ? 'devoured' : 'total'}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
 }
 
 // ── Import / Backup ──
