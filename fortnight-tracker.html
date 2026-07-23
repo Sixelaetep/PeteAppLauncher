@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.28</title>
+<title>9-Day Fortnight Tracker v3.29</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -394,6 +394,25 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .ts-submit-btn:hover{border-color:var(--teal);color:var(--teal);}
 /* FT-019: on-screen totals row matches PDF footer style */
 .ts-report tfoot td{border-top:2px solid var(--border);font-weight:700;color:var(--text);padding-top:7px;}
+/* FT-022: matrix input table — replaces day-by-day accordion */
+.ts-mx{width:100%;border-collapse:collapse;font-size:.72rem;margin:0;}
+.ts-mx th{color:var(--muted);font-weight:500;padding:7px 8px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap;}
+.ts-mx th:first-child{text-align:left;min-width:120px;}
+.ts-mx td{padding:5px 6px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.ts-mx td:first-child{font-size:.7rem;}
+.ts-mx td.num{font-family:'DM Mono',monospace;text-align:right;white-space:nowrap;}
+.ts-mx tfoot td{border-top:2px solid var(--border);font-weight:700;color:var(--text);padding-top:7px;font-family:'DM Mono',monospace;text-align:right;}
+.ts-mx tfoot td:first-child{font-family:inherit;text-align:left;}
+.ts-mx-input{width:48px;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:inherit;padding:4px 5px;font-family:'DM Mono',monospace;font-size:.72rem;text-align:right;}
+.ts-mx-input:focus{outline:none;border-color:var(--teal);}
+.ts-mx-input.has-val{border-color:var(--amber);color:var(--text);}
+.ts-mx-input.over{border-color:#ef4444;}
+.ts-mx th.day-hi{color:var(--text);background:rgba(245,166,35,.08);}  /* highlight col from Live jump */
+.ts-mx td.day-hi{background:rgba(245,166,35,.05);}
+.ts-mx-rem{background:none;border:none;color:var(--muted);cursor:pointer;font-size:.78rem;padding:2px 4px;line-height:1;opacity:.6;}
+.ts-mx-rem:hover{color:#ef4444;opacity:1;}
+.ts-mx-add{display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);}
+.ts-mx-status{font-size:.6rem;color:var(--muted);display:block;margin-top:1px;}
 /* FT-025 / FT-017: print-only view. Screen: fully hidden. Print: all
    other elements removed from layout (display:none, not visibility:hidden
    — visibility:hidden keeps layout height intact and creates blank pages).
@@ -429,7 +448,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.28</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.29</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -640,10 +659,12 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
-// v3.28 (FT-021): Collapsible week cards — chevron in header toggles
-// day rows + report table. Submitted weeks auto-collapse on load/nav;
-// explicit tap overrides the default. Submit button stops propagation
-// so tapping it doesn't also toggle collapse.
+// v3.29 (FT-022): Matrix input replaces day-accordion on Timesheet tab.
+// Codes as rows, days as columns, decimal-hour inputs per cell. Single
+// table is both input and report; PDF/Copy drive off same tsWeekMatrix.
+// tsMxWeekCodes, tsMxUpdCell, tsMxAddCode, tsMxRemCode, tsMxPickerW,
+// tsMxCopyPrevWeekCodes all new. tsOpenDay retained as Live-tab jump hint.
+// v3.28 (FT-021): Collapsible week cards on Timesheet tab
 // v3.27 (FT-020): Fix Prev/Next nav direction on Timesheet tab
 // v3.26 (FT-019): Timesheet nav, totals row, week submit toggle
 // v3.25 (FT-018): PDF report now includes a Week Total footer row —
@@ -1075,8 +1096,8 @@ function applyAutoAbsence(d){
 
 // ── Timesheet tab state ──
 var tsSelected=null;   // bundle index shown on the tab; null = auto (active, else newest)
-var tsOpenDay=null;    // day index with the allocation editor expanded
-var tsPickerDay=null;  // day index with the code picker open
+var tsOpenDay=null;    // day index jumped from Live tab (highlights that column); null = none
+var tsPickerDay=null;  // retained for setStat compatibility (not used in matrix render)
 var tsPickerQ='';      // picker search text
 var tsShowArchived=false;
 var tsEditCodeId=null; // code id being edited in the manager; '__new__' = adding
@@ -1084,6 +1105,9 @@ var tsEditCodeId=null; // code id being edited in the manager; '__new__' = addin
 // (submitted weeks start collapsed); true/false = explicit user override.
 // Reset to {1:null,2:null} on bundle navigation so the default re-applies.
 var tsWeekCollapsed={1:null,2:null};
+// FT-022: matrix input — which week's code picker is open (1, 2, or null)
+var tsMxPickerW=null;
+var tsMxPickerQ='';
 
 function tsBundle(){
   if(tsSelected!==null&&state.bundles[tsSelected]) return state.bundles[tsSelected];
@@ -1095,18 +1119,18 @@ function tsBundle(){
 function tsBundleIdx(){
   var b=tsBundle(); return b?state.bundles.indexOf(b):-1;
 }
-function tsSelectBundle(v){ tsSelected=(v===''?null:parseInt(v,10)); tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; render(); }
+function tsSelectBundle(v){ tsSelected=(v===''?null:parseInt(v,10)); tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render(); }
 // FT-019/FT-020: forward/back bundle navigation.
 // state.bundles is sorted newest-first (descending startDate), so:
 //   Prev (older/earlier) = higher index
 //   Next (newer/later)   = lower index
 function tsNavPrev(){
   var bi=tsBundleIdx(); if(bi<0||bi>=state.bundles.length-1) return;
-  tsSelected=bi+1; tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; render();
+  tsSelected=bi+1; tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render();
 }
 function tsNavNext(){
   var bi=tsBundleIdx(); if(bi<=0) return;
-  tsSelected=bi-1; tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; render();
+  tsSelected=bi-1; tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render();
 }
 // FT-019: toggle week submitted — keyed on the last day of each week
 // (day 4 for week 1, day 8 for week 2). timesheetDone is only non-null
@@ -1215,6 +1239,139 @@ function tsCopyPrevDay(di){
 }
 function tsWeekDays(b,w){ var idx=w===1?[0,1,2,3,4]:[5,6,7,8]; return idx.map(function(i){return {d:b.days[i],i:i};}); }
 function tsWeekTarget(w){ var idx=w===1?[0,1,2,3,4]:[5,6,7,8]; return idx.reduce(function(s,i){return s+stdMins(i);},0); }
+
+// FT-022: matrix input helpers ─────────────────────────────────────────────
+// All active codes across the week (union of alloc codeIds on all days).
+// Includes codes with zero allocation so they stay visible once added.
+function tsMxWeekCodes(b,w){
+  var days=tsWeekDays(b,w);
+  var seen={}, ids=[];
+  days.forEach(function(x){
+    (x.d.alloc||[]).forEach(function(a){
+      if(!seen[a.codeId]){ seen[a.codeId]=true; ids.push(a.codeId); }
+    });
+  });
+  // Return in the order codes appear on day 0 first, then others
+  return ids;
+}
+// Read a cell input and commit to store (decimal hours → nearest-5-min)
+function tsMxUpdCell(w,codeId,dayIdx){
+  var bi=tsBundleIdx(); if(bi<0) return;
+  var el=document.getElementById('mx-'+w+'-'+codeId+'-'+dayIdx);
+  if(!el) return;
+  var val=parseFloat(el.value)||0;
+  var mins=Math.round(val*60/5)*5; // nearest 5 min
+  var d=state.bundles[bi].days[dayIdx];
+  if(!d.alloc) d.alloc=[];
+  var entry=d.alloc.find(function(a){return a.codeId===codeId;});
+  if(entry){ entry.mins=mins; }
+  else if(mins>0){ d.alloc.push({codeId:codeId,mins:mins}); }
+  // Reformat input to display rounded value
+  el.value=mins>0?(mins/60).toFixed(2).replace(/\.00$/,''):'';
+  el.className='ts-mx-input'+(mins>0?' has-val':'');
+  save(state.bundles[bi]);
+  // Update totals in-place without full re-render for responsiveness
+  tsMxRefreshTotals(w,b);
+}
+// Refresh the per-day and grand total cells without re-rendering
+function tsMxRefreshTotals(w,b){
+  if(!b) b=tsBundle(); if(!b) return;
+  var days=tsWeekDays(b,w);
+  var codes=tsMxWeekCodes(b,w);
+  // Row totals
+  codes.forEach(function(codeId){
+    var rowTot=0;
+    days.forEach(function(x){
+      var a=(x.d.alloc||[]).find(function(a){return a.codeId===codeId;});
+      rowTot+=(a?a.mins:0);
+    });
+    var el=document.getElementById('mx-tot-'+w+'-'+codeId);
+    if(el) el.textContent=rowTot>0?m2hrs(rowTot).toFixed(2):'\u00b7';
+  });
+  // Column (day) totals
+  days.forEach(function(x){
+    var colTot=(x.d.alloc||[]).reduce(function(s,a){return s+(a.mins||0);},0);
+    var el=document.getElementById('mx-dtot-'+w+'-'+x.i);
+    var tgt=dayTarget(x.d,x.i);
+    if(el){
+      el.textContent=colTot>0?m2hrs(colTot).toFixed(2):'\u00b7';
+      el.className='ts-mx tfoot-cell num'+(colTot>tgt?' ts-over':colTot===tgt?' ts-ok':colTot>0?' ts-under':'');
+    }
+  });
+  // Week grand total
+  var wTot=days.reduce(function(s,x){return s+(x.d.alloc||[]).reduce(function(ss,a){return ss+(a.mins||0);},0);},0);
+  var wTarget=tsWeekTarget(w);
+  var wtEl=document.getElementById('mx-wtot-'+w);
+  if(wtEl){
+    wtEl.textContent=m2hrs(wTot).toFixed(2);
+    wtEl.className='num'+(wTot>wTarget?' ts-over':wTot===wTarget?' ts-ok':wTot>0?' ts-under':'');
+  }
+}
+// Add a code row to the week (zeros on all days; will be visible even at 0)
+function tsMxAddCode(w,codeId){
+  var bi=tsBundleIdx(); if(bi<0) return;
+  var b=state.bundles[bi];
+  var days=tsWeekDays(b,w);
+  // Ensure at least a zero-entry exists on day 0 so the code appears
+  var d0=b.days[days[0].i];
+  if(!d0.alloc) d0.alloc=[];
+  if(!d0.alloc.some(function(a){return a.codeId===codeId;})){
+    d0.alloc.push({codeId:codeId,mins:0});
+  }
+  tsMxPickerW=null; tsMxPickerQ='';
+  save(b); render();
+}
+// Remove a code from all days in the week
+function tsMxRemCode(w,codeId){
+  var bi=tsBundleIdx(); if(bi<0) return;
+  var b=state.bundles[bi];
+  tsWeekDays(b,w).forEach(function(x){
+    if(!x.d.alloc) return;
+    x.d.alloc=x.d.alloc.filter(function(a){return a.codeId!==codeId;});
+  });
+  save(b); render();
+}
+// Toggle the week-level code picker
+function tsMxTogglePicker(w){
+  tsMxPickerW=(tsMxPickerW===w?null:w); tsMxPickerQ=''; render();
+  if(tsMxPickerW!==null){ var el=document.getElementById('ts-mx-pick-q'); if(el) el.focus(); }
+}
+function tsMxPickerInput(v){ tsMxPickerQ=v; var el=document.getElementById('ts-mx-pick-pills'); if(el) el.innerHTML=tsMxPickerPillsHtml(tsMxPickerW); }
+function tsMxPickerPillsHtml(w){
+  var q=tsMxPickerQ.trim().toLowerCase();
+  // Exclude codes already in this week
+  var existing=new Set(w?tsMxWeekCodes(tsBundle(),w):[]);
+  var list=activeCodes().filter(function(c){
+    return !existing.has(c.id)&&(!q||(c.desc+' '+c.project+' '+c.task).toLowerCase().indexOf(q)>=0);
+  });
+  var h=list.map(function(c){
+    return '<span class="pick-pill" onclick="tsMxAddCode('+w+',\''+c.id+'\')">'+esc(c.desc)+'<span class="pp-task">'+esc(c.task)+'</span></span>';
+  }).join('');
+  h+='<span class="pick-pill" style="border-style:dashed" onclick="cmStartNew(tsMxPickerQ)">\uFF0B New code\u2026</span>';
+  return h;
+}
+// Copy the code set (not hours) from the nearest earlier bundle's same week
+function tsMxCopyPrevWeekCodes(w){
+  var bi=tsBundleIdx(); if(bi<0) return;
+  var b=state.bundles[bi];
+  var src=null;
+  for(var j=bi+1;j<state.bundles.length;j++){
+    var srcDays=tsWeekDays(state.bundles[j],w);
+    if(srcDays.some(function(x){return (x.d.alloc||[]).length>0;})){ src=state.bundles[j]; break; }
+  }
+  if(!src){ toast('No earlier bundle with codes to copy','error'); return; }
+  var srcCodes=tsMxWeekCodes(src,w);
+  var added=0;
+  srcCodes.forEach(function(codeId){
+    var days=tsWeekDays(b,w);
+    var d0=b.days[days[0].i];
+    if(!d0.alloc) d0.alloc=[];
+    if(!d0.alloc.some(function(a){return a.codeId===codeId;})){ d0.alloc.push({codeId:codeId,mins:0}); added++; }
+  });
+  if(!added){ toast('All codes from the previous bundle are already here','error'); return; }
+  save(b); render();
+  toast('Copied '+added+' code(s) from '+esc(src.label),'ok');
+}
 // FT-016: per-day matrix — codes down the left, one column per day of
 // the week, plus Total. Feeds both the on-screen grid and the TSV copy.
 function tsWeekMatrix(b,w){
@@ -1363,56 +1520,78 @@ function renderTimesheet(root){
       +(submitDay&&submitDay.timesheetDone!==null?'<button class="ts-submit-btn'+(submitted?' done':'')+'" onclick="tsToggleWeekSubmit('+w+')">'+(submitted?'\u2713 Submitted':'Submit')+'</button>':'')
       +'</span></div>';
     if(!collapsed){
-    days.forEach(function(x){
-      var d=x.d, di=x.i;
-      var at=allocTotal(d);
-      var dTarget=dayTarget(d,di);
-      var amtCls=at===dTarget?'ts-ok':(at>dTarget?'ts-over':'ts-under');
-      var stTxt=d.status?d.status.charAt(0).toUpperCase()+d.status.slice(1):'\u2014';
-      var absLbl=dayAbsenceLabel(d,di);
-      var absBadge=absLbl?' <span class="ts-abs-badge '+d.status+'">'+esc(absLbl)+'</span>':'';
-      h+='<div class="ts-day"><div class="ts-day-head" onclick="tsToggleDay('+di+')">'
-        +'<span><span class="ts-day-date">'+esc(fmtDate(parseDate(d.date)))+'</span> <span class="ts-day-sub">'+stTxt+'</span>'+absBadge+'</span>'
-        +'<span class="ts-day-amt '+amtCls+'">'+hmm(at)+' / '+hmm(dTarget)+'</span></div>';
-      if(tsOpenDay===di){
-        (d.alloc||[]).forEach(function(a,ai){
-          var c=codeById(a.codeId);
-          h+='<div class="alloc-row"><span class="alloc-name">'+esc(c?c.desc:'(deleted code)')+'<span class="alloc-task"> '+esc(c?c.task:'')+'</span></span>'
-            +tsHourSel(di,ai,Math.floor((a.mins||0)/60))+'h'
-            +tsMinSel(di,ai,(a.mins||0)%60)+'m'
-            +'<button class="alloc-x" onclick="tsRemAlloc('+di+','+ai+')" aria-label="Remove allocation">\u2715</button></div>';
-        });
-        if(tsPickerDay===di){
-          h+='<div class="pickwrap"><input type="text" id="ts-pick-q" placeholder="Search codes\u2026" value="'+esc(tsPickerQ)+'" oninput="tsPickerInput(this.value)"><div class="pick-pills" id="ts-pick-pills">'+tsPickerPillsHtml()+'</div></div>';
-        } else {
-          h+='<button class="ts-add-btn" onclick="tsTogglePicker('+di+')">\uFF0B Add code</button>'
-            +'<button class="ts-add-btn" onclick="tsCopyPrevDay('+di+')" style="margin-left:6px">\u29C9 Copy previous day</button>';
-        }
-      }
-      h+='</div>';
+    // FT-022: matrix input — codes as rows, days as columns, editable cells
+    var mxCodes=tsMxWeekCodes(b,w);
+    // Compute column totals
+    var colMins=days.map(function(x){ return (x.d.alloc||[]).reduce(function(s,a){return s+(a.mins||0);},0); });
+    var wTotMx=colMins.reduce(function(s,v){return s+v;},0);
+    h+='<div style="overflow-x:auto"><table class="ts-mx"><thead><tr>'
+      +'<th style="text-align:left">Code</th>';
+    days.forEach(function(x,ci){
+      var dl=parseDate(x.d.date).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'});
+      var absLbl=dayAbsenceLabel(x.d,x.i);
+      var stTxt=x.d.status?x.d.status.charAt(0).toUpperCase()+x.d.status.slice(1):'';
+      var hiCls=(tsOpenDay===x.i)?' day-hi':'';
+      h+='<th class="num'+hiCls+'">'+esc(dl);
+      if(stTxt) h+='<span class="ts-mx-status">'+esc(absLbl||stTxt)+'</span>';
+      h+='</th>';
     });
-    // report — FT-016/FT-018/FT-019: per-day grid + totals footer row
-    var mtx=tsWeekMatrix(b,w);
-    if(mtx.rows.length){
-      var wTotMtx=weekAllocated(b,w);
-      var numDaysMtx=mtx.dayLabels.length;
-      var colTotsMtx=mtx.rows.reduce(function(acc,r){
-        r.perDay.forEach(function(v,i){ acc[i]=(acc[i]||0)+v; });
-        return acc;
-      }, new Array(numDaysMtx).fill(0));
-      h+='<div style="padding:10px 14px 13px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="ts-day-sub">Week '+w+' timesheet report</span><span><button class="ts-pdf-btn" onclick="tsExportPdf('+w+')">PDF</button><button class="ts-copy" onclick="tsCopyWeek('+w+')">Copy</button></span></div>';
-      h+='<div style="overflow-x:auto"><table class="ts-report"><thead><tr><th>Code</th>';
-      mtx.dayLabels.forEach(function(dl){ h+='<th style="text-align:right">'+esc(dl)+'</th>'; });
-      h+='<th style="text-align:right">Total</th></tr></thead><tbody>';
-      mtx.rows.forEach(function(r){
-        h+='<tr><td>'+esc(r.desc)+'<br><span class="cm-meta">'+esc(r.project)+' \u00b7 '+esc(r.task)+' \u00b7 '+esc(r.code)+'</span></td>';
-        r.perDay.forEach(function(v){ h+='<td class="num" style="text-align:right">'+(v?m2hrs(v).toFixed(2):'\u00b7')+'</td>'; });
-        h+='<td class="num" style="text-align:right"><b>'+m2hrs(r.total).toFixed(2)+'</b></td></tr>';
+    h+='<th class="num">Total</th><th></th></tr></thead><tbody>';
+    if(mxCodes.length){
+      mxCodes.forEach(function(codeId){
+        var code=codeById(codeId);
+        var rowTot=0;
+        h+='<tr><td style="font-size:.69rem;">'+esc(code?code.desc:'(deleted)')
+          +(code?'<br><span class="cm-meta">'+esc(code.code)+'</span>':'')+'</td>';
+        days.forEach(function(x,ci){
+          var entry=(x.d.alloc||[]).find(function(a){return a.codeId===codeId;});
+          var mins=entry?entry.mins:0;
+          rowTot+=mins;
+          var dispVal=mins>0?(mins/60).toFixed(2).replace(/\.00$/,''):'';
+          var tgt=dayTarget(x.d,x.i);
+          var colTot=colMins[ci];
+          var hiCls=(tsOpenDay===x.i)?' day-hi':'';
+          var inputCls='ts-mx-input'+(mins>0?' has-val':'')+(colTot>tgt?' over':'');
+          h+='<td class="num'+hiCls+'"><input type="number" min="0" max="24" step="0.25"'
+            +' id="mx-'+w+'-'+codeId+'-'+x.i+'"'
+            +' class="'+inputCls+'"'
+            +' value="'+esc(dispVal)+'"'
+            +' placeholder="·"'
+            +' onchange="tsMxUpdCell('+w+',\''+codeId+'\','+x.i+')"'
+            +' onfocus="this.select()"'
+            +'></td>';
+        });
+        h+='<td class="num" id="mx-tot-'+w+'-'+codeId+'">'+(rowTot>0?m2hrs(rowTot).toFixed(2):'\u00b7')+'</td>';
+        h+='<td><button class="ts-mx-rem" onclick="tsMxRemCode('+w+',\''+codeId+'\')" title="Remove code from week">\u2715</button></td>';
+        h+='</tr>';
       });
-      h+='</tbody><tfoot><tr><td><b>Week total</b></td>';
-      colTotsMtx.forEach(function(v){ h+='<td class="num" style="text-align:right"><b>'+(v?m2hrs(v).toFixed(2):'\u00b7')+'</b></td>'; });
-      h+='<td class="num" style="text-align:right"><b>'+m2hrs(wTotMtx).toFixed(2)+'</b></td></tr></tfoot>';
-      h+='</table></div></div>';
+    } else {
+      h+='<tr><td colspan="'+(days.length+3)+'" style="padding:12px 8px;color:var(--muted);font-size:.72rem;">No codes yet — add one below</td></tr>';
+    }
+    // Footer: day totals + week grand total
+    h+='</tbody><tfoot><tr><td>Week total</td>';
+    days.forEach(function(x,ci){
+      var ct=colMins[ci], tgt=dayTarget(x.d,x.i);
+      var hiCls=(tsOpenDay===x.i)?' day-hi':'';
+      var cls=ct===tgt?' ts-ok':ct>tgt?' ts-over':ct>0?' ts-under':'';
+      h+='<td class="num'+hiCls+' '+cls+'" id="mx-dtot-'+w+'-'+x.i+'">'+(ct>0?m2hrs(ct).toFixed(2):'\u00b7')+'</td>';
+    });
+    var wCls=wTotMx===target?' ts-ok':wTotMx>target?' ts-over':wTotMx>0?' ts-under':'';
+    h+='<td class="num '+wCls+'" id="mx-wtot-'+w+'">'+m2hrs(wTotMx).toFixed(2)+'</td><td></td></tr></tfoot>';
+    h+='</table></div>';
+    // Add-code controls
+    h+='<div class="ts-mx-add">';
+    if(tsMxPickerW===w){
+      h+='<input type="text" id="ts-mx-pick-q" placeholder="Search codes\u2026" value="'+esc(tsMxPickerQ)+'" oninput="tsMxPickerInput(this.value)" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:inherit;padding:7px 10px;font-size:.76rem;">'
+        +'<button class="ts-pdf-btn" onclick="tsMxTogglePicker('+w+')">Cancel</button>';
+      h+='</div><div style="padding:0 14px 10px"><div class="pick-pills" id="ts-mx-pick-pills">'+tsMxPickerPillsHtml(w)+'</div></div>';
+    } else {
+      h+='<button class="ts-add-btn" style="margin-top:0" onclick="tsMxTogglePicker('+w+')">\uFF0B Add code</button>'
+        +'<button class="ts-add-btn" style="margin-top:0;margin-left:6px" onclick="tsMxCopyPrevWeekCodes('+w+')">\u29C9 Copy from prev bundle</button>'
+        +'<span style="flex:1"></span>'
+        +'<button class="ts-pdf-btn" onclick="tsExportPdf('+w+')">PDF</button>'
+        +'<button class="ts-copy" onclick="tsCopyWeek('+w+')" style="margin-left:6px">Copy</button>';
+      h+='</div>';
     }
     } // end if(!collapsed)
     h+='</div>';
@@ -1440,11 +1619,12 @@ function renderTimesheet(root){
 
   wrap.innerHTML=h;
   root.appendChild(wrap);
-  // workflow jump: scroll the focused day into view once
+  // FT-022: when jumping from Live tab (tsOpenDay set), scroll the
+  // highlighted column header into view then clear the hint.
   if(tsOpenDay!==null){
-    var rows=wrap.getElementsByClassName('ts-day');
-    // rows appear in day-index order 0-8 across the two week cards
-    if(rows[tsOpenDay]) rows[tsOpenDay].scrollIntoView({behavior:'smooth',block:'center'});
+    var hiEl=wrap.querySelector('.day-hi');
+    if(hiEl) hiEl.scrollIntoView({behavior:'smooth',block:'center'});
+    tsOpenDay=null; // clear after first render — highlight is one-shot
   }
 }
 function cmFormHtml(c){
