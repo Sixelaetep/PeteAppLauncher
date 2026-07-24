@@ -150,6 +150,50 @@
  * Deliberately NOT automatic: apps surface it as a count-then-confirm
  * button. GigsAndTrips and Meal Planner (bespoke shared sync) are out
  * of scope — their shared-data tombstone policy needs its own thinking.
+ * v1.11 — pull()'s final line unconditionally dropped every _deleted:true
+ * record from `merged`, regardless of whether the cloud had actually
+ * confirmed the deletion. Every calling app rebuilds its local array
+ * straight from `merged`, so this meant: delete something, and on the
+ * VERY NEXT pull — success or failure of that delete's own tombstone
+ * push — the local record of the deletion itself was gone, not just the
+ * (correctly) hidden record. If the tombstone push had failed for any
+ * reason (network blip, 401, offline), the cloud still held the old live
+ * row, and with local memory of the delete now wiped too, a LATER pull
+ * would freely adopt that stale row as if it were legitimate unseen data
+ * — the deleted record resurrects, permanently, with no further chance
+ * to self-correct. Traced through On Budget ON--049 and ON--050: the
+ * second bug was an app-level retry sweep (compare _deleted:true local
+ * records against cloud confirmation) that could never fire, because by
+ * the time it ran, pull() had already erased the local tombstone it
+ * needed to check. Root cause was here, one layer below any app's own
+ * logic, affecting every app and every table using table().pull().
+ * Two changes, no signature change, existing 3-arg and 4-arg callers
+ * both unaffected other than getting the fix:
+ * (1) merged no longer strips _deleted:true unconditionally. A record
+ * only leaves merged once the CLOUD independently confirms the
+ * deletion (its own row for that id also carries _deleted:true) — at
+ * that point it's already removed from the working map by the existing
+ * "cloud tombstone wins" branch earlier in pull(), so nothing extra is
+ * needed to drop it. Anything still _deleted:true in the map by the end
+ * is, by construction, one the cloud hasn't echoed back yet, and now
+ * stays in merged so the calling app's local array keeps remembering it
+ * across pulls instead of forgetting after one cycle.
+ * (2) an unconfirmed local tombstone whose id already exists in cloud
+ * (so the existing "local-only" push skips it, since that only fires
+ * for ids missing from cloud entirely) now gets its own explicit retry
+ * push every pull, until the cloud confirms it. Previously such a
+ * tombstone was pushed exactly once, at the moment of deletion, with no
+ * second chance if that single push failed.
+ * Consequence every calling app needs to know: merged can now contain
+ * _deleted:true records it never used to. Every app in the suite is
+ * documented as filtering !record._deleted at render/calc time — that
+ * pattern is what makes this safe; an app that instead relied on pull()
+ * having already scrubbed deletes for it will start showing tombstoned
+ * records until the cloud confirms them. Audited alongside this release
+ * (see each app's own changelog): Reading Tracker and Test & Issues had
+ * no such filtering anywhere and needed it added; Fortnight Tracker had
+ * it for codes but not bundles. On Budget, Gym Tracker, and Claim
+ * Tracker already filtered consistently and needed no changes for this.
  *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
@@ -476,10 +520,25 @@ window.PalSync = (function () {
     //   an app with several record kinds sharing one table), pass the
     //   result here to skip this instance's own network fetch.
     //
-    // Returns { merged, pushedCount, rows, skipped }:
-    //   merged      — final live record array (tombstones stripped) —
-    //                 the app should replace its local array with this.
-    //   pushedCount — how many local-only records were pushed to cloud.
+    // Returns { merged, pushedCount, retriedDeleteCount, rows, skipped }:
+    //   merged      — final record array. v1.11: NO LONGER strips every
+    //                 _deleted:true record — only ones the cloud has
+    //                 independently confirmed (its own row for that id
+    //                 also carries _deleted:true) are gone, and those are
+    //                 removed earlier in this function, not here. An
+    //                 unconfirmed local tombstone stays in merged so the
+    //                 calling app's local array keeps remembering the
+    //                 deletion across pulls instead of forgetting it
+    //                 after one cycle. The app should replace its local
+    //                 array with this either way, same as always — but
+    //                 must filter !record._deleted at render/calc time
+    //                 (the suite-wide documented pattern) since merged
+    //                 can now legitimately contain tombstones.
+    //   pushedCount — how many local-only (unknown-to-cloud) records were
+    //                 pushed to cloud.
+    //   retriedDeleteCount — v1.11: how many unconfirmed local tombstones
+    //                 (id already exists in cloud, just not yet marked
+    //                 deleted there) were re-pushed this pull.
     //   rows        — ALL rows fetched from the table, unfiltered by
     //                 prefix — for callers that keep another record kind
     //                 alongside this one (e.g. Test & Issues' '__meta__',
@@ -490,7 +549,7 @@ window.PalSync = (function () {
     async function pull(localRecords, idField, updatedAtField, preFetchedRows) {
       idField = idField || 'id';
       updatedAtField = updatedAtField || 'updated_at';
-      if (!hasSession()) return { merged: localRecords, pushedCount: 0, rows: [], skipped: true };
+      if (!hasSession()) return { merged: localRecords, pushedCount: 0, retriedDeleteCount: 0, rows: [], skipped: true };
 
       const allRows = preFetchedRows || await fetchTableRows(tableName);
       // Scope the merge to this instance's prefix, if any — otherwise a
@@ -504,7 +563,7 @@ window.PalSync = (function () {
       rows.forEach(function (row) {
         const remote = row.data;
         if (!remote || !remote[idField]) return; // not a record this merge cares about (e.g. a settings/meta row)
-        if (remote._deleted) { delete localMap[remote[idField]]; return; }
+        if (remote._deleted) { delete localMap[remote[idField]]; return; } // cloud confirms the delete — drop it here, unconditionally, regardless of local state
         const local = localMap[remote[idField]];
         if (local && local._deleted) return; // local tombstone wins — don't resurrect from an older cloud copy
         if (!local || (remote[updatedAtField] || '') >= (local[updatedAtField] || '')) {
@@ -522,8 +581,37 @@ window.PalSync = (function () {
       const localOnly = Object.values(localMap).filter(function (r) { return !cloudIds.has(r[idField]); });
       for (const r of localOnly) await upsert(r[idField], r);
 
-      const merged = Object.values(localMap).filter(function (r) { return !r._deleted; });
-      return { merged: merged, pushedCount: localOnly.length, rows: allRows, skipped: false };
+      // v1.11: a local tombstone that survived the merge above (meaning
+      // the cloud hasn't echoed the delete back yet) but whose id DOES
+      // already exist in cloud — so the localOnly push above skipped it,
+      // since that only covers ids missing from cloud entirely — gets
+      // its own retry here. Without this, a tombstone whose first push
+      // failed for any reason was never tried again; it would just sit
+      // there until its still-live cloud counterpart eventually won a
+      // future merge and resurrected. Best-effort: a failure here is not
+      // rethrown, since the record stays in merged (below) and gets
+      // another attempt on the next pull regardless.
+      const localOnlyIds = new Set(localOnly.map(function (r) { return r[idField]; }));
+      let retriedDeleteCount = 0;
+      for (const r of Object.values(localMap)) {
+        if (r._deleted && cloudIds.has(r[idField]) && !localOnlyIds.has(r[idField])) {
+          try { await upsert(r[idField], r); retriedDeleteCount++; } catch (e) { /* best-effort — retried again next pull */ }
+        }
+      }
+
+      // v1.11: previously filtered out every _deleted:true record here,
+      // unconditionally. That was the bug — see the v1.11 changelog entry
+      // at the top of this file. Anything still _deleted:true in the map
+      // at this point is, by construction, one the cloud has NOT yet
+      // echoed back (a cloud-confirmed delete was already removed above,
+      // in the rows.forEach loop), so keeping it here is exactly what the
+      // calling app needs: without it, an app that rebuilds its local
+      // array from `merged` (every app in the suite does) permanently
+      // forgets its own delete after just one pull if the first tombstone
+      // push failed, and the cloud's still-live copy gets silently
+      // re-adopted as legitimate on a later pull.
+      const merged = Object.values(localMap);
+      return { merged: merged, pushedCount: localOnly.length, retriedDeleteCount: retriedDeleteCount, rows: allRows, skipped: false };
     }
 
     return { upsert: upsert, tombstone: tombstone, pull: pull };
