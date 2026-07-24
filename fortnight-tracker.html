@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.31</title>
+<title>9-Day Fortnight Tracker v3.32</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -450,7 +450,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.31</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.32</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -661,6 +661,17 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.32 (FT-026, suite-wide sync audit): importData() (restore from
+// backup) used to forge a brand-new updatedAt on every imported bundle
+// regardless of the backup file's own timestamp, then blind-push every
+// one straight to the cloud with no comparison against what was
+// actually there. Together, this meant a stale backup could look
+// artificially newer than genuinely newer cloud data and silently
+// overwrite it — the same defect found and fixed in Meal Planner
+// (MP-045), Reading Tracker (MR-011), and On Budget (ON--049). Now
+// preserves the backup's own updatedAt where present (only stamping a
+// fresh one if genuinely missing), and pulls-and-merges with the cloud
+// before pushing — same fix already applied to manualPush (FT-002).
 // v3.31 (FT-024): Header total now live-updates on cell change. Added
 // mx-whdr-{w} id to header span; tsMxRefreshTotals now patches it.
 // New emoji format: 🎯 38h ✅ 7h ⏳ 31h (done/target/remaining).
@@ -2294,7 +2305,15 @@ function importData(event){
       var added=0;
       bundles.forEach(function(b){
         migrateDays(b);
-        b.updatedAt = new Date().toISOString();
+        // FT-026 (suite-wide sync audit): this used to forge a brand-new
+        // updatedAt on every imported bundle regardless of what the backup
+        // file actually carried. That made a stale backup look artificially
+        // newer than genuinely newer cloud data, so even a correct
+        // last-write-wins merge would wrongly let the stale import win.
+        // Only stamp a timestamp if the backup file didn't already have
+        // one (e.g. a very old export) — otherwise preserve the backup's
+        // own real timestamp so the merge below can compare it honestly.
+        if(!b.updatedAt) b.updatedAt = new Date().toISOString();
         if(!existing.has(b.startDate)){ state.bundles.push(b); added++; }
         else {
           // Overwrite existing bundle data from backup
@@ -2304,9 +2323,25 @@ function importData(event){
       });
       state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
       saveLocal();
-      bundles.forEach(function(b){ sbUpsert(b, null); });
-      render();
-      toast(added>0?'Imported '+added+' bundle'+(added>1?'s':'')+' ✓':'Data restored ✓','ok');
+      // FT-026 (suite-wide sync audit): this used to blind-upsert every
+      // imported bundle straight to the cloud, with no comparison against
+      // what was actually there — the same defect found and fixed in Meal
+      // Planner (MP-045), Reading Tracker (MR-011), and On Budget
+      // (ON--049). If the restored backup predated something newer
+      // already in the cloud, that push would silently overwrite it. Pull
+      // first (same fix as manualPush, FT-002) — this reconciles the
+      // just-imported local state against the cloud via a genuine
+      // last-write-wins merge, and only pushes up whatever's genuinely
+      // local-only or newer, before rendering the final result.
+      if (window.PalSync.hasSession()) {
+        pullFromCloud(function(){
+          render();
+          toast(added>0?'Imported '+added+' bundle'+(added>1?'s':'')+' ✓':'Data restored ✓','ok');
+        });
+      } else {
+        render();
+        toast(added>0?'Imported '+added+' bundle'+(added>1?'s':'')+' ✓':'Data restored ✓','ok');
+      }
     }catch(err){toast('Import failed: '+err.message,'err');}
     event.target.value='';
   };

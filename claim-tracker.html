@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.9</title>
+<title>Claim Tracker v2.10</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -232,7 +232,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.9</div>
+        <div class="ver">v2.10</div>
       </div>
     </div>
     <div class="header-actions">
@@ -540,6 +540,21 @@
 // setSyncState() to show "N pending sync" instead of a bare error while
 // a retry is queued. Every sync error log message now also runs through
 // the shared PalSync.errorHint() instead of a bare err.message.
+// v2.10 (CLA-011, suite-wide sync audit): syncPush() (the manual "Push
+// to cloud" button) used to blind-upsert every local entry and settings
+// directly to the cloud, with NO merge and no comparison against what
+// was actually there. Never auto-triggered, so lower risk than the
+// equivalent bug found in Meal Planner (MP-045), Reading Tracker
+// (MR-011), On Budget (ON--049), Fortnight Tracker (FT-026), and
+// GigsAndTrips (GT-004) — but a manual push firing while local state was
+// stale relative to the cloud (e.g. right after switching devices) could
+// still silently overwrite newer cloud data. syncPush() now delegates
+// entirely to syncPull() (which takes an optional verb parameter so the
+// sync log reads "Push"/"Pushed" correctly even though both buttons now
+// run the same merge), and the settings singleton merge — previously
+// only ever pulling cloud-is-newer — now also pushes local settings up
+// when they're genuinely newer or the cloud has no settings row yet,
+// closing the gap left by removing syncPush()'s own explicit upsert.
 // v2.9: Suite-wide modal audit — the 3 main modals (Mark All as
 // Claimed, Edit Entry, Edit Standard Trip) were bottom-sheet styled
 // (align-items:flex-end, top-radius-only) with no way to dismiss by
@@ -547,7 +562,7 @@
 // uniform radius, shadow) and added click-outside-to-close, matching
 // the Sync & Backup drawer's existing behaviour. Sync & Backup drawer
 // itself is untouched — it's a deliberate bottom sheet, not a modal.
-const VERSION  = '2.9';
+const VERSION  = '2.10';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -760,13 +775,17 @@ function renderLog() {
 // { id (uuid PK), user_id, record_key, data (full entry/settings JSON), updated_at }
 
 // ── Pull: fetch all rows for user, merge with local ──
-async function syncPull() {
-  if (!window.PalSync.hasSession()) { addLog('Pull skipped — no session', 'info'); return; }
-  setSyncState('syncing', 'Pulling…');
-  addLog('Pull started', 'info');
+// verb (optional, default 'Pull'): syncPush() delegates here as 'Push' so
+// the sync log reads correctly for whichever button the user actually
+// pressed, even though both now run the exact same merge underneath.
+async function syncPull(verb) {
+  verb = verb || 'Pull';
+  if (!window.PalSync.hasSession()) { addLog(verb + ' skipped — no session', 'info'); return; }
+  setSyncState('syncing', verb + 'ing…');
+  addLog(verb + ' started', 'info');
   try {
     const result = await _ct.pull(getEntries(), 'id');
-    addLog(`Pull received ${result.rows.length} row(s)`, 'ok');
+    addLog(`${verb} received ${result.rows.length} row(s)`, 'ok');
 
     // Settings travel in the same table under record_key '__settings__' —
     // _ct.pull() ignores rows without an 'id' field (settings has none),
@@ -779,6 +798,14 @@ async function syncPull() {
     // device's real settings push, so the incoming settings got silently
     // dropped. Now compares against settings' own dedicated updated_at,
     // stamped only when settings actually change (see mutate()).
+    // CLA-011 (suite-wide sync audit): this used to only handle the
+    // cloud-is-newer direction — pushing local settings up when they were
+    // genuinely newer (or the cloud had no settings row yet) was
+    // previously covered by syncPush()'s own explicit upsert() call. Now
+    // that syncPush() delegates entirely to this function (so a manual
+    // Push is also merge-safe — see syncPush() below), the push-up
+    // direction has to live here too, or newer local settings would
+    // silently never reach the cloud at all.
     const settingsRow = result.rows.find(r => r.record_key === '__settings__');
     if (settingsRow) {
       const remoteTs = settingsRow.updated_at || '';
@@ -786,7 +813,13 @@ async function syncPull() {
       if (remoteTs > localTs) {
         _env.data.settings = settingsRow.data;
         addLog('Settings merged from cloud', 'ok');
+      } else {
+        await _ct.upsert('__settings__', getSettings());
+        addLog('Settings pushed to cloud', 'ok');
       }
+    } else {
+      await _ct.upsert('__settings__', getSettings());
+      addLog('Settings pushed to cloud (first sync)', 'ok');
     }
 
     if (result.pushedCount) addLog(`${result.pushedCount} local-only entr(ies) pushed`, 'info');
@@ -795,33 +828,28 @@ async function syncPull() {
     save(_env);
     renderAll();
     setSyncState('synced');
-    addLog('Pull complete', 'ok');
+    addLog(verb + ' complete', 'ok');
   } catch(err) {
     setSyncState('error');
-    addLog('Pull failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
+    addLog(verb + ' failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
   }
 }
 
-// ── Push: upsert all local entries and settings to cloud ──
+// CLA-011 (suite-wide sync audit): syncPush() used to blind-upsert every
+// local entry and settings directly to the cloud, with NO merge and no
+// comparison against what was actually there. This is only reachable
+// from the manual "Push to cloud" button — never auto-triggered — but a
+// manual push firing while local state is stale relative to the cloud
+// (e.g. right after switching devices) would still silently overwrite
+// newer cloud data with older local data. Same defect found and fixed in
+// Meal Planner (MP-045), Reading Tracker (MR-011), On Budget (ON--049),
+// Fortnight Tracker (FT-026), and GigsAndTrips (GT-004). syncPush() now
+// delegates entirely to syncPull(), which merges every entry
+// last-write-wins first (via _ct.pull()) and only pushes up whatever's
+// genuinely local-only or newer — so "Push" is safe to press at any
+// time, exactly like "Pull" always was.
 async function syncPush() {
-  if (!window.PalSync.hasSession()) { addLog('Push skipped — no session', 'info'); return; }
-  setSyncState('syncing', 'Pushing…');
-  addLog('Push started', 'info');
-  try {
-    let count = 0;
-    for (const e of getEntries()) {
-      if (e._deleted) continue; // tombstones handled separately
-      await _ct.upsert(e.id, e);
-      count++;
-    }
-    // Push settings
-    await _ct.upsert('__settings__', getSettings());
-    setSyncState('synced');
-    addLog(`Push complete — ${count} entr(ies) + settings`, 'ok');
-  } catch(err) {
-    setSyncState('error');
-    addLog('Push failed: ' + window.PalSync.errorHint(err.status, err.message), 'err');
-  }
+  await syncPull('Push');
 }
 
 

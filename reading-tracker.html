@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.15</title>
+<title>Reading Tracker v3.17</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -122,9 +122,15 @@
   .rt-nav-btn:hover { color: var(--text); }
 
   /* ── Data modal ── */
-  .rt-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 500; align-items: flex-end; justify-content: center; }
+  /* v3.16: suite-wide modal audit — was bottom-sheet styled
+     (align-items:flex-end, top-radius-only); re-centred as a proper
+     dialog (full radius, shadow). Click-outside-to-close was already
+     wired via closeRtDataModalOutside(), untouched. PIN/user login
+     overlays below are already centred and deliberately have no
+     click-outside (auth gates). */
+  .rt-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 500; align-items: center; justify-content: center; padding: 16px; }
   .rt-modal-overlay.open { display: flex; }
-  .rt-modal { background: var(--card); border-radius: 16px 16px 0 0; padding: 20px 18px 32px; width: 100%; max-width: 540px; }
+  .rt-modal { background: var(--card); border-radius: 16px; padding: 20px 18px; width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.35); }
   .rt-modal-title { font-family: 'Playfair Display', serif; font-size: 18px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; }
   .rt-modal-close { background: var(--modal-close-bg); border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 15px; color: var(--muted); display: flex; align-items: center; justify-content: center; }
   .rt-data-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 8px; margin-top: 4px; }
@@ -667,7 +673,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.15</span></div>
+    <div class="rt-logo">My Reading <span>v3.17</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1283,6 +1289,12 @@ let _sbUserId = null;
 let _currentUser = null;   // "pete" or "claire"
 let _syncTimer   = null;
 let _pendingSync = false;
+// Suite-wide sync audit: guards save() (called from inside pushAllToCloud,
+// after merging in pullAllFromCloud's result) from re-triggering
+// syncToCloud() and scheduling another push — that would otherwise loop
+// every debounce interval indefinitely, since pushAllToCloud now always
+// ends with a save().
+let _syncingNow  = false;
 
 let _syncState = 'local'; // local | syncing | synced | error
 let _syncLog   = [];      // [{ts, msg, type}] newest first, cap 120
@@ -1563,25 +1575,34 @@ function reassembleFromSync(flat) {
   appState.wishlist = flat.wishlist;
 }
 
-// Push everything up. Used by both the debounced auto-save and the
-// manual Push button.
+// MR-011 (suite-wide sync audit): pushAllToCloud() used to blind-upsert
+// every tracker/book/entry/wishlist record directly to the cloud, with
+// NO merge and no comparison against what was actually there — unlike
+// pullAllFromCloud(), which always merges via pal-sync.js's last-write-
+// wins pull() first. Since this function is wired to fire after EVERY
+// save() (see syncToCloud()) — including both backup-restore paths and
+// the CSV book import — any save made while local state was stale
+// relative to the cloud (e.g. right after restoring an old backup)
+// would silently overwrite newer cloud data with older local data. This
+// is the same defect found and fixed in Meal Planner (MP-045); every
+// pal-sync.js-based app in the suite should only ever write to the
+// cloud through a merge-first pull() — there's no correctness reason
+// for a separate unmerged "push everything" path to exist at all.
+// pushAllToCloud() now delegates to pullAllFromCloud(), which merges
+// every collection via _rtTrackers/_rtBooks/_rtEntries/_rtWishlist's
+// .pull(), reassembles the merged result into appState (so this also
+// correctly absorbs anything newer already in the cloud — e.g. Lex's
+// edits — instead of overwriting it), and pushes up only whatever's
+// genuinely local-only or newer. Both the debounced auto-save and the
+// manual Push button now get the same safe behaviour Pull always had.
 async function pushAllToCloud() {
   if (!window.PalSync.hasSession()) { _lastCloudError = 'push: no authenticated user yet'; return false; }
   backfillReadingTimestamps();
-  const flat = flattenForSync();
-  try {
-    for (const t of flat.trackers) await _rtTrackers.upsert(t.id, t);
-    for (const b of flat.books)    await _rtBooks.upsert(b.id, b);
-    for (const e of flat.entries)  await _rtEntries.upsert(e.id, e);
-    for (const w of flat.wishlist) await _rtWishlist.upsert(w.id, w);
-    _lastCloudError = null;
-    return true;
-  } catch(e) {
-    _lastCloudError = 'push: ' + (e && e.message ? e.message : 'network error');
-    if (e && e.status === 401) showSessionExpiredBanner();
-    console.warn('Supabase push failed:', e);
-    return false;
-  }
+  const result = await pullAllFromCloud();
+  if (result === null) return false; // _lastCloudError already set by pullAllFromCloud
+  _syncingNow = true;
+  try { save(); } finally { _syncingNow = false; } // persist the merged result locally; guarded so this save() can't re-schedule another push
+  return true;
 }
 
 // Pull everything, merge (last-write-wins per record, tombstone-aware),
@@ -1803,8 +1824,10 @@ function save() {
   let ok = false;
   try { localStorage.setItem(STORE_KEY, data); ok = true; } catch(e) {}
   try { sessionStorage.setItem(STORE_KEY, data); } catch(e) {}
-  // Trigger debounced cloud sync if a user is selected
-  if (_currentUser) syncToCloud();
+  // Trigger debounced cloud sync if a user is selected. Suppressed while
+  // pushAllToCloud() is applying a just-merged pull result back to
+  // appState (see _syncingNow) — that save must not schedule another push.
+  if (_currentUser && !_syncingNow) syncToCloud();
   return ok;
 }
 
