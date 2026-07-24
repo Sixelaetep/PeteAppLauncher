@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.35</title>
+<title>Meal Planner v1.36</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -194,7 +194,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.35</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.36</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -503,7 +503,7 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.35 ────────────────────────────────────────────────
+// ── Meal Planner v1.36 ────────────────────────────────────────────────
 // Originally a standalone test build (no sync, no launcher integration).
 // Now live in the launcher with its own bespoke Supabase sync (see
 // syncPullAll/syncPushAll below) — this note is left for history; the
@@ -532,6 +532,24 @@
 // per-table saves and ensureDay blank-stub materialisations no longer
 // race-push over cloud data); single scheduled auto-push after pull
 // completes captures any locally-pushed-up new records correctly.
+// v1.36 (MP-045): root-and-branch sync fix — the actual cause of MP-044's
+// residual flakiness after v1.35. syncPushAll (fired by every debounced
+// auto-push after save(), and by the manual Push button) previously
+// blind-upserted every local record to the cloud with NO merge and no
+// comparison against what was actually there — unlike pullOneTable/
+// genericPull, which always merge via last-write-wins first. This meant
+// restoring an old JSON backup (or any auto-push firing while local state
+// was stale relative to the cloud) silently overwrote newer cloud data
+// with older local data. No pal-sync.js-based app in the suite has a
+// separate "push everything" path for exactly this reason — all writes
+// go through a merge-first pull(). syncPushAll now delegates to
+// syncPullAll (verb-aware toasts/logs distinguish Push from Pull in the
+// UI), so Push is now merge-then-apply exactly like Pull, and correctly
+// absorbs newer cloud data (e.g. Lex's edits) instead of destroying it.
+// Also removed a redundant unconditional scheduleAutoPush() at the end of
+// every pull, which — now that push delegates to pull — would have
+// created a perpetual self-triggering sync loop on an idle, already-synced
+// session.
 // (1) The slot-assignment modal's Recipe view now shows up to three
 // "Haven't had lately" pills above the picker — recipes matching the
 // slot's category, not already planned for a future date, last had 3+
@@ -560,7 +578,7 @@
 // count) and a Reaction Log listing flagged meals with reaction count
 // vs devoured count, plus a percentage bar. Stored as slot.reaction
 // boolean — fully backwards-compatible; absent = false.
-const VERSION = '1.35';
+const VERSION = '1.36';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -791,9 +809,12 @@ async function pullOneTable(table, getLocal, applyMerged) {
     return false;
   }
 }
-async function syncPullAll(manual) {
+async function syncPullAll(manual, verb) {
+  verb = verb || 'pull';
+  const Verb = verb === 'push' ? 'Push' : 'Pull';
+  const verbedPast = verb === 'push' ? 'Pushed' : 'Pulled';
   if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
-  if (!hasSyncSession()) { logSync('err', 'Pull skipped — not connected'); if (manual) toast('Not connected — open via the launcher to sync'); return; }
+  if (!hasSyncSession()) { logSync('err', Verb + ' skipped — not connected'); if (manual) toast('Not connected — open via the launcher to sync'); return; }
   _syncBusy = true;
   _syncPulling = true; // MP-044: suppress auto-push from save() during pull
   setSyncState('syncing', 'Syncing…');
@@ -856,79 +877,61 @@ async function syncPullAll(manual) {
     }))) anyFailed = true;
 
     localStorage.setItem('meal_planner_last_pull', nowIso());
-    try { renderAllTabs(); } catch (renderErr) { logSync('err', 'Pull succeeded but the screen failed to redraw: ' + renderErr.message + ' — switch tabs to refresh.'); }
+    try { renderAllTabs(); } catch (renderErr) { logSync('err', Verb + ' succeeded but the screen failed to redraw: ' + renderErr.message + ' — switch tabs to refresh.'); }
     if (anyFailed) {
       setSyncState('error', 'Sync issue');
-      logSync('err', 'Pull completed with at least one table failed or refused — other tables still synced and saved. See the log above for which table.');
+      logSync('err', Verb + ' completed with at least one table failed or refused — other tables still synced and saved. See the log above for which table.');
       toast('Sync issue on one table — others still synced. See Sync Log.');
     } else {
       setSyncState('synced', 'Synced');
-      logSync('ok', 'Pull complete');
-      if (manual) toast('Pulled latest from cloud');
+      logSync('ok', Verb + ' complete');
+      if (manual) toast(verbedPast + ' — up to date with the cloud');
     }
   } catch (e) {
     setSyncState('error', 'Sync error');
-    logSync('err', 'Pull failed: ' + e.message);
-    toast('Pull failed: ' + e.message);
+    logSync('err', Verb + ' failed: ' + e.message);
+    toast(Verb + ' failed: ' + e.message);
   } finally {
     _syncBusy = false;
-    _syncPulling = false; // MP-044: re-enable auto-push now that pull is fully done
+    _syncPulling = false; // MP-044/MP-045: re-enable auto-push now that merge is fully done
   }
-  // MP-044: schedule exactly one auto-push after the pull completes —
-  // catches any local-only records that were pushed inline by genericPull
-  // and ensures the cloud reflects the now-merged local state. This is
-  // safe here because _syncPulling is already cleared above, so if a
-  // manual push or another event fires in the meantime it won't be blocked.
-  scheduleAutoPush();
+  // MP-045: no unconditional scheduleAutoPush() here any more. Previously
+  // this fired after every pull regardless of whether anything actually
+  // changed, and now that syncPushAll() delegates to this same function,
+  // that would perpetually re-trigger itself every ~2.5s forever (pull
+  // schedules a push, the push is really a pull, which schedules another
+  // push...) even with a fully quiet, already-synced session. Any table
+  // whose merge genuinely changed local state already calls save() inside
+  // pullOneTable (line above, guarded by _syncPulling so it's a no-op
+  // mid-merge), which schedules exactly one real auto-push once this
+  // function returns and _syncPulling is clear — that's sufficient.
   refreshSyncModal();
 }
-async function pushOneTable(table, getRecords) {
-  try {
-    const records = getRecords();
-    if (!Array.isArray(records)) {
-      logSync('err', `${table}: local records were not an array (got ${typeof records}) — skipped this table this push`);
-      return false;
-    }
-    for (const r of records) await upsertRow(table, r.id, r);
-    return true;
-  } catch (e) {
-    logSync('err', `${table}: push failed — ${e.message}`);
-    return false;
-  }
-}
+// MP-045: syncPushAll used to run every table through its own
+// blind-upsert pushOneTable() — for each local record, unconditionally
+// PATCH/POST it to the cloud, with NO merge and no comparison against
+// what was actually there. That's the actual root cause behind MP-044:
+// restoring an old JSON backup (or any auto-push firing while local
+// state was stale relative to the cloud) silently overwrote newer cloud
+// data with older local data, because no comparison was ever made.
+// pullOneTable/genericPull, by contrast, always merge first via
+// last-write-wins and only push whatever's genuinely local-only or
+// genuinely newer — exactly the pattern every pal-sync.js-based app in
+// the suite uses for ALL cloud writes (there is no separate "push
+// everything" path anywhere else in the suite; this app shouldn't have
+// had one either). syncPushAll now delegates straight to syncPullAll,
+// which merges every table via genericPull, applies the merged result
+// locally (so a Push also safely absorbs anything newer already sitting
+// in the cloud, e.g. Lex's edits, instead of overwriting it), and pushes
+// up only local-only/newer records. The manual "Push" button and the
+// debounced auto-push after any save() both call this, so both now get
+// the same safe behaviour "Pull" always had.
 async function syncPushAll(manual) {
-  if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
-  if (!hasSyncSession()) { if (manual) toast('Not connected — open via the launcher to sync'); return; }
-  _syncBusy = true;
-  setSyncState('syncing', 'Syncing…');
-  let anyFailed = false;
-  try {
-    if (!(await pushOneTable('meal_settings', () => [{ id: 'shared', weekStartDay: DB.data.settings.weekStartDay, updatedAt: DB.data.settings.weekStartDayUpdatedAt }]))) anyFailed = true;
-    if (!(await pushOneTable('meal_categories', () => DB.data.settings.customCategories))) anyFailed = true;
-    if (!(await pushOneTable('meal_ingredients', () => DB.data.ingredients))) anyFailed = true;
-    if (!(await pushOneTable('meal_recipes', () => DB.data.recipes))) anyFailed = true;
-    if (!(await pushOneTable('meal_plans', () => Object.values(DB.data.mealPlanDays)))) anyFailed = true;
-    if (!(await pushOneTable('meal_shopping', () => Object.values(DB.data.shoppingLists)))) anyFailed = true;
 
-    localStorage.setItem('meal_planner_last_push', nowIso());
-    if (anyFailed) {
-      setSyncState('error', 'Sync issue');
-      logSync('err', 'Push completed with at least one table failed — other tables still pushed. See the log above for which table.');
-      toast('Push issue on one table — others still pushed. See Sync Log.');
-    } else {
-      setSyncState('synced', 'Synced');
-      logSync('ok', `Push complete: ${DB.data.ingredients.length} ingredients, ${DB.data.recipes.length} recipes, ${Object.keys(DB.data.mealPlanDays).length} plan days, ${Object.keys(DB.data.shoppingLists).length} shopping lists`);
-      if (manual) toast('Pushed to cloud');
-    }
-  } catch (e) {
-    setSyncState('error', 'Sync error');
-    logSync('err', 'Push failed: ' + e.message);
-    toast('Push failed: ' + e.message);
-  } finally {
-    _syncBusy = false;
-  }
-  refreshSyncModal();
+  await syncPullAll(manual, 'push');
+  localStorage.setItem('meal_planner_last_push', nowIso());
 }
+
 function openSyncModal() { refreshSyncModal(); openModal('syncModal'); }
 function refreshSyncModal() {
   renderSyncLog();
