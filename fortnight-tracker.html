@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.32</title>
+<title>9-Day Fortnight Tracker v3.33</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -450,7 +450,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.32</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.33</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -661,6 +661,30 @@ function nextMonday(){var t=new Date();t.setHours(0,0,0,0);var dw=t.getDay();ret
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.33 (FT-030, suite-wide sync audit / pal-sync.js v1.11): deleteBundle()
+// used to splice the bundle out of state.bundles immediately, before its
+// tombstone even reached the cloud — a fire-and-forget push with no local
+// record of the attempted delete surviving if that push failed for any
+// reason (network blip, 401, offline). pal-sync.js v1.11 fixed the deeper
+// bug this exposed (an unconfirmed tombstone permanently forgotten after
+// one pull cycle, root-caused via On Budget ON--049/ON--050), but that fix
+// only protects apps that actually keep a soft-delete marker locally for
+// it to act on — this app never did. deleteBundle() now marks
+// _deleted:true and keeps the bundle in state.bundles (soft delete,
+// matching On Budget/Gym Tracker's existing pattern) instead of removing
+// it outright. Every render/selection/lookup path that reads
+// state.bundles now goes through the new visibleBundles() helper instead,
+// so a tombstoned bundle pending cloud confirmation never appears in the
+// UI: the three render() lists, tsBundle()'s active-scan and fallback,
+// tsNavPrev()/tsNavNext() (rewritten to walk the visible list rather than
+// raw array positions, since a tombstone can now sit between two visible
+// bundles), openDataModal()'s stats, and the new-bundle date picker's
+// "already exists"/latest-bundle logic in openModal() and createBundle().
+// idx/bi values passed around the app still always resolve to a raw
+// state.bundles position via indexOf() on a bundle found through
+// visibleBundles(), so nothing downstream needed to change. Bonus: since
+// a soft-delete no longer shifts array positions the way splice() did,
+// this is also safer for any other bi reference held mid-render-cycle.
 // v3.32 (FT-026, suite-wide sync audit): importData() (restore from
 // backup) used to forge a brand-new updatedAt on every imported bundle
 // regardless of the backup file's own timestamp, then blind-push every
@@ -928,6 +952,18 @@ var state = {
   set bundles(v) { _store.data.bundles = v; }
 };
 
+// FT-030 (suite-wide sync audit / pal-sync.js v1.11): bundles now soft-
+// delete instead of hard-delete (see deleteBundle()), so a tombstoned
+// bundle can sit in state.bundles — visible only to sync — until the
+// cloud confirms the deletion. Every render/selection/lookup site that
+// used to read state.bundles directly now goes through this instead,
+// matching the pattern every other pal-sync app in the suite already
+// uses (getExercises() etc. in Gym Tracker). idx/bi values passed
+// around the app are always resolved via state.bundles.indexOf() on a
+// bundle found through this list, so raw array positions (used for the
+// actual mutations) stay correct regardless of tombstones interspersed.
+function visibleBundles(){ return state.bundles.filter(function(b){ return !b._deleted; }); }
+
 function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ── MIGRATION ────────────────────────────────────────────────────────────────
@@ -1157,12 +1193,16 @@ var tsWeekCollapsed={1:null,2:null};
 var tsMxPickerW=null;
 var tsMxPickerQ='';
 
+// FT-030: skip tombstoned bundles at every step — a stale tsSelected
+// index, the active-bundle scan, and the fallback all need to land on
+// something visible, never a pending-delete tombstone.
 function tsBundle(){
-  if(tsSelected!==null&&state.bundles[tsSelected]) return state.bundles[tsSelected];
-  var act=null,actI=-1;
-  state.bundles.forEach(function(b,i){ if(b.active){act=b;actI=i;} });
+  if(tsSelected!==null&&state.bundles[tsSelected]&&!state.bundles[tsSelected]._deleted) return state.bundles[tsSelected];
+  var act=null;
+  visibleBundles().forEach(function(b){ if(b.active){act=b;} });
   if(act){ return act; }
-  return state.bundles.length?state.bundles[0]:null;
+  var vis=visibleBundles();
+  return vis.length?vis[0]:null;
 }
 function tsBundleIdx(){
   var b=tsBundle(); return b?state.bundles.indexOf(b):-1;
@@ -1172,13 +1212,23 @@ function tsSelectBundle(v){ tsSelected=(v===''?null:parseInt(v,10)); tsOpenDay=n
 // state.bundles is sorted newest-first (descending startDate), so:
 //   Prev (older/earlier) = higher index
 //   Next (newer/later)   = lower index
+// FT-030: navigate within visibleBundles(), not raw array positions —
+// a tombstoned bundle pending cloud confirmation can now sit between
+// two visible ones (see visibleBundles() comment), and raw bi+1/bi-1
+// arithmetic would either land on it or miscount. tsSelected still
+// stores a raw state.bundles index (that's what tsBundle() reads), so
+// the resolved visible-list neighbour is mapped back via indexOf().
 function tsNavPrev(){
-  var bi=tsBundleIdx(); if(bi<0||bi>=state.bundles.length-1) return;
-  tsSelected=bi+1; tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render();
+  var vis=visibleBundles(); var b=tsBundle(); var vi=b?vis.indexOf(b):-1;
+  if(vi<0||vi>=vis.length-1) return;
+  tsSelected=state.bundles.indexOf(vis[vi+1]);
+  tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render();
 }
 function tsNavNext(){
-  var bi=tsBundleIdx(); if(bi<=0) return;
-  tsSelected=bi-1; tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render();
+  var vis=visibleBundles(); var b=tsBundle(); var vi=b?vis.indexOf(b):-1;
+  if(vi<=0) return;
+  tsSelected=state.bundles.indexOf(vis[vi-1]);
+  tsOpenDay=null; tsPickerDay=null; tsWeekCollapsed={1:null,2:null}; tsMxPickerW=null; tsMxPickerQ=''; render();
 }
 // FT-019: toggle week submitted — keyed on the last day of each week
 // (day 4 for week 1, day 8 for week 2). timesheetDone is only non-null
@@ -1711,9 +1761,11 @@ function render(){
   var root=document.getElementById('root');
   root.innerHTML='';
 
-  var activeBundles=state.bundles.filter(function(b){return!isComplete(b)&&b.active;});
-  var inactiveBundles=state.bundles.filter(function(b){return!isComplete(b)&&!b.active;});
-  var doneBundles=state.bundles.filter(function(b){return isComplete(b);});
+  // FT-030: exclude tombstoned bundles pending cloud confirmation — see
+  // visibleBundles() comment for why they can exist in state.bundles now.
+  var activeBundles=state.bundles.filter(function(b){return!isComplete(b)&&b.active&&!b._deleted;});
+  var inactiveBundles=state.bundles.filter(function(b){return!isComplete(b)&&!b.active&&!b._deleted;});
+  var doneBundles=state.bundles.filter(function(b){return isComplete(b)&&!b._deleted;});
   var liveCount=activeBundles.length+inactiveBundles.length;
 
   // Update tab counts
@@ -2173,6 +2225,16 @@ function updHolidayMins(bi,di){
 }
 
 var _deletePending={};
+// FT-030: soft-delete instead of splice. Keeping the tombstoned bundle in
+// state.bundles (rather than removing it) is what lets pal-sync.js v1.11
+// retry the cloud push if it fails, and stops the app forgetting the
+// delete happened after just one pull — the exact bug found and fixed in
+// On Budget (ON--049/ON--050), traced to pal-sync.js itself. Every
+// render/selection function now goes through visibleBundles() so a
+// tombstoned bundle never appears in the UI while it's still pending
+// cloud confirmation. Bonus: since indices no longer shift on delete,
+// this is also safer than the old splice() for any other bi reference
+// held elsewhere in the same render cycle.
 function deleteBundle(idx,btn){
   if(!_deletePending[idx]){
     _deletePending[idx]=true;
@@ -2181,9 +2243,9 @@ function deleteBundle(idx,btn){
     setTimeout(function(){ _deletePending[idx]=false; if(btn){btn.textContent='\uD83D\uDDD1 Delete';btn.classList.remove('confirm');} },3000);
     return;
   }
-  var startDate = state.bundles[idx].startDate; // capture before splice
   var deletedBundle = state.bundles[idx];
-  state.bundles.splice(idx,1);
+  deletedBundle._deleted = true;
+  deletedBundle.updatedAt = new Date().toISOString();
   if(openPanel===idx) openPanel=null;
   saveLocal();
   sbDelete(deletedBundle, null);
@@ -2201,9 +2263,13 @@ function toast(msg,type){
 
 // DATA MODAL
 function openDataModal(){
-  var n=state.bundles.length;
-  var inProg=state.bundles.filter(function(b){return!isComplete(b);}).length;
-  var activeCt=state.bundles.filter(function(b){return b.active;}).length;
+  // FT-030: exclude tombstoned bundles pending cloud confirmation from
+  // the visible stats — they're implementation detail, not something
+  // the person should see counted.
+  var vis=visibleBundles();
+  var n=vis.length;
+  var inProg=vis.filter(function(b){return!isComplete(b);}).length;
+  var activeCt=vis.filter(function(b){return b.active;}).length;
   var done=n-inProg;
   document.getElementById('dataSummary').innerHTML=
     '<strong>'+n+'</strong> bundle'+(n!==1?'s':'')+' total &nbsp;&middot;&nbsp; '+
@@ -2352,13 +2418,17 @@ var selMonday=null;
 function openModal(){
   selMonday=null;
   var list=document.getElementById('monday-list');list.innerHTML='';
-  var used=new Set(state.bundles.map(function(b){return b.startDate;}));
+  // FT-030: a tombstoned bundle pending cloud confirmation shouldn't
+  // block recreating a bundle for the same date, and shouldn't be
+  // treated as "the latest bundle" when suggesting the next start date.
+  var vis=visibleBundles();
+  var used=new Set(vis.map(function(b){return b.startDate;}));
 
   // Determine first valid start: Monday after latest bundle's end date,
   // or next Monday from today if no bundles exist.
   var firstStart;
-  if(state.bundles.length){
-    var sorted=state.bundles.slice().sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
+  if(vis.length){
+    var sorted=vis.slice().sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
     var latestEnd=parseDate(sorted[0].endDate);
     var candidate=addDays(latestEnd,1);
     var dw=candidate.getDay();
@@ -2387,7 +2457,8 @@ function closeModalOutside(e){if(e.target.id==='modal')closeModal();}
 function createBundle(){
   if(!selMonday){alert('Please select a start Monday.');return;}
   var startD=parseDate(selMonday),endD=addDays(startD,10);
-  var hasActive=state.bundles.some(function(b){return b.active&&!isComplete(b);});
+  // FT-030: a tombstoned bundle's stale active:true flag shouldn't count.
+  var hasActive=visibleBundles().some(function(b){return b.active&&!isComplete(b);});
   var nb={id:Date.now(),label:'Fortnight w/c '+fmtDate(startD),startDate:isoDate(startD),endDate:isoDate(endD),days:buildDays(selMonday),active:!hasActive};
   state.bundles.unshift(nb);
   state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
