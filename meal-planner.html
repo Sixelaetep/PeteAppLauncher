@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Meals">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0f1923" id="metaThemeColor">
-<title>Meal Planner v1.34</title>
+<title>Meal Planner v1.35</title>
 <script>
 // Apply any explicit global theme preference before first paint, so
 // there's no flash of dark before this runs. Absence of the key (or a
@@ -194,7 +194,7 @@
 <div class="app">
   <div class="topbar">
     <div class="topbar-row">
-      <div class="logo">Meal Planner <span class="ver">MP · v1.34</span></div>
+      <div class="logo">Meal Planner <span class="ver">MP · v1.35</span></div>
       <div class="sync-chip state-local" id="syncChip" onclick="openSyncModal()"><span class="sync-chip-dot"></span><span id="syncChipText">Local only</span></div>
     </div>
     <div class="nav">
@@ -503,7 +503,7 @@
 
 <script src="pal-config.js"></script>
 <script>
-// ── Meal Planner v1.34 ────────────────────────────────────────────────
+// ── Meal Planner v1.35 ────────────────────────────────────────────────
 // Originally a standalone test build (no sync, no launcher integration).
 // Now live in the launcher with its own bespoke Supabase sync (see
 // syncPullAll/syncPushAll below) — this note is left for history; the
@@ -526,6 +526,12 @@
 // v1.32 (MP-042): recipe cards now show warning tags for missing ingredients
 //   or instructions, so incomplete recipes are visible at a glance.
 // v1.34 (MP-044): rotation prompts + reaction insight refinements.
+// v1.35 (MP-044): sync wipe fix — first-receipt-only PAL_SESSION gate
+// so repeat session broadcasts don't trigger a second pull; _syncPulling
+// flag suppresses auto-push from save() calls made during a pull (merging
+// per-table saves and ensureDay blank-stub materialisations no longer
+// race-push over cloud data); single scheduled auto-push after pull
+// completes captures any locally-pushed-up new records correctly.
 // (1) The slot-assignment modal's Recipe view now shows up to three
 // "Haven't had lately" pills above the picker — recipes matching the
 // slot's category, not already planned for a future date, last had 3+
@@ -554,7 +560,7 @@
 // count) and a Reaction Log listing flagged meals with reaction count
 // vs devoured count, plus a percentage bar. Stored as slot.reaction
 // boolean — fully backwards-compatible; absent = false.
-const VERSION = '1.34';
+const VERSION = '1.35';
 const STORE_KEY = 'meal_planner_data';
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -590,6 +596,20 @@ function applyTheme(theme) {
 // than allowed to interleave.
 let _syncBusy = false;
 let _lastAutoPullAt = 0;
+// MP-044: first-receipt-only gate — subsequent PAL_SESSION broadcasts
+// (the launcher can send them more than once) must only refresh the token
+// without triggering a second full pull. A full pull on a freshly-opened
+// device that still has 0 local records would pass the safeToApplyPull
+// check (0 remote === 0 local, no guard fires) and then blank-day
+// ensureDay() materialisations from the mid-pull render would schedule
+// an auto-push that overwrites real cloud data with empty stubs.
+let _hasReceivedSession = false;
+// MP-044: while a pull is in flight, save() must not schedule an
+// auto-push. Any save() that happens inside pullOneTable (persisting a
+// just-merged table) or inside renderPlan() (materialising ensureDay
+// stubs for the current week view) would otherwise queue a push that
+// races with the tables still being pulled.
+let _syncPulling = false;
 window.addEventListener('message', function (e) {
   if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'PAL_THEME') {
@@ -600,8 +620,17 @@ window.addEventListener('message', function (e) {
     _syncToken = e.data.access_token || null;
     _syncUserId = e.data.user_id || null;
     if (_syncToken && _syncUserId) {
+      if (_hasReceivedSession) {
+        // MP-044: subsequent session broadcasts — silently update the
+        // token only. A second full pull on an already-live session is
+        // what let a blank iPad overwrite iPhone data: the second pull
+        // finds 0 local records (still loading from the first pull),
+        // safeToApplyPull passes (0===0), and ensureDay stubs get pushed.
+        return;
+      }
+      _hasReceivedSession = true;
       const now = Date.now();
-      if (now - _lastAutoPullAt < 5000) return; // debounce rapid repeat session events
+      if (now - _lastAutoPullAt < 5000) return; // extra debounce guard
       _lastAutoPullAt = now;
       setSyncState('syncing', 'Connecting…');
       syncPullAll(false);
@@ -766,6 +795,7 @@ async function syncPullAll(manual) {
   if (_syncBusy) { if (manual) toast('Sync already in progress — try again in a moment'); return; }
   if (!hasSyncSession()) { logSync('err', 'Pull skipped — not connected'); if (manual) toast('Not connected — open via the launcher to sync'); return; }
   _syncBusy = true;
+  _syncPulling = true; // MP-044: suppress auto-push from save() during pull
   setSyncState('syncing', 'Syncing…');
   let anyFailed = false;
   try {
@@ -842,7 +872,14 @@ async function syncPullAll(manual) {
     toast('Pull failed: ' + e.message);
   } finally {
     _syncBusy = false;
+    _syncPulling = false; // MP-044: re-enable auto-push now that pull is fully done
   }
+  // MP-044: schedule exactly one auto-push after the pull completes —
+  // catches any local-only records that were pushed inline by genericPull
+  // and ensures the cloud reflects the now-merged local state. This is
+  // safe here because _syncPulling is already cleared above, so if a
+  // manual push or another event fires in the meantime it won't be blocked.
+  scheduleAutoPush();
   refreshSyncModal();
 }
 async function pushOneTable(table, getRecords) {
@@ -1089,7 +1126,11 @@ function save() {
   DB.version = VERSION;
   DB.lastUpdated = nowIso();
   localStorage.setItem(STORE_KEY, JSON.stringify(DB));
-  scheduleAutoPush();
+  // MP-044: don't schedule an auto-push while a pull is in flight.
+  // saves that happen inside pullOneTable or during the post-pull render
+  // (ensureDay materialising blank week stubs) must not push before all
+  // tables have finished merging — that race is what overwrote cloud data.
+  if (!_syncPulling) scheduleAutoPush();
 }
 
 // ── Tabs ──
