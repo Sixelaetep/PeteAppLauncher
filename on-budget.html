@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.47</title>
+<title>On Budget v3.48</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -352,7 +352,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.47</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.48</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -868,7 +868,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.47
+// On Budget v3.48
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1331,6 +1331,33 @@
 // enough history exists (trend/average/left-over need 2+ completed
 // months; top shops need any labelled spending), so sparse data
 // degrades gracefully rather than showing empty charts.
+// v3.48 (ON--050): v3.47's tombstone re-confirmation sweep didn't fix
+// the £2 "Test" transaction resurrecting — the sync log showed why:
+// "Recovered 1 transaction(s) missing monthKey from a pre-fix sync"
+// followed by "Transaction synced" (a live push, not a delete). That
+// message only fires when pal-sync's own per-id merge hands back a
+// transaction with no monthKey at all — meaning the record that won
+// the merge was a stale, never-tombstoned cloud copy from this
+// transaction's original creation, still sitting in Supabase under an
+// id pal-sync's merge keeps preferring, for reasons this app has no way
+// to inspect or control from the outside (pal-sync.js is shared,
+// separately maintained code). v3.47's sweep only re-confirms records
+// that are ALREADY _deleted locally post-merge — it couldn't help here
+// because the merge itself was overwriting the local delete before the
+// sweep ever got a look at it.
+// Fix: deletedTxLog, a small persistent record of every transaction id
+// this device has ever explicitly deleted (id → deletion timestamp),
+// stored independently of the transactions array and surviving in the
+// JSON backup. Every pull, boot, and import now cross-checks merged
+// transactions against this log via enforceDeletionGuard() — any id
+// that's on the log but comes back live gets re-deleted and re-
+// tombstoned immediately, regardless of which cloud row or merge
+// behaviour produced the resurrection. This doesn't depend on knowing
+// pal-sync's internals; it just refuses to let a deletion be undone
+// once made, full stop. Log entries prune automatically after 180 days.
+// Also fixed: the save()/exportJSON() envelope version string was still
+// hardcoded to '3.46' — missed when v3.47 shipped. Bumped to match and
+// added to the "bump everywhere" checklist for next time.
 // v3.47 (ON--049 continued — tombstone resurrection fix): a deleted
 // transaction could return after a sync if the cloud tombstone push
 // failed silently (network drop, 401 expiry) while the local soft-
@@ -1448,6 +1475,18 @@ let _scenarioDraft = null; // { id, name, items:[{id,baseId,name,type,amount,fre
 // Quick-pick labels for faster Food & Travel entry — a small
 // self-building list of shop/label names. items: [{name, count, lastUsed}]
 let ftLabels = { items:[], updated_at:null };
+
+// ON--050: a persistent, independent record of every transaction id this
+// device has explicitly deleted, separate from the transactions array
+// itself. { [id]: deletedAtIso }. Exists because a stale/duplicate cloud
+// copy of a transaction can keep winning pal-sync's per-id merge and
+// resurface as live — regardless of the local _deleted flag, which the
+// merge can overwrite. This log survives that: every pull cross-checks
+// merged transactions against it and re-kills anything that comes back
+// from an id already on this list, no matter where the live copy came
+// from. Pruned of entries older than 180 days at boot (see
+// pruneDeletedTxLog()) so it can't grow unbounded.
+let deletedTxLog = {};
 
 // meta is app housekeeping, not user data — not part of settings/months/
 // bills. changesSinceBackup is kept only for backward-compat with older
@@ -1827,8 +1866,22 @@ async function syncPull() {
       // ON--049 (tombstone resurrection fix): route deleted records through
       // syncTombstoneTx rather than syncUpsertTx — pushing a _deleted:true
       // record as a live upsert could overwrite a cloud tombstone with a live row.
-      txToRepush.forEach(t => t._deleted ? syncTombstoneTx(t.monthKey, t) : syncUpsertTx(t.monthKey, t));
+      // ON--050: also check deletedTxLog here, not just t._deleted — a
+      // transaction recovered from a stale cloud row can be missing its
+      // monthKey precisely because it's an old un-deleted duplicate of
+      // something this device already knows it deleted. Pushing it live
+      // even momentarily would be exactly the bug being fixed.
+      txToRepush.forEach(t => {
+        if (deletedTxLog[t.id]) t._deleted = true;
+        t._deleted ? syncTombstoneTx(t.monthKey, t) : syncUpsertTx(t.monthKey, t);
+      });
     }
+
+    // ON--050: resolve any resurrection BEFORE the tombstone sweep runs,
+    // so the sweep's own cloud-confirmation check (right below) is what
+    // actually pushes the correction — avoids two separate tombstone
+    // pushes firing back to back for the same record.
+    enforceDeletionGuard(false);
 
     // ON--049 (tombstone re-confirmation sweep): after the merge, any
     // local transaction that is _deleted:true but whose cloud row was not
@@ -1958,9 +2011,14 @@ function load() {
     if (parsed.meta) meta = { changesSinceBackup:0, lastBackupAt:null, ...parsed.meta };
     if (d.ftLabels)  ftLabels = { items: d.ftLabels.items||[], updated_at: d.ftLabels.updated_at||null };
     if (d.savings)   savings  = { goals: d.savings.goals||[], tx: d.savings.tx||[] };
+    // ON--050: backwards compatible — older backups won't have this key,
+    // default to an empty log rather than failing the whole load.
+    deletedTxLog = d.deletedTxLog || {};
   } catch(e) {}
   migrateCategories();
   backfillSyncTimestamps();
+  pruneDeletedTxLog();
+  enforceDeletionGuard(); // ON--050: catch a resurrection sitting in localStorage even before any pull runs
 }
 
 // v2.8 simplified the three spend categories (Food/Travel/Other) down to
@@ -2021,15 +2079,15 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.46', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
-    data:{ settings, months, bills, ftLabels, savings }, meta
+    version:'3.48', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    data:{ settings, months, bills, ftLabels, savings, deletedTxLog }, meta
   }));
   // Notify launcher so the dashboard card refreshes live
   try { window.parent.postMessage({ type:'OB_DATA_UPDATED' }, window.location.origin); } catch(e) {}
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.46', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.48', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog } },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2054,11 +2112,19 @@ function importJSON(e) {
         : { settings:{ clearedBalance:0, forecastMode:'next_income' }, recurring:[], tx:[], overrides:[], scenarios:[] };
       ftLabels = d.ftLabels ? { items:d.ftLabels.items||[], updated_at:d.ftLabels.updated_at||null } : { items:[], updated_at:null };
       savings = d.savings ? { goals:d.savings.goals||[], tx:d.savings.tx||[] } : { goals:[], tx:[] };
+      // ON--050: merge rather than replace — an older backup (or one from
+      // another device) won't carry every deletion this device already
+      // knows about. Deletions are monotonic, so the safe move is to keep
+      // the union of both logs rather than let an import erase local
+      // knowledge that something was deleted.
+      deletedTxLog = { ...deletedTxLog, ...(d.deletedTxLog||{}) };
       // A fresh import means the person just handled a backup file, so
       // there's nothing new to nag about yet.
       meta = { changesSinceBackup:0, lastBackupAt:new Date().toISOString() };
       migrateCategories();
       backfillSyncTimestamps();
+      pruneDeletedTxLog();
+      enforceDeletionGuard(); // ON--050: an imported backup can carry a live copy of something already known-deleted
       save(); populateSettings(); renderDash(); renderHist(); renderSavings();
       // ON--049 (suite-wide sync audit): this used to call syncPush() —
       // which blind-upserts every local record with no comparison against
@@ -2748,10 +2814,55 @@ function delTx(mk, id) {
   const t = m.transactions.find(x=>x.id===id); if (!t) return;
   t._deleted = true;
   t.updated_at = new Date().toISOString();
+  // ON--050: record the deletion independently of the transaction record
+  // itself — see deletedTxLog declaration for why this exists.
+  deletedTxLog[id] = t.updated_at;
   const snapshot = { ...t };
   save(true); renderDash();
   syncTombstoneTx(mk, snapshot);
   toast('Transaction removed');
+}
+
+// ON--050: any transaction id in deletedTxLog that comes back from a
+// merge as live (not _deleted) is a resurrection — no matter whether
+// that's a stale duplicate cloud row, a legacy record-key mismatch, or
+// anything else pal-sync's merge did internally. This re-kills it
+// unconditionally and re-pushes the tombstone, rather than trying to
+// diagnose which of those causes applies each time. Called after every
+// pull (post-rebuild) and once at boot, so a resurrection sitting in
+// localStorage from before this fix gets caught even before a pull runs.
+function enforceDeletionGuard(pushTombstone) {
+  if (pushTombstone === undefined) pushTombstone = true;
+  let caught = 0;
+  Object.keys(months).forEach(mk => {
+    (months[mk].transactions || []).forEach(t => {
+      if (t._deleted) return;
+      if (!deletedTxLog[t.id]) return;
+      t._deleted = true;
+      t.updated_at = new Date().toISOString();
+      if (!t.monthKey) t.monthKey = mk;
+      deletedTxLog[t.id] = t.updated_at; // keep the log's timestamp current
+      caught++;
+      if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneTx(mk, t);
+    });
+  });
+  if (caught) {
+    save();
+    addSyncLog(`Blocked ${caught} previously-deleted transaction(s) from resurfacing`,'err');
+  }
+  return caught;
+}
+
+// ON--050: deletedTxLog only needs to outlive the longest plausible
+// window during which a stale cloud duplicate could still resurface —
+// 180 days is generous. Without this the log would grow forever, one
+// entry per transaction ever deleted on this device.
+function pruneDeletedTxLog() {
+  const cutoff = Date.now() - (180*24*60*60*1000);
+  Object.keys(deletedTxLog).forEach(id => {
+    const t = Date.parse(deletedTxLog[id]);
+    if (!isNaN(t) && t < cutoff) delete deletedTxLog[id];
+  });
 }
 
 // ── Sheet ──────────────────────────────────────────────────────
