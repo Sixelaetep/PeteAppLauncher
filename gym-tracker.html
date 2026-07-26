@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.50</title>
+<title>Gym Tracker v2.51</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.50</div></span>
+      <span>Gym Tracker<div class="ver">v2.51</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -898,7 +898,30 @@
 // timestamp), a race-free sync can still show it that way — the v2.49
 // Restore button is the deliberate fix for that, not something this
 // silently auto-corrects.
-const VERSION = '2.50';
+// v2.51 (GYM-047, third and actual root cause): re-importing the same
+// backup kept losing its real notes on every subsequent sync, even after
+// the v2.49 dedup fix and the v2.50 race-condition fix — both of those
+// were real bugs and both are correctly fixed, but neither protects
+// against this: the cloud very likely already holds a corrupted copy of
+// the real note set (marked archived, from when the original v2.48 bug
+// ran and auto-pushed that mistake) with a timestamp NEWER than anything
+// in the backup file. A plain last-write-wins merge would keep letting
+// that corrupted-but-newer cloud copy win, no matter how many times the
+// same backup gets re-imported — the file's own embedded updatedAt can
+// never out-date corruption that happened after it was exported. Also
+// found: importJSON() never defaulted trainerNoteSets at all (every
+// other field had a fallback) — a backup missing that field entirely
+// would leave it undefined and crash the first read. Fixed: on import,
+// trainerNoteSets now defaults properly, every note set's updatedAt is
+// bumped to the moment of import (guaranteeing the restore wins the next
+// merge/push regardless of what's already in the cloud, since restoring a
+// backup is a deliberate "this is the truth now" action), and
+// ensureActiveNoteSet() runs immediately rather than waiting for the next
+// sync. Documented tradeoff: if another of your devices has genuinely
+// newer notes not yet synced, restoring an older backup here and letting
+// it push could overwrite them once that device's edit reaches the cloud
+// — restore is authoritative for this collection, by design.
+const VERSION = '2.51';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -4055,6 +4078,29 @@ function importJSON(event) {
         _env.data.weightEntries = _env.data.weightEntries || [];
         _env.data.scheduleEntries = _env.data.scheduleEntries || [];
         _env.data.starterDismissed = _env.data.starterDismissed || false;
+        // GYM-047 (third root cause): trainerNoteSets had no default-fill
+        // here at all — a backup missing that field entirely would leave
+        // it undefined and crash the first thing that reads it. More
+        // importantly: restoring a backup is a deliberate "this is the
+        // truth now" action, but a backup's own embedded updatedAt values
+        // are frozen at export time. If the cloud already holds corrupted
+        // data pushed AFTER that export (e.g. the v2.48 dedup bug flipping
+        // real notes to archived with a fresh timestamp), a plain
+        // last-write-wins merge on the next sync would keep re-imposing
+        // that corruption forever — no amount of re-importing the same
+        // file can ever out-date it, since the file's timestamp can't
+        // change. Bumping every note set's updatedAt to right now at
+        // import time guarantees the restored data wins the next
+        // merge/push regardless of what's already sitting in the cloud.
+        // Tradeoff, made deliberately rather than silently: if another of
+        // your devices has genuinely newer notes that haven't synced yet,
+        // restoring an older backup here and letting it sync could
+        // overwrite them once that device's edit reaches the cloud later
+        // — restoring a backup is authoritative for this collection.
+        _env.data.trainerNoteSets = _env.data.trainerNoteSets || [];
+        const importNow = new Date().toISOString();
+        _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
+        ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
         const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
         if (exChanged.length && window.PalSync.hasSession()) exChanged.forEach(ex => sbUpsert('exercise', ex, null));
       } else { throw new Error('Unrecognised backup format'); }
