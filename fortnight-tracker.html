@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.40</title>
+<title>9-Day Fortnight Tracker v3.41</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -453,6 +453,9 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .leave-card-lbl{font-size:.7rem;font-weight:600;margin-bottom:.3rem;}
 .leave-card-val{font-family:'DM Mono',monospace;font-size:1.35rem;font-weight:600;}
 .leave-card-sub{font-size:.65rem;color:var(--muted);margin-top:.1rem;}
+.leave-allow-row{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:.5rem;padding-top:.4rem;border-top:1px solid var(--faint);}
+.leave-allow-row label{font-size:.62rem;color:var(--muted);white-space:nowrap;}
+.leave-allow-input{width:56px;text-align:center;padding:.2rem .3rem;}
 /* ── FT-028/FT-030: multi-day leave preview + bank holidays ── */
 .lv-multi-list{max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:4px 10px;}
 .lv-multi-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--faint);font-size:.72rem;}
@@ -466,7 +469,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.40</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.41</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -760,6 +763,16 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.41 (FT-038): new holiday hours allowance, editable directly in the
+// Holiday card on the Leave tab — one figure per tax year (deterministic
+// record id, same fixed-id convergence pattern as SEED_CODES/bank
+// holidays). Once set, the card shows hours remaining (allowance minus
+// hours already booked as Holiday for that year — Sick doesn't count
+// against it), in red if you've gone over. Clearing the field removes
+// the allowance for that year rather than treating it as zero, so "not
+// set" and "0h allowance" stay distinguishable. Synced via the same
+// fortnight_bundles table (la_ prefix), same pattern as codes/leave/bank
+// holidays.
 // v3.40 (FT-037): multi-day leave date pickers. The End date field used
 // to sit on whatever it was last set to (usually today, from the
 // modal's defaults) regardless of what Start was changed to, so opening
@@ -971,6 +984,8 @@ const _ftCodes = window.PalSync.table('fortnight_bundles', { prefix: 'code_' });
 const _ftLeave = window.PalSync.table('fortnight_bundles', { prefix: 'leave_' });
 // FT-030: bank holidays, same table, own prefix — same reasoning as codes/leave above.
 const _ftBankHols = window.PalSync.table('fortnight_bundles', { prefix: 'bh_' });
+// FT-038: one record per tax year, deterministic id — see leaveAllowances above.
+const _ftLeaveAllow = window.PalSync.table('fortnight_bundles', { prefix: 'la_' });
 
 // ── SYNC LOG ─────────────────────────────────────────────────────────────────
 var _syncLog = [];
@@ -1088,6 +1103,31 @@ function deleteBankHol(id) {
   sbUpsertBankHol(h);
 }
 
+// FT-038
+function sbUpsertLeaveAllow(a) {
+  if (!window.PalSync.hasSession()) return;
+  setSyncStatus('syncing');
+  _ftLeaveAllow.upsert(a.id, a)
+    .then(function() { slog('Allowance upsert ' + a.id + ' \u2713', 'ok'); setSyncStatus('synced'); })
+    .catch(function(e) { slog('Allowance upsert error: ' + window.PalSync.errorHint(e.status, e.message), 'error'); setSyncStatus('error'); });
+}
+// Setting hours to null clears the allowance for that year (tombstoned,
+// not just zeroed, so "no allowance set" and "allowance is 0h" stay
+// distinguishable).
+function setLeaveAllowance(startYear, hours){
+  var id=String(startYear);
+  var rec=leaveAllowances.list.find(function(a){ return a.id===id; });
+  if(hours===null){
+    if(rec){ rec._deleted=true; rec.updatedAt=new Date().toISOString(); saveLocal(); sbUpsertLeaveAllow(rec); }
+    return;
+  }
+  if(!rec){ rec={ id:id, taxYearStart:startYear, hours:hours, _deleted:false, updatedAt:'' }; leaveAllowances.list.push(rec); }
+  else { rec.hours=hours; rec.taxYearStart=startYear; rec._deleted=false; }
+  rec.updatedAt=new Date().toISOString();
+  saveLocal();
+  sbUpsertLeaveAllow(rec);
+}
+
 function sbUpsert(bundle, cb) {
   if (!window.PalSync.hasSession()) { if (cb) cb(false); return; }
   setSyncStatus('syncing');
@@ -1144,9 +1184,14 @@ function pullFromCloud(cb) {
         .then(function(bhResult) {
           bankHols.list = bhResult.merged;
           seedBankHolidaysIfEmpty();
+          // FT-038: same prefetched rows feed the leave-allowances merge too.
+          return _ftLeaveAllow.pull(leaveAllowances.list, 'id', 'updatedAt', rows);
+        })
+        .then(function(allowResult) {
+          leaveAllowances.list = allowResult.merged;
           saveLocal();
           setSyncStatus('synced');
-          slog('Pull complete — ' + state.bundles.length + ' bundle(s), ' + codes.list.length + ' code(s), ' + visibleLeave().length + ' leave record(s), ' + visibleBankHols().length + ' bank holiday(s)', 'ok');
+          slog('Pull complete — ' + state.bundles.length + ' bundle(s), ' + codes.list.length + ' code(s), ' + visibleLeave().length + ' leave record(s), ' + visibleBankHols().length + ' bank holiday(s), ' + visibleLeaveAllowances().length + ' allowance(s)', 'ok');
           if (cb) cb();
         });
     })
@@ -1160,7 +1205,7 @@ function pullFromCloud(cb) {
 
 // ── STORAGE ABSTRACTION ──────────────────────────────────────────────────────
 var SKEY = 'fn_tracker_v5';
-var _store = { version: 1, lastUpdated: '', lastExported: '', data: { bundles: [], codes: [], leave: [], bankHolidays: [] } };
+var _store = { version: 1, lastUpdated: '', lastExported: '', data: { bundles: [], codes: [], leave: [], bankHolidays: [], leaveAllowances: [] } };
 
 function load() {
   try {
@@ -1179,6 +1224,7 @@ function load() {
     if (!Array.isArray(_store.data.codes)) _store.data.codes = []; // FT-020: pre-3.17 backups have no codes
     if (!Array.isArray(_store.data.leave)) _store.data.leave = []; // FT-026: pre-3.34 backups have no leave records
     if (!Array.isArray(_store.data.bankHolidays)) _store.data.bankHolidays = []; // FT-030: pre-3.36 backups have no bank holidays
+    if (!Array.isArray(_store.data.leaveAllowances)) _store.data.leaveAllowances = []; // FT-038: pre-3.41 backups have no allowances
     _store.data.bundles.forEach(function(b) { migrateDays(b); });
   } catch(e) {}
 }
@@ -1213,6 +1259,21 @@ function visibleBankHols(){ return bankHols.list.filter(function(h){ return !h._
 function observedBankHolOn(dateStr){
   var nd=normDate(dateStr);
   return visibleBankHols().find(function(h){ return normDate(h.date)===nd && h.observed; }) || null;
+}
+
+// FT-038: Pete's holiday hours allowance, one record per tax year
+// (startYear = the April it begins in). Deterministic id (the year
+// itself) so two devices setting the same year's allowance converge on
+// one record instead of duplicating — same pattern as SEED_CODES' fixed
+// ids. Editable directly from the Leave tab's Holiday card.
+var leaveAllowances = {
+  get list() { return _store.data.leaveAllowances; },
+  set list(v) { _store.data.leaveAllowances = v; }
+};
+function visibleLeaveAllowances(){ return leaveAllowances.list.filter(function(a){ return !a._deleted; }); }
+function allowanceForYear(startYear){
+  var r=visibleLeaveAllowances().find(function(a){ return a.taxYearStart===startYear; });
+  return r ? r.hours : null;
 }
 
 // FT-030: any existing bundle works as the anchor for the fortnight
@@ -2078,6 +2139,29 @@ function cmArchive(id,val){
 // ── FT-026: LEAVE TAB ─────────────────────────────────────────────────────────
 var currentLeaveYear=null; // startYear of the tax year currently shown
 
+// FT-038: editable hours allowance + remaining calculation, shown inside
+// the Holiday card. One allowance per tax year; remaining = allowance -
+// hours already booked as Holiday (Sick doesn't count against it).
+function renderAllowanceBlock(startYear,usedMins){
+  var allowHrs=allowanceForYear(startYear);
+  var h='<div class="leave-allow-row">'
+    +'<label>Allowance (h)</label>'
+    +'<input type="number" min="0" step="0.5" class="extra-sel leave-allow-input" value="'+(allowHrs!==null?allowHrs:'')+'" placeholder="hrs" onchange="onLeaveAllowanceChange(this)">'
+    +'</div>';
+  if(allowHrs!==null){
+    var remainingMins=Math.round(allowHrs*60)-usedMins;
+    var over=remainingMins<0;
+    h+='<div class="leave-card-sub" style="color:'+(over?'var(--red)':'var(--green)')+';font-weight:600;">'+fmtHrs(Math.abs(remainingMins))+' '+(over?'over':'remaining')+'</div>';
+  } else {
+    h+='<div class="cm-meta">Set your hours total to track remaining</div>';
+  }
+  return h;
+}
+function onLeaveAllowanceChange(el){
+  var val=el.value.trim();
+  setLeaveAllowance(currentLeaveYear, val===''?null:(+val||0));
+  render();
+}
 function renderLeave(root){
   if(currentLeaveYear===null) currentLeaveYear=taxYearStart(isoDate(new Date()));
   var entries=leaveEntriesForYear(currentLeaveYear);
@@ -2092,7 +2176,9 @@ function renderLeave(root){
   h+='<div class="leave-summary">'
     +'<div class="cm-card leave-card"><div class="leave-card-lbl" style="color:var(--blue)">&#127796; Holiday</div>'
       +'<div class="leave-card-val">'+fmtHrs(totals.holiday)+'</div>'
-      +'<div class="leave-card-sub">'+(totals.holiday/60/8).toFixed(1)+' days equiv.</div></div>'
+      +'<div class="leave-card-sub">'+(totals.holiday/60/8).toFixed(1)+' days equiv.</div>'
+      +renderAllowanceBlock(currentLeaveYear,totals.holiday)
+      +'</div>'
     +'<div class="cm-card leave-card"><div class="leave-card-lbl" style="color:var(--red)">&#129298; Sickness</div>'
       +'<div class="leave-card-val">'+fmtHrs(totals.sick)+'</div>'
       +'<div class="leave-card-sub">'+(totals.sick/60/8).toFixed(1)+' days equiv.</div></div>'
