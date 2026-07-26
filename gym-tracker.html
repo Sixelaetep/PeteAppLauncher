@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.45</title>
+<title>Gym Tracker v2.46</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.45</div></span>
+      <span>Gym Tracker<div class="ver">v2.46</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -809,7 +809,21 @@
 // this one table like any other unreachable table. The active set's notes
 // are also folded into the PDF report, directly under the header — ahead
 // of Summary — so they land on the first printed page.
-const VERSION = '2.45';
+// v2.46 (GYM-044, GYM-045): (1) Calendar day cards no longer keep offering
+// to (re)start a plan that's already been done on that date — each
+// scheduled plan is checked individually against that day's logged
+// sessions, so a multi-plan day still shows whichever ones remain
+// outstanding. Once every scheduled plan for the day is done, the card
+// drops to the same options an unscheduled day gets: start a different
+// plan, go freestyle, or add another plan to the day. (2) GYM-045 sync
+// error ("column gym_trainer_notes.record_key does not exist") was a
+// Supabase schema mistake on my (Claude's) part in the GYM-043 release,
+// not an app-code bug — the gym_trainer_notes table was created with an
+// "id" primary key instead of the "record_key" column pal-sync.js's
+// shared table() helper expects on every table. No app code changes were
+// needed here; corrected SQL was provided to recreate the table matching
+// an existing working table's structure.
+const VERSION = '2.46';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1014,6 +1028,12 @@ function resolvePlansForDate(date) {
     out.push({ type: 'repeat', rule: r, planId: r.planId });
   });
   return out;
+}
+// GYM-044: a session already exists for this plan on this date — whether
+// it came from a one-off entry or a repeat occurrence doesn't matter here,
+// only "has this specific plan already been done today" does.
+function planDoneOnDate(planId, date) {
+  return getSessions().some(s => s.date === date && s.planId === planId);
 }
 const DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 function repeatLabel(rule) {
@@ -2219,8 +2239,13 @@ function renderCalendar() {
     // v2.37: Start actions on TODAY only — sessions happen now.
     // GYM-036: every plan on the day gets its own row and actions.
     let body;
-    if (dayPlans.length) {
-      body = dayPlans.map(r => {
+    // GYM-044: don't keep offering to start a plan that's already been done
+    // on this date — once every scheduled plan for the day is completed,
+    // drop to the same freestyle/choose-another-plan options as an
+    // unscheduled day, rather than repeating the finished plan's row.
+    const pendingPlans = dayPlans.filter(r => !planDoneOnDate(r.planId, date));
+    if (pendingPlans.length) {
+      body = pendingPlans.map(r => {
         const plan = planById(r.planId);
         if (!plan) return '';
         const removeBtn = r.type === 'repeat'
@@ -2242,6 +2267,13 @@ function renderCalendar() {
         ${isToday ? `<button class="btn btn-secondary btn-sm" onclick="startSession(null)">▶ Freestyle</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="openSchedulePicker('${date}')">+ Add plan</button>
       </div>`;
+    } else if (dayPlans.length) {
+      body = `<div class="cal-empty">✓ ${dayPlans.length>1?'All scheduled plans':'Scheduled plan'} completed</div>
+           <div class="li-actions" style="margin-top:6px">
+             ${isToday ? `<button class="btn btn-primary btn-sm" onclick="openStartPlanPicker()">▶ Start another plan</button>` : ''}
+             ${isToday ? `<button class="btn btn-secondary btn-sm" onclick="startSession(null)">▶ Freestyle</button>` : ''}
+             <button class="btn btn-secondary btn-sm" onclick="openSchedulePicker('${date}')">+ Add plan</button>
+           </div>`;
     } else {
       body = `<div class="cal-empty">No plan scheduled</div>
            <div class="li-actions" style="margin-top:6px">
