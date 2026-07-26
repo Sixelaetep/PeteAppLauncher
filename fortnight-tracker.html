@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.36</title>
+<title>9-Day Fortnight Tracker v3.37</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -466,7 +466,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.36</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.37</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -759,6 +759,18 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.37 (FT-032, FT-033): FT-032 — Leave tab records are now grouped by
+// month, collapsed by default with an instance counter on each header
+// (e.g. "July 2026 — 3 instances"), using the same collapse/chevron
+// convention as the Timesheet's week groups. FT-033 — creating a new
+// bundle now checks its date range against existing manual leave records
+// and folds any matches straight in: the bundle day's status/hours are
+// set from the record, and its own clocked time is zeroed via the time
+// clock (start=end, no lunch) so the day's credited hours come entirely
+// from holidayMins — exactly as if it had been marked absent by hand.
+// Covers a future holiday booked ahead of the bundle that will eventually
+// cover it. The manual record itself is left untouched; the existing
+// dedupe (FT-027/FT-029) already collapses the pair into one Leave line.
 // v3.36 (FT-029, FT-030): more Leave tab fixes/improvements. FT-029 —
 // duplicates could still slip through when an archived (or any legacy)
 // bundle day stored its date in a slightly different string form than
@@ -1521,6 +1533,33 @@ function applyAutoAbsence(d){
   if(isPureAutoAlloc(d)) d.alloc=[{codeId:c.id,mins:d.holidayMins||0}];
 }
 
+// FT-033: when a new bundle is created, any of its days that already
+// have a manual leave record against them (e.g. a future holiday booked
+// before the bundle existed) get folded straight in — status/hours set
+// from the record, and the day's own clocked time zeroed out (start=end,
+// no lunch) via the time clock itself, so the day's credited hours come
+// entirely from holidayMins, exactly like manually marking a bundle day
+// absent. The manual record itself is left untouched (not deleted) —
+// the Leave tab's existing dedupe (FT-027/FT-029) already collapses the
+// pair into one line, keeping the manual record as the editable source.
+function prefillHolidaysIntoBundle(bundle){
+  var filled=0;
+  bundle.days.forEach(function(d){
+    if(d.status) return;
+    var nd=normDate(d.date);
+    var rec=visibleLeave().find(function(r){ return normDate(r.date)===nd; });
+    if(rec){
+      d.status=rec.type;
+      d.holidayMins=Math.round((rec.hours||0)*60);
+      d.end=d.start;
+      d.lunch=0;
+      applyAutoAbsence(d);
+      filled++;
+    }
+  });
+  return filled;
+}
+
 // ── Timesheet tab state ──
 var tsSelected=null;   // bundle index shown on the tab; null = auto (active, else newest)
 var tsOpenDay=null;    // day index jumped from Live tab (highlights that column); null = none
@@ -1972,28 +2011,62 @@ function renderLeave(root){
   if(!entries.length){
     h+='<div class="empty"><div class="empty-icon">&#127796;</div><h3>No leave recorded</h3><p>Holiday/Sick days marked on bundles, plus anything you add here, will show up for '+taxYearLabel(currentLeaveYear)+'.</p></div>';
   } else {
-    h+='<div class="section-lbl">Records</div><div class="cm-card">';
+    h+='<div class="section-lbl">Records</div>';
+    // FT-032: grouped by calendar month, collapsed by default with an
+    // instance counter — same collapse/chevron convention as the
+    // Timesheet's week groups (ts-week / ts-week-head / ts-week-chevron).
+    var groups=[], groupMap={};
     entries.forEach(function(e){
-      var tagCls=e.type==='holiday'?'stag-holiday':'stag-sick';
-      var tagLbl=e.type==='holiday'?'Holiday':'Sick';
-      h+='<div class="cm-row">'
-        +'<span style="flex:1;min-width:0">'+esc(fmtDate(parseDate(e.date)))
-          +' <span class="stag '+tagCls+'">'+tagLbl+'</span>'
-          +(e.note?' <span class="cm-meta">'+esc(e.note)+'</span>':'')
-          +(e.source==='bundle'?' <span class="cm-meta">(bundle)</span>':'')
-        +'</span>'
-        +'<span style="flex-shrink:0;font-family:\'DM Mono\',monospace">'+fmtHrs(e.mins)+'</span>';
-      if(e.source==='manual'){
-        h+='<span style="flex-shrink:0;margin-left:8px"><button class="cm-btn" onclick="openLeaveModal(\''+e.id+'\')">Edit</button></span>';
+      var key=e.date.slice(0,7);
+      if(!groupMap[key]){
+        var g={ key:key, label:parseDate(key+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'}), items:[] };
+        groupMap[key]=g;
+        groups.push(g);
+      }
+      groupMap[key].items.push(e);
+    });
+    groups.forEach(function(g){
+      var collapsed=_leaveMonthCollapsed[g.key]!==false; // default true (collapsed) until explicitly opened
+      h+='<div class="ts-week'+(collapsed?' collapsed':'')+'">';
+      h+='<div class="ts-week-head" onclick="toggleLeaveMonth(\''+g.key+'\')">'
+        +'<span class="ts-week-title"><span class="ts-week-chevron'+(collapsed?'':' open')+'">'+(collapsed?'&#9654;':'&#9660;')+'</span>'+esc(g.label)+'</span>'
+        +'<span class="cm-meta">'+g.items.length+' instance'+(g.items.length!==1?'s':'')+'</span>'
+        +'</div>';
+      if(!collapsed){
+        h+='<div style="padding:0 14px;">';
+        g.items.forEach(function(e){
+          var tagCls=e.type==='holiday'?'stag-holiday':'stag-sick';
+          var tagLbl=e.type==='holiday'?'Holiday':'Sick';
+          h+='<div class="cm-row">'
+            +'<span style="flex:1;min-width:0">'+esc(fmtDate(parseDate(e.date)))
+              +' <span class="stag '+tagCls+'">'+tagLbl+'</span>'
+              +(e.note?' <span class="cm-meta">'+esc(e.note)+'</span>':'')
+              +(e.source==='bundle'?' <span class="cm-meta">(bundle)</span>':'')
+            +'</span>'
+            +'<span style="flex-shrink:0;font-family:\'DM Mono\',monospace">'+fmtHrs(e.mins)+'</span>';
+          if(e.source==='manual'){
+            h+='<span style="flex-shrink:0;margin-left:8px"><button class="cm-btn" onclick="openLeaveModal(\''+e.id+'\')">Edit</button></span>';
+          }
+          h+='</div>';
+        });
+        h+='</div>';
       }
       h+='</div>';
     });
-    h+='</div>';
   }
   root.innerHTML=h;
 }
 
 function changeLeaveYear(delta){ currentLeaveYear+=delta; render(); }
+// FT-032: per-month collapse state, keyed 'YYYY-MM'. Absent = collapsed
+// (the requested default); only stores an entry once a month is
+// explicitly toggled.
+var _leaveMonthCollapsed={};
+function toggleLeaveMonth(key){
+  var wasCollapsed=_leaveMonthCollapsed[key]!==false;
+  _leaveMonthCollapsed[key]=!wasCollapsed;
+  render();
+}
 
 // Leave record modal
 var _leaveEditId=null, _lvType='holiday', _lvMode='single', _lvMultiRows=[];
@@ -3055,9 +3128,11 @@ function createBundle(){
   // FT-030: a tombstoned bundle's stale active:true flag shouldn't count.
   var hasActive=visibleBundles().some(function(b){return b.active&&!isComplete(b);});
   var nb={id:Date.now(),label:'Fortnight w/c '+fmtDate(startD),startDate:isoDate(startD),endDate:isoDate(endD),days:buildDays(selMonday),active:!hasActive};
+  var filled=prefillHolidaysIntoBundle(nb);
   state.bundles.unshift(nb);
   state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
   save(nb);closeModal();openPanel=0;openDay=null;render();
+  if(filled) toast('Pre-filled '+filled+' day'+(filled>1?'s':'')+' from existing leave records \u2713','ok');
 }
 
 
