@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.53</title>
+<title>Test &amp; Issues v1.54</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -474,7 +474,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.53</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.54</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -2684,6 +2684,16 @@ let _syncState = 'local';
 let _syncLog   = []; // [{ts,msg,type}] newest first, cap 120
 let _syncLock  = false; // true while import is pushing — blocks concurrent pulls
 
+// v1.54 (TI-068, pal-sync v1.11): the post-pull state rebuild assigned
+// every record from merged straight into state.apps/state.issues without
+// filtering _deleted. Since pal-sync v1.11, merged can contain _deleted:true
+// records — unconfirmed local tombstones (first push failed) that are kept in
+// merged so the retry mechanism can attempt them again next pull. Without
+// filtering here, a tombstoned-but-not-yet-cloud-confirmed app or issue would
+// land in state and pass through getActiveApps()/renderIssues()/renderKanban()
+// since those filter !archived not !_deleted. The rebuild now skips any record
+// where _deleted is true. The v1.11 changelog explicitly listed Test & Issues
+// as needing this fix.
 // v1.31 (TI-051): Test & Issues had no handling for a push failing
 // because the session token expired mid-use (401) — just logged and
 // dropped, relying on the next full pull to notice the local record is
@@ -2849,10 +2859,15 @@ async function syncPull() {
     const pulled    = appsResult.merged.length + issuesResult.merged.length;
     const pushedUp  = appsResult.pushedCount + issuesResult.pushedCount;
 
+    // TI-068 (pal-sync v1.11): merged can contain _deleted:true records —
+    // unconfirmed local tombstones whose first push failed. Filter them here
+    // so they never surface in state.apps/state.issues. getActiveApps() and
+    // renderIssues() filter !archived, not !_deleted, so without this a
+    // tombstoned-but-unconfirmed app or issue would slip through and render.
     state.apps = {};
-    appsResult.merged.forEach(app => { state.apps[app.id] = app; });
+    appsResult.merged.forEach(app => { if (!app._deleted) state.apps[app.id] = app; });
     state.issues = {};
-    issuesResult.merged.forEach(issue => { state.issues[issue.id] = issue; });
+    issuesResult.merged.forEach(issue => { if (!issue._deleted) state.issues[issue.id] = issue; });
 
     // Meta travels in the same table under record_key '__meta__' — both
     // pull() calls above return the full unfiltered row set, so no extra

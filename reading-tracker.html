@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.17</title>
+<title>Reading Tracker v3.18</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -673,7 +673,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.17</span></div>
+    <div class="rt-logo">My Reading <span>v3.18</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1500,6 +1500,21 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.18 (MR-015, MR-016): two sync correctness fixes.
+// (MR-015) reassembleFromSync() was passing all four merged arrays from
+// pull() straight into appState without filtering _deleted. Since pal-sync
+// v1.11, merged can legitimately contain _deleted:true records — unconfirmed
+// local tombstones that haven't yet been echoed back from the cloud. Without
+// filtering them here, a book or entry deleted offline whose first cloud push
+// failed would reappear in the UI on the next pull, until the cloud finally
+// confirmed the delete. All four kinds (trackers, books, entries, wishlist)
+// now filter !_deleted at the reassembly step. The v1.11 changelog
+// explicitly listed Reading Tracker as needing this fix.
+// (MR-016) noSessionMs was 300 — 10× below the 3000ms suite standard.
+// On a slow connection or cold browser load, the launcher's PAL_SESSION
+// postMessage could arrive a moment after the 300ms timeout fired, causing
+// a spurious flash of the standalone login screen for users coming in via
+// the launcher. Corrected to 3000ms.
 // ── Supabase: per-record sync (v3.9, MR-005) ───────────────────────────
 // Replaces the old whole-blob reading_data table (one row per user) with
 // four record kinds sharing a new reading_records table, matching the
@@ -1556,23 +1571,27 @@ function flattenForSync() {
 // Rebuild appState.trackers[].books[]/.entries[] from the flat merged
 // arrays pull() returns. trackerId is stripped back off — the local
 // nested shape never carried it, and no existing UI code expects it.
+// MR-015 (pal-sync v1.11): merged can now contain _deleted:true records
+// (unconfirmed local tombstones kept so the retry mechanism works). Filter
+// them here — a deleted tracker/book/entry/wishlist item must never
+// re-appear in the UI just because its first cloud push failed.
 function reassembleFromSync(flat) {
   const byId = {};
-  flat.trackers.forEach(t => { byId[t.id] = Object.assign({}, t, { books: [], entries: [] }); });
-  flat.books.forEach(b => {
+  flat.trackers.filter(t => !t._deleted).forEach(t => { byId[t.id] = Object.assign({}, t, { books: [], entries: [] }); });
+  flat.books.filter(b => !b._deleted).forEach(b => {
     const t = byId[b.trackerId];
     if (!t) return;
     const rest = Object.assign({}, b); delete rest.trackerId;
     t.books.push(rest);
   });
-  flat.entries.forEach(e => {
+  flat.entries.filter(e => !e._deleted).forEach(e => {
     const t = byId[e.trackerId];
     if (!t) return;
     const rest = Object.assign({}, e); delete rest.trackerId;
     t.entries.push(rest);
   });
   appState.trackers = Object.values(byId);
-  appState.wishlist = flat.wishlist;
+  appState.wishlist = flat.wishlist.filter(w => !w._deleted);
 }
 
 // MR-011 (suite-wide sync audit): pushAllToCloud() used to blind-upsert
@@ -4265,7 +4284,7 @@ window.PalSync.initSession({
   onNoSession: function() {
     if (!window._rtInited) showRtDirectLogin();
   },
-  noSessionMs: 300
+  noSessionMs: 3000 // MR-016: was 300 — 10× below suite standard, caused login flash on launcher load
 });
 
 // Boot: restore a standalone session via refresh token, if one's stored.
