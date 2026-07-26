@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.43</title>
+<title>Gym Tracker v2.44</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -300,7 +300,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.43</div></span>
+      <span>Gym Tracker<div class="ver">v2.44</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -759,7 +759,22 @@
 // date — via tombstone+create so nothing resurrects on pull. Duplicate
 // guard excludes the item being edited. An Edit-exercises button jumps
 // into the plan editor for the underlying plan. Data shapes unchanged.
-const VERSION = '2.43';
+// v2.44 (GYM-042): plan editor upgrades. (1) Saving an edited plan now
+// checks whether it's used by any future one-off schedule entries or
+// repeating rules, and confirms before saving — the update itself was
+// already automatic (plans are referenced by id, never snapshotted), this
+// just surfaces that plainly instead of it happening silently. (2) Each
+// plan item's tracked type (Reps/Time/Distance) can now be changed directly
+// in the plan editor; since type lives on the exercise record, this is a
+// global change and cascades to every other plan using that exercise
+// (confirmed first, and resets that exercise's target sets to the new
+// type's defaults — old fields don't carry over structurally). The
+// existing Exercise editor's type field now cascades the same way instead
+// of silently drifting out of sync with plans. (3) Each plan item now shows
+// its exercise's progression (mode + amount) directly in the plan editor,
+// so it can be set up front rather than only live in a session; this was
+// already a global per-exercise setting, just not editable from here.
+const VERSION = '2.44';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1480,8 +1495,21 @@ function saveExercise() {
   let record;
   if (id) {
     const e = exerciseById(id);
+    const prevType = e.type;
     e.name = name; e.type = _exType; e.tags = _exTags.slice(); e.notes = notes; e.updatedAt = now;
     record = e;
+    // GYM-042: type used to silently drift out of sync with plans already
+    // using this exercise (each plan item stores its own trackType at
+    // add-time). Confirm and cascade here too, same as the plan editor's
+    // type switcher, so both entry points stay consistent.
+    if (prevType !== _exType) {
+      const otherPlans = plansUsingExercise(id, null);
+      if (otherPlans.length) {
+        const proceed = confirm('This exercise is used in '+otherPlans.length+' plan'+(otherPlans.length===1?'':'s')+' ('+otherPlans.map(p=>p.name).join(', ')+'). Changing its type will reset target sets for this exercise in '+(otherPlans.length===1?'that plan':'those plans')+'. Continue?');
+        if (!proceed) { e.type = prevType; _exType = prevType; }
+      }
+      if (e.type !== prevType) cascadeExerciseTypeToPlans(id, e.type, null);
+    }
   } else {
     newId = uid('ex');
     record = { id:newId, name, type:_exType, tags:_exTags.slice(), notes, createdAt:now, updatedAt:now };
@@ -1787,14 +1815,96 @@ function renderPlanItemsList() {
           <button class="pib-remove" onclick="removePlanItem(${idx})">✕</button>
         </span>
       </div>
+      <div class="type-row" style="grid-template-columns:repeat(3,1fr);margin:6px 0">
+        <button class="type-btn sm ${type==='reps'?'active':''}" onclick="setPlanItemType(${idx},'reps')">Reps</button>
+        <button class="type-btn sm ${type==='time'?'active':''}" onclick="setPlanItemType(${idx},'time')">Time</button>
+        <button class="type-btn sm ${type==='distance'?'active':''}" onclick="setPlanItemType(${idx},'distance')">Distance</button>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
         <label style="margin:0;font-size:10.5px;white-space:nowrap">Est. time</label>
         <select style="max-width:80px" onchange="updatePlanItemEstimate(${idx},this.value)">${estimateMinuteOptions(item.estimatedMinutes||0)}</select>
         <span style="font-size:10.5px;color:var(--ink3)">min — set by you, not auto-filled</span>
       </div>
       <div class="set-builder">${setsHtml}<button class="add-set-mini" onclick="addPlanSet(${idx})">+ Add Set</button></div>
+      ${renderPlanProgressionEditor(item)}
     </div>`;
   }).join('');
+}
+// GYM-042: changing type here is a global change to the exercise, not a
+// local plan-item override — confirmed first (it resets target sets, and
+// may touch other plans using the same exercise), then cascaded.
+function setPlanItemType(idx, newType) {
+  const item = _planItems[idx];
+  const oldType = item.trackType || exerciseType(item.exerciseId);
+  if (oldType === newType) return;
+  const exerciseId = item.exerciseId;
+  const currentPlanId = document.getElementById('planEditId').value || null;
+  const otherPlans = plansUsingExercise(exerciseId, currentPlanId);
+  let msg = 'Change "'+exerciseName(exerciseId)+'" to '+typeLabel(newType)+'? This changes the exercise everywhere and resets its target sets to the new type\'s defaults.';
+  if (otherPlans.length) msg += ' It also appears in '+otherPlans.length+' other plan'+(otherPlans.length===1?'':'s')+': '+otherPlans.map(p=>p.name).join(', ')+'.';
+  if (!confirm(msg)) return;
+  const ex = exerciseById(exerciseId);
+  if (ex) { ex.type = newType; ex.updatedAt = new Date().toISOString(); sbUpsert('exercise', ex, null); }
+  item.trackType = newType;
+  item.targetSets = defaultTargetSetsForType(newType);
+  cascadeExerciseTypeToPlans(exerciseId, newType, currentPlanId);
+  save(_env);
+  renderPlanItemsList();
+  toast('Exercise type updated everywhere ✓');
+}
+// GYM-042: progression (mode + step amount) is a global per-exercise
+// setting reused across every plan and session — this just exposes it in
+// the plan editor so it can be set up front, matching the same picker
+// already used live in a session (renderProgressionPicker).
+function renderPlanProgressionEditor(item) {
+  const ex = exerciseById(item.exerciseId);
+  if (!ex) return '';
+  const type = item.trackType || exerciseType(item.exerciseId);
+  const def = defaultProgressionFor(type, item.targetSets||[]);
+  const mode = ex.progressionMode || def.mode;
+  const amount = ex.progressionAmount != null ? ex.progressionAmount : def.amount;
+  const label = '<div class="tag-group-label" style="margin-top:8px">Progression <span style="font-weight:400;color:var(--ink3)">— applies to this exercise everywhere</span></div>';
+  if (type === 'time') {
+    return `<div class="set-builder" style="margin-top:2px">
+      ${label}
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="number" class="tsr-input" value="${amount}" oninput="setPlanExerciseProgressionAmount('${item.exerciseId}', this.value)" style="width:60px !important">
+        <span style="font-size:11px;color:var(--ink2)">extra seconds</span>
+      </div>
+    </div>`;
+  }
+  const isReps = type === 'reps';
+  const modeA = isReps ? 'reps' : 'distance';
+  const modeB = isReps ? 'weight' : 'pace';
+  const labelA = isReps ? '+ Reps' : '+ Distance';
+  const labelB = isReps ? '+ Weight' : '− Time';
+  const unit = mode==='weight' ? 'kg' : mode==='reps' ? 'reps' : mode==='distance' ? 'metres' : '% faster';
+  return `<div class="set-builder" style="margin-top:2px">
+    ${label}
+    <div class="type-row" style="grid-template-columns:1fr 1fr">
+      <button class="type-btn sm ${mode===modeA?'active':''}" onclick="setPlanExerciseProgressionMode('${item.exerciseId}','${modeA}')">${labelA}</button>
+      <button class="type-btn sm ${mode===modeB?'active':''}" onclick="setPlanExerciseProgressionMode('${item.exerciseId}','${modeB}')">${labelB}</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <span style="font-size:11px;color:var(--ink2)">Amount</span>
+      <input type="number" class="tsr-input" step="${mode==='weight'?'0.5':'1'}" value="${amount}" oninput="setPlanExerciseProgressionAmount('${item.exerciseId}', this.value)" style="width:60px !important">
+      <span style="font-size:11px;color:var(--ink2)">${unit}</span>
+    </div>
+  </div>`;
+}
+function setPlanExerciseProgressionMode(exerciseId, mode) {
+  const ex = exerciseById(exerciseId);
+  if (!ex) return;
+  ex.progressionMode = mode; ex.updatedAt = new Date().toISOString();
+  save(_env); sbUpsert('exercise', ex, null);
+  renderPlanItemsList();
+}
+function setPlanExerciseProgressionAmount(exerciseId, val) {
+  const ex = exerciseById(exerciseId);
+  if (!ex) return;
+  ex.progressionAmount = val===''?0:Number(val); ex.updatedAt = new Date().toISOString();
+  save(_env); sbUpsert('exercise', ex, null);
+  renderPlanItemsList();
 }
 function updatePlanItemEstimate(idx, val) {
   _planItems[idx].estimatedMinutes = val===''?0:Number(val);
@@ -1851,16 +1961,43 @@ function renderExercisePickerList() {
       <span>${escHtml(e.name)}</span>${typeBadge(e.type)}
     </div>`).join('');
 }
+// GYM-042: shared default-sets shape, also reused whenever a plan item's
+// type is switched (either from here or via the type switcher below) since
+// the old type's fields don't structurally carry over to the new one.
+function defaultTargetSetsForType(type) {
+  return type==='distance' ? [{metres:1000,seconds:300,weight:0}] : type==='time' ? [{seconds:30},{seconds:30},{seconds:30}] : [{reps:10,weight:0},{reps:10,weight:0},{reps:10,weight:0}];
+}
 function addExerciseToPlanItems(exerciseId) {
   const type = exerciseType(exerciseId);
-  const defaultSets = type==='distance' ? [{metres:1000,seconds:300,weight:0}] : type==='time' ? [{seconds:30},{seconds:30},{seconds:30}] : [{reps:10,weight:0},{reps:10,weight:0},{reps:10,weight:0}];
   // GYM-024: estimatedMinutes always starts at 0/unset regardless of type —
   // even for time/distance exercises that already have a tracked duration,
   // that's workout data, not a "how long does this realistically take"
   // estimate, and the two shouldn't be conflated.
-  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultSets, estimatedMinutes: 0 });
+  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultTargetSetsForType(type), estimatedMinutes: 0 });
   closeModal('modalExercisePicker');
   renderPlanItemsList();
+}
+// GYM-042: an exercise's type lives on the exercise record, not the plan
+// item — so it's a global property. These helpers find every OTHER plan
+// using an exercise (excludePlanId lets the plan currently open in the
+// editor be skipped, since its own _planItems working copy is handled
+// separately) and bring their items back in sync when the type changes.
+function plansUsingExercise(exerciseId, excludePlanId) {
+  return _env.data.plans.filter(p => !p._deleted && p.id!==excludePlanId && (p.items||[]).some(i=>i.exerciseId===exerciseId));
+}
+function cascadeExerciseTypeToPlans(exerciseId, newType, excludePlanId) {
+  const now = new Date().toISOString();
+  plansUsingExercise(exerciseId, excludePlanId).forEach(p => {
+    let touched = false;
+    (p.items||[]).forEach(item => {
+      if (item.exerciseId===exerciseId && item.trackType!==newType) {
+        item.trackType = newType;
+        item.targetSets = defaultTargetSetsForType(newType);
+        touched = true;
+      }
+    });
+    if (touched) { p.updatedAt = now; sbUpsert('plan', p, null); }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2261,6 +2398,17 @@ function nextPlanOrder() {
   const orders = _env.data.plans.map(p => p.order || 0);
   return orders.length ? Math.max(...orders) + 1 : 0;
 }
+// GYM-042: plans are referenced by id from schedule entries and repeat
+// rules — there's no per-instance snapshot, so an edit here already reaches
+// every future/repeating session using this plan automatically. This just
+// finds what would be affected so savePlan() can say so before committing,
+// rather than that happening silently.
+function affectedFutureSchedule(planId) {
+  const today = todayISO();
+  const oneOffs = getScheduleEntries().filter(e => !e.kind && e.planId===planId && e.date >= today);
+  const repeats = getRepeatRules().filter(r => r.planId===planId);
+  return { oneOffs, repeats };
+}
 function savePlan() {
   const name = document.getElementById('planName').value.trim();
   if (!name) { toast('Enter a plan name'); return; }
@@ -2268,6 +2416,15 @@ function savePlan() {
   const id = document.getElementById('planEditId').value;
   const now = new Date().toISOString();
   const notes = document.getElementById('planNotes').value.trim();
+  if (id) {
+    const { oneOffs, repeats } = affectedFutureSchedule(id);
+    if (oneOffs.length || repeats.length) {
+      const parts = [];
+      if (repeats.length) parts.push(repeats.length+' repeating schedule'+(repeats.length===1?'':'s')+' ('+repeats.map(repeatLabel).join(', ')+')');
+      if (oneOffs.length) parts.push(oneOffs.length+' upcoming one-off session'+(oneOffs.length===1?'':'s'));
+      if (!confirm('This plan is used in '+parts.join(' and ')+'. Saving will update all of them with your changes. Continue?')) return;
+    }
+  }
   let record;
   if (id) { record = planById(id); record.name=name; record.notes=notes; record.items=_planItems; record.updatedAt=now; }
   else { record = { id: uid('plan'), name, notes, items:_planItems, order: nextPlanOrder(), archived: false, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
