@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.37</title>
+<title>9-Day Fortnight Tracker v3.38</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -466,7 +466,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.37</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.38</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -759,6 +759,15 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.38 (FT-034): FT-033's auto-fill only fired at bundle-creation time,
+// so adding (or editing) a manual leave record for a date inside a
+// bundle that already existed never reached that bundle's day. Adding a
+// manual leave record — single day, an edit, or each day in a multi-day
+// batch — now also checks every existing bundle for a day matching that
+// date and folds it in the same way (status/hours set, clock zeroed via
+// start=end), as long as the day isn't already marked. Each affected
+// bundle is saved individually so the sync fires per bundle. Toast now
+// reports both the record(s) added and how many bundle days were updated.
 // v3.37 (FT-032, FT-033): FT-032 — Leave tab records are now grouped by
 // month, collapsed by default with an instance counter on each header
 // (e.g. "July 2026 — 3 instances"), using the same collapse/chevron
@@ -1533,28 +1542,49 @@ function applyAutoAbsence(d){
   if(isPureAutoAlloc(d)) d.alloc=[{codeId:c.id,mins:d.holidayMins||0}];
 }
 
+// FT-033/FT-034: shared fill — marks a bundle day absent from a leave
+// record's type/hours, zeroing the day's own clocked time (start=end, no
+// lunch) via the time clock itself so its credited hours come entirely
+// from holidayMins, exactly like manually marking the day absent by hand.
+function fillDayFromLeave(day,type,hours){
+  day.status=type;
+  day.holidayMins=Math.round((hours||0)*60);
+  day.end=day.start;
+  day.lunch=0;
+  applyAutoAbsence(day);
+}
 // FT-033: when a new bundle is created, any of its days that already
 // have a manual leave record against them (e.g. a future holiday booked
-// before the bundle existed) get folded straight in — status/hours set
-// from the record, and the day's own clocked time zeroed out (start=end,
-// no lunch) via the time clock itself, so the day's credited hours come
-// entirely from holidayMins, exactly like manually marking a bundle day
-// absent. The manual record itself is left untouched (not deleted) —
-// the Leave tab's existing dedupe (FT-027/FT-029) already collapses the
-// pair into one line, keeping the manual record as the editable source.
+// before the bundle existed) get folded straight in. The manual record
+// itself is left untouched (not deleted) — the Leave tab's existing
+// dedupe (FT-027/FT-029) already collapses the pair into one line,
+// keeping the manual record as the editable source.
 function prefillHolidaysIntoBundle(bundle){
   var filled=0;
   bundle.days.forEach(function(d){
     if(d.status) return;
     var nd=normDate(d.date);
     var rec=visibleLeave().find(function(r){ return normDate(r.date)===nd; });
-    if(rec){
-      d.status=rec.type;
-      d.holidayMins=Math.round((rec.hours||0)*60);
-      d.end=d.start;
-      d.lunch=0;
-      applyAutoAbsence(d);
+    if(rec){ fillDayFromLeave(d,rec.type,rec.hours); filled++; }
+  });
+  return filled;
+}
+// FT-034: the reverse direction — FT-033 only fired at bundle-creation
+// time, so adding (or editing) a manual leave record for a date that
+// falls inside a bundle that already exists never reached that bundle's
+// day. Called after every manual leave save (single, edited, or each
+// record in a multi-day batch); only fills a day that's currently
+// unmarked, same guard as prefillHolidaysIntoBundle, so it never
+// overwrites a day you've already set by hand. Each touched bundle is
+// saved (and so synced) individually.
+function syncLeaveIntoExistingBundles(dateStr,type,hours){
+  var nd=normDate(dateStr), filled=0;
+  visibleBundles().forEach(function(b){
+    var day=b.days.find(function(d){ return normDate(d.date)===nd; });
+    if(day && !day.status){
+      fillDayFromLeave(day,type,hours);
       filled++;
+      save(b);
     }
   });
   return filled;
@@ -2176,17 +2206,21 @@ function saveLeaveModal(){
   if(_lvMode==='multi' && !_leaveEditId){
     var included=_lvMultiRows.filter(function(r){ return r.include; });
     if(!included.length){ toast('No days to record in that range','err'); return; }
-    var created=0;
+    var created=0, bundleFilled=0;
     included.forEach(function(r,idx){
       if(r.mins<=0) return; // a day left at 0h wasn't actually taken off
       var rec={ id:'lv'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)+idx, date:r.date, type:_lvType, hours:+(r.mins/60).toFixed(2), note:note, _deleted:false, updatedAt:'' };
       leaveRecs.list.push(rec);
       saveLeaveRec(rec);
       created++;
+      // FT-034: also fold into any already-existing bundle covering this date.
+      bundleFilled+=syncLeaveIntoExistingBundles(rec.date,rec.type,rec.hours);
     });
     closeLeaveModal();
     render();
-    toast((created||0)+' record'+(created!==1?'s':'')+' added \u2713', created?'ok':'err');
+    var msg=(created||0)+' record'+(created!==1?'s':'')+' added';
+    if(bundleFilled) msg+=', '+bundleFilled+' bundle day'+(bundleFilled!==1?'s':'')+' updated';
+    toast(msg+' \u2713', created?'ok':'err');
     return;
   }
 
@@ -2204,8 +2238,10 @@ function saveLeaveModal(){
     saveLeaveRec(rec2);
   }
   closeLeaveModal();
+  // FT-034: also fold into any already-existing bundle covering this date.
+  var bf=syncLeaveIntoExistingBundles(date,_lvType,hours);
   render();
-  toast('Saved \u2713','ok');
+  toast('Saved'+(bf?', bundle day updated':'')+' \u2713','ok');
 }
 function deleteLeaveModalRecord(){
   if(!_leaveEditId) return;
