@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.47</title>
+<title>Gym Tracker v2.48</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.47</div></span>
+      <span>Gym Tracker<div class="ver">v2.48</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -833,7 +833,37 @@
 // Notes panel isn't the active tab (display:none means scrollHeight reads
 // 0 there, which would otherwise collapse every note to nothing) — the
 // sizing pass re-runs for real the moment you switch onto the Notes tab.
-const VERSION = '2.47';
+// v2.48 — full sync-logic review (GYM-046 as originally reported, plus a
+// deeper pass through pal-sync.js's actual source rather than guessing at
+// its contract). Three real fixes, all narrow and defensive:
+// (1) ensureActiveNoteSet() now handles two devices each bootstrapping
+// their own "first" active note set before ever syncing with each other —
+// previously the second one silently became invisible forever (still
+// stored and synced, just with no active-set UI ever surfacing it). Now
+// detected and the older one is archived (not deleted — every note stays
+// visible under Archived Note Sets), the newer one stays active.
+// (2) savePlan() and saveExercise() could throw an uncaught error, leaving
+// the modal stuck, if the record being edited was deleted on another
+// device while the modal sat open (needs a background pull mid-edit —
+// rare, but the failure mode was disproportionately bad for how rare it
+// is). Both now guard and show a plain message instead.
+// (3) loadStarterLibrary()'s duplicate-name check included tombstoned
+// exercises, so deleting one could permanently block its starter-library
+// counterpart from ever being re-added. Now excludes _deleted, matching
+// backfillStarterTags()'s existing (already-correct) pattern.
+// Everything else checked out: table registration, idField/updatedAtField
+// conventions, tombstone construction, and !_deleted filtering are all
+// correct and consistent across every table including the new
+// trainerNoteSet one. Two things noted but NOT changed, since they're
+// judgment calls rather than clear bugs — flagged separately to Pete:
+// deletePlan() doesn't cascade to the schedule entries/repeat rules that
+// reference it (a deleted plan can keep showing on the calendar via a
+// stale schedule entry); and note-set merges are whole-record
+// last-write-wins, same as Plans' items array, so two devices editing
+// different notes in the same active set between syncs will have one
+// edit silently overwrite the other rather than merge field-by-field —
+// an inherent trade-off of the suite's architecture, not new here.
+const VERSION = '2.48';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -951,9 +981,24 @@ function migrateSessions(env) {
 // GYM-043: exactly one non-archived, non-deleted note set should exist at
 // all times so there's always somewhere for a new note to land — this
 // creates one on first-ever load, and is called again after archiving.
+// GYM-046 review: two devices can each bootstrap their own "first" active
+// note set before ever syncing with each other — a pull then legitimately
+// merges in two separate active-status rows. Previously this silently
+// orphaned one of them: getActiveNoteSet() only ever surfaces one active
+// set, so the other's notes became invisible (still stored and synced,
+// just with no UI path to see them). Keep the most recently created one
+// active and archive the rest — not delete, matching the suite's
+// archive-over-delete principle, and keeping every note visible under
+// Archived Note Sets rather than silently hiding it.
 function ensureActiveNoteSet(env) {
-  const active = env.data.trainerNoteSets.find(s => !s._deleted && s.status === 'active');
-  if (active) return active;
+  const actives = env.data.trainerNoteSets.filter(s => !s._deleted && s.status === 'active');
+  if (actives.length === 1) return actives[0];
+  if (actives.length > 1) {
+    actives.sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
+    const now = new Date().toISOString();
+    actives.slice(1).forEach(s => { s.status='archived'; s.archivedAt=now; s.updatedAt=now; sbUpsert('trainerNoteSet', s, null); });
+    return actives[0];
+  }
   const now = new Date().toISOString();
   const fresh = { id: uid('tns'), status: 'active', items: [], createdAt: now, archivedAt: null, updatedAt: now };
   env.data.trainerNoteSets.push(fresh);
@@ -1700,6 +1745,11 @@ function saveExercise() {
   let record;
   if (id) {
     const e = exerciseById(id);
+    // GYM-046 review: same latent gap as savePlan() — exerciseById can
+    // return undefined if this exercise was deleted on another device
+    // while this modal sat open and a background pull ran in the
+    // meantime. Guard before touching properties on it.
+    if (!e) { toast('This exercise was deleted on another device'); closeModal('modalExercise'); renderExerciseList(); return; }
     const prevType = e.type;
     e.name = name; e.type = _exType; e.tags = _exTags.slice(); e.notes = notes; e.updatedAt = now;
     record = e;
@@ -1821,7 +1871,12 @@ const STARTER_LIBRARY = [
 ];
 
 function loadStarterLibrary() {
-  const existingNames = new Set(_env.data.exercises.map(e => e.name.toLowerCase()));
+  // GYM-046 review: was including tombstoned exercises here, so deleting
+  // an exercise then re-running this could permanently block its
+  // starter-library counterpart from ever being added back — the deleted
+  // record's name stayed in this set forever. backfillStarterTags()
+  // already excludes _deleted; this now matches.
+  const existingNames = new Set(_env.data.exercises.filter(e => !e._deleted).map(e => e.name.toLowerCase()));
   const now = new Date().toISOString();
   let added = 0;
   const newRecords = [];
@@ -2643,7 +2698,16 @@ function savePlan() {
     }
   }
   let record;
-  if (id) { record = planById(id); record.name=name; record.notes=notes; record.items=_planItems; record.updatedAt=now; }
+  if (id) {
+    record = planById(id);
+    // GYM-046 review: planById can legitimately return undefined here if a
+    // background pull (e.g. after a 401 retry-queue flush) ran while this
+    // modal sat open and the cloud had, by then, confirmed this plan's
+    // deletion from another device. Without this guard the next line would
+    // throw on a plain object access and leave the modal stuck.
+    if (!record) { toast('This plan was deleted on another device'); closeModal('modalPlan'); renderPlanList(); return; }
+    record.name=name; record.notes=notes; record.items=_planItems; record.updatedAt=now;
+  }
   else { record = { id: uid('plan'), name, notes, items:_planItems, order: nextPlanOrder(), archived: false, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
   save(_env);
   sbUpsert('plan', record, null);
