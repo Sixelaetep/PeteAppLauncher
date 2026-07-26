@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.48</title>
+<title>Gym Tracker v2.49</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.48</div></span>
+      <span>Gym Tracker<div class="ver">v2.49</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -863,7 +863,23 @@
 // different notes in the same active set between syncs will have one
 // edit silently overwrite the other rather than merge field-by-field —
 // an inherent trade-off of the suite's architecture, not new here.
-const VERSION = '2.48';
+// v2.49 (GYM-047 — regression from v2.48): the note-set dedup added in
+// v2.48 picked whichever active set was CREATED most recently, ignoring
+// content entirely. A device that had never successfully pulled real
+// notes (e.g. hit by the GYM-046 schema bug) auto-creates its own empty
+// active set — and if that empty set's createdAt happened to be later
+// than a real note set merged in from another device, the empty one won
+// and the real notes got archived. Nothing was deleted, but the Notes tab
+// then shows an empty "Current Notes" with the real ones sitting in the
+// collapsed Archived section, which reads exactly like data loss. Fixed:
+// a set with notes in it now never loses to an empty one regardless of
+// timestamps; recency (updatedAt, not createdAt) only breaks ties between
+// sets that are equally empty or equally non-empty. Also added a Restore
+// button on archived note sets — the fix above only prevents this from
+// happening again, it doesn't retroactively undo damage the v2.48 bug
+// already did, so this gives an explicit, safe way to get affected notes
+// back rather than any silent auto-recovery guesswork.
+const VERSION = '2.49';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -990,11 +1006,26 @@ function migrateSessions(env) {
 // active and archive the rest — not delete, matching the suite's
 // archive-over-delete principle, and keeping every note visible under
 // Archived Note Sets rather than silently hiding it.
+// GYM-047: v2.48's dedup picked whichever active set was CREATED most
+// recently, with no regard for content. A device that had never
+// successfully pulled real notes (e.g. due to the GYM-046 schema bug)
+// would auto-create its own empty active set — and if that empty set
+// happened to be created AFTER a real note set from another device, the
+// empty one won and the real notes got archived, which looks exactly
+// like they vanished (they didn't — archived sets are never deleted, but
+// the section is collapsed by default). A set with notes in it must
+// never lose to an empty one purely on timestamp; only when sets are
+// equally "has notes or doesn't" does recency (updatedAt, not createdAt —
+// more meaningful for something actively being edited) break the tie.
 function ensureActiveNoteSet(env) {
   const actives = env.data.trainerNoteSets.filter(s => !s._deleted && s.status === 'active');
   if (actives.length === 1) return actives[0];
   if (actives.length > 1) {
-    actives.sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
+    actives.sort((a,b) => {
+      const aHas = (a.items||[]).length > 0, bHas = (b.items||[]).length > 0;
+      if (aHas !== bHas) return aHas ? -1 : 1;
+      return (b.updatedAt||b.createdAt||'').localeCompare(a.updatedAt||a.createdAt||'');
+    });
     const now = new Date().toISOString();
     actives.slice(1).forEach(s => { s.status='archived'; s.archivedAt=now; s.updatedAt=now; sbUpsert('trainerNoteSet', s, null); });
     return actives[0];
@@ -1606,11 +1637,32 @@ function renderArchivedNoteSetsList() {
   el.innerHTML = list.map(set => {
     const lines = (set.items||[]).map(i => `<div style="font-size:11.5px;padding:3px 0;border-bottom:1px solid var(--border);${i.done?'text-decoration:line-through;color:var(--ink3)':''}">${escHtml(i.text)}</div>`).join('') || '<div class="li-meta">No notes in this set</div>';
     return `<div class="list-item">
-      <div class="li-top"><div class="li-name">Archived ${fmtDate(set.archivedAt)}</div></div>
+      <div class="li-top">
+        <div class="li-name">Archived ${fmtDate(set.archivedAt)}</div>
+        <button class="btn btn-secondary btn-sm" onclick="restoreNoteSet('${set.id}')">↩ Restore</button>
+      </div>
       <div class="li-meta" style="margin-bottom:6px">${(set.items||[]).length} note${(set.items||[]).length===1?'':'s'}</div>
       ${lines}
     </div>`;
   }).join('');
+}
+// GYM-047: recovery lever for the v2.48 dedup bug (and a generally useful
+// undo for archiving the wrong set by hand) — flips an archived set back
+// to active, then immediately resolves it through ensureActiveNoteSet()'s
+// now-fixed content-aware heuristic rather than leaving two actives
+// dangling until the next render/pull.
+function restoreNoteSet(id) {
+  const set = getNoteSets().find(s => s.id === id && s.status === 'archived');
+  if (!set) return;
+  if (!confirm('Restore this archived set (' + (set.items||[]).length + ' note' + ((set.items||[]).length===1?'':'s') + ') as the active set?')) return;
+  const now = new Date().toISOString();
+  set.status = 'active'; set.archivedAt = null; set.updatedAt = now;
+  save(_env);
+  sbUpsert('trainerNoteSet', set, null);
+  ensureActiveNoteSet(_env); // resolves immediately if this leaves 2 actives, using the fixed content-aware heuristic
+  save(_env);
+  renderNotesTab();
+  toast('Note set restored ✓');
 }
 
 // ═══════════════════════════════════════════════════════════════════
