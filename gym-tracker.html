@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.49</title>
+<title>Gym Tracker v2.50</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.49</div></span>
+      <span>Gym Tracker<div class="ver">v2.50</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -879,7 +879,26 @@
 // happening again, it doesn't retroactively undo damage the v2.48 bug
 // already did, so this gives an explicit, safe way to get affected notes
 // back rather than any silent auto-recovery guesswork.
-const VERSION = '2.49';
+// v2.50 (GYM-047, second root cause): the actual bug behind "sync removed
+// my notes again" after restoring a backup on v2.49 wasn't the dedup
+// heuristic (that part was already fixed) — it was a genuine race
+// condition. pullFromCloud() runs automatically the instant a session
+// arrives, including on every app launch, before the user can do
+// anything. If a JSON import (or Clear All Data) replaces _env while that
+// automatic pull is still in flight, the pull was captured against the
+// PRE-import local data the moment it started; when it finally resolved,
+// it unconditionally overwrote the fresh import with those stale merge
+// results, silently undoing the restore the user had just performed.
+// New _envGeneration counter bumps on every wholesale _env replacement; a
+// pull now captures the generation it started with and discards its own
+// results entirely if that's changed by the time it resolves, rather than
+// blindly applying a merge computed against data that no longer exists.
+// Residual note: if the cloud already holds a corrupted copy from the
+// earlier v2.48 bug (real notes flipped to archived, with a recent
+// timestamp), a race-free sync can still show it that way — the v2.49
+// Restore button is the deliberate fix for that, not something this
+// silently auto-corrects.
+const VERSION = '2.50';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1065,6 +1084,18 @@ function writeXAppSummary(envelope) {
 // APP STATE
 // ═══════════════════════════════════════════════════════════════════
 let _env = defaultEnvelope();
+// GYM-047 (second bug): pullFromCloud() is async and runs automatically
+// the moment a session arrives — including on every app launch, before
+// the user can touch anything. If a JSON import (or Clear All Data)
+// replaces _env while an earlier pull is still in flight, that pull was
+// captured against the PRE-import local data the instant it started —
+// when it finally resolves, it would unconditionally overwrite the
+// fresh import with those stale results, silently undoing the restore.
+// _envGeneration bumps every time _env is wholesale-replaced; a pull
+// captures the generation it started with and discards its own results
+// if that's changed by the time it resolves, rather than blindly
+// applying merge results computed against data that no longer exists.
+let _envGeneration = 0;
 const getExercises = () => _env.data.exercises.filter(e => !e._deleted);
 const getPlans      = () => _env.data.plans.filter(p => !p._deleted);
 // GYM-031: plans available for starting a session from — archived plans
@@ -1365,10 +1396,22 @@ function pullFromCloud(cb) {
   // same fixed kind order so the sync log reads in the same sequence as
   // before, regardless of which table's request actually finished first.
   (async () => {
+    const myGeneration = _envGeneration;
     let anyError = false;
     const outcomes = await Promise.allSettled(
       kinds.map(kind => _gymTables[kind].pull(_env.data[_gymArrKeys[kind]], 'id', 'updatedAt'))
     );
+    if (myGeneration !== _envGeneration) {
+      // _env was wholesale-replaced (JSON import / Clear All Data) while
+      // this pull was in flight — its merge results were computed against
+      // local data that's no longer current. Applying them now would
+      // silently undo whatever just replaced _env. Drop this pull
+      // entirely; whatever replaced _env is already the correct state,
+      // and the next normal pull/push cycle reconciles it with the cloud.
+      slog('Pull discarded — local data was replaced (import or clear) while this pull was running', 'error');
+      if (cb) cb();
+      return;
+    }
     kinds.forEach((kind, i) => {
       const arrKey = _gymArrKeys[kind];
       const outcome = outcomes[i];
@@ -4003,6 +4046,7 @@ function importJSON(event) {
       if (parsed.data && (parsed.data.exercises !== undefined || parsed.data.plans !== undefined || parsed.data.templates !== undefined || parsed.data.sessions !== undefined)) {
         if (typeof parsed.version !== 'number') throw new Error('Missing version field');
         _env = parsed;
+        _envGeneration++; // GYM-047: any pull already in flight is now stale — see the guard in pullFromCloud()
         _env.lastUpdated  = _env.lastUpdated  || '';
         _env.lastExported = _env.lastExported || '';
         _env.data.exercises = _env.data.exercises || [];
@@ -4119,6 +4163,7 @@ function downloadProgramTemplate() {
 function confirmClearAll() {
   if (!confirm('Clear ALL gym data? This cannot be undone.')) return;
   _env = defaultEnvelope();
+  _envGeneration++; // GYM-047: same guard as importJSON — see pullFromCloud()
   save(_env);
   closeDataDrawer();
   renderAll();
