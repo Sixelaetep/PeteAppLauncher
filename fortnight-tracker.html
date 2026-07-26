@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.34</title>
+<title>9-Day Fortnight Tracker v3.35</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -459,7 +459,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.34</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.35</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -524,14 +524,27 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
   <div class="modal">
     <h3 id="leaveModalTitle">Add Leave Record</h3>
     <p class="modal-sub">Logged in hours &mdash; not tied to a fortnight day</p>
-    <label>Date</label>
-    <input type="date" id="lv-date" class="extra-sel" style="width:100%;margin-bottom:10px;padding:.5rem;">
+    <div id="lv-mode-row" style="display:flex;gap:8px;margin-bottom:10px;">
+      <button type="button" class="sbtn" id="lv-mode-single" onclick="setLvMode('single')">Single day</button>
+      <button type="button" class="sbtn" id="lv-mode-multi" onclick="setLvMode('multi')">Multiple days</button>
+    </div>
+    <div id="lv-date-single">
+      <label>Date</label>
+      <input type="date" id="lv-date" class="extra-sel" style="width:100%;margin-bottom:10px;padding:.5rem;">
+    </div>
+    <div id="lv-date-multi" style="display:none;">
+      <label>From</label>
+      <input type="date" id="lv-date-start" class="extra-sel" style="width:100%;margin-bottom:10px;padding:.5rem;">
+      <label>To</label>
+      <input type="date" id="lv-date-end" class="extra-sel" style="width:100%;margin-bottom:4px;padding:.5rem;">
+      <p class="modal-hint" style="margin:0 0 10px;">Weekdays only (Mon&#8211;Fri), max 60 days &middot; same hours applied each day</p>
+    </div>
     <label>Type</label>
     <div style="display:flex;gap:8px;margin-bottom:10px;">
       <button type="button" class="sbtn" id="lv-type-holiday" onclick="setLvType('holiday')">&#127796; Holiday</button>
       <button type="button" class="sbtn" id="lv-type-sick" onclick="setLvType('sick')">&#129298; Sick</button>
     </div>
-    <label>Hours</label>
+    <label id="lv-hours-lbl">Hours</label>
     <div style="display:flex;gap:8px;margin-bottom:10px;">
       <select class="extra-sel" id="lv-h" style="flex:1;"></select>
       <select class="extra-sel" id="lv-m" style="flex:1;"></select>
@@ -546,6 +559,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
   </div>
 </div>
 <div class="toast" id="toast"></div>
+
 
 <script src="pal-config.js"></script>
 <script src="pal-sync.js"></script>
@@ -704,6 +718,19 @@ function inTaxYear(dateStr, startYear){ var b=taxYearBounds(startYear); return d
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.35 (FT-027, FT-028): two Leave tab fixes/improvements from first
+// real use. FT-027 — a date could show as two separate Holiday/Sick
+// lines (e.g. a bundle-marked day with 0h alongside a manual record for
+// the same date with real hours logged against it). leaveEntriesForYear
+// now dedupes by date+type across both sources, keeping whichever entry
+// carries the most hours (ties favour the manual record, as the more
+// deliberate edit) — same real-world absence, one line. FT-028 — Add
+// Leave Record now offers Single day vs Multiple days. Multiple days
+// takes a from/to range and creates one independent record per weekday
+// in it (weekends skipped, 60-day cap), each with the same hours/type/
+// note; every created record is a normal standalone entry afterwards,
+// editable/deletable on its own like any single-day one. Multi mode is
+// only offered when adding — editing always targets one existing record.
 // v3.34 (FT-026): new Leave tab. Tracks Holiday/Sick hours (and a days-
 // equivalent at 8h/day) over a UK tax year (1 Apr – 31 Mar), with
 // forward/back year navigation. Totals combine two sources: Holiday/Sick
@@ -1038,19 +1065,34 @@ function visibleLeave(){ return leaveRecs.list.filter(function(r){ return !r._de
 // Bundle days are read live off state.bundles — never duplicated into
 // leaveRecs — so there's exactly one source of truth per record.
 function leaveEntriesForYear(startYear){
-  var entries=[];
+  var raw=[];
   visibleBundles().forEach(function(b){
     b.days.forEach(function(d){
       if((d.status==='holiday'||d.status==='sick') && inTaxYear(d.date, startYear)){
-        entries.push({ source:'bundle', date:d.date, type:d.status, mins:d.holidayMins||0 });
+        raw.push({ source:'bundle', date:d.date, type:d.status, mins:d.holidayMins||0 });
       }
     });
   });
   visibleLeave().forEach(function(r){
     if(inTaxYear(r.date, startYear)){
-      entries.push({ source:'manual', id:r.id, date:r.date, type:r.type, mins:Math.round((r.hours||0)*60), note:r.note||'' });
+      raw.push({ source:'manual', id:r.id, date:r.date, type:r.type, mins:Math.round((r.hours||0)*60), note:r.note||'' });
     }
   });
+  // FT-027: the same calendar date can carry both a bundle-marked entry
+  // (e.g. flagged Holiday inside a fortnight with 0h not yet filled in)
+  // and a manual record for the same date+type — that's one real-world
+  // absence showing twice, not two. Dedupe on date+type, keeping
+  // whichever carries the most hours; on an exact tie prefer the manual
+  // record since it's the more deliberate, directly-edited entry.
+  var byKey={};
+  raw.forEach(function(e){
+    var key=e.date+'|'+e.type;
+    var existing=byKey[key];
+    if(!existing){ byKey[key]=e; return; }
+    var existingWins = existing.mins>e.mins || (existing.mins===e.mins && existing.source==='manual');
+    if(!existingWins) byKey[key]=e;
+  });
+  var entries=Object.keys(byKey).map(function(k){ return byKey[k]; });
   entries.sort(function(a,b){ return a.date.localeCompare(b.date); });
   return entries;
 }
@@ -1779,17 +1821,33 @@ function renderLeave(root){
 function changeLeaveYear(delta){ currentLeaveYear+=delta; render(); }
 
 // Leave record modal
-var _leaveEditId=null, _lvType='holiday';
+var _leaveEditId=null, _lvType='holiday', _lvMode='single';
 function setLvType(t){
   _lvType=t;
   document.getElementById('lv-type-holiday').className='sbtn'+(t==='holiday'?' s-holiday':'');
   document.getElementById('lv-type-sick').className='sbtn'+(t==='sick'?' s-sick':'');
 }
+// FT-028: Single day vs Multiple days (date range) toggle. Multi mode is
+// only offered when adding a new record — editing always targets one
+// existing record, so the toggle is hidden in that case.
+function setLvMode(m){
+  _lvMode=m;
+  document.getElementById('lv-mode-single').className='sbtn'+(m==='single'?' s-done':'');
+  document.getElementById('lv-mode-multi').className='sbtn'+(m==='multi'?' s-done':'');
+  document.getElementById('lv-date-single').style.display=m==='single'?'block':'none';
+  document.getElementById('lv-date-multi').style.display=m==='multi'?'block':'none';
+  document.getElementById('lv-hours-lbl').textContent=m==='multi'?'Hours per day':'Hours';
+}
 function openLeaveModal(id){
   _leaveEditId=id||null;
   var rec=id?leaveRecs.list.find(function(r){return r.id===id;}):null;
   document.getElementById('leaveModalTitle').textContent=rec?'Edit Leave Record':'Add Leave Record';
-  document.getElementById('lv-date').value=rec?rec.date:isoDate(new Date());
+  document.getElementById('lv-mode-row').style.display=rec?'none':'flex';
+  setLvMode('single');
+  var today=isoDate(new Date());
+  document.getElementById('lv-date').value=rec?rec.date:today;
+  document.getElementById('lv-date-start').value=today;
+  document.getElementById('lv-date-end').value=today;
   var lvH=document.getElementById('lv-h'), lvM=document.getElementById('lv-m');
   if(!lvH.options.length){
     lvH.innerHTML=Array.from({length:13},function(_,i){return'<option value="'+i+'">'+i+'h</option>';}).join('');
@@ -1805,12 +1863,40 @@ function openLeaveModal(id){
 }
 function closeLeaveModal(){ document.getElementById('leaveModal').classList.remove('open'); _leaveEditId=null; }
 function saveLeaveModal(){
-  var date=document.getElementById('lv-date').value;
-  if(!date){ toast('Pick a date','err'); return; }
   var hVal=+document.getElementById('lv-h').value||0, mVal=+document.getElementById('lv-m').value||0;
   var hours=+(hVal+mVal/60).toFixed(2);
   if(hours<=0){ toast('Enter some hours','err'); return; }
   var note=document.getElementById('lv-note').value.trim();
+
+  // FT-028: multi-day range — creates one independent record per weekday
+  // (each editable/deletable on its own afterwards, same as a single-day
+  // record). Only offered for new records, never edits.
+  if(_lvMode==='multi' && !_leaveEditId){
+    var start=document.getElementById('lv-date-start').value;
+    var end=document.getElementById('lv-date-end').value;
+    if(!start||!end){ toast('Pick a start and end date','err'); return; }
+    if(end<start){ toast('End date is before start date','err'); return; }
+    var spanDays=Math.round((parseDate(end)-parseDate(start))/86400000)+1;
+    if(spanDays>60){ toast('Range too long — max 60 days','err'); return; }
+    var d=parseDate(start), created=0;
+    while(isoDate(d)<=end){
+      var dow=d.getDay();
+      if(dow!==0 && dow!==6){
+        var rec=(function(){ return { id:'lv'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)+created, date:isoDate(d), type:_lvType, hours:hours, note:note, _deleted:false, updatedAt:'' }; })();
+        leaveRecs.list.push(rec);
+        saveLeaveRec(rec);
+        created++;
+      }
+      d=addDays(d,1);
+    }
+    closeLeaveModal();
+    render();
+    toast((created||0)+' record'+(created!==1?'s':'')+' added \u2713', created?'ok':'err');
+    return;
+  }
+
+  var date=document.getElementById('lv-date').value;
+  if(!date){ toast('Pick a date','err'); return; }
   if(_leaveEditId){
     var rec=leaveRecs.list.find(function(r){return r.id===_leaveEditId;});
     if(rec){ rec.date=date; rec.type=_lvType; rec.hours=hours; rec.note=note; saveLeaveRec(rec); }
