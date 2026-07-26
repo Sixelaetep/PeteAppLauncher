@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.54</title>
+<title>Test &amp; Issues v1.55</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -474,7 +474,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.54</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.55</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -913,7 +913,7 @@ function nextIssueId(prefix) {
 }
 
 function activeApps() {
-  return Object.values(state.apps).filter(a => !a.archived);
+  return Object.values(state.apps).filter(a => !a.archived && !a._deleted);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1091,7 +1091,7 @@ function allTests() {
 }
 
 function allIssues() {
-  return Object.values(state.issues).sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
+  return Object.values(state.issues).filter(i => !i._deleted).sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
 }
 
 function statusPill(status) {
@@ -1506,7 +1506,7 @@ function kbAdvanceAfterFail(appId, version) {
 
 function kbShowCleanupSheet(appId, selVer) {
   const deployedCount = Object.values(state.issues).filter(i =>
-    !i.archived && i.appId === appId && (i.status==='deployed'||i.status==='fixed')
+    !i._deleted && !i.archived && i.appId === appId && (i.status==='deployed'||i.status==='fixed')
   ).length;
   const passedCount = allTests().filter(t =>
     t.appId === appId && (!selVer || t.version === selVer) && t.status === 'pass'
@@ -1535,7 +1535,8 @@ function kbShowCleanupSheet(appId, selVer) {
 function kbCleanupArchiveDeploy(appId) {
   let count = 0;
   Object.values(state.issues).forEach(i => {
-    if (!i.archived && i.appId === appId && (i.status==='deployed'||i.status==='fixed')) {
+    if (i._deleted || i.archived) return;
+    if (i.appId === appId && (i.status==='deployed'||i.status==='fixed')) {
       i.archived = true; i.updatedAt = new Date().toISOString(); count++;
     }
   });
@@ -1578,7 +1579,7 @@ function resetTestFilter() {
 const appTabSelected = {}; // appId -> Set of issueIds
 
 function renderApps() {
-  const allApps  = Object.values(state.apps);
+  const allApps  = Object.values(state.apps).filter(a => !a._deleted); // TI-068: exclude unconfirmed tombstones
   const apps     = allApps.filter(a => !a.archived);
   const archived = allApps.filter(a => a.archived);
   const list  = document.getElementById('apps-list');
@@ -1598,7 +1599,7 @@ function renderApps() {
 
     const activeStatuses = new Set(['open','build','deployed','fixed','testing']);
     const appIssues = Object.values(state.issues)
-      .filter(i => i.appId===app.id && activeStatuses.has(i.status))
+      .filter(i => !i._deleted && i.appId===app.id && activeStatuses.has(i.status))
       .sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''));
     const openN = appIssues.filter(i=>i.status==='open').length;
 
@@ -1842,7 +1843,7 @@ function confirmArchiveIssues() {
   if (!toArchive.size) { toast('Select at least one status'); return; }
   let archived = 0;
   Object.values(state.issues).forEach(issue => {
-    if (issue.archived) return;
+    if (issue._deleted || issue.archived) return;
     const s = issue.status || 'open';
     // Map legacy statuses to new ones for archive matching
     const normalised = (s==='fixed'||s==='testing') ? 'deployed' : s;
@@ -2309,15 +2310,23 @@ function deleteCurrentIssue() {
   if (!editingIssueId) return;
   if (!confirm('Delete this issue?')) return;
   const deletedId = editingIssueId;
-  const snapshot  = { ...state.issues[deletedId] }; // capture before removal
-  delete state.issues[deletedId];
+  const issue = state.issues[deletedId];
+  if (!issue) return;
+  // TI-069: soft-delete-first pattern — mark _deleted:true locally before
+  // attempting the cloud tombstone, so the deletion intent survives a failed
+  // network push. pal-sync v1.11 keeps this record in merged across pulls,
+  // retrying the tombstone each cycle until the cloud confirms the delete.
+  // allIssues() / activeApps() / renderApps() all filter !_deleted, so the
+  // issue disappears from the UI immediately even though it stays in state.
+  issue._deleted  = true;
+  issue.updatedAt = new Date().toISOString();
   saveState();
   closeIssueModal();
   renderIssues();
   if (currentTab === 'kanban') renderKanban();
   refreshStats();
   toast('Issue deleted');
-  syncDeleteIssue(deletedId, snapshot);
+  syncDeleteIssue(deletedId, issue);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2684,6 +2693,26 @@ let _syncState = 'local';
 let _syncLog   = []; // [{ts,msg,type}] newest first, cap 120
 let _syncLock  = false; // true while import is pushing — blocks concurrent pulls
 
+// v1.55 (TI-068 revised, TI-069): correct implementation of pal-sync v1.11
+// compliance, replacing the v1.54 approach which was architecturally wrong.
+// v1.54 filtered _deleted records at state-assignment time; the v1.11
+// canonical pattern is to keep ALL merged records in state (including
+// unconfirmed local tombstones with _deleted:true) and filter at render/calc
+// time — the same pattern Gym Tracker and Fortnight Tracker already use.
+// Filtering at assignment was breaking soft-delete: a pending tombstone was
+// removed from state after the first pull, so pal-sync's per-pull retry
+// mechanism had nothing to retry, and the issue resurrected from the cloud's
+// still-live row. Two changes in this release:
+// (TI-068 revised) Post-pull assignment reverted to unfiltered. render/calc
+// functions now filter !_deleted: activeApps(), allIssues(), renderApps()
+// allApps + appIssues, kbShowCleanupSheet deployedCount, kbCleanupArchiveDeploy
+// forEach, confirmArchiveIssues forEach. Deleted records are invisible in every
+// view but persist in state.issues until the cloud confirms the delete.
+// (TI-069) deleteCurrentIssue switches from hard-delete (delete state.issues[id])
+// to soft-delete-first (issue._deleted = true, save, then syncDeleteIssue).
+// The issue disappears from all renders immediately (allIssues() filters it)
+// but stays in state for the retry mechanism. When the cloud confirms the
+// tombstone, it is removed from merged and therefore from state on the next pull.
 // v1.54 (TI-068, pal-sync v1.11): the post-pull state rebuild assigned
 // every record from merged straight into state.apps/state.issues without
 // filtering _deleted. Since pal-sync v1.11, merged can contain _deleted:true
@@ -2860,14 +2889,16 @@ async function syncPull() {
     const pushedUp  = appsResult.pushedCount + issuesResult.pushedCount;
 
     // TI-068 (pal-sync v1.11): merged can contain _deleted:true records —
-    // unconfirmed local tombstones whose first push failed. Filter them here
-    // so they never surface in state.apps/state.issues. getActiveApps() and
-    // renderIssues() filter !archived, not !_deleted, so without this a
-    // tombstoned-but-unconfirmed app or issue would slip through and render.
+    // unconfirmed local tombstones kept in merged so the per-pull retry
+    // mechanism can re-attempt the cloud push on the next cycle. The v1.11
+    // canonical pattern is to keep ALL merged records in state (including
+    // _deleted:true ones), and filter !_deleted at render/calc time.
+    // activeApps(), allIssues(), renderApps(), and the mutation helpers all
+    // do this — see TI-069 (soft-delete for issue deletion) for the full fix.
     state.apps = {};
-    appsResult.merged.forEach(app => { if (!app._deleted) state.apps[app.id] = app; });
+    appsResult.merged.forEach(app => { state.apps[app.id] = app; });
     state.issues = {};
-    issuesResult.merged.forEach(issue => { if (!issue._deleted) state.issues[issue.id] = issue; });
+    issuesResult.merged.forEach(issue => { state.issues[issue.id] = issue; });
 
     // Meta travels in the same table under record_key '__meta__' — both
     // pull() calls above return the full unfiltered row set, so no extra

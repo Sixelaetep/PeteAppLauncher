@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.10</title>
+<title>Claim Tracker v2.11</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -232,7 +232,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.10</div>
+        <div class="ver">v2.11</div>
       </div>
     </div>
     <div class="header-actions">
@@ -540,6 +540,16 @@
 // setSyncState() to show "N pending sync" instead of a bare error while
 // a retry is queued. Every sync error log message now also runs through
 // the shared PalSync.errorHint() instead of a bare err.message.
+// v2.11 (CLA-012): deleteEntry() switched from hard-delete (splice entry
+// out of local array, then attempt cloud tombstone) to soft-delete-first.
+// Previously, if the tombstone push failed (network blip, offline), local
+// had already removed the entry so the next pull had no local record to
+// protect against the still-live cloud row — the entry resurrected silently.
+// Now the entry is marked _deleted:true and updated_at stamped before
+// saving locally; the cloud tombstone is then attempted. If it fails,
+// pal-sync v1.11's per-pull retry keeps re-attempting until the cloud
+// confirms the delete. All render functions already filter !e._deleted so
+// the entry is immediately invisible even though it stays in the entries array.
 // v2.10 (CLA-011, suite-wide sync audit): syncPush() (the manual "Push
 // to cloud" button) used to blind-upsert every local entry and settings
 // directly to the cloud, with NO merge and no comparison against what
@@ -1119,10 +1129,20 @@ function unmarkClaimed(id) {
 
 function deleteEntry(id) {
   if (!confirm('Delete this entry?')) return;
-  // Capture snapshot before removing from local list — needed for tombstone payload
-  const snapshot = getEntries().find(e => e.id === id);
-  _env.data.entries = getEntries().filter(e => e.id !== id);
-  deleteEntryFromCloud(id, snapshot || { id }); renderAll(); toast('Entry deleted');
+  const entry = getEntries().find(e => e.id === id);
+  if (!entry) return;
+  // CLA-012: soft-delete-first pattern — mark _deleted:true locally before
+  // attempting the cloud tombstone, so the deletion intent survives a failed
+  // network push. pal-sync v1.11 keeps this record in merged across pulls,
+  // retrying the tombstone each cycle until the cloud confirms the delete.
+  // All render functions already filter !e._deleted so the entry disappears
+  // from the UI immediately even though it stays in _env.data.entries.
+  entry._deleted  = true;
+  entry.updated_at = new Date().toISOString();
+  save(_env);
+  deleteEntryFromCloud(id, entry);
+  renderAll();
+  toast('Entry deleted');
 }
 
 function computeAmount(entry) {
