@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.44</title>
+<title>Gym Tracker v2.45</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -285,6 +285,9 @@
   .rpt-ex-name{font-weight:700;color:#0d1117}
   .rpt-ex-sets{color:#3a3a3a;text-align:right}
   .rpt-session-notes{font-size:10.5px;color:#666;margin-top:5px;font-style:italic}
+  .rpt-notes-block{border:1px solid #cfe3f5;border-left:5px solid #1d70b8;border-radius:7px;padding:10px 14px;margin-bottom:18px;background:#f7fbff;page-break-inside:avoid}
+  .rpt-notes-title{font-size:13px;font-weight:800;color:#0d3a5c;margin-bottom:6px}
+  .rpt-note-line{font-size:11.5px;color:#222;padding:3px 0}
   .rpt-footer{margin-top:24px;font-size:9.5px;color:#999;text-align:center}
   @media print {
     body *{visibility:hidden}
@@ -300,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.44</div></span>
+      <span>Gym Tracker<div class="ver">v2.45</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -312,6 +315,7 @@
     <button class="tab-btn" id="tab-exercises" onclick="switchTab('exercises')"><span class="tab-icon">💪</span>Exercises</button>
     <button class="tab-btn" id="tab-insights" onclick="switchTab('insights')"><span class="tab-icon">📊</span>Insights</button>
     <button class="tab-btn" id="tab-history" onclick="switchTab('history')"><span class="tab-icon">📈</span>History</button>
+    <button class="tab-btn" id="tab-notes" onclick="switchTab('notes')"><span class="tab-icon">🗒️</span>Notes</button>
   </div>
   <div class="no-pal-banner" id="noPalBanner">Open via Pete's Apps launcher for cloud sync</div>
 </div>
@@ -418,6 +422,26 @@
       <label>Exercise</label>
       <select id="historyExerciseSelect" onchange="renderExerciseProgress()"></select>
       <div id="exerciseProgressList" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- ═══ TRAINER NOTES (GYM-043) ═══ -->
+  <div class="tab-panel" id="panel-notes">
+    <div class="section-title" style="margin-top:0">Current Notes</div>
+    <p style="font-size:11.5px;color:var(--ink2);line-height:1.5;margin-bottom:8px">Jot things down as they come up, then run through them at your next session. Tick a note off once you've raised it.</p>
+    <div id="activeNoteList"></div>
+    <div class="li-actions" style="margin-top:8px">
+      <input type="text" id="newNoteInput" placeholder="Add a note…" style="flex:1" onkeydown="if(event.key==='Enter')addTrainerNote()">
+      <button class="btn btn-secondary btn-sm" onclick="addTrainerNote()">+ Add</button>
+    </div>
+    <button class="btn btn-secondary btn-block" style="margin-top:14px" onclick="archiveNoteSetAndStartNew()">📦 Archive &amp; Start New Set</button>
+
+    <div class="section-title" onclick="toggleArchivedNotes()" style="cursor:pointer;user-select:none;margin-top:20px">
+      <span>Archived Note Sets <span id="archivedNotesCount" style="color:var(--ink3);font-weight:400"></span></span>
+      <span id="archivedNotesChevron">▸</span>
+    </div>
+    <div id="archivedNotesWrap" style="display:none">
+      <div id="archivedNotesList"></div>
     </div>
   </div>
 
@@ -774,7 +798,18 @@
 // its exercise's progression (mode + amount) directly in the plan editor,
 // so it can be set up front rather than only live in a session; this was
 // already a global per-exercise setting, just not editable from here.
-const VERSION = '2.44';
+// v2.45 (GYM-043): Trainer Notes — a new tab holding one running "active"
+// set of notes to raise with your trainer (add/edit/check-off/remove),
+// plus a one-tap "Archive & Start New" that files the current set away and
+// opens a fresh one. Archived sets are kept read-only underneath, newest
+// first. New data collection (trainerNoteSets), synced via its own table
+// (gym_trainer_notes) following the same tombstone/upsert pattern as every
+// other table — requires that table to exist in Supabase (SQL provided
+// separately); until then notes still save locally, sync just no-ops for
+// this one table like any other unreachable table. The active set's notes
+// are also folded into the PDF report, directly under the header — ahead
+// of Summary — so they land on the first printed page.
+const VERSION = '2.45';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -800,14 +835,14 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], starterDismissed: false }
   };
 }
 
 function load() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return defaultEnvelope();
+    if (!raw) { const fresh = defaultEnvelope(); ensureActiveNoteSet(fresh); return fresh; }
     const parsed = JSON.parse(raw);
     const env = defaultEnvelope();
     env.version      = parsed.version      || 1;
@@ -819,12 +854,15 @@ function load() {
       env.data.sessions  = parsed.data.sessions || [];
       env.data.weightEntries = parsed.data.weightEntries || [];
       env.data.scheduleEntries = parsed.data.scheduleEntries || [];
+      env.data.trainerNoteSets = parsed.data.trainerNoteSets || [];
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
     migratePlans(env);
     migrateSessions(env);
-    if (exChanged.length) {
+    const hadNoteSets = env.data.trainerNoteSets.length;
+    ensureActiveNoteSet(env);
+    if (exChanged.length || env.data.trainerNoteSets.length !== hadNoteSets) {
       // Persist the spa-tag fix locally straight away; if sync is already
       // live by the time PAL_SESSION arrives, reportToLauncher/pull will
       // pick these up, but pullFromCloud also re-pushes any it migrates
@@ -886,6 +924,17 @@ function migrateSessions(env) {
     });
   });
 }
+// GYM-043: exactly one non-archived, non-deleted note set should exist at
+// all times so there's always somewhere for a new note to land — this
+// creates one on first-ever load, and is called again after archiving.
+function ensureActiveNoteSet(env) {
+  const active = env.data.trainerNoteSets.find(s => !s._deleted && s.status === 'active');
+  if (active) return active;
+  const now = new Date().toISOString();
+  const fresh = { id: uid('tns'), status: 'active', items: [], createdAt: now, archivedAt: null, updatedAt: now };
+  env.data.trainerNoteSets.push(fresh);
+  return fresh;
+}
 
 function save(envelope) {
   envelope.lastUpdated = new Date().toISOString();
@@ -927,6 +976,9 @@ const getArchivedPlans = () => getPlans().filter(p => p.archived).sort((a,b)=>(a
 const getSessions   = () => _env.data.sessions.filter(s => !s._deleted);
 const getWeightEntries = () => _env.data.weightEntries.filter(w => !w._deleted).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
 const getScheduleEntries = () => _env.data.scheduleEntries.filter(e => !e._deleted);
+const getNoteSets = () => _env.data.trainerNoteSets.filter(s => !s._deleted);
+const getActiveNoteSet = () => getNoteSets().find(s => s.status==='active') || ensureActiveNoteSet(_env);
+const getArchivedNoteSets = () => getNoteSets().filter(s => s.status==='archived').sort((a,b)=>(b.archivedAt||'').localeCompare(a.archivedAt||''));
 const oneOffEntriesForDate = date => getScheduleEntries().filter(e => !e.kind && e.date === date);
 // GYM-033: repeat rules live in the same array, distinguished by kind.
 const getRepeatRules = () => getScheduleEntries().filter(e => e.kind === 'repeat');
@@ -1098,8 +1150,9 @@ const _gymPlans     = window.PalSync.table('gym_plans');
 const _gymSessions  = window.PalSync.table('gym_sessions');
 const _gymWeight    = window.PalSync.table('gym_weight');
 const _gymSchedule  = window.PalSync.table('gym_schedule');
-const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule };
-const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries' };
+const _gymTrainerNotes = window.PalSync.table('gym_trainer_notes'); // GYM-043
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -1190,7 +1243,7 @@ function pullFromCloud(cb) {
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session','weight','schedule'];
+  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet'];
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
@@ -1225,6 +1278,7 @@ function pullFromCloud(cb) {
       }
     });
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
+    ensureActiveNoteSet(_env); // GYM-043: a first-ever pull with zero rows shouldn't leave no active set
     save(_env);
     if (exChanged.length) {
       slog('Pushing '+exChanged.length+' exercise(s) with corrected Spa tags','ok');
@@ -1247,12 +1301,12 @@ function manualPush() {
   // from another device, resurrecting something that was deleted elsewhere.
   pullFromCloud(() => {
     window.PalSync.flushRetryQueue().then(renderSyncPanel);
-    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries'].forEach(k => total += _env.data[k].length);
+    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets'].forEach(k => total += _env.data[k].length);
     if (!total) { toast('Nothing to push'); return; }
     setSyncStatus('syncing');
     slog('Manual push — '+total+' record(s)');
     let done = 0, errors = 0;
-    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries]].forEach(([kind, arr]) => {
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets]].forEach(([kind, arr]) => {
       arr.forEach(rec => sbUpsert(kind, rec, ok => {
         if (!ok) errors++;
         done++;
@@ -1313,7 +1367,7 @@ window.addEventListener('resize', adjustBodyScrollTop);
 // RENDER ALL
 // ═══════════════════════════════════════════════════════════════════
 function renderAll() {
-  renderHome(); renderCalendar(); renderPlanList(); renderExerciseList(); renderHistory(); renderInsights();
+  renderHome(); renderCalendar(); renderPlanList(); renderExerciseList(); renderHistory(); renderInsights(); renderNotesTab();
   reportToLauncher();
   renderSyncPanel();
 }
@@ -1361,6 +1415,117 @@ function applyArchivedPlansCollapse() {
   const chevron = document.getElementById('archivedPlanChevron');
   if (body) body.style.display = _archivedPlansCollapsed ? 'none' : '';
   if (chevron) chevron.textContent = _archivedPlansCollapsed ? '▸' : '▾';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TRAINER NOTES (GYM-043)
+// ═══════════════════════════════════════════════════════════════════
+let _archivedNotesCollapsed = localStorage.getItem('gym_archived_notes_collapsed') !== 'false';
+function toggleArchivedNotes() {
+  _archivedNotesCollapsed = !_archivedNotesCollapsed;
+  localStorage.setItem('gym_archived_notes_collapsed', _archivedNotesCollapsed ? 'true' : 'false');
+  applyArchivedNotesCollapse();
+}
+function applyArchivedNotesCollapse() {
+  const body = document.getElementById('archivedNotesWrap');
+  const chevron = document.getElementById('archivedNotesChevron');
+  if (body) body.style.display = _archivedNotesCollapsed ? 'none' : '';
+  if (chevron) chevron.textContent = _archivedNotesCollapsed ? '▸' : '▾';
+}
+function renderNotesTab() {
+  renderActiveNoteList();
+  renderArchivedNoteSetsList();
+  applyArchivedNotesCollapse();
+}
+function renderActiveNoteList() {
+  const el = document.getElementById('activeNoteList');
+  if (!el) return;
+  const set = getActiveNoteSet();
+  const items = set.items || [];
+  if (!items.length) { el.innerHTML = '<div class="empty-state">📝 No notes yet — add one below</div>'; return; }
+  el.innerHTML = items.map(item => `
+    <div class="list-item">
+      <div class="li-top">
+        <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
+          <input type="checkbox" ${item.done?'checked':''} onchange="toggleTrainerNoteDone('${item.id}')" style="margin-top:3px">
+          <textarea rows="1" style="flex:1;resize:vertical;min-height:34px;${item.done?'text-decoration:line-through;color:var(--ink3)':''}" oninput="autoGrow(this)" onblur="updateTrainerNoteText('${item.id}', this.value)">${escHtml(item.text)}</textarea>
+        </div>
+        <button class="pib-remove" onclick="removeTrainerNote('${item.id}')">✕</button>
+      </div>
+    </div>`).join('');
+}
+function autoGrow(ta) { ta.style.height='auto'; ta.style.height=ta.scrollHeight+'px'; }
+function addTrainerNote() {
+  const input = document.getElementById('newNoteInput');
+  const text = input.value.trim();
+  if (!text) return;
+  const set = getActiveNoteSet();
+  const now = new Date().toISOString();
+  set.items.push({ id: uid('tn'), text, done:false, createdAt: now });
+  set.updatedAt = now;
+  input.value = '';
+  save(_env);
+  sbUpsert('trainerNoteSet', set, null);
+  renderActiveNoteList();
+}
+function updateTrainerNoteText(itemId, text) {
+  const set = getActiveNoteSet();
+  const item = set.items.find(i=>i.id===itemId);
+  if (!item) return;
+  const trimmed = text.trim();
+  if (item.text === trimmed) return;
+  item.text = trimmed;
+  set.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('trainerNoteSet', set, null);
+}
+function toggleTrainerNoteDone(itemId) {
+  const set = getActiveNoteSet();
+  const item = set.items.find(i=>i.id===itemId);
+  if (!item) return;
+  item.done = !item.done;
+  set.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('trainerNoteSet', set, null);
+  renderActiveNoteList();
+}
+function removeTrainerNote(itemId) {
+  const set = getActiveNoteSet();
+  set.items = set.items.filter(i=>i.id!==itemId);
+  set.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('trainerNoteSet', set, null);
+  renderActiveNoteList();
+}
+function archiveNoteSetAndStartNew() {
+  const set = getActiveNoteSet();
+  if (!set.items.length) { toast('Nothing to archive yet'); return; }
+  if (!confirm('Archive this set of '+set.items.length+' note'+(set.items.length===1?'':'s')+' and start a fresh one? Archived notes are kept, read-only, further down this tab.')) return;
+  const now = new Date().toISOString();
+  set.status = 'archived'; set.archivedAt = now; set.updatedAt = now;
+  save(_env);
+  sbUpsert('trainerNoteSet', set, null);
+  const fresh = ensureActiveNoteSet(_env);
+  save(_env);
+  sbUpsert('trainerNoteSet', fresh, null);
+  renderNotesTab();
+  toast('Note set archived ✓ — fresh set started');
+}
+function renderArchivedNoteSetsList() {
+  const list = getArchivedNoteSets();
+  const el = document.getElementById('archivedNotesList');
+  const countEl = document.getElementById('archivedNotesCount');
+  if (countEl) countEl.textContent = list.length ? '('+list.length+')' : '';
+  if (!el) return;
+  if (!list.length) { el.innerHTML = '<div class="empty-state">No archived note sets yet</div>'; return; }
+  el.innerHTML = list.map(set => {
+    const lines = (set.items||[]).map(i => `<div style="font-size:11.5px;padding:3px 0;border-bottom:1px solid var(--border);${i.done?'text-decoration:line-through;color:var(--ink3)':''}">${escHtml(i.text)}</div>`).join('') || '<div class="li-meta">No notes in this set</div>';
+    return `<div class="list-item">
+      <div class="li-top"><div class="li-name">Archived ${fmtDate(set.archivedAt)}</div></div>
+      <div class="li-meta" style="margin-bottom:6px">${(set.items||[]).length} note${(set.items||[]).length===1?'':'s'}</div>
+      ${lines}
+    </div>`;
+  }).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3536,6 +3701,24 @@ function buildSessionDetailBlock(s) {
     ${s.notes ? '<div class="rpt-session-notes">Notes: '+escHtml(s.notes)+'</div>' : ''}
   </div>`;
 }
+// GYM-043: the report is one continuously flowing document (no fixed page
+// breaks — the browser paginates it), so "first page" isn't something we
+// can pin exactly. Placing this immediately after the header, before
+// Summary, is as close to a guarantee as that gives us — header + notes +
+// stat grid together are short enough to land on page 1 in practice.
+// Always pulled from the *current* active set regardless of the report's
+// date range, since these are forward-looking notes to raise, not a
+// historical record tied to any date.
+function buildReportNotesBlock() {
+  const set = getActiveNoteSet();
+  const items = (set.items||[]).filter(i => !i.done);
+  if (!items.length) return '';
+  const lines = items.map(i => `<div class="rpt-note-line">• ${escHtml(i.text)}</div>`).join('');
+  return `<div class="rpt-notes-block">
+    <div class="rpt-notes-title">📝 Notes for Trainer</div>
+    ${lines}
+  </div>`;
+}
 function buildReportHtml(start, end, sessions, weights, userName) {
   const totalSessions = sessions.length;
   const completed = sessions.filter(s => s.items.length && s.items.every(i=>i.status==='completed')).length;
@@ -3569,6 +3752,8 @@ function buildReportHtml(start, end, sessions, weights, userName) {
       <div class="rpt-title">${userName ? escHtml(userName)+"'s " : ''}Gym Tracker Report</div>
       <div class="rpt-sub">${fmtDate(start)} – ${fmtDate(end)} · generated ${fmtDate(todayISO())}</div>
     </div>
+
+    ${buildReportNotesBlock()}
 
     <div class="rpt-section-title">Summary</div>
     <div class="rpt-stat-grid">
