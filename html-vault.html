@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint.
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>HTML Vault v1.1</title>
+<title>HTML Vault v1.2</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='16' fill='%2334d399' text-anchor='middle'>&#128193;</text></svg>">
 <style>
   :root {
@@ -59,6 +59,8 @@
   .btn-danger{background:rgba(247,129,102,0.12);color:#f78166;border:1px solid rgba(247,129,102,0.3)}
   .btn-danger:hover{background:#f78166;color:#fff}
   .btn-sm{padding:5px 12px;font-size:12px;border-radius:6px}
+  .btn:disabled{opacity:0.35;cursor:default}
+  .btn:disabled:hover{opacity:0.35}
 
   .vault-grid{display:grid;grid-template-columns:1fr;gap:10px}
   @media (min-width:640px){.vault-grid{grid-template-columns:repeat(2,1fr)}}
@@ -111,7 +113,7 @@
       <span class="icon">🗂️</span>
       <div>
         <div>HTML Vault</div>
-        <div class="ver">v1.1</div>
+        <div class="ver">v1.2</div>
       </div>
     </div>
     <div class="header-actions">
@@ -178,7 +180,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ─────────────────────────────────────────────────────────────
-// HTML Vault v1.1 (HTV-001..HTV-007)
+// HTML Vault v1.2 (HTV-001..HTV-008)
 // A lightweight library for self-contained HTML "view" tools —
 // upload once, open full-screen from any device. Deliberately NOT
 // built on PalSync's generic table().pull()/push() sync engine:
@@ -259,15 +261,37 @@ function applyTheme(theme) {
 async function loadList() {
   try {
     const res = await PalSync.sbFetch(
-      TABLE + '?select=id,name,filename,size_bytes,created_at,updated_at&deleted=eq.false&order=created_at.desc',
+      TABLE + '?select=id,name,filename,size_bytes,created_at,updated_at,sort_order&deleted=eq.false&order=sort_order.asc.nullslast,created_at.desc',
       'GET'
     );
     if (!res.ok) throw new Error(PalSync.errorHint(res.status));
     items = await res.json();
+    await backfillSortOrder();
     renderList();
   } catch (e) {
     toast('Could not load library: ' + e.message);
     renderList();
+  }
+}
+
+// HTV-001: reorder needs a persisted position — timestamps don't survive
+// manual reordering. Existing rows (and anyone restoring an older JSON
+// backup that predates this column) will have sort_order = null. One-time,
+// lazy migration: assign 1..n in the order the list is currently shown
+// (nulls already sort last, after any already-numbered rows, so this
+// never visually jumps anything) and persist it. Runs at most once per
+// item, then every load is a plain ordered fetch.
+async function backfillSortOrder() {
+  const needsBackfill = items.some(function(it) { return it.sort_order == null; });
+  if (!needsBackfill) return;
+  let next = items.reduce(function(max, it) { return it.sort_order != null ? Math.max(max, it.sort_order) : max; }, 0) + 1;
+  for (const it of items) {
+    if (it.sort_order == null) {
+      it.sort_order = next++;
+      try {
+        await PalSync.sbFetch(TABLE + '?id=eq.' + it.id, 'PATCH', { sort_order: it.sort_order });
+      } catch (e) { /* best-effort — a fresh load will retry any that failed */ }
+    }
   }
 }
 
@@ -279,7 +303,9 @@ function renderList() {
       '<div class="empty-sub">Upload a self-contained .html file to get started</div></div>';
     return;
   }
-  area.innerHTML = '<div class="vault-grid">' + items.map(function(it) {
+  area.innerHTML = '<div class="vault-grid">' + items.map(function(it, idx) {
+    const isFirst = idx === 0;
+    const isLast  = idx === items.length - 1;
     return '<div class="item-card">' +
       '<div class="item-name">' + escapeHtml(it.name) + '</div>' +
       '<div class="item-meta">' +
@@ -290,6 +316,8 @@ function renderList() {
         '<button class="btn btn-primary btn-sm" data-action="open" data-id="' + escapeHtml(it.id) + '">Open</button>' +
         '<button class="btn btn-secondary btn-sm" data-action="rename" data-id="' + escapeHtml(it.id) + '">Rename</button>' +
         '<button class="btn btn-danger btn-sm" data-action="archive" data-id="' + escapeHtml(it.id) + '">Archive</button>' +
+        '<button class="btn btn-secondary btn-sm" data-action="moveup" data-id="' + escapeHtml(it.id) + '"' + (isFirst ? ' disabled' : '') + ' title="Move up">↑</button>' +
+        '<button class="btn btn-secondary btn-sm" data-action="movedown" data-id="' + escapeHtml(it.id) + '"' + (isLast ? ' disabled' : '') + ' title="Move down">↓</button>' +
       '</div>' +
     '</div>';
   }).join('') + '</div>';
@@ -304,7 +332,7 @@ function renderList() {
 // in-memory items array instead.
 document.getElementById('listArea').addEventListener('click', function(e) {
   const btn = e.target.closest('[data-action]');
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   const id = btn.dataset.id;
   const action = btn.dataset.action;
   const item = items.find(function(i) { return i.id === id; });
@@ -312,7 +340,27 @@ document.getElementById('listArea').addEventListener('click', function(e) {
   if (action === 'open') openTool(id, item.name);
   else if (action === 'rename') openRenameModal(id, item.name);
   else if (action === 'archive') archiveItem(id);
+  else if (action === 'moveup') moveItem(id, -1);
+  else if (action === 'movedown') moveItem(id, 1);
 });
+
+// HTV-001: swap this item's sort_order with its neighbour rather than
+// renumbering the whole list — two PATCH calls regardless of list size,
+// and no risk of a half-renumbered list if one request fails partway.
+async function moveItem(id, direction) {
+  const idx = items.findIndex(function(i) { return i.id === id; });
+  const swapIdx = idx + direction;
+  if (idx === -1 || swapIdx < 0 || swapIdx >= items.length) return;
+  const a = items[idx], b = items[swapIdx];
+  const aOrder = a.sort_order, bOrder = b.sort_order;
+  try {
+    await PalSync.sbFetch(TABLE + '?id=eq.' + a.id, 'PATCH', { sort_order: bOrder, updated_at: new Date().toISOString() });
+    await PalSync.sbFetch(TABLE + '?id=eq.' + b.id, 'PATCH', { sort_order: aOrder, updated_at: new Date().toISOString() });
+    loadList();
+  } catch (e) {
+    toast('Reorder failed: ' + e.message);
+  }
+}
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, function(c) {
@@ -337,6 +385,11 @@ function handleFileUpload(event) {
     const html = reader.result;
     const baseName = file.name.replace(/\.html?$/i, '');
     const now = new Date().toISOString();
+    // HTV-001: append new uploads to the end of the current manual order
+    // (max existing sort_order + 1) rather than the old newest-first
+    // placement — once ordering is user-controlled, a new upload jumping
+    // to the top would undo whatever order was just set up.
+    const nextOrder = items.reduce(function(max, it) { return it.sort_order != null ? Math.max(max, it.sort_order) : max; }, 0) + 1;
     const row = {
       id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()),
       user_id: PalSync.getUserId(),
@@ -346,7 +399,8 @@ function handleFileUpload(event) {
       size_bytes: file.size,
       created_at: now,
       updated_at: now,
-      deleted: false
+      deleted: false,
+      sort_order: nextOrder
     };
     try {
       const res = await PalSync.sbFetch(TABLE, 'POST', row);
