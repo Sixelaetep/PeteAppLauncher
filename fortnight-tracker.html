@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.44</title>
+<title>9-Day Fortnight Tracker v3.45</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -469,7 +469,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.44</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.45</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -763,6 +763,19 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.45 (FT-040): new Capex tracker card at the top of the Timesheet
+// tab. Codes with code '0001' count as opex, any other code counts as
+// capex (a code with no value set defaults to opex rather than silently
+// counting as capex). One editable target % (a new global setting,
+// _store.data.settings.capexTargetPct — not per-bundle, not per-year),
+// tracked against two live scopes at once per Pete's call: the bundle
+// currently open, and the tax year to date (own prev/next nav, separate
+// from the Leave tab's year — defaults to the current tax year).
+// Includes draft/unsubmitted allocations as they're typed, not just
+// submitted weeks, so it moves live as the timesheet is built up.
+// Pre-3.45 backups get an empty settings object on load (no target set,
+// cards show "Set a target to track" until Pete enters one).
+//
 // v3.44 (FT-039): the Holiday allowance card's remaining/over hours line
 // now shows a days-equivalent line underneath it too, matching the
 // convention already used for the Holiday/Sick totals above it (hrs/8).
@@ -1219,7 +1232,7 @@ function pullFromCloud(cb) {
 
 // ── STORAGE ABSTRACTION ──────────────────────────────────────────────────────
 var SKEY = 'fn_tracker_v5';
-var _store = { version: 1, lastUpdated: '', lastExported: '', data: { bundles: [], codes: [], leave: [], bankHolidays: [], leaveAllowances: [] } };
+var _store = { version: 1, lastUpdated: '', lastExported: '', data: { bundles: [], codes: [], leave: [], bankHolidays: [], leaveAllowances: [], settings: { capexTargetPct: null } } };
 
 function load() {
   try {
@@ -1239,6 +1252,7 @@ function load() {
     if (!Array.isArray(_store.data.leave)) _store.data.leave = []; // FT-026: pre-3.34 backups have no leave records
     if (!Array.isArray(_store.data.bankHolidays)) _store.data.bankHolidays = []; // FT-030: pre-3.36 backups have no bank holidays
     if (!Array.isArray(_store.data.leaveAllowances)) _store.data.leaveAllowances = []; // FT-038: pre-3.41 backups have no allowances
+    if (!_store.data.settings || typeof _store.data.settings !== 'object') _store.data.settings = { capexTargetPct: null }; // FT-040: pre-3.45 backups have no settings
     _store.data.bundles.forEach(function(b) { migrateDays(b); });
   } catch(e) {}
 }
@@ -1601,6 +1615,40 @@ function seedCodesIfEmpty(){
 }
 function codeById(id){ for(var i=0;i<codes.list.length;i++) if(codes.list[i].id===id) return codes.list[i]; return null; }
 function activeCodes(){ return codes.list.filter(function(c){ return !c.archived; }); }
+// FT-040: code '0001' = opex, any other non-blank code = capex. A
+// deleted/missing code, or a code with no value set, defaults to opex —
+// safer than silently counting unclassified time toward the capex %.
+function isCapexCode(c){ return !!(c && c.code && c.code!=='0001'); }
+function capexOpexMins(days){
+  var capex=0, opex=0;
+  days.forEach(function(d){
+    (d.alloc||[]).forEach(function(a){
+      var mins=a.mins||0; if(!mins) return;
+      if(isCapexCode(codeById(a.codeId))) capex+=mins; else opex+=mins;
+    });
+  });
+  return { capex:capex, opex:opex, total:capex+opex };
+}
+// FT-040: same aggregation across every visible bundle's days falling in
+// the given tax year — mirrors leaveEntriesForYear's tax-year scoping.
+function capexOpexMinsForYear(startYear){
+  var capex=0, opex=0;
+  visibleBundles().forEach(function(b){
+    b.days.forEach(function(d){
+      if(!inTaxYear(normDate(d.date), startYear)) return;
+      (d.alloc||[]).forEach(function(a){
+        var mins=a.mins||0; if(!mins) return;
+        if(isCapexCode(codeById(a.codeId))) capex+=mins; else opex+=mins;
+      });
+    });
+  });
+  return { capex:capex, opex:opex, total:capex+opex };
+}
+function setCapexTarget(pct){
+  if(!_store.data.settings) _store.data.settings={};
+  _store.data.settings.capexTargetPct = pct;
+  saveLocal();
+}
 function autoCodeFor(status){
   var flag = status==='sick' ? 'autoSick' : 'autoHoliday';
   for(var i=0;i<codes.list.length;i++) if(codes.list[i][flag] && !codes.list[i].archived) return codes.list[i];
@@ -2515,6 +2563,60 @@ function addCustomBankHol(){
   toast('Bank holiday added \u2713','ok');
 }
 
+// FT-040: which tax year the Capex tracker's tax-year card is showing —
+// independent of currentLeaveYear so browsing Leave doesn't move this.
+var tsCapexYear=null;
+function changeTsCapexYear(delta){ tsCapexYear+=delta; render(); }
+function onCapexTargetChange(el){
+  var val=el.value.trim();
+  var num = val===''?null:Math.max(0,Math.min(100,+val||0));
+  setCapexTarget(num);
+  render();
+}
+// One stat block's value + sub-line: '%' vs target, or a placeholder
+// when there's nothing logged yet for that scope.
+function capexPctBodyHtml(pct,target,total){
+  if(!total) return '<div class="leave-card-val">\u00b7</div><div class="leave-card-sub">No hours logged yet</div>';
+  var onTarget = target!=null && pct>=target;
+  var col = target==null ? 'var(--text)' : (onTarget?'var(--green)':'var(--amber)');
+  var h='<div class="leave-card-val" style="color:'+col+'">'+pct.toFixed(1)+'%</div>';
+  if(target!=null){
+    var diff=pct-target;
+    h+='<div class="leave-card-sub" style="color:'+col+';font-weight:600;">'+(diff>=0?'+':'')+diff.toFixed(1)+'pts vs '+target+'% target</div>';
+  } else {
+    h+='<div class="leave-card-sub">Set a target to track</div>';
+  }
+  return h;
+}
+// FT-040: capex-vs-target tracker — one card for the bundle currently
+// open on the Timesheet tab, one for the tax year to date (own year
+// nav, defaults to the current tax year). Includes drafts as well as
+// submitted weeks, per Pete's call — it's a live running % as codes are
+// allocated, not just an after-the-fact submitted total.
+function renderCapexTracker(b){
+  var target=(_store.data.settings&&_store.data.settings.capexTargetPct!=null)?_store.data.settings.capexTargetPct:null;
+  if(tsCapexYear===null) tsCapexYear=taxYearStart(isoDate(new Date()));
+  var bs=capexOpexMins(b.days);
+  var bPct=bs.total?(bs.capex/bs.total*100):null;
+  var ys=capexOpexMinsForYear(tsCapexYear);
+  var yPct=ys.total?(ys.capex/ys.total*100):null;
+  var h='<div class="cm-card" style="margin-bottom:12px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px"><span class="ts-week-title">Capex tracker</span></div>';
+  h+='<div class="leave-allow-row" style="border-top:none;padding-top:0;">'
+    +'<label>Target capex %</label>'
+    +'<input type="number" min="0" max="100" step="1" class="extra-sel leave-allow-input" value="'+(target!=null?target:'')+'" placeholder="%" onchange="onCapexTargetChange(this)">'
+    +'</div>';
+  h+='<div class="leave-summary">';
+  h+='<div class="cm-card leave-card"><div class="leave-card-lbl" style="color:var(--teal)">This bundle</div>'
+    +capexPctBodyHtml(bPct,target,bs.total)+'</div>';
+  h+='<div class="cm-card leave-card"><div class="leave-card-lbl" style="color:var(--purple)">Tax year'
+    +' <button class="cm-btn" style="padding:1px 6px;font-size:.6rem;margin:0 2px" onclick="event.stopPropagation();changeTsCapexYear(-1)">&#8249;</button>'
+    +'<span style="font-weight:400;font-size:.62rem;">'+taxYearLabel(tsCapexYear)+'</span>'
+    +'<button class="cm-btn" style="padding:1px 6px;font-size:.6rem;margin:0 2px" onclick="event.stopPropagation();changeTsCapexYear(1)">&#8250;</button>'
+    +'</div>'+capexPctBodyHtml(yPct,target,ys.total)+'</div>';
+  h+='</div></div>';
+  return h;
+}
 function renderTimesheet(root){
   var b=tsBundle();
   var wrap=document.createElement('div');
@@ -2533,6 +2635,8 @@ function renderTimesheet(root){
     +'<span class="ts-nav-label">'+bundleLabel+'<span class="ts-nav-sub">'+esc(dateFrom)+' \u2013 '+esc(dateTo)+'</span></span>'
     +'<button class="ts-nav-btn" onclick="tsNavNext()"'+(bi<=0?' disabled':'')+'>Next &#8250;</button>'
     +'</div>';
+
+  h+=renderCapexTracker(b);
 
   [1,2].forEach(function(w){
     var target=tsWeekTarget(w);
