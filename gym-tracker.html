@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.55</title>
+<title>Gym Tracker v2.56</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.55</div></span>
+      <span>Gym Tracker<div class="ver">v2.56</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -391,6 +391,11 @@
     <div class="section-title" style="margin-top:0">📄 PDF Report</div>
     <p style="font-size:11.5px;color:var(--ink2);line-height:1.5;margin-bottom:8px">Pick a date range and generate a printable summary of sessions, body-area insights, and weight trend — useful to share with a trainer.</p>
     <button class="btn btn-secondary btn-block" onclick="openReportModal()">📄 Generate Report</button>
+
+    <div class="section-title" style="margin-top:20px">🧑‍🏫 Personal Trainer</div>
+    <div id="ptSummary" style="font-size:12px;color:var(--ink2);margin-bottom:8px"></div>
+    <button class="btn btn-secondary btn-block" onclick="openPTModal()">+ Log PT Session</button>
+    <div id="ptSessionList" style="margin-top:10px"></div>
 
     <div class="section-title" style="margin-top:20px">🎯 What To Train Next</div>
     <div id="nextUpList"></div>
@@ -607,6 +612,21 @@
       <button class="btn btn-primary" style="flex:1" onclick="saveWeightEntry()">Save</button>
     </div>
     <p style="font-size:11px;color:var(--ink3);margin-top:10px;text-align:center">Saving copies the weight to your clipboard — paste it into your Shortcut or Health app manually.</p>
+  </div>
+</div>
+
+<!-- ═══ PT SESSION MODAL (GYM-053) ═══ -->
+<div class="modal-overlay" id="modalPT" onclick="if(event.target===this)closeModal('modalPT')">
+  <div class="modal">
+    <div class="modal-title"><span id="ptModalTitle">Log PT Session</span><button class="modal-close" onclick="closeModal('modalPT')">✕</button></div>
+    <input type="hidden" id="ptEditId">
+    <label>Date</label>
+    <input type="date" id="ptDate">
+    <label>Notes <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional)</span></label>
+    <textarea id="ptNotes" placeholder="What you worked on, cues from the trainer, anything to follow up on…"></textarea>
+    <div class="btn-row">
+      <button class="btn btn-primary" style="flex:1" onclick="savePTSession()">Save</button>
+    </div>
   </div>
 </div>
 
@@ -898,6 +918,27 @@
 // timestamp), a race-free sync can still show it that way — the v2.49
 // Restore button is the deliberate fix for that, not something this
 // silently auto-corrects.
+// v2.56 (GYM-052, GYM-053): two additions.
+// GYM-052 — scheduled plan rows in the calendar/day view now show the
+// plan's estimated total time (sum of each exercise's Est. time, set in
+// the plan editor) as a badge next to the plan name, e.g. "⏱ ~45 min".
+// Only shown when at least one exercise in the plan has a nonzero
+// estimate; nothing new to set up, it reads the same estimatedMinutes
+// field the plan editor already had.
+// GYM-053 — new Personal Trainer log: a simple date+notes record,
+// logged from a new section on the Insights tab ("+ Log PT Session"),
+// answering "how long since I saw the trainer" and "how many workouts
+// since then". Same stat is folded into the PDF report's Summary grid
+// as "Since Last PT Session", computed against all-time session data
+// regardless of the report's own date range. Ships as a new local data
+// array (ptSessions) with its own soft-delete tombstones, JSON backup
+// support, and sync table (gym_pt_sessions) following the exact pattern
+// of every other Gym Tracker collection — NOTE: that Supabase table
+// doesn't exist yet, so PT sessions save and work fully offline/locally
+// but won't sync across devices until gym_pt_sessions is created with
+// the same RLS as the other gym_* tables (auth.uid()=user_id). Until
+// then, sbUpsert/pull for kind 'ptSession' will log a (harmless) sync
+// error rather than throwing.
 // v2.55 (GYM-051): scheduled-but-not-yet-done plan rows in the calendar/
 // day view now have their own "N exercises — show ▾" toggle, expanding
 // to a read-only list of exercise names and target set counts. Lets you
@@ -953,7 +994,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.55';
+const VERSION = '2.56';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -979,7 +1020,7 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], starterDismissed: false }
   };
 }
 
@@ -999,6 +1040,7 @@ function load() {
       env.data.weightEntries = parsed.data.weightEntries || [];
       env.data.scheduleEntries = parsed.data.scheduleEntries || [];
       env.data.trainerNoteSets = parsed.data.trainerNoteSets || [];
+      env.data.ptSessions = parsed.data.ptSessions || []; // GYM-053: absent in pre-v2.56 backups
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
@@ -1163,6 +1205,9 @@ const getSessions   = () => _env.data.sessions.filter(s => !s._deleted);
 const getWeightEntries = () => _env.data.weightEntries.filter(w => !w._deleted).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
 const getScheduleEntries = () => _env.data.scheduleEntries.filter(e => !e._deleted);
 const getNoteSets = () => _env.data.trainerNoteSets.filter(s => !s._deleted);
+// GYM-053: sorted ascending by date so the last element is always the
+// most recently logged PT session, same convention as getWeightEntries().
+const getPTSessions = () => _env.data.ptSessions.filter(p => !p._deleted).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
 const getActiveNoteSet = () => getNoteSets().find(s => s.status==='active') || ensureActiveNoteSet(_env);
 const getArchivedNoteSets = () => getNoteSets().filter(s => s.status==='archived').sort((a,b)=>(b.archivedAt||'').localeCompare(a.archivedAt||''));
 const oneOffEntriesForDate = date => getScheduleEntries().filter(e => !e.kind && e.date === date);
@@ -1343,8 +1388,14 @@ const _gymSessions  = window.PalSync.table('gym_sessions');
 const _gymWeight    = window.PalSync.table('gym_weight');
 const _gymSchedule  = window.PalSync.table('gym_schedule');
 const _gymTrainerNotes = window.PalSync.table('gym_trainer_notes'); // GYM-043
-const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes };
-const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets' };
+// GYM-053: new Supabase table required — 'gym_pt_sessions', same shape/RLS
+// as the other gym_* tables (auth.uid()=user_id). Until that table exists,
+// PT sessions save and work fine locally but sbUpsert/pullFromCloud calls
+// for kind 'ptSession' will fail (404) the same way any missing table
+// would — logged to the sync panel, not thrown.
+const _gymPT = window.PalSync.table('gym_pt_sessions');
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -1431,7 +1482,7 @@ function pullFromCloud(cb) {
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet'];
+  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession'];
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
@@ -1501,12 +1552,12 @@ function manualPush() {
   // from another device, resurrecting something that was deleted elsewhere.
   pullFromCloud(() => {
     window.PalSync.flushRetryQueue().then(renderSyncPanel);
-    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets'].forEach(k => total += _env.data[k].length);
+    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions'].forEach(k => total += _env.data[k].length);
     if (!total) { toast('Nothing to push'); return; }
     setSyncStatus('syncing');
     slog('Manual push — '+total+' record(s)');
     let done = 0, errors = 0;
-    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets]].forEach(([kind, arr]) => {
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions]].forEach(([kind, arr]) => {
       arr.forEach(rec => sbUpsert(kind, rec, ok => {
         if (!ok) errors++;
         done++;
@@ -2447,10 +2498,14 @@ function renderCalendar() {
         const itemId = r.type === 'repeat' ? r.rule.id : r.entry.id;
         const n = (plan.items||[]).length;
         const previewOpen = _expandedPlanPreviews.has(plan.id);
+        const totalMin = planTimeTotal(plan.items||[]);
         return `<div class="cal-plan-row">
           <div class="cal-plan-tap" onclick="openScheduleEdit('${r.type}','${itemId}','${date}')">
             <div class="cal-plan-name">${escHtml(plan.name)}</div>
-            ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}</div>` : ''}
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              ${totalMin>0 ? `<div class="cal-repeat-badge">⏱ ~${totalMin} min</div>` : ''}
+              ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}</div>` : ''}
+            </div>
           </div>
           <div class="session-detail-toggle" onclick="event.stopPropagation();togglePlanPreview('${plan.id}')">${previewOpen ? 'Hide exercises ▲' : n+' exercise'+(n===1?'':'s')+' — show ▾'}</div>
           ${previewOpen ? `<div style="margin-top:4px">${planPreviewRows(plan)}</div>` : ''}
@@ -3630,6 +3685,7 @@ function sortAreasSpaLast(areas) {
 function renderInsights() {
   renderNextUpCard();
   renderWeightSection();
+  renderPTSection();
   const {areaTotals, areaTags} = computeInsights(_insightsWindow);
   const areas = sortAreasSpaLast(Object.keys(areaTotals).filter(a => a!=='Other' || areaTags['Other'].length).sort((a,b)=>areaTotals[b]-areaTotals[a]));
   const el = document.getElementById('insightsList');
@@ -3761,6 +3817,96 @@ function renderWeightSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// PERSONAL TRAINER SESSIONS (GYM-053) — a simple date+notes log, kept
+// deliberately separate from workout sessions: a PT session isn't
+// itself a logged workout, it's a marker used to answer "how long since
+// I last saw the trainer" / "how many workouts have I done since then".
+// Same CRUD shape as weight entries (soft-delete tombstones, own sync
+// table) for consistency with the rest of the suite.
+// ═══════════════════════════════════════════════════════════════════
+function lastPTSession() {
+  const pts = getPTSessions();
+  return pts.length ? pts[pts.length-1] : null;
+}
+// Deliberately computed against ALL logged sessions ever, not the
+// Insights window or a report's date range — "since last PT" is an
+// open-ended count from an event, not a fixed-period stat. A session
+// logged on the same date as the PT visit itself isn't counted (the PT
+// visit is the reference point, not day zero of the count).
+function workoutsSincePT() {
+  const last = lastPTSession();
+  if (!last) return null;
+  return getSessions().filter(s => s.date > last.date).length;
+}
+function openPTModal(id) {
+  document.getElementById('ptEditId').value = id||'';
+  const entries = getPTSessions();
+  if (id) {
+    const p = entries.find(x=>x.id===id);
+    document.getElementById('ptModalTitle').textContent = 'Edit PT Session';
+    document.getElementById('ptDate').value = p.date;
+    document.getElementById('ptNotes').value = p.notes||'';
+  } else {
+    document.getElementById('ptModalTitle').textContent = 'Log PT Session';
+    document.getElementById('ptDate').value = todayISO();
+    document.getElementById('ptNotes').value = '';
+  }
+  openModal('modalPT');
+}
+function savePTSession() {
+  const date = document.getElementById('ptDate').value || todayISO();
+  const notes = document.getElementById('ptNotes').value.trim();
+  const id = document.getElementById('ptEditId').value;
+  const now = new Date().toISOString();
+  let record;
+  if (id) {
+    record = _env.data.ptSessions.find(x=>x.id===id);
+    record.date = date; record.notes = notes; record.updatedAt = now;
+  } else {
+    record = { id: uid('pt'), date, notes, createdAt: now, updatedAt: now };
+    _env.data.ptSessions.push(record);
+  }
+  save(_env);
+  sbUpsert('ptSession', record, null);
+  closeModal('modalPT');
+  renderPTSection();
+  toast('PT session logged ✓');
+}
+function deletePTSession(id) {
+  if (!confirm('Delete this PT session record?')) return;
+  const p = _env.data.ptSessions.find(x=>x.id===id);
+  p._deleted = true; p.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('ptSession', p, null);
+  renderPTSection();
+  toast('PT session deleted');
+}
+function renderPTSection() {
+  const summaryEl = document.getElementById('ptSummary');
+  const listEl = document.getElementById('ptSessionList');
+  if (!summaryEl || !listEl) return;
+  const entries = getPTSessions();
+  const last = lastPTSession();
+  if (!last) {
+    summaryEl.textContent = 'No PT sessions logged yet.';
+  } else {
+    const since = workoutsSincePT();
+    summaryEl.innerHTML = 'Last PT session: <strong>'+fmtDate(last.date)+'</strong> · '+since+' workout'+(since===1?'':'s')+' since';
+  }
+  const recent = entries.slice().reverse().slice(0,10);
+  listEl.innerHTML = recent.map(p => `<div class="list-item">
+      <div class="li-top"><div>
+        <div class="li-name">🧑‍🏫 PT Session</div>
+        <div class="li-meta">${fmtDate(p.date)}${p.notes?' · '+escHtml(p.notes):''}</div>
+      </div></div>
+      <div class="li-actions">
+        <button class="btn btn-secondary btn-sm" onclick="openPTModal('${p.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePTSession('${p.id}')">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // PDF REPORT (GYM-027) — builds a print-optimized view and hands off to
 // the browser's native print dialog; "Save as PDF" from there produces a
 // real PDF with no library dependency, consistent with the hand-rolled
@@ -3879,6 +4025,13 @@ function buildReportHtml(start, end, sessions, weights, userName) {
   const durations = sessions.map(sessionDurationMinutes).filter(m=>m!=null);
   const avgDuration = durations.length ? Math.round(durations.reduce((a,b)=>a+b,0)/durations.length) : null;
   const spaCount = sessions.filter(s=>isSpaOnlyItemSet(s.items)).length;
+  // GYM-053: deliberately NOT scoped to the report's start/end range —
+  // this answers "how long since I last saw the trainer", which only
+  // makes sense measured against all-time data regardless of what
+  // window the report itself was generated for.
+  const ptLast = lastPTSession();
+  const ptStatVal = ptLast ? String(workoutsSincePT()) : '—';
+  const ptStatNote = ptLast ? 'since '+fmtDate(ptLast.date) : 'no PT sessions logged';
 
   const {areaTotals, areaTags} = computeInsightsFromSessions(sessions);
   const areas = sortAreasSpaLast(Object.keys(areaTotals).filter(a => areaTotals[a] > 0 || (a!=='Other')).sort((a,b)=>areaTotals[b]-areaTotals[a]));
@@ -3915,6 +4068,7 @@ function buildReportHtml(start, end, sessions, weights, userName) {
       <div class="rpt-stat"><div class="rpt-stat-label">Exercises Logged</div><div class="rpt-stat-val">${totalExercises}</div></div>
       <div class="rpt-stat"><div class="rpt-stat-label">Avg Duration</div><div class="rpt-stat-val">${avgDuration?avgDuration+' min':'—'}</div></div>
       <div class="rpt-stat"><div class="rpt-stat-label">Spa Sessions</div><div class="rpt-stat-val">${spaCount}</div></div>
+      <div class="rpt-stat"><div class="rpt-stat-label">Since Last PT Session</div><div class="rpt-stat-val">${ptStatVal}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${ptStatNote}</div></div>
     </div>
 
     <div class="rpt-section-title">Body Areas Worked</div>
@@ -4017,6 +4171,7 @@ function importJSON(event) {
         // overwrite them once that device's edit reaches the cloud later
         // — restoring a backup is authoritative for this collection.
         _env.data.trainerNoteSets = _env.data.trainerNoteSets || [];
+        _env.data.ptSessions = _env.data.ptSessions || []; // GYM-053: absent in pre-v2.56 backups
         const importNow = new Date().toISOString();
         _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
         ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
