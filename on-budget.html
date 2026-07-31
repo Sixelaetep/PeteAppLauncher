@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.55</title>
+<title>On Budget v3.56</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -359,7 +359,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.55</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.56</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -915,7 +915,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.55
+// On Budget v3.56
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1378,6 +1378,39 @@
 // enough history exists (trend/average/left-over need 2+ completed
 // months; top shops need any labelled spending), so sparse data
 // degrades gracefully rather than showing empty charts.
+// v3.56 (ON--056): Bundle 1 (sync completeness & safety) from the full
+// review — closes the last gap flagged in the very first sync audit.
+// (1) bills.recurring, bills.overrides, bills.scenarios, and
+// savings.goals never got the tombstone-resurrection guard that
+// bills.tx/savings.tx got in v3.49 — deliberately deprioritised at the
+// time since none of them back a stored counter, so a resurrection there
+// is cosmetic (an item reappearing) rather than a silent balance
+// mismatch. Closed properly now: deletedRecurringLog/deletedOverrideLog/
+// deletedScenarioLog/deletedGoalLog, each with its own
+// enforceXDeletionGuard() and post-pull re-confirmation sweep, exact same
+// shape as the three that already existed — duplicated rather than
+// abstracted (consolidating the now-7x-duplicated pattern is deliberately
+// separate work, not bundled in here). ftLabels (the shop-list quick-pick
+// labels) stays out of scope — same reasoning, no stored counter depends
+// on it, and it wasn't part of what was flagged.
+// (2) Added checkClearedBalanceDrift() — a read-only sanity check, not a
+// fix. It never touches clearedBalance, just compares the stored figure
+// against what the cleared transaction history actually sums to, and
+// logs a visible warning (with both figures) if they've drifted apart by
+// more than a penny. Runs at boot, after import, and after every pull.
+// A real mismatch here means either an undiscovered bug or (more likely
+// day to day) that the manual reconcile screen was used, which
+// deliberately overrides drift by design — the log line shows both
+// figures so it's obvious which is at play.
+// (3) Looked hard at bills.settings' blind-upsert-on-every-push pattern
+// (the narrow two-device-same-second race flagged in the full review)
+// and deliberately did NOT change it this release — the fix (re-pull-
+// merging a single settings row before every push) would add a network
+// round trip to every quick edit for a benefit that only matters if
+// Bills is being edited from two devices within the same few seconds,
+// which for a Pete-only app is rare. Flagged for a separate decision
+// rather than building it unprompted.
+// ══════════════════════════════════════════════════════════════
 // v3.55 (ON--055): Food & Travel's Pot remaining + Headroom, previously
 // two side-by-side cards at reduced padding/font-size, now match Bills'
 // Cleared-balance/Lowest-projected card exactly (same v3.54 pattern) —
@@ -1697,6 +1730,16 @@ let deletedTxLog = {};
 // leg is exactly this same failure shape.
 let deletedBillsTxLog = {};
 let deletedSavingsTxLog = {};
+// v3.56 (ON--056): closing the last gap from the original sync review —
+// these four collections never got the resurrection guard, since none of
+// them back a stored counter (unlike bills.tx), so a resurrection there
+// is cosmetic (an item reappearing) rather than a silent balance
+// mismatch. Still worth closing properly rather than leaving asymmetric
+// protection across the app.
+let deletedRecurringLog = {};
+let deletedOverrideLog = {};
+let deletedScenarioLog = {};
+let deletedGoalLog = {};
 
 // meta is app housekeeping, not user data — not part of settings/months/
 // bills. changesSinceBackup is kept only for backward-compat with older
@@ -2123,6 +2166,17 @@ async function syncPull() {
     // already a flat array locally, so these map onto pal-sync directly.
     const recurResult = await _obBillsRec.pull(bills.recurring, 'id', 'updated_at', rows);
     bills.recurring = recurResult.merged;
+    // v3.56 (ON--056): same guard + re-confirmation sweep pattern as
+    // bills.tx/savings.tx below, extended to the four collections that
+    // didn't have it — see deletedRecurringLog declaration for why.
+    enforceRecurringDeletionGuard(false);
+    let recurTombstoneConfirmed = 0;
+    bills.recurring.forEach(r => {
+      if (!r._deleted) return;
+      const cloudRow = byKey['billsrecur_' + r.id];
+      if (!(cloudRow && cloudRow.data && cloudRow.data._deleted)) { syncTombstoneBillsRecur(r); recurTombstoneConfirmed++; }
+    });
+    if (recurTombstoneConfirmed) addSyncLog(`Re-confirmed ${recurTombstoneConfirmed} recurring-item delete(s) not yet on cloud`,'info');
     const billsTxResult = await _obBillsTx.pull(bills.tx, 'id', 'updated_at', rows);
     bills.tx = billsTxResult.merged;
     // v3.49 (ON--051): same resurrection guard + re-confirmation sweep as
@@ -2139,10 +2193,36 @@ async function syncPull() {
 
     const overrideResult = await _obBillsOv.pull(bills.overrides, 'id', 'updated_at', rows);
     bills.overrides = overrideResult.merged;
+    enforceOverrideDeletionGuard(false);
+    let overrideTombstoneConfirmed = 0;
+    bills.overrides.forEach(o => {
+      if (!o._deleted) return;
+      const cloudRow = byKey['billsoverride_' + o.id];
+      if (!(cloudRow && cloudRow.data && cloudRow.data._deleted)) { syncTombstoneBillsOverride(o); overrideTombstoneConfirmed++; }
+    });
+    if (overrideTombstoneConfirmed) addSyncLog(`Re-confirmed ${overrideTombstoneConfirmed} override delete(s) not yet on cloud`,'info');
+
     const scenarioResult = await _obScenarios.pull(bills.scenarios, 'id', 'updated_at', rows);
     bills.scenarios = scenarioResult.merged;
+    enforceScenarioDeletionGuard(false);
+    let scenarioTombstoneConfirmed = 0;
+    bills.scenarios.forEach(s => {
+      if (!s._deleted) return;
+      const cloudRow = byKey['billsscenario_' + s.id];
+      if (!(cloudRow && cloudRow.data && cloudRow.data._deleted)) { syncTombstoneScenario(s); scenarioTombstoneConfirmed++; }
+    });
+    if (scenarioTombstoneConfirmed) addSyncLog(`Re-confirmed ${scenarioTombstoneConfirmed} scenario delete(s) not yet on cloud`,'info');
+
     const savingsGoalResult = await _obSavingsGoals.pull(savings.goals, 'id', 'updated_at', rows);
     savings.goals = savingsGoalResult.merged;
+    enforceGoalDeletionGuard(false);
+    let goalTombstoneConfirmed = 0;
+    savings.goals.forEach(g => {
+      if (!g._deleted) return;
+      const cloudRow = byKey['savingsgoal_' + g.id];
+      if (!(cloudRow && cloudRow.data && cloudRow.data._deleted)) { syncTombstoneSavingsGoal(g); goalTombstoneConfirmed++; }
+    });
+    if (goalTombstoneConfirmed) addSyncLog(`Re-confirmed ${goalTombstoneConfirmed} savings-goal delete(s) not yet on cloud`,'info');
     const savingsTxResult = await _obSavingsTx.pull(savings.tx, 'id', 'updated_at', rows);
     savings.tx = savingsTxResult.merged;
     // v3.49 (ON--051): same guard + sweep for savings.tx.
@@ -2164,6 +2244,9 @@ async function syncPull() {
     // A cloud row can still carry an old food/travel tag if it was
     // pushed by a device that hasn't upgraded past v2.7 yet.
     migrateCategories();
+    // v3.56 (ON--056): read-only sanity check, after everything above has
+    // settled — bills.tx and bills.settings are both fully merged by now.
+    checkClearedBalanceDrift();
     save();
     renderDash();
     populateSettings();
@@ -2248,15 +2331,29 @@ function load() {
     // v3.49 (ON--051): same backward-compatibility default for the two new logs.
     deletedBillsTxLog = d.deletedBillsTxLog || {};
     deletedSavingsTxLog = d.deletedSavingsTxLog || {};
+    // v3.56 (ON--056): same, for the four collections closing the last gap.
+    deletedRecurringLog = d.deletedRecurringLog || {};
+    deletedOverrideLog = d.deletedOverrideLog || {};
+    deletedScenarioLog = d.deletedScenarioLog || {};
+    deletedGoalLog = d.deletedGoalLog || {};
   } catch(e) {}
   migrateCategories();
   backfillSyncTimestamps();
   pruneDeletedTxLog();
   pruneDeletedBillsTxLog();
   pruneDeletedSavingsTxLog();
+  pruneDeletedRecurringLog();
+  pruneDeletedOverrideLog();
+  pruneDeletedScenarioLog();
+  pruneDeletedGoalLog();
   enforceDeletionGuard(); // ON--050: catch a resurrection sitting in localStorage even before any pull runs
   enforceBillsTxDeletionGuard(); // v3.49 (ON--051): same, for bills.tx
   enforceSavingsTxDeletionGuard(); // v3.49 (ON--051): same, for savings.tx
+  enforceRecurringDeletionGuard(); // v3.56 (ON--056): same, for recurring items
+  enforceOverrideDeletionGuard(); // v3.56 (ON--056): same, for occurrence overrides
+  enforceScenarioDeletionGuard(); // v3.56 (ON--056): same, for saved scenarios
+  enforceGoalDeletionGuard(); // v3.56 (ON--056): same, for savings goals
+  checkClearedBalanceDrift(); // v3.56 (ON--056): read-only sanity check at boot too, not just after a pull
 }
 
 // v2.8 simplified the three spend categories (Food/Travel/Other) down to
@@ -2403,8 +2500,8 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.55', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
-    data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog }, meta,
+    version:'3.56', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog, deletedGoalLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
   // Notify launcher so the dashboard card refreshes live
@@ -2412,7 +2509,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.55', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.56', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog, deletedGoalLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2446,6 +2543,11 @@ function importJSON(e) {
       // v3.49 (ON--051): same union-merge for the two new logs.
       deletedBillsTxLog = { ...deletedBillsTxLog, ...(d.deletedBillsTxLog||{}) };
       deletedSavingsTxLog = { ...deletedSavingsTxLog, ...(d.deletedSavingsTxLog||{}) };
+      // v3.56 (ON--056): same, for the four collections closing the last gap.
+      deletedRecurringLog = { ...deletedRecurringLog, ...(d.deletedRecurringLog||{}) };
+      deletedOverrideLog = { ...deletedOverrideLog, ...(d.deletedOverrideLog||{}) };
+      deletedScenarioLog = { ...deletedScenarioLog, ...(d.deletedScenarioLog||{}) };
+      deletedGoalLog = { ...deletedGoalLog, ...(d.deletedGoalLog||{}) };
       // A fresh import means the person just handled a backup file, so
       // there's nothing new to nag about yet.
       meta = { changesSinceBackup:0, lastBackupAt:new Date().toISOString() };
@@ -2454,9 +2556,18 @@ function importJSON(e) {
       pruneDeletedTxLog();
       pruneDeletedBillsTxLog();
       pruneDeletedSavingsTxLog();
+      pruneDeletedRecurringLog();
+      pruneDeletedOverrideLog();
+      pruneDeletedScenarioLog();
+      pruneDeletedGoalLog();
       enforceDeletionGuard(); // ON--050: an imported backup can carry a live copy of something already known-deleted
       enforceBillsTxDeletionGuard(); // v3.49 (ON--051): same, for bills.tx
       enforceSavingsTxDeletionGuard(); // v3.49 (ON--051): same, for savings.tx
+      enforceRecurringDeletionGuard(); // v3.56 (ON--056): same, for recurring items
+      enforceOverrideDeletionGuard(); // v3.56 (ON--056): same, for occurrence overrides
+      enforceScenarioDeletionGuard(); // v3.56 (ON--056): same, for saved scenarios
+      enforceGoalDeletionGuard(); // v3.56 (ON--056): same, for savings goals
+      checkClearedBalanceDrift(); // v3.56 (ON--056): read-only sanity check after a restore too
       save(); populateSettings(); renderDash(); renderHist(); renderSavings();
       // ON--049 (suite-wide sync audit): this used to call syncPush() —
       // which blind-upserts every local record with no comparison against
@@ -3284,6 +3395,165 @@ function pruneDeletedSavingsTxLog() {
   });
 }
 
+// ── Recurring / overrides / scenarios / goals deletion guards
+//    (v3.56, ON--056) ─────────────────────────────────────────
+// Closing the last gap from the original sync review — same exact
+// pattern as bills.tx/savings.tx above, duplicated rather than shared
+// (per "leave what works, extend rather than replace" — this is Bundle 1,
+// consolidating the now-5x-duplicated pattern is a separate, deliberately
+// later piece of work, not bundled in here).
+function tombstoneRecurringRecord(r) {
+  r._deleted = true;
+  r.updated_at = new Date().toISOString();
+  deletedRecurringLog[r.id] = r.updated_at;
+  return { ...r };
+}
+function enforceRecurringDeletionGuard(pushTombstone) {
+  if (pushTombstone === undefined) pushTombstone = true;
+  let caught = 0;
+  bills.recurring.forEach(r => {
+    if (r._deleted) return;
+    if (!deletedRecurringLog[r.id]) return;
+    r._deleted = true;
+    r.updated_at = new Date().toISOString();
+    deletedRecurringLog[r.id] = r.updated_at;
+    caught++;
+    if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneBillsRecur(r);
+  });
+  if (caught) {
+    save();
+    addSyncLog(`Blocked ${caught} previously-deleted recurring item(s) from resurfacing`,'err');
+  }
+  return caught;
+}
+function pruneDeletedRecurringLog() {
+  const cutoff = Date.now() - (180*24*60*60*1000);
+  Object.keys(deletedRecurringLog).forEach(id => {
+    const t = Date.parse(deletedRecurringLog[id]);
+    if (!isNaN(t) && t < cutoff) delete deletedRecurringLog[id];
+  });
+}
+
+function tombstoneOverrideRecord(o) {
+  o._deleted = true;
+  o.updated_at = new Date().toISOString();
+  deletedOverrideLog[o.id] = o.updated_at;
+  return { ...o };
+}
+function enforceOverrideDeletionGuard(pushTombstone) {
+  if (pushTombstone === undefined) pushTombstone = true;
+  let caught = 0;
+  bills.overrides.forEach(o => {
+    if (o._deleted) return;
+    if (!deletedOverrideLog[o.id]) return;
+    o._deleted = true;
+    o.updated_at = new Date().toISOString();
+    deletedOverrideLog[o.id] = o.updated_at;
+    caught++;
+    if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneBillsOverride(o);
+  });
+  if (caught) {
+    save();
+    addSyncLog(`Blocked ${caught} previously-deleted override(s) from resurfacing`,'err');
+  }
+  return caught;
+}
+function pruneDeletedOverrideLog() {
+  const cutoff = Date.now() - (180*24*60*60*1000);
+  Object.keys(deletedOverrideLog).forEach(id => {
+    const t = Date.parse(deletedOverrideLog[id]);
+    if (!isNaN(t) && t < cutoff) delete deletedOverrideLog[id];
+  });
+}
+
+function tombstoneScenarioRecord(s) {
+  s._deleted = true;
+  s.updated_at = new Date().toISOString();
+  deletedScenarioLog[s.id] = s.updated_at;
+  return { ...s };
+}
+function enforceScenarioDeletionGuard(pushTombstone) {
+  if (pushTombstone === undefined) pushTombstone = true;
+  let caught = 0;
+  bills.scenarios.forEach(s => {
+    if (s._deleted) return;
+    if (!deletedScenarioLog[s.id]) return;
+    s._deleted = true;
+    s.updated_at = new Date().toISOString();
+    deletedScenarioLog[s.id] = s.updated_at;
+    caught++;
+    if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneScenario(s);
+  });
+  if (caught) {
+    save();
+    addSyncLog(`Blocked ${caught} previously-deleted scenario(s) from resurfacing`,'err');
+  }
+  return caught;
+}
+function pruneDeletedScenarioLog() {
+  const cutoff = Date.now() - (180*24*60*60*1000);
+  Object.keys(deletedScenarioLog).forEach(id => {
+    const t = Date.parse(deletedScenarioLog[id]);
+    if (!isNaN(t) && t < cutoff) delete deletedScenarioLog[id];
+  });
+}
+
+function tombstoneGoalRecord(g) {
+  g._deleted = true;
+  g.updated_at = new Date().toISOString();
+  deletedGoalLog[g.id] = g.updated_at;
+  return { ...g };
+}
+function enforceGoalDeletionGuard(pushTombstone) {
+  if (pushTombstone === undefined) pushTombstone = true;
+  let caught = 0;
+  savings.goals.forEach(g => {
+    if (g._deleted) return;
+    if (!deletedGoalLog[g.id]) return;
+    g._deleted = true;
+    g.updated_at = new Date().toISOString();
+    deletedGoalLog[g.id] = g.updated_at;
+    caught++;
+    if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneSavingsGoal(g);
+  });
+  if (caught) {
+    save();
+    addSyncLog(`Blocked ${caught} previously-deleted savings goal(s) from resurfacing`,'err');
+  }
+  return caught;
+}
+function pruneDeletedGoalLog() {
+  const cutoff = Date.now() - (180*24*60*60*1000);
+  Object.keys(deletedGoalLog).forEach(id => {
+    const t = Date.parse(deletedGoalLog[id]);
+    if (!isNaN(t) && t < cutoff) delete deletedGoalLog[id];
+  });
+}
+
+// ── Cleared-balance drift check (v3.56, ON--056) ────────────────
+// bills.settings.clearedBalance is a stored running counter, not derived
+// fresh — it's the one place a silent mismatch could sit undetected for
+// a long time (see the ON--050/051 changelog history above). This is a
+// read-only sanity check, not a fix: it never touches clearedBalance
+// itself, just compares it against what the cleared transaction history
+// actually sums to, and logs a visible warning if they've drifted apart
+// by more than a penny of rounding. A real mismatch here means either an
+// undiscovered bug, or (more likely, day to day) that Pete used the
+// manual reconcile screen, which deliberately overrides any drift by
+// design (see saveBillsReconcile()) — the log line distinguishes the two
+// by showing both figures so it's obvious which is at play.
+function checkClearedBalanceDrift() {
+  const summed = bills.tx
+    .filter(t => !t._deleted && t.cleared !== false)
+    .reduce((s,t) => s + (t.type==='income' ? t.amount : -t.amount), 0);
+  const stored = bills.settings.clearedBalance || 0;
+  const diff = Math.round((stored - summed) * 100) / 100;
+  if (Math.abs(diff) > 0.01) {
+    addSyncLog(`Cleared balance check: stored £${stored.toFixed(2)} vs transaction history £${summed.toFixed(2)} (£${diff.toFixed(2)} apart) — if this wasn't a manual reconcile, it's worth a look`,'err');
+  }
+  return diff;
+}
+
 // ── Transfers (v3.49, ON--051) ──────────────────────────────────
 // A transfer is two ordinary records — one bills.tx/savings.tx/F&T
 // transaction on each side — linked by a shared transferId. No new
@@ -4005,9 +4275,7 @@ function consumeOverride(recurringId, schedDate) {
   const id = overrideKey(recurringId, schedDate);
   const idx = bills.overrides.findIndex(o=>o.id===id && !o._deleted);
   if (idx===-1) return null;
-  bills.overrides[idx]._deleted = true;
-  bills.overrides[idx].updated_at = new Date().toISOString();
-  return { ...bills.overrides[idx] };
+  return tombstoneOverrideRecord(bills.overrides[idx]);
 }
 
 function billsForecastData() {
@@ -4738,9 +5006,7 @@ function loadScenario(id) {
 function deleteScenario(id) {
   const idx = bills.scenarios.findIndex(s=>s.id===id);
   if (idx===-1) return;
-  bills.scenarios[idx]._deleted = true;
-  bills.scenarios[idx].updated_at = new Date().toISOString();
-  const snapshot = { ...bills.scenarios[idx] };
+  const snapshot = tombstoneScenarioRecord(bills.scenarios[idx]);
   save(true);
   syncTombstoneScenario(snapshot);
   if (_scenarioDraft && _scenarioDraft.id===id) { _scenarioDraft = null; ensureScenarioDraft(); }
@@ -4986,9 +5252,7 @@ function saveGoal() {
 function deleteGoal(id) {
   const idx = savings.goals.findIndex(g=>g.id===id);
   if (idx===-1) return;
-  savings.goals[idx]._deleted = true;
-  savings.goals[idx].updated_at = new Date().toISOString();
-  const snapshot = { ...savings.goals[idx] };
+  const snapshot = tombstoneGoalRecord(savings.goals[idx]);
   // Tombstone every transaction under this goal too, so they don't
   // silently resurface as an orphaned pile if a goal of the same name
   // is ever created again — matches the tombstone approach used
@@ -5206,9 +5470,7 @@ function deleteRecur() {
   if (!_rcEditId) return;
   const idx = bills.recurring.findIndex(r=>r.id===_rcEditId);
   if (idx===-1) return;
-  bills.recurring[idx]._deleted = true;
-  bills.recurring[idx].updated_at = new Date().toISOString();
-  const snapshot = { ...bills.recurring[idx] };
+  const snapshot = tombstoneRecurringRecord(bills.recurring[idx]);
   save(true); closeRecurSheet(); renderBillsRecurring();
   syncTombstoneBillsRecur(snapshot);
   toast('Recurring item deleted');
