@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.50</title>
+<title>On Budget v3.51</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -353,7 +353,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.50</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.51</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -909,7 +909,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.50
+// On Budget v3.51
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1372,6 +1372,18 @@
 // enough history exists (trend/average/left-over need 2+ completed
 // months; top shops need any labelled spending), so sparse data
 // degrades gracefully rather than showing empty charts.
+// v3.51 (PET-058/060): reinstates the `dashboardSummary` computation for
+// the launcher's home-screen card (computeDashboardSummary/
+// writeDashboardSummaryOnly, hooked into save()/exportJSON()/boot). This
+// existed in a prior v3.49 but this file's line had since diverged onto
+// a separate v3.50 (the Transfer feature below) that didn't carry it —
+// re-added on top of that baseline rather than reverting anything from
+// v3.50. Confirmed the Transfer feature (toSavings/fromSavings/toFT)
+// needs no special-casing in the summary: those paths already flow
+// through bills.settings.clearedBalance and goalBalance(), which the
+// summary already reads, and the toFT path's months[] entry carries
+// category:null so it's correctly counted as income without touching
+// Food/Travel reserve math.
 // v3.50 (ON--051 follow-up): the Transfer sheet added in v3.49 didn't
 // open — tapping the button did nothing. Root cause: populateTransferGoalPicker()
 // called escHtml() to build the goal <option> list, but this app's HTML-
@@ -2211,20 +2223,107 @@ function backfillSyncTimestamps() {
   });
 }
 
+// ── Dashboard summary for the launcher card (PET-058/060, v3.51) ─────
+// Packages a snapshot of what the launcher's home-screen card needs,
+// using this app's own existing calculations rather than making the
+// launcher re-derive any of them. Written into the localStorage envelope
+// on every save() (see below) and refreshed once at boot by
+// writeDashboardSummaryOnly(), so a freshly restored backup gets a
+// summary immediately rather than waiting for the next edit.
+// v3.51 note: this was originally added in v3.49, but this file's
+// baseline had diverged onto a separate v3.50 (the Transfer feature,
+// ON--051) that didn't include it — re-added here on top of that
+// baseline. Verified the Transfer feature needs no special-casing: the
+// toSavings/fromSavings paths only touch bills.tx/savings.tx (already
+// reflected via bills.settings.clearedBalance and goalBalance()), and
+// the toFT path adds a real months[] transaction with category:null,
+// which the existing income/spend split already handles correctly.
+function computeDashboardSummary() {
+  try {
+    const { last, next } = getBoundaries();
+    const k = mKey(last);
+    const d = months[k] || null;
+    let cycleStarted = false, pot = null, headroom = null, food = null, travel = null;
+    if (d && d.startBalance !== null && d.startBalance !== undefined) {
+      cycleStarted = true;
+      const tx = (d.transactions || []).filter(t => !t._deleted);
+      const monthWeeklyFood   = d.weeklyFoodBudget ?? settings.weeklyFood;
+      const monthTravelBudget = d.travelBudget ?? settings.monthlyTravel;
+      const weeks     = getWeeks(last, next, monthWeeklyFood, d.weeklyFoodAdjustment ?? null);
+      const reserveBd = calcReserve(weeks, tx, monthTravelBudget);
+      const spent  = tx.filter(t => t.type !== 'income').reduce((s, t) => s + (t.amount || 0), 0);
+      const income = tx.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
+      pot      = Math.round((d.startBalance + income - spent) * 100) / 100;
+      headroom = Math.round((pot - reserveBd.total) * 100) / 100;
+      food     = Math.round(reserveBd.food * 100) / 100;
+      travel   = Math.round(reserveBd.travel * 100) / 100;
+    }
+
+    // Bills: cleared balance + projected balance right before the
+    // forecast cutoff (next income, or 90 days — whichever billsForecastData
+    // is currently using), reusing that function's own item generation
+    // and running-balance calc rather than repeating it here.
+    const fc = billsForecastData();
+    const nextIncome = billsNextIncomeDate();
+    const mode = bills.settings.forecastMode || 'next_income';
+    const cutoffIso = (mode === 'next_income' && nextIncome)
+      ? iso(new Date(nextIncome.getTime() - 86400000))
+      : iso(new Date(Date.now() + 90 * 86400000));
+    const beforeCutoff = fc.items.filter(it => it.date <= cutoffIso);
+    const forecastBalance = beforeCutoff.length
+      ? beforeCutoff[beforeCutoff.length - 1].runningBalance
+      : (bills.settings.clearedBalance || 0);
+
+    const goals = (savings.goals || []).filter(g => !g._deleted).map(g => ({
+      name: g.name,
+      balance: Math.round(goalBalance(g.id) * 100) / 100,
+      target: g.target || null
+    }));
+
+    return {
+      cycleStarted, pot, headroom, food, travel,
+      clearedBalance: Math.round((bills.settings.clearedBalance || 0) * 100) / 100,
+      forecastBalance: Math.round(forecastBalance * 100) / 100,
+      forecastLabel: fc.label,
+      goals,
+      computedAt: new Date().toISOString()
+    };
+  } catch (e) {
+    return null; // launcher card falls back to "Open app to load" if this is null/missing
+  }
+}
+
+// Patches dashboardSummary into localStorage without touching meta or
+// changesSinceBackup — used once at boot so a restored/imported backup
+// (which predates this field, or carries a stale one) gets a current
+// summary right away, without that counting as a "change" or trigger
+// syncPull()/re-render side effects a full save() would (undesirable
+// this early in boot, before the rest of boot has finished running).
+function writeDashboardSummaryOnly() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    parsed.dashboardSummary = computeDashboardSummary();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+  } catch (e) {}
+}
+
 function save(trackChange) {
   if (trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.50', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
-    data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog }, meta
+    version:'3.51', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog }, meta,
+    dashboardSummary: computeDashboardSummary()
   }));
   // Notify launcher so the dashboard card refreshes live
   try { window.parent.postMessage({ type:'OB_DATA_UPDATED' }, window.location.origin); } catch(e) {}
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.50', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.51', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -5282,6 +5381,7 @@ repairPhantomMonths(); // ON--046: local-only repair pass (cloud fix-up happens 
 populateSettings();
 renderDash();
 setSyncState('local');
+writeDashboardSummaryOnly(); // PET-058/060 v3.51: backfill for a restored/imported backup, without waiting for the next edit
 
 // v3.42: delegated click handlers for the label chips — the chips carry
 // their label name in data-label instead of an inline onclick, so a name
