@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.41</title>
+<title>P Apps v10.42</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -302,6 +302,30 @@
   }
   .theme-btn:hover { border-color: var(--accent); }
 
+  /* ── PET-058 v10.42: iPhone-width nav fix ──
+     PET-060's overflow-x:auto (added when On Budget became a 7th icon)
+     was meant to let the icon row scroll rather than clip on a narrow
+     phone, but Pete reported the icons still ended up visually covered
+     by the theme toggle on real iPhones — nested overflow-x:auto inside
+     a position:fixed ancestor doesn't always clip cleanly under iOS
+     Safari's compositing, so that fallback wasn't actually load-bearing
+     in practice. The real fix is to stop depending on scroll for the
+     common case: shrink icons, gaps, and the logo enough that all 7 fit
+     outright within a standard iPhone's width (tested down to 375px).
+     overflow-x:auto stays in the CSS above as a safety net for an older/
+     narrower device or a future 8th icon, but nothing here should need
+     it on a normal iPhone anymore. */
+  @media (max-width: 500px) {
+    .nav-btn { width: 27px; height: 27px; font-size: 15px; }
+    .nav-left { gap: 4px; }
+    .nav-icons-group { gap: 3px; }
+    .nav-logo { padding: 5px 6px; font-size: 12px; }
+    .nav-version { display: none; } /* decorative only — first thing to drop for space */
+    .theme-btn, .user-pill { flex-shrink: 0; }
+    .theme-btn { width: 26px; height: 26px; font-size: 13px; }
+    .user-pill { padding: 3px 6px; font-size: 11px; }
+  }
+
   /* ── Home screen ── */
   #home-screen {
     position: fixed;
@@ -542,7 +566,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.41</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.42</span></button>
       <div class="nav-icons-group">
         <button class="nav-btn" data-target="gym" style="--app-color:#38bdf8" onclick="switchTo('gym', this)" title="Gym Tracker">🏋️</button>
         <button class="nav-btn pete-only" data-target="budget" style="--app-color:#a3e635" onclick="switchTo('budget', this)" title="On Budget">🪙</button>
@@ -1551,52 +1575,49 @@ function refreshCardStats() {
 // PET-053 v10.31: statMeal removed
 // PET-053 v10.31: statGat removed
 
-// ── On Budget card stat (PET-060 v10.41, reinstated) ─────────────────
-// Mirrors just enough of on-budget.html's own pay-cycle boundary logic
-// (getBoundaries/payinDate/mKey) to find the *current* cycle's month
-// record and show its running Pot (start balance + income − spend).
-// Deliberately does NOT replicate the full Headroom/reserve calculation
-// (getWeeks + calcReserve, including mid-month adjustments) — that logic
-// is genuinely intricate and evolves inside the app; duplicating it here
-// would be a maintenance trap that silently drifts out of sync every
-// time On Budget's budgeting logic changes. Pot alone is simple, always
-// correct from the raw transaction data, and enough for an at-a-glance
-// card — full Headroom remains a reason to open the app.
-function obPayinDate(y, m, day) {
-  const d = new Date(y, m, day);
-  const dow = d.getDay();
-  if (dow === 6) d.setDate(d.getDate() - 1);
-  if (dow === 0) d.setDate(d.getDate() - 2);
-  return d;
-}
-function obMKey(d) {
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-}
+// ── On Budget card stat (PET-058 v10.42, expanded) ────────────────────
+// Pete asked for the card to show Food/Travel remaining, Headroom, the
+// Bills cleared balance + forecast before next income, and savings goal
+// balances. Reproducing all of that here would recreate exactly the
+// duplication problem the original PET-060 version was designed to
+// avoid (that version deliberately showed Pot only, to sidestep
+// reimplementing getWeeks/calcReserve). Instead, on-budget.html v3.49+
+// now computes a `dashboardSummary` object using its OWN existing
+// calcReserve/billsForecastData/goalBalance functions and writes it into
+// its localStorage envelope on every save() — this just reads that
+// summary. If it's missing (on-budget.html hasn't been updated to
+// v3.49+ yet, or a very old backup was restored and hasn't been resaved)
+// the card says so rather than guessing at stale/absent numbers.
 function statOnBudget() {
   try {
     const raw = localStorage.getItem('on_budget_v1');
     if (!raw) { setCardStat('stat-budget', 'No data yet', 'muted'); return; }
     const parsed  = JSON.parse(raw);
-    const d       = parsed.data || parsed;
-    const payinDay = (d.settings && d.settings.payinDay) || 28;
-    const months  = d.months || {};
-    const today   = new Date(); today.setHours(0, 0, 0, 0);
-    const thisP   = obPayinDate(today.getFullYear(), today.getMonth(), payinDay);
-    const last    = thisP <= today ? thisP : obPayinDate(
-      today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear(),
-      today.getMonth() === 0 ? 11 : today.getMonth() - 1,
-      payinDay
-    );
-    const m = months[obMKey(last)];
-    if (!m || m.startBalance === null || m.startBalance === undefined) {
-      setCardStat('stat-budget', 'Not started this cycle', 'muted');
-      return;
+    const summary = parsed.dashboardSummary;
+    if (!summary) { setCardStat('stat-budget', 'Open app to refresh', 'muted'); return; }
+
+    const statEl = document.getElementById('stat-budget');
+    if (!statEl) return;
+
+    let html = '';
+    if (!summary.cycleStarted) {
+      html += '<div class="card-stat-row"><span class="card-stat-dot"></span><span>Not started this cycle</span></div>';
+    } else {
+      const warn = summary.headroom < 0;
+      html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:' + (warn ? '#f78166' : '#3fb950') + '"></span>' +
+        '<span>Headroom <span class="val" style="color:' + (warn ? '#f78166' : '#3fb950') + '">£' + summary.headroom.toFixed(2) + '</span></span></div>';
+      html += '<div style="font-size:10px;color:var(--ink3);margin-top:2px">Food £' + summary.food.toFixed(2) + ' · Travel £' + summary.travel.toFixed(2) + ' left</div>';
     }
-    const tx     = (m.transactions || []).filter(t => !t._deleted);
-    const spent  = tx.filter(t => t.type !== 'income').reduce((s, t) => s + (t.amount || 0), 0);
-    const income = tx.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
-    const pot    = m.startBalance + income - spent;
-    setCardStat('stat-budget', '<span class="val">£' + pot.toFixed(2) + '</span> in pot', pot < 0 ? 'warn' : 'ok');
+    html += '<div style="font-size:10px;color:var(--ink3);margin-top:2px">Bills £' + summary.clearedBalance.toFixed(2) + ' cleared · £' + summary.forecastBalance.toFixed(2) + ' ' + summary.forecastLabel + '</div>';
+    if (summary.goals && summary.goals.length) {
+      const goalsStr = summary.goals.map(g =>
+        g.name + ' £' + g.balance.toFixed(2) + (g.target ? '/£' + g.target.toFixed(2) : '')
+      ).join(', ');
+      html += '<div style="font-size:10px;color:var(--ink3);margin-top:2px">🎯 ' + goalsStr + '</div>';
+    }
+
+    statEl.className = 'card-stat' + (!summary.cycleStarted ? '' : summary.headroom < 0 ? ' warn' : ' ok');
+    statEl.innerHTML = html;
   } catch(e) {
     setCardStat('stat-budget', 'Open app to load', 'muted');
   }

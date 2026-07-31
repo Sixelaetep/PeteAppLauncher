@@ -282,7 +282,6 @@
   .bills-view.active{display:block}
 
   .type-toggle{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px}
-  .type-toggle-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:4px}
   .type-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:12px 6px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface2);cursor:pointer;font-size:13px;font-weight:600;color:var(--ink2);font-family:inherit;transition:all 0.15s;-webkit-tap-highlight-color:transparent}
   .type-btn.sel.income{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
   .type-btn.sel.outgoing{border-color:var(--red);background:var(--red-dim);color:var(--red)}
@@ -821,46 +820,6 @@
   </div>
 </div>
 
-<!-- ══ TRANSFER SHEET (v3.49, ON--051) ══ -->
-<div class="overlay" id="overlay-transfer" onclick="overlayClickTransfer(event)">
-  <div class="sheet">
-    <div class="sheet-title">
-      Transfer
-      <button class="sheet-close" onclick="closeTransferSheet()">✕</button>
-    </div>
-
-    <div class="type-toggle-3" style="margin-top:0">
-      <button class="type-btn sel outgoing" id="transfer-dir-toSavings" onclick="pickTransferDirection('toSavings')">→ Savings</button>
-      <button class="type-btn income" id="transfer-dir-fromSavings" onclick="pickTransferDirection('fromSavings')">← Savings</button>
-      <button class="type-btn outgoing" id="transfer-dir-toFT" onclick="pickTransferDirection('toFT')">→ Food &amp; Travel</button>
-    </div>
-
-    <div class="field-group" id="transfer-goal-row">
-      <label class="field-label">Savings goal</label>
-      <select id="transfer-goal" onchange="pickTransferGoal(this.value)"></select>
-    </div>
-
-    <div class="amount-row">
-      <span class="amount-sym">£</span>
-      <input type="text" class="amount-in" id="transfer-amt" placeholder="0.00" inputmode="numeric">
-    </div>
-
-    <div class="field-group">
-      <label class="field-label">Note <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional)</span></label>
-      <input type="text" id="transfer-note" placeholder="e.g. Topping up holiday fund">
-    </div>
-
-    <div class="field-group">
-      <label class="field-label">Date</label>
-      <input type="date" id="transfer-date">
-    </div>
-
-    <div class="btn-row">
-      <button class="btn btn-primary btn-full" onclick="saveTransfer()">Transfer</button>
-    </div>
-  </div>
-</div>
-
 <!-- ══ BILLS: CLEAR / SKIP OCCURRENCE SHEET ══ -->
 <div class="overlay" id="overlay-clear" onclick="overlayClickClear(event)">
   <div class="sheet">
@@ -1372,47 +1331,27 @@
 // enough history exists (trend/average/left-over need 2+ completed
 // months; top shops need any labelled spending), so sparse data
 // degrades gracefully rather than showing empty charts.
-// v3.49 (ON--051): two pieces of work, shipped together.
-// (1) Sync hardening — ON--050's deletedTxLog/enforceDeletionGuard/
-// re-confirmation-sweep pattern protected Food & Travel transactions
-// from tombstone resurrection (a delete whose cloud push failed
-// silently, then came back live on a later pull) but nothing else in
-// the app had it. Bills tx was the real exposure: its clearedBalance
-// is a stored running counter reversed once at delete time, not
-// derived fresh like F&T's pot or Savings' goal balances — if a
-// deleted bills.tx resurrected, the ledger would show it live again
-// but the balance would never re-adjust, so ledger total and
-// clearedBalance would quietly disagree with no obvious cause.
-// Duplicated (not abstracted — the working F&T version stays
-// untouched) the exact same pattern for bills.tx: deletedBillsTxLog,
-// enforceBillsTxDeletionGuard(), and a post-pull re-confirmation
-// sweep. Savings tx gets the same twin treatment (deletedSavingsTxLog
-// etc.) since Transfers below now write there too and it's the same
-// shape of risk once a transfer leg exists. bills.recurring/overrides/
-// scenarios and savings.goals are NOT covered by this pass — no stored
-// counter depends on them, so the resurrection risk there is cosmetic
-// (an item reappearing), not a silent balance mismatch. Flagged as a
-// possible follow-up, not done here.
-// (2) Transfers (ON--051): a "⇄ Transfer" action in Bills covering the
-// three pairs actually needed — To Savings, From Savings, To Food &
-// Travel (deliberately no From F&T; money doesn't flow back that way).
-// No new Supabase table — a transfer is two ordinary records, one in
-// each collection's existing sync table, linked by a shared
-// transferId + transferCounterpart tag. Deleting either leg cascades
-// to tombstone the other through the same guarded delete path above,
-// so a transfer can't be half-undone (money vanishing from one side
-// while a duplicate lingers on the other). Bills' clearedBalance and
-// each Savings goal's derived balance both update immediately: the
-// Bills leg is cleared:true on creation (identical to any other
-// ad-hoc cleared entry), the Savings leg is a plain deposit/withdrawal
-// (identical to using the existing Deposit/Withdraw sheet directly),
-// and the F&T leg is a plain income transaction (identical to any
-// other income entry, so it correctly counts toward that month's
-// left-over figure and History insights — a transfer in is real money
-// arriving, not different from any other income). Transfers are not
-// editable in this version — delete and recreate if the amount or
-// direction was wrong.
-// ══════════════════════════════════════════════════════════════
+// v3.49 (PET-058, launcher-side card redesign): the launcher's home-
+// screen card for this app previously only showed the simple monthly
+// Pot figure — a deliberate choice at the time to avoid duplicating
+// this app's own reserve/headroom math in the launcher's JS, since that
+// logic (getWeeks + calcReserve, mid-month adjustments, etc.) lives here
+// and evolves here. Pete asked for the card to show much more: Food and
+// Travel remaining, Headroom, the Bills cleared balance and forecast
+// before next income, and savings goal balances — reproducing all of
+// that in the launcher would recreate exactly the duplication problem
+// this app was designed to avoid. Instead, this version computes a
+// small `dashboardSummary` object (using this app's own existing
+// calcReserve/billsForecastData/goalBalance functions — no new
+// calculation logic, just packaging) and writes it into the localStorage
+// envelope alongside `data` on every save(). The launcher now just reads
+// that summary directly; it never re-derives Headroom or the forecast
+// itself. writeDashboardSummaryOnly() also runs once at boot so a
+// restored backup or an import gets a fresh summary immediately, without
+// waiting for the next edit. Purely additive to the envelope — the
+// `dashboardSummary` key sits alongside `data`/`meta`, so older backups
+// that don't have it still load exactly as before; the very next save
+// (or the boot-time backfill) fills it in.
 // v3.48 (ON--050): v3.47's tombstone re-confirmation sweep didn't fix
 // the £2 "Test" transaction resurrecting — the sync log showed why:
 // "Recovered 1 transaction(s) missing monthKey from a pre-fix sync"
@@ -1569,16 +1508,6 @@ let ftLabels = { items:[], updated_at:null };
 // from. Pruned of entries older than 180 days at boot (see
 // pruneDeletedTxLog()) so it can't grow unbounded.
 let deletedTxLog = {};
-
-// v3.49 (ON--051): same pattern as deletedTxLog above, duplicated rather
-// than shared — one log per collection that has a resurrection-sensitive
-// delete path. bills.tx is the one that actually matters (clearedBalance
-// is a stored counter, not derived fresh, so a resurrection there would
-// silently desync from the balance); savings.tx gets the same treatment
-// because Transfers (below) now write to it and a half-undone transfer
-// leg is exactly this same failure shape.
-let deletedBillsTxLog = {};
-let deletedSavingsTxLog = {};
 
 // meta is app housekeeping, not user data — not part of settings/months/
 // bills. changesSinceBackup is kept only for backward-compat with older
@@ -2007,18 +1936,6 @@ async function syncPull() {
     bills.recurring = recurResult.merged;
     const billsTxResult = await _obBillsTx.pull(bills.tx, 'id', 'updated_at', rows);
     bills.tx = billsTxResult.merged;
-    // v3.49 (ON--051): same resurrection guard + re-confirmation sweep as
-    // F&T tx above, duplicated for bills.tx — see deletedBillsTxLog
-    // declaration for why this collection specifically needed it.
-    enforceBillsTxDeletionGuard(false);
-    let billsTombstoneConfirmed = 0;
-    bills.tx.forEach(t => {
-      if (!t._deleted) return;
-      const cloudRow = byKey['billstx_' + t.id];
-      if (!(cloudRow && cloudRow.data && cloudRow.data._deleted)) { syncTombstoneBillsTx(t); billsTombstoneConfirmed++; }
-    });
-    if (billsTombstoneConfirmed) addSyncLog(`Re-confirmed ${billsTombstoneConfirmed} bills delete(s) not yet on cloud`,'info');
-
     const overrideResult = await _obBillsOv.pull(bills.overrides, 'id', 'updated_at', rows);
     bills.overrides = overrideResult.merged;
     const scenarioResult = await _obScenarios.pull(bills.scenarios, 'id', 'updated_at', rows);
@@ -2027,15 +1944,6 @@ async function syncPull() {
     savings.goals = savingsGoalResult.merged;
     const savingsTxResult = await _obSavingsTx.pull(savings.tx, 'id', 'updated_at', rows);
     savings.tx = savingsTxResult.merged;
-    // v3.49 (ON--051): same guard + sweep for savings.tx.
-    enforceSavingsTxDeletionGuard(false);
-    let savingsTombstoneConfirmed = 0;
-    savings.tx.forEach(t => {
-      if (!t._deleted) return;
-      const cloudRow = byKey['savingstx_' + t.id];
-      if (!(cloudRow && cloudRow.data && cloudRow.data._deleted)) { syncTombstoneSavingsTx(t); savingsTombstoneConfirmed++; }
-    });
-    if (savingsTombstoneConfirmed) addSyncLog(`Re-confirmed ${savingsTombstoneConfirmed} savings delete(s) not yet on cloud`,'info');
 
     // Local-only records (a fresh device, or edits made while offline)
     // are already pushed up by each .pull() call above — no separate
@@ -2127,18 +2035,11 @@ function load() {
     // ON--050: backwards compatible — older backups won't have this key,
     // default to an empty log rather than failing the whole load.
     deletedTxLog = d.deletedTxLog || {};
-    // v3.49 (ON--051): same backward-compatibility default for the two new logs.
-    deletedBillsTxLog = d.deletedBillsTxLog || {};
-    deletedSavingsTxLog = d.deletedSavingsTxLog || {};
   } catch(e) {}
   migrateCategories();
   backfillSyncTimestamps();
   pruneDeletedTxLog();
-  pruneDeletedBillsTxLog();
-  pruneDeletedSavingsTxLog();
   enforceDeletionGuard(); // ON--050: catch a resurrection sitting in localStorage even before any pull runs
-  enforceBillsTxDeletionGuard(); // v3.49 (ON--051): same, for bills.tx
-  enforceSavingsTxDeletionGuard(); // v3.49 (ON--051): same, for savings.tx
 }
 
 // v2.8 simplified the three spend categories (Food/Travel/Other) down to
@@ -2194,20 +2095,99 @@ function backfillSyncTimestamps() {
   });
 }
 
+// ── Dashboard summary for the launcher card (PET-058, v3.49) ─────────
+// Packages a snapshot of what the launcher's home-screen card needs,
+// using this app's own existing calculations rather than making the
+// launcher re-derive any of them. Written into the localStorage envelope
+// on every save() (see below) and refreshed once at boot by
+// writeDashboardSummaryOnly(), so a freshly restored backup gets a
+// summary immediately rather than waiting for the next edit.
+function computeDashboardSummary() {
+  try {
+    const { last, next } = getBoundaries();
+    const k = mKey(last);
+    const d = months[k] || null;
+    let cycleStarted = false, pot = null, headroom = null, food = null, travel = null;
+    if (d && d.startBalance !== null && d.startBalance !== undefined) {
+      cycleStarted = true;
+      const tx = (d.transactions || []).filter(t => !t._deleted);
+      const monthWeeklyFood   = d.weeklyFoodBudget ?? settings.weeklyFood;
+      const monthTravelBudget = d.travelBudget ?? settings.monthlyTravel;
+      const weeks     = getWeeks(last, next, monthWeeklyFood, d.weeklyFoodAdjustment ?? null);
+      const reserveBd = calcReserve(weeks, tx, monthTravelBudget);
+      const spent  = tx.filter(t => t.type !== 'income').reduce((s, t) => s + (t.amount || 0), 0);
+      const income = tx.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
+      pot      = Math.round((d.startBalance + income - spent) * 100) / 100;
+      headroom = Math.round((pot - reserveBd.total) * 100) / 100;
+      food     = Math.round(reserveBd.food * 100) / 100;
+      travel   = Math.round(reserveBd.travel * 100) / 100;
+    }
+
+    // Bills: cleared balance + projected balance right before the
+    // forecast cutoff (next income, or 90 days — whichever billsForecastData
+    // is currently using), reusing that function's own item generation
+    // and running-balance calc rather than repeating it here.
+    const fc = billsForecastData();
+    const nextIncome = billsNextIncomeDate();
+    const mode = bills.settings.forecastMode || 'next_income';
+    const cutoffIso = (mode === 'next_income' && nextIncome)
+      ? iso(new Date(nextIncome.getTime() - 86400000))
+      : iso(new Date(Date.now() + 90 * 86400000));
+    const beforeCutoff = fc.items.filter(it => it.date <= cutoffIso);
+    const forecastBalance = beforeCutoff.length
+      ? beforeCutoff[beforeCutoff.length - 1].runningBalance
+      : (bills.settings.clearedBalance || 0);
+
+    const goals = (savings.goals || []).filter(g => !g._deleted).map(g => ({
+      name: g.name,
+      balance: Math.round(goalBalance(g.id) * 100) / 100,
+      target: g.target || null
+    }));
+
+    return {
+      cycleStarted, pot, headroom, food, travel,
+      clearedBalance: Math.round((bills.settings.clearedBalance || 0) * 100) / 100,
+      forecastBalance: Math.round(forecastBalance * 100) / 100,
+      forecastLabel: fc.label,
+      goals,
+      computedAt: new Date().toISOString()
+    };
+  } catch (e) {
+    return null; // launcher card falls back to "Open app to load" if this is null/missing
+  }
+}
+
+// Patches dashboardSummary into localStorage without touching meta or
+// changesSinceBackup — used once at boot so a restored/imported backup
+// (which predates this field, or carries a stale one) gets a current
+// summary right away, without that counting as a "change" or trigger
+// syncPull()/re-render side effects a full save() would (undesirable
+// this early in boot, before the rest of boot has finished running).
+function writeDashboardSummaryOnly() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    parsed.dashboardSummary = computeDashboardSummary();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+  } catch (e) {}
+}
+
 function save(trackChange) {
   if (trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     version:'3.49', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
-    data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog }, meta
+    data:{ settings, months, bills, ftLabels, savings, deletedTxLog }, meta,
+    dashboardSummary: computeDashboardSummary()
   }));
   // Notify launcher so the dashboard card refreshes live
   try { window.parent.postMessage({ type:'OB_DATA_UPDATED' }, window.location.origin); } catch(e) {}
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.49', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog, deletedBillsTxLog, deletedSavingsTxLog } },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.49', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, savings, deletedTxLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2238,20 +2218,13 @@ function importJSON(e) {
       // the union of both logs rather than let an import erase local
       // knowledge that something was deleted.
       deletedTxLog = { ...deletedTxLog, ...(d.deletedTxLog||{}) };
-      // v3.49 (ON--051): same union-merge for the two new logs.
-      deletedBillsTxLog = { ...deletedBillsTxLog, ...(d.deletedBillsTxLog||{}) };
-      deletedSavingsTxLog = { ...deletedSavingsTxLog, ...(d.deletedSavingsTxLog||{}) };
       // A fresh import means the person just handled a backup file, so
       // there's nothing new to nag about yet.
       meta = { changesSinceBackup:0, lastBackupAt:new Date().toISOString() };
       migrateCategories();
       backfillSyncTimestamps();
       pruneDeletedTxLog();
-      pruneDeletedBillsTxLog();
-      pruneDeletedSavingsTxLog();
       enforceDeletionGuard(); // ON--050: an imported backup can carry a live copy of something already known-deleted
-      enforceBillsTxDeletionGuard(); // v3.49 (ON--051): same, for bills.tx
-      enforceSavingsTxDeletionGuard(); // v3.49 (ON--051): same, for savings.tx
       save(); populateSettings(); renderDash(); renderHist(); renderSavings();
       // ON--049 (suite-wide sync audit): this used to call syncPush() —
       // which blind-upserts every local record with no comparison against
@@ -2947,10 +2920,6 @@ function delTx(mk, id) {
   const snapshot = { ...t };
   save(true); renderDash();
   syncTombstoneTx(mk, snapshot);
-  // v3.49 (ON--051): a transfer's F&T leg has a Bills counterpart —
-  // remove that too so a delete here can't leave a phantom outgoing
-  // entry sitting in the Bills ledger.
-  if (t.transferId) cascadeDeleteTransferCounterpart(t.transferId, t.transferCounterpart, id);
   toast('Transaction removed');
 }
 
@@ -2994,194 +2963,6 @@ function pruneDeletedTxLog() {
     const t = Date.parse(deletedTxLog[id]);
     if (!isNaN(t) && t < cutoff) delete deletedTxLog[id];
   });
-}
-
-// ── Bills tx deletion guard (v3.49, ON--051) ────────────────────
-// Same shape as F&T's deletedTxLog/enforceDeletionGuard above,
-// duplicated rather than shared. Every place that soft-deletes a
-// bills.tx record should call this instead of setting _deleted by
-// hand, so the log always stays in step with the flag.
-function tombstoneBillsTxRecord(t) {
-  t._deleted = true;
-  t.updated_at = new Date().toISOString();
-  deletedBillsTxLog[t.id] = t.updated_at;
-  return { ...t };
-}
-function enforceBillsTxDeletionGuard(pushTombstone) {
-  if (pushTombstone === undefined) pushTombstone = true;
-  let caught = 0;
-  bills.tx.forEach(t => {
-    if (t._deleted) return;
-    if (!deletedBillsTxLog[t.id]) return;
-    t._deleted = true;
-    t.updated_at = new Date().toISOString();
-    deletedBillsTxLog[t.id] = t.updated_at;
-    caught++;
-    if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneBillsTx(t);
-  });
-  if (caught) {
-    save();
-    addSyncLog(`Blocked ${caught} previously-deleted bills transaction(s) from resurfacing`,'err');
-  }
-  return caught;
-}
-function pruneDeletedBillsTxLog() {
-  const cutoff = Date.now() - (180*24*60*60*1000);
-  Object.keys(deletedBillsTxLog).forEach(id => {
-    const t = Date.parse(deletedBillsTxLog[id]);
-    if (!isNaN(t) && t < cutoff) delete deletedBillsTxLog[id];
-  });
-}
-
-// ── Savings tx deletion guard (v3.49, ON--051) ──────────────────
-function tombstoneSavingsTxRecord(t) {
-  t._deleted = true;
-  t.updated_at = new Date().toISOString();
-  deletedSavingsTxLog[t.id] = t.updated_at;
-  return { ...t };
-}
-function enforceSavingsTxDeletionGuard(pushTombstone) {
-  if (pushTombstone === undefined) pushTombstone = true;
-  let caught = 0;
-  savings.tx.forEach(t => {
-    if (t._deleted) return;
-    if (!deletedSavingsTxLog[t.id]) return;
-    t._deleted = true;
-    t.updated_at = new Date().toISOString();
-    deletedSavingsTxLog[t.id] = t.updated_at;
-    caught++;
-    if (pushTombstone && window.PalSync && window.PalSync.hasSession()) syncTombstoneSavingsTx(t);
-  });
-  if (caught) {
-    save();
-    addSyncLog(`Blocked ${caught} previously-deleted savings transaction(s) from resurfacing`,'err');
-  }
-  return caught;
-}
-function pruneDeletedSavingsTxLog() {
-  const cutoff = Date.now() - (180*24*60*60*1000);
-  Object.keys(deletedSavingsTxLog).forEach(id => {
-    const t = Date.parse(deletedSavingsTxLog[id]);
-    if (!isNaN(t) && t < cutoff) delete deletedSavingsTxLog[id];
-  });
-}
-
-// ── Transfers (v3.49, ON--051) ──────────────────────────────────
-// A transfer is two ordinary records — one bills.tx/savings.tx/F&T
-// transaction on each side — linked by a shared transferId. No new
-// sync table: each leg rides its collection's existing pal-sync
-// table exactly like any other record of that kind.
-function cascadeDeleteTransferCounterpart(transferId, counterpart, excludeId) {
-  if (counterpart === 'savings') {
-    const t = savings.tx.find(x => x.transferId===transferId && x.id!==excludeId && !x._deleted);
-    if (t) {
-      const snap = tombstoneSavingsTxRecord(t);
-      save(true); syncTombstoneSavingsTx(snap); renderSavings();
-    }
-  } else if (counterpart === 'ft') {
-    Object.keys(months).forEach(mk => {
-      const t = (months[mk].transactions||[]).find(x => x.transferId===transferId && x.id!==excludeId && !x._deleted);
-      if (t) {
-        t._deleted = true; t.updated_at = new Date().toISOString();
-        deletedTxLog[t.id] = t.updated_at;
-        const snap = { ...t };
-        save(true); syncTombstoneTx(mk, snap); renderDash();
-      }
-    });
-  } else if (counterpart === 'bills') {
-    const t = bills.tx.find(x => x.transferId===transferId && x.id!==excludeId && !x._deleted);
-    if (t) {
-      if (!t.skipped) {
-        const delta = t.type==='income' ? t.amount : -t.amount;
-        bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) - delta)*100)/100;
-        bills.settings.updated_at = new Date().toISOString();
-      }
-      const snap = tombstoneBillsTxRecord(t);
-      save(true); syncTombstoneBillsTx(snap); syncUpsertBillsSettings(); renderBillsLedger();
-    }
-  }
-}
-
-let _transferDirection = 'toSavings';
-let _transferGoalId = null;
-function openTransferSheet() {
-  _transferDirection = 'toSavings';
-  _transferGoalId = savings.goals.find(g=>!g._deleted) ? savings.goals.find(g=>!g._deleted).id : null;
-  pickTransferDirection('toSavings');
-  setPennyValue('transfer-amt', null);
-  document.getElementById('transfer-note').value = '';
-  document.getElementById('transfer-date').value = todayIso();
-  populateTransferGoalPicker();
-  document.getElementById('overlay-transfer').classList.add('open');
-}
-function closeTransferSheet() { document.getElementById('overlay-transfer').classList.remove('open'); }
-function overlayClickTransfer(e) { if (e.target===document.getElementById('overlay-transfer')) closeTransferSheet(); }
-function pickTransferDirection(dir) {
-  _transferDirection = dir;
-  ['toSavings','fromSavings','toFT'].forEach(d => {
-    const el = document.getElementById('transfer-dir-'+d);
-    if (el) el.classList.toggle('sel', d===dir);
-  });
-  const goalRow = document.getElementById('transfer-goal-row');
-  if (goalRow) goalRow.style.display = (dir==='toSavings'||dir==='fromSavings') ? 'flex' : 'none';
-}
-function populateTransferGoalPicker() {
-  const sel = document.getElementById('transfer-goal');
-  if (!sel) return;
-  const active = savings.goals.filter(g=>!g._deleted);
-  sel.innerHTML = active.map(g => `<option value="${g.id}">${escHtml(g.name)}</option>`).join('');
-  if (active.length && !active.find(g=>g.id===_transferGoalId)) _transferGoalId = active[0].id;
-  sel.value = _transferGoalId || '';
-}
-function pickTransferGoal(id) { _transferGoalId = id; }
-function saveTransfer() {
-  const amt = pennyValue('transfer-amt');
-  if (isNaN(amt) || amt<=0) { toast('Enter a valid amount'); return; }
-  const date = document.getElementById('transfer-date').value || todayIso();
-  const note = document.getElementById('transfer-note').value.trim() || null;
-  const now = new Date().toISOString();
-  const tid = uid();
-  const amount = Math.round(amt*100)/100;
-
-  if (_transferDirection === 'toSavings' || _transferDirection === 'fromSavings') {
-    const goal = savings.goals.find(g=>g.id===_transferGoalId && !g._deleted);
-    if (!goal) { toast('Choose a savings goal'); return; }
-    const toSavings = _transferDirection === 'toSavings';
-
-    const billsEntry = { id:billsUid(), date, name:`Transfer ${toSavings?'to':'from'} ${goal.name}`, type: toSavings?'outgoing':'income', amount, source:'transfer', cleared:true, transferId:tid, transferCounterpart:'savings', note, _ts:Date.now(), updated_at:now };
-    bills.tx.push(billsEntry);
-    const delta = billsEntry.type==='income' ? amount : -amount;
-    bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0)+delta)*100)/100;
-    bills.settings.updated_at = now;
-
-    const savEntry = { id:uid(), goalId:goal.id, type: toSavings?'deposit':'withdrawal', amount, date, note:`Transfer ${toSavings?'from':'to'} Bills`, transferId:tid, transferCounterpart:'bills', _ts:Date.now(), updated_at:now };
-    savings.tx.push(savEntry);
-
-    save(true);
-    syncUpsertBillsTx(billsEntry);
-    syncUpsertBillsSettings();
-    syncUpsertSavingsTx(savEntry);
-    closeTransferSheet(); renderBillsLedger(); renderSavings();
-    toast(`Transfer ${toSavings?'to':'from'} ${goal.name} ✓`);
-
-  } else if (_transferDirection === 'toFT') {
-    const billsEntry = { id:billsUid(), date, name:'Transfer to Food & Travel', type:'outgoing', amount, source:'transfer', cleared:true, transferId:tid, transferCounterpart:'ft', note, _ts:Date.now(), updated_at:now };
-    bills.tx.push(billsEntry);
-    bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0)-amount)*100)/100;
-    bills.settings.updated_at = now;
-
-    const k = curKey();
-    if (!months[k]) months[k] = { startBalance:null, transactions:[] };
-    const ftEntry = { id:uid(), monthKey:k, date, type:'income', category:null, amount, label:note||'Transfer from Bills', transferId:tid, transferCounterpart:'bills', _ts:Date.now(), updated_at:now };
-    months[k].transactions.push(ftEntry);
-
-    save(true);
-    syncUpsertBillsTx(billsEntry);
-    syncUpsertBillsSettings();
-    syncUpsertTx(k, ftEntry);
-    closeTransferSheet(); renderBillsLedger(); renderDash();
-    toast('Transfer to Food & Travel ✓');
-  }
 }
 
 // ── Sheet ──────────────────────────────────────────────────────
@@ -3931,10 +3712,7 @@ function renderBillsLedger() {
     <div class="stat-card-sub ${lowCls}">${fc.usedFallback ? 'No income recurring item set up — showing 90 days instead' : (fc.lowest<0 ? `Goes into overdraft ${fc.label}` : `Stays in credit ${fc.label}`)}</div>
   </div>
 
-  <div style="display:flex;gap:8px">
-    <button class="add-btn" style="flex:2" onclick="openBtxSheet()"><span class="add-btn-icon">+</span> Add transaction</button>
-    <button class="btn btn-ghost" style="flex:1" onclick="openTransferSheet()">⇄ Transfer</button>
-  </div>
+  <button class="add-btn" onclick="openBtxSheet()"><span class="add-btn-icon">+</span> Add transaction</button>
 
   <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px;flex-wrap:wrap;gap:8px">
     <div class="ledger-section-label" style="margin:0">Transactions</div>
@@ -4772,12 +4550,9 @@ function deleteGoal(id) {
   // throughout the rest of the app rather than a hard delete.
   savings.tx.forEach(t => {
     if (t.goalId===id && !t._deleted) {
-      const txSnap = tombstoneSavingsTxRecord(t);
-      syncTombstoneSavingsTx(txSnap);
-      // v3.49 (ON--051): if this was a transfer leg, remove its Bills
-      // counterpart too — deleting the goal shouldn't leave a phantom
-      // outgoing entry behind in the Bills ledger.
-      if (t.transferId) cascadeDeleteTransferCounterpart(t.transferId, t.transferCounterpart, t.id);
+      t._deleted = true;
+      t.updated_at = new Date().toISOString();
+      syncUpsertSavingsTx(t);
     }
   });
   save(true);
@@ -4828,13 +4603,11 @@ function saveSavingsTx() {
 function deleteSavingsTx(id) {
   const idx = savings.tx.findIndex(t=>t.id===id);
   if (idx===-1) return;
-  const t = savings.tx[idx];
-  const transferId = t.transferId, counterpart = t.transferCounterpart;
-  const snapshot = tombstoneSavingsTxRecord(t);
+  savings.tx[idx]._deleted = true;
+  savings.tx[idx].updated_at = new Date().toISOString();
+  const snapshot = { ...savings.tx[idx] };
   save(true);
   syncTombstoneSavingsTx(snapshot);
-  // v3.49 (ON--051): remove the Bills leg too if this was a transfer.
-  if (transferId) cascadeDeleteTransferCounterpart(transferId, counterpart, id);
   renderSavings();
   toast('Transaction removed');
 }
@@ -5126,7 +4899,11 @@ function skipClear() {
     // entry had already synced from another device.
     const idx = bills.tx.findIndex(t=>t.id===_clrCtx.txId);
     let snapshot = null;
-    if (idx>-1) snapshot = tombstoneBillsTxRecord(bills.tx[idx]);
+    if (idx>-1) {
+      bills.tx[idx]._deleted = true;
+      bills.tx[idx].updated_at = new Date().toISOString();
+      snapshot = { ...bills.tx[idx] };
+    }
     save(true); closeClearSheet(); renderBillsLedger();
     if (snapshot) syncTombstoneBillsTx(snapshot);
     toast('Cancelled');
@@ -5146,12 +4923,12 @@ function deleteBillsTx(id) {
     bills.settings.updated_at = new Date().toISOString();
     addSyncLog(`Deleted "${t.name}" — reversed ${reversal>=0?'+':''}£${reversal.toFixed(2)} → balance £${bills.settings.clearedBalance.toFixed(2)}`,'info');
   }
-  const snapshot = tombstoneBillsTxRecord(t);
+  t._deleted = true;
+  t.updated_at = new Date().toISOString();
+  const snapshot = { ...t };
   save(true); renderBillsLedger();
   syncTombstoneBillsTx(snapshot);
   syncUpsertBillsSettings();
-  // v3.49 (ON--051): remove the linked leg too if this was a transfer.
-  if (t.transferId) cascadeDeleteTransferCounterpart(t.transferId, t.transferCounterpart, id);
   toast(t.skipped ? 'Removed' : `Removed — balance £${bills.settings.clearedBalance.toFixed(2)}`);
 }
 
@@ -5165,7 +4942,11 @@ function quickDeleteUncleared(kind, a, b) {
   if (kind === 'adhoc') {
     const idx = bills.tx.findIndex(t=>t.id===a);
     let snapshot = null;
-    if (idx>-1) snapshot = tombstoneBillsTxRecord(bills.tx[idx]);
+    if (idx>-1) {
+      bills.tx[idx]._deleted = true;
+      bills.tx[idx].updated_at = new Date().toISOString();
+      snapshot = { ...bills.tx[idx] };
+    }
     save(true); renderBillsLedger();
     if (snapshot) syncTombstoneBillsTx(snapshot);
     toast('Removed');
@@ -5265,6 +5046,7 @@ repairPhantomMonths(); // ON--046: local-only repair pass (cloud fix-up happens 
 populateSettings();
 renderDash();
 setSyncState('local');
+writeDashboardSummaryOnly(); // PET-058 v3.49: backfill for a restored/imported backup, without waiting for the next edit
 
 // v3.42: delegated click handlers for the label chips — the chips carry
 // their label name in data-label instead of an inline onclick, so a name
