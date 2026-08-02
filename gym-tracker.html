@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.57</title>
+<title>Gym Tracker v2.58</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.57</div></span>
+      <span>Gym Tracker<div class="ver">v2.58</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -522,6 +522,11 @@
     <input type="text" id="planName" placeholder="e.g. Push Day">
     <label>Notes <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional)</span></label>
     <textarea id="planNotes" placeholder="Warm-up notes, focus areas…"></textarea>
+    <label>Program <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional — groups related plans together)</span></label>
+    <select id="planProgram" onchange="handlePlanProgramChange(this.value)">
+      <option value="">— No program —</option>
+      <option value="__new__">+ New program…</option>
+    </select>
 
     <div class="section-title">Exercises in this Plan</div>
     <div id="planTimeTotal" style="font-size:12.5px;color:var(--accent);font-weight:600;margin-bottom:8px"></div>
@@ -919,6 +924,23 @@
 // timestamp), a race-free sync can still show it that way — the v2.49
 // Restore button is the deliberate fix for that, not something this
 // silently auto-corrects.
+// v2.58 (GYM-055, PT-004 dependency): Programs — a new grouping entity so
+// plans imported together (e.g. from a PT Companion export) stay visually
+// together instead of landing as loose unrelated plans. New Supabase table
+// required: 'gym_programs' (same shape/RLS as the other gym_* tables,
+// auth.uid()=user_id) — until it's created, programs save/work fine
+// locally but won't sync across devices, same as gym_pt_sessions before
+// GYM-053's table was made. A plan's programId is optional/nullable, so
+// every existing plan (no programId) renders exactly as before, under an
+// "Other plans" heading only if at least one program exists.
+// importProgramFileHandler() now always resolves a program (from
+// bundle.programName, or today's short date if that field is absent —
+// keeping the plain manual bulk-import template working unchanged) and
+// scopes its plan-name collision check to that program only. On a name
+// collision it no longer skips the incoming plan: it adds it alongside
+// the existing one, suffixed with today's date, so a trainer's revised
+// programme can be re-imported without silently losing the update (or
+// silently discarding the client's own edits to the original).
 // v2.57 (GYM-054): the Generate Report modal now has a "🧑‍🏫 Since Last
 // PT Session" quick-range button alongside 7/30/90 Days, This Month, and
 // All Time. Sets From to the last logged PT session's date (inclusive)
@@ -1031,7 +1053,7 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], starterDismissed: false }
   };
 }
 
@@ -1052,6 +1074,7 @@ function load() {
       env.data.scheduleEntries = parsed.data.scheduleEntries || [];
       env.data.trainerNoteSets = parsed.data.trainerNoteSets || [];
       env.data.ptSessions = parsed.data.ptSessions || []; // GYM-053: absent in pre-v2.56 backups
+      env.data.programs = parsed.data.programs || []; // GYM-055: absent in pre-v2.58 backups
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
@@ -1206,6 +1229,40 @@ let _env = defaultEnvelope();
 let _envGeneration = 0;
 const getExercises = () => _env.data.exercises.filter(e => !e._deleted);
 const getPlans      = () => _env.data.plans.filter(p => !p._deleted);
+// GYM-055: Programs group plans together (e.g. everything imported from
+// one PT Companion export). A plan's programId is nullable/optional —
+// ungrouped plans are entirely unaffected and keep working exactly as before.
+const getPrograms      = () => _env.data.programs.filter(p => !p._deleted).sort((a,b)=>a.name.localeCompare(b.name));
+const programById       = (id) => getPrograms().find(p => p.id === id) || null;
+function findOrCreateProgram(rawName) {
+  const name = (rawName || '').trim() || fmtDateShort(new Date().toISOString().slice(0,10));
+  const existing = getPrograms().find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (existing) return existing;
+  const now = new Date().toISOString();
+  const record = { id: uid('prog'), name, notes: '', createdAt: now, updatedAt: now };
+  _env.data.programs.push(record);
+  sbUpsert('program', record, null);
+  return record;
+}
+function renameProgram(id) {
+  const prog = programById(id); if (!prog) return;
+  const name = prompt('Rename program', prog.name);
+  if (!name || !name.trim() || name.trim() === prog.name) return;
+  prog.name = name.trim(); prog.updatedAt = new Date().toISOString();
+  save(_env); sbUpsert('program', prog, null);
+  renderPlanList();
+  toast('Program renamed ✓');
+}
+function deleteProgram(id) {
+  const prog = programById(id); if (!prog) return;
+  if (!confirm(`Delete program "${prog.name}"? Its plans are kept, just ungrouped — nothing is deleted.`)) return;
+  const now = new Date().toISOString();
+  getPlans().filter(p => p.programId === id).forEach(p => { p.programId = null; p.updatedAt = now; sbUpsert('plan', p, null); });
+  prog._deleted = true; prog.updatedAt = now;
+  save(_env); sbUpsert('program', prog, null);
+  renderPlanList();
+  toast('Program deleted — plans kept, ungrouped');
+}
 // GYM-031: plans available for starting a session from — archived plans
 // keep their full history (getPlans() above still returns them for
 // lookups) but are excluded here, and order reflects Pete's own
@@ -1290,6 +1347,10 @@ let _insightsWindow = 7;
 function uid(prefix) { return (prefix||'id') + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function todayISO() { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function fmtDate(iso) { if (!iso) return '—'; const [y,m,d]=iso.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
+// GYM-055: short, weekday-free date for use in generated titles (program
+// default names, de-duplicated plan names on re-import) — "2 Aug 2026"
+// rather than fmtDate's "Sun, 2 Aug", which reads oddly baked into a name.
+function fmtDateShort(iso) { if (!iso) return ''; const [y,m,d]=iso.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }
 function fmtDateTime(iso) { if (!iso) return '—'; return new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); }
 function hasAnyValue(s) { return (s.reps||s.weight||s.seconds||s.metres) ? true : false; }
 function stripDone(s) { const c = {...s}; delete c.done; return c; }
@@ -1405,8 +1466,16 @@ const _gymTrainerNotes = window.PalSync.table('gym_trainer_notes'); // GYM-043
 // for kind 'ptSession' will fail (404) the same way any missing table
 // would — logged to the sync panel, not thrown.
 const _gymPT = window.PalSync.table('gym_pt_sessions');
-const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT };
-const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions' };
+// GYM-055: new Supabase table required — 'gym_programs', same shape/RLS as
+// the other gym_* tables (auth.uid()=user_id). Until that table exists,
+// programs save and work fine locally but sbUpsert/pullFromCloud calls for
+// kind 'program' will fail (404) the same way any missing table would —
+// logged to the sync panel, not thrown. Programs group plans together
+// (e.g. an imported PT programme); a plan's programId is nullable, so
+// existing ungrouped plans are unaffected.
+const _gymPrograms = window.PalSync.table('gym_programs');
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -1493,7 +1562,7 @@ function pullFromCloud(cb) {
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession'];
+  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program'];
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
@@ -1563,12 +1632,12 @@ function manualPush() {
   // from another device, resurrecting something that was deleted elsewhere.
   pullFromCloud(() => {
     window.PalSync.flushRetryQueue().then(renderSyncPanel);
-    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions'].forEach(k => total += _env.data[k].length);
+    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions','programs'].forEach(k => total += _env.data[k].length);
     if (!total) { toast('Nothing to push'); return; }
     setSyncStatus('syncing');
     slog('Manual push — '+total+' record(s)');
     let done = 0, errors = 0;
-    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions]].forEach(([kind, arr]) => {
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs]].forEach(([kind, arr]) => {
       arr.forEach(rec => sbUpsert(kind, rec, ok => {
         if (!ok) errors++;
         done++;
@@ -2125,6 +2194,36 @@ function exerciseName(id) { const e = exerciseById(id); return e ? e.name : '(re
 function exerciseType(id) { const e = exerciseById(id); return e ? e.type : 'reps'; }
 function planById(id) { return _env.data.plans.find(p=>p.id===id); }
 
+// GYM-055: plans belonging to a program are shown grouped under a header
+// (name + rename/delete-program controls); ungrouped plans render exactly
+// as before, in their own trailing section with no header at all — so a
+// suite with no programs looks and behaves identically to pre-v2.58.
+function renderPlanCard(p, idx, list, sessions) {
+  const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const last = done[0];
+  const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
+  const timeTotal = planTimeTotal(p.items);
+  const timeStr = timeTotal>0 ? ' · ⏱ ~'+timeTotal+' min' : '';
+  return `<div class="list-item">
+    <div class="li-top">
+      <div>
+        <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
+        <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
+      </div>
+      <span style="display:flex;align-items:center;gap:2px;flex-shrink:0">
+        <button class="pib-reorder" onclick="movePlanOrder('${p.id}',-1)" ${idx===0?'disabled':''} title="Move up">▲</button>
+        <button class="pib-reorder" onclick="movePlanOrder('${p.id}',1)" ${idx===list.length-1?'disabled':''} title="Move down">▼</button>
+      </span>
+    </div>
+    <div class="li-actions">
+      <button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button>
+      <button class="btn btn-secondary btn-sm" onclick="openPlanEditor('${p.id}')">Edit</button>
+      ${last?`<button class="btn btn-secondary btn-sm" onclick="updatePlanFromLastSession('${p.id}')">🔄 Update targets</button>`:''}
+      <button class="btn btn-secondary btn-sm" onclick="archivePlan('${p.id}')">📦 Archive</button>
+      <button class="btn btn-danger btn-sm" onclick="deletePlan('${p.id}')">Delete</button>
+    </div>
+  </div>`;
+}
 function renderPlanList() {
   const list = getPickablePlans();
   const el = document.getElementById('planList');
@@ -2132,32 +2231,28 @@ function renderPlanList() {
   if (!list.length) {
     el.innerHTML = '<div class="empty-state"><div class="big">📋</div>No saved plans yet</div>';
   } else {
-    el.innerHTML = list.map((p, idx) => {
-      const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-      const last = done[0];
-      const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
-      const timeTotal = planTimeTotal(p.items);
-      const timeStr = timeTotal>0 ? ' · ⏱ ~'+timeTotal+' min' : '';
-      return `<div class="list-item">
-        <div class="li-top">
-          <div>
-            <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
-            <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
-          </div>
-          <span style="display:flex;align-items:center;gap:2px;flex-shrink:0">
-            <button class="pib-reorder" onclick="movePlanOrder('${p.id}',-1)" ${idx===0?'disabled':''} title="Move up">▲</button>
-            <button class="pib-reorder" onclick="movePlanOrder('${p.id}',1)" ${idx===list.length-1?'disabled':''} title="Move down">▼</button>
-          </span>
-        </div>
-        <div class="li-actions">
-          <button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button>
-          <button class="btn btn-secondary btn-sm" onclick="openPlanEditor('${p.id}')">Edit</button>
-          ${last?`<button class="btn btn-secondary btn-sm" onclick="updatePlanFromLastSession('${p.id}')">🔄 Update targets</button>`:''}
-          <button class="btn btn-secondary btn-sm" onclick="archivePlan('${p.id}')">📦 Archive</button>
-          <button class="btn btn-danger btn-sm" onclick="deletePlan('${p.id}')">Delete</button>
-        </div>
+    const programs = getPrograms();
+    const byProgram = {};
+    const ungrouped = [];
+    list.forEach(p => { if (p.programId && programs.some(pr=>pr.id===p.programId)) { (byProgram[p.programId] = byProgram[p.programId]||[]).push(p); } else { ungrouped.push(p); } });
+    let html = '';
+    programs.forEach(prog => {
+      const plans = byProgram[prog.id];
+      if (!plans || !plans.length) return;
+      html += `<div class="li-meta" style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px;font-weight:600;color:var(--ink1)">
+        <span>🗂 ${escHtml(prog.name)}</span>
+        <span>
+          <button class="pib-reorder" onclick="renameProgram('${prog.id}')" title="Rename program">✏️</button>
+          <button class="pib-reorder" onclick="deleteProgram('${prog.id}')" title="Delete program (keeps plans)">🗑</button>
+        </span>
       </div>`;
-    }).join('');
+      html += plans.map((p, idx) => renderPlanCard(p, idx, plans, sessions)).join('');
+    });
+    if (ungrouped.length) {
+      if (Object.keys(byProgram).length) html += `<div class="li-meta" style="margin:14px 0 6px;font-weight:600;color:var(--ink1)">Other plans</div>`;
+      html += ungrouped.map((p, idx) => renderPlanCard(p, idx, ungrouped, sessions)).join('');
+    }
+    el.innerHTML = html;
   }
   renderArchivedPlanList();
 }
@@ -2186,7 +2281,11 @@ function renderArchivedPlanList() {
   applyArchivedPlansCollapse();
 }
 function movePlanOrder(planId, dir) {
-  const visible = getPickablePlans();
+  // GYM-055: scoped to plans sharing the same programId (or no program)
+  // as the plan being moved, so reordering within a program group can't
+  // jump the plan into an unrelated group's position.
+  const moving = planById(planId);
+  const visible = getPickablePlans().filter(p => (p.programId||null) === (moving && moving.programId || null));
   const idx = visible.findIndex(p => p.id === planId);
   const newIdx = idx + dir;
   if (idx < 0 || newIdx < 0 || newIdx >= visible.length) return;
@@ -2216,6 +2315,23 @@ function unarchivePlan(id) {
   toast('Plan restored ✓');
 }
 
+function renderPlanProgramOptions(selectedId) {
+  const sel = document.getElementById('planProgram');
+  const programs = getPrograms();
+  sel.innerHTML = '<option value="">— No program —</option>'
+    + programs.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('')
+    + '<option value="__new__">+ New program…</option>';
+  sel.value = (selectedId && programs.some(p=>p.id===selectedId)) ? selectedId : '';
+}
+function handlePlanProgramChange(value) {
+  if (value !== '__new__') return;
+  const name = prompt('New program name');
+  const sel = document.getElementById('planProgram');
+  if (!name || !name.trim()) { sel.value = ''; return; }
+  const prog = findOrCreateProgram(name.trim());
+  save(_env);
+  renderPlanProgramOptions(prog.id);
+}
 function openPlanEditor(id) {
   if (id && !planById(id)) { toast('That plan no longer exists'); return; }
   document.getElementById('planEditId').value = id||'';
@@ -2224,11 +2340,13 @@ function openPlanEditor(id) {
     document.getElementById('planModalTitle').textContent = 'Edit Plan';
     document.getElementById('planName').value = p.name;
     document.getElementById('planNotes').value = p.notes||'';
+    renderPlanProgramOptions(p.programId||null);
     _planItems = JSON.parse(JSON.stringify(p.items||[]));
   } else {
     document.getElementById('planModalTitle').textContent = 'New Plan';
     document.getElementById('planName').value = '';
     document.getElementById('planNotes').value = '';
+    renderPlanProgramOptions(null);
     _planItems = [];
   }
   renderPlanItemsList();
@@ -2884,6 +3002,8 @@ function savePlan() {
   const id = document.getElementById('planEditId').value;
   const now = new Date().toISOString();
   const notes = document.getElementById('planNotes').value.trim();
+  const programSel = document.getElementById('planProgram').value;
+  const programId = (programSel && programSel !== '__new__') ? programSel : null;
   if (id) {
     const { oneOffs, repeats } = affectedFutureSchedule(id);
     if (oneOffs.length || repeats.length) {
@@ -2902,9 +3022,9 @@ function savePlan() {
     // deletion from another device. Without this guard the next line would
     // throw on a plain object access and leave the modal stuck.
     if (!record) { toast('This plan was deleted on another device'); closeModal('modalPlan'); renderPlanList(); return; }
-    record.name=name; record.notes=notes; record.items=_planItems; record.updatedAt=now;
+    record.name=name; record.notes=notes; record.items=_planItems; record.programId=programId; record.updatedAt=now;
   }
-  else { record = { id: uid('plan'), name, notes, items:_planItems, order: nextPlanOrder(), archived: false, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
+  else { record = { id: uid('plan'), name, notes, items:_planItems, programId, order: nextPlanOrder(), archived: false, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
   save(_env);
   sbUpsert('plan', record, null);
   closeModal('modalPlan');
@@ -4196,6 +4316,7 @@ function importJSON(event) {
         // — restoring a backup is authoritative for this collection.
         _env.data.trainerNoteSets = _env.data.trainerNoteSets || [];
         _env.data.ptSessions = _env.data.ptSessions || []; // GYM-053: absent in pre-v2.56 backups
+        _env.data.programs = _env.data.programs || []; // GYM-055: absent in pre-v2.58 backups
         const importNow = new Date().toISOString();
         _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
         ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
@@ -4249,32 +4370,49 @@ function importProgramFileHandler(event) {
         exercisesAdded++;
       });
 
-      const existingPlanNames = new Set(getPlans().map(p => p.name.toLowerCase()));
-      let plansAdded = 0, plansSkipped = 0;
+      // GYM-055: every import creates or reuses a program (grouping), named
+      // from bundle.programName — or today's short date if none was given,
+      // which also keeps this working unchanged for the plain manual bulk
+      // import template (no programName field) that pre-v2.58 used.
+      let program = null;
+      let plansAdded = 0, plansRenamed = 0;
       const newPlanRecords = [];
-      bundle.plans.forEach(planIn => {
-        if (!planIn || !planIn.name || !Array.isArray(planIn.items)) return;
-        if (existingPlanNames.has(planIn.name.toLowerCase())) { plansSkipped++; return; }
-        const items = planIn.items.map(itemIn => {
-          const exId = itemIn.exerciseName ? nameToId[itemIn.exerciseName.toLowerCase()] : null;
-          if (!exId) return null; // exercise couldn't be resolved — dropped, not guessed at
-          const trackType = ['reps','time','distance'].includes(itemIn.trackType) ? itemIn.trackType : exerciseType(exId);
-          return { id: uid('pi'), exerciseId: exId, trackType, targetSets: Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [], estimatedMinutes: 0 };
-        }).filter(Boolean);
-        if (!items.length) return;
-        const record = { id: uid('plan'), name: planIn.name, notes: planIn.notes||'', items, createdAt: now, updatedAt: now };
-        _env.data.plans.push(record);
-        newPlanRecords.push(record);
-        existingPlanNames.add(planIn.name.toLowerCase());
-        plansAdded++;
-      });
+      if (bundle.plans.length) {
+        program = findOrCreateProgram(bundle.programName);
+        // Collision check scoped to plans already in THIS program only — a
+        // plan named "Day 1" in one program never blocks "Day 1" in another.
+        const existingPlanNamesInProgram = new Set(getPlans().filter(p => p.programId === program.id).map(p => p.name.toLowerCase()));
+        bundle.plans.forEach(planIn => {
+          if (!planIn || !planIn.name || !Array.isArray(planIn.items)) return;
+          let planName = planIn.name;
+          if (existingPlanNamesInProgram.has(planName.toLowerCase())) {
+            // GYM-055: a re-import of a revised programme never overwrites
+            // or skips — the updated plan lands alongside the old one,
+            // tagged with today's date, so nothing is silently lost.
+            planName = `${planIn.name} (${fmtDateShort(todayISO())})`;
+            plansRenamed++;
+          }
+          const items = planIn.items.map(itemIn => {
+            const exId = itemIn.exerciseName ? nameToId[itemIn.exerciseName.toLowerCase()] : null;
+            if (!exId) return null; // exercise couldn't be resolved — dropped, not guessed at
+            const trackType = ['reps','time','distance'].includes(itemIn.trackType) ? itemIn.trackType : exerciseType(exId);
+            return { id: uid('pi'), exerciseId: exId, trackType, targetSets: Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [], estimatedMinutes: 0 };
+          }).filter(Boolean);
+          if (!items.length) return;
+          const record = { id: uid('plan'), name: planName, notes: planIn.notes||'', items, programId: program.id, order: nextPlanOrder(), archived: false, createdAt: now, updatedAt: now };
+          _env.data.plans.push(record);
+          newPlanRecords.push(record);
+          existingPlanNamesInProgram.add(planName.toLowerCase());
+          plansAdded++;
+        });
+      }
 
       save(_env);
       newExerciseRecords.forEach(r => sbUpsert('exercise', r, null));
       newPlanRecords.forEach(r => sbUpsert('plan', r, null));
       closeDataDrawer();
       renderAll();
-      toast(`Imported ${plansAdded} plan${plansAdded===1?'':'s'} and ${exercisesAdded} new exercise${exercisesAdded===1?'':'s'}${plansSkipped?' · '+plansSkipped+' plan(s) skipped (name already exists)':''} ✓`);
+      toast(`Imported ${plansAdded} plan${plansAdded===1?'':'s'}${program?' into "'+program.name+'"':''} and ${exercisesAdded} new exercise${exercisesAdded===1?'':'s'}${plansRenamed?' · '+plansRenamed+' renamed with today\u2019s date (name already existed)':''} ✓`);
     } catch(ex) { toast('Program import failed: '+ex.message); }
   };
   reader.readAsText(file);
