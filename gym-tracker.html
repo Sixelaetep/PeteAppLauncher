@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.60</title>
+<title>Gym Tracker v2.61</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.60</div></span>
+      <span>Gym Tracker<div class="ver">v2.61</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -932,6 +932,22 @@
 // timestamp), a race-free sync can still show it that way — the v2.49
 // Restore button is the deliberate fix for that, not something this
 // silently auto-corrects.
+// v2.61 (GYM-056): Distance-type exercises no longer force a time entry.
+// Distance (metres) is the mandatory/primary field; the min:sec target
+// time is now optional on both the plan builder and the live session
+// logger. Defaults for new distance sets/exercises changed from a
+// pre-filled 5:00 to 0 (unset), so the field starts genuinely empty
+// rather than implying a required value. Every place that displays a
+// distance set (plan target summaries, session history, exercise
+// progress, grouped-set formatting) now omits the "/mm:ss" portion
+// entirely when no time was logged, instead of showing a misleading
+// "/0:00". Progression tracking for distance exercises (the trend arrow
+// and the "best" value used on the Progress tab) now compares metres
+// covered rather than pace, since pace can no longer be assumed present
+// — this is actually a better fit now that distance is the primary
+// value. PT Companion's target/summary display was updated to match
+// (same optional-time behaviour) for parity as the two apps share
+// programme data.
 // v2.60 (GYM-058, hotfix): the v2.59 Programs restructure accidentally
 // deleted the renderPlanCard() function itself while its surrounding
 // caller (renderPlanList/renderProgramCard) was being rewritten — it was
@@ -1079,7 +1095,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.60';
+const VERSION = '2.61';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2065,7 +2081,7 @@ function typeBadge(type) {
     : type==='time' ? '<span class="li-badge badge-time">Time</span>'
     : '<span class="li-badge badge-reps">Reps</span>';
 }
-function typeLabel(type) { return type==='distance' ? 'Time & distance' : type==='time' ? 'Time-based' : 'Reps & weight'; }
+function typeLabel(type) { return type==='distance' ? 'Distance (+ optional time)' : type==='time' ? 'Time-based' : 'Reps & weight'; }
 
 function renderAreaChips() {
   const el = document.getElementById('areaChips');
@@ -2584,11 +2600,12 @@ function renderPlanItemsList() {
           <span class="set-idx">Set ${si+1}</span>
           <div class="set-row">
             <input type="number" min="0" placeholder="metres" value="${s.metres||''}" oninput="updatePlanSet(${idx},${si},'metres',this.value)">
-            <select style="max-width:70px" onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
-            <select style="max-width:70px" onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
+            <select style="max-width:70px" title="Time (optional)" onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
+            <select style="max-width:70px" title="Time (optional)" onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
             <input type="number" min="0" step="0.5" placeholder="kg (opt)" value="${s.weight||''}" oninput="updatePlanSet(${idx},${si},'weight',this.value)">
             <button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>
           </div>
+          <div style="font-size:10px;color:var(--ink3);margin-top:2px">metres required · min:sec optional</div>
         </div>`;
       }
       if (type==='time') {
@@ -2685,7 +2702,7 @@ function addPlanSet(idx) {
   const type = _planItems[idx].trackType || exerciseType(_planItems[idx].exerciseId);
   const sets = _planItems[idx].targetSets;
   const last = sets[sets.length-1];
-  const fallback = type==='distance' ? {metres:1000,seconds:300,weight:0} : type==='time' ? {seconds:30} : {reps:10,weight:0};
+  const fallback = type==='distance' ? {metres:1000,seconds:0,weight:0} : type==='time' ? {seconds:30} : {reps:10,weight:0};
   sets.push(last ? {...last} : fallback);
   renderPlanItemsList();
 }
@@ -2719,7 +2736,9 @@ function renderExercisePickerList() {
 // type is switched (either from here or via the type switcher below) since
 // the old type's fields don't structurally carry over to the new one.
 function defaultTargetSetsForType(type) {
-  return type==='distance' ? [{metres:1000,seconds:300,weight:0}] : type==='time' ? [{seconds:30},{seconds:30},{seconds:30}] : [{reps:10,weight:0},{reps:10,weight:0},{reps:10,weight:0}];
+  // GYM-056: distance sets default to seconds:0 (time unset/optional) —
+  // metres is now the mandatory field, time is an optional add-on.
+  return type==='distance' ? [{metres:1000,seconds:0,weight:0}] : type==='time' ? [{seconds:30},{seconds:30},{seconds:30}] : [{reps:10,weight:0},{reps:10,weight:0},{reps:10,weight:0}];
 }
 function addExerciseToPlanItems(exerciseId) {
   const type = exerciseType(exerciseId);
@@ -3314,7 +3333,9 @@ function lastPerformedItem(exerciseId) {
   return null;
 }
 function summarizeSets(sets, type) {
-  return sets.map(s => type==='distance' ? (s.metres||0)+'m/'+mmss(s.seconds)
+  // GYM-056: distance time is optional now, so omit "/mm:ss" when unset
+  // rather than showing a misleading "/0:00".
+  return sets.map(s => type==='distance' ? (s.metres||0)+'m'+(s.seconds?'/'+mmss(s.seconds):'')
     : type==='time' ? mmss(s.seconds)
     : (s.reps||0)+'×'+(s.weight||0)+'kg').join(', ');
 }
@@ -3635,15 +3656,17 @@ function renderSessionItems() {
     const rows = item.actualSets.map((a, si) => {
       const ref = item.referenceSets ? item.referenceSets[si] : null;
       if (item.trackType === 'distance') {
-        const pace = a.seconds ? (a.metres||0)/a.seconds : 0;
-        const refPace = ref && ref.seconds ? (ref.metres||0)/ref.seconds : null;
+        // GYM-056: time is now optional for distance sets, so trend/best
+        // is judged on metres (the mandatory/primary field) rather than
+        // pace — pace can no longer be assumed present.
         const ms = secToMinSec(a.seconds);
+        const refText = ref ? refLabel+' '+(ref.metres||0)+'m'+(ref.seconds?'/'+mmss(ref.seconds):'') : 'extra';
         return `<div class="track-set-block">
-          <div class="tsr-label">Set ${si+1} — ${ref?refLabel+' '+(ref.metres||0)+'m/'+mmss(ref.seconds):'extra'}</div>
+          <div class="tsr-label">Set ${si+1} — ${refText}</div>
           <div class="track-set-row">
             <input type="number" class="tsr-input" value="${a.metres||''}" oninput="updateSessionSet(${ii},${si},'metres',this.value)"> m
-            <select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
-            <span class="tsr-trend">${trendArrow(pace, refPace)}</span>
+            <select class="tsr-input" style="width:52px !important" title="Time (optional)" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" title="Time (optional)" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
+            <span class="tsr-trend">${trendArrow(a.metres||0, ref?(ref.metres||0):null)}</span>
             <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
             <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
           </div>
@@ -3929,12 +3952,14 @@ function renderExerciseProgress() {
   if (!entries.length) { el.innerHTML = '<div class="empty-state"><div class="big">📊</div>No completed sets logged for this exercise yet</div>'; return; }
   let prevBest = null;
   el.innerHTML = entries.map(en => {
-    const best = en.type==='distance' ? Math.max(...en.sets.map(s=>s.seconds?(s.metres||0)/s.seconds:0))
+    // GYM-056: distance time is optional now, so progression is judged on
+    // metres (the mandatory/primary field) rather than pace.
+    const best = en.type==='distance' ? Math.max(...en.sets.map(s=>s.metres||0))
       : en.type==='time' ? Math.max(...en.sets.map(s=>s.seconds||0))
       : Math.max(...en.sets.map(s=>(s.weight||0)));
     const trend = prevBest===null ? '' : trendArrow(best, prevBest);
     prevBest = best;
-    const setsStr = en.sets.map(s => en.type==='distance' ? (s.metres||0)+'m/'+mmss(s.seconds)+' ('+(s.seconds?((s.metres||0)/s.seconds).toFixed(2):'0')+' m/s)'
+    const setsStr = en.sets.map(s => en.type==='distance' ? (s.metres||0)+'m'+(s.seconds?'/'+mmss(s.seconds)+' ('+((s.metres||0)/s.seconds).toFixed(2)+' m/s)':'')
       : en.type==='time' ? mmss(s.seconds) : (s.reps||0)+'×'+(s.weight||0)+'kg').join(', ');
     const targetStr = en.target ? summarizeSets(en.target, en.type) : null;
     const hitTarget = targetStr && targetStr === setsStr;
@@ -4355,7 +4380,7 @@ function groupConsecutiveSets(sets, type) {
 }
 function formatSetGroup(g, type) {
   const s = g.set;
-  const base = type==='distance' ? (s.metres||0)+'m/'+mmss(s.seconds)
+  const base = type==='distance' ? (s.metres||0)+'m'+(s.seconds?'/'+mmss(s.seconds):'')
     : type==='time' ? mmss(s.seconds)
     : (s.reps||0)+' reps × '+(s.weight||0)+'kg';
   return g.count>1 ? base+' ×'+g.count : base;
