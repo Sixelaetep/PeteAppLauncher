@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.45</title>
+<title>P Apps v10.46</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -582,7 +582,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.45</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.46</span></button>
       <div class="nav-icons-group">
         <!-- Gigs & Trips reinstated as 1st icon (GIG-032, v10.45) — shared app, no pete-only class -->
         <button class="nav-btn" data-target="gigs" style="--app-color:#7c3aed" onclick="switchTo('gigs', this)" title="Gigs &amp; Trips">📅</button>
@@ -620,8 +620,10 @@
 
     <!-- PET-054 v10.33: All cards full-width, order matches nav icons -->
 
-    <!-- Gigs & Trips (shared with Lex) — reinstated GIG-032, v10.45 -->
-    <div class="app-card" style="--card-color:#7c3aed" onclick="switchTo('gigs', document.querySelector('[data-target=gigs]'))">
+    <!-- Gigs & Trips (shared with Lex) — reinstated GIG-032, v10.45.
+         Card colour #f97316 restored to match the original pre-retirement
+         card (v10.30) rather than the app's own in-app accent. -->
+    <div class="app-card" style="--card-color:#f97316" onclick="switchTo('gigs', document.querySelector('[data-target=gigs]'))">
       <div class="card-top">
         <div class="card-icon">📅</div>
         <div class="card-name">Gigs &amp; Trips</div>
@@ -1609,6 +1611,15 @@ function statFortnight() {
   }
 }
 
+// v10.46 (GIG-032 follow-up): the Gigs & Trips card shipped in v10.45 was
+// a simplified reimplementation, not a restoration of the original. Card
+// colour (#f97316) and statGigs() replaced with the original v10.30
+// hero-card logic (next-event hero, active-trip banner, 2-event pipeline,
+// gig/trip summary footer, conflict detection) verified byte-identical to
+// the pre-retirement statGat(), aside from the gat→gigs id/target renames
+// already established at v10.45. Nav icon colour, backup wiring, health
+// check, and everything else from v10.45 deliberately left untouched —
+// scoped to the dashboard card only, per Pete's request.
 function refreshCardStats() {
   statGigs();
   statReading();
@@ -1622,37 +1633,185 @@ function refreshCardStats() {
 }
 
 // PET-053 v10.31: statMeal removed
-// ── Gigs & Trips card stat (reinstated GIG-032, v10.45) ──────────────
-// Reads gat_v1_clean — the tombstone-free copy GigsAndTrips.html already
-// writes on every saveData() specifically for the launcher card (this
-// was never removed while the app was retired from the launcher, it just
-// had no reader). Shows the soonest upcoming gig or trip by date.
+// ── Gigs & Trips card stat ────────────────────────────────────────────
+// Restored verbatim (bar target/id renames only: 'gat'→'gigs') from the
+// original pre-retirement card (v10.30), per Pete's request to reimplement
+// the same card view rather than the simplified version first shipped
+// with the GIG-032 reinstatement. Reads gat_v1_clean with a gat_v1
+// fallback — the tombstone-free copy GigsAndTrips.html already writes on
+// every saveData() specifically for the launcher card (never removed
+// while the app was retired from the launcher, it just had no reader).
+// Shows a hero "next event" block, an active-trip banner if currently on
+// a trip, a 2-event pipeline, a gigs/trips summary footer, and basic
+// gig/gig, gig/trip and trip/trip conflict detection.
 function statGigs() {
   try {
-    const raw = localStorage.getItem('gat_v1_clean');
-    if (!raw) { setCardStat('stat-gigs', 'No data yet', 'muted'); return; }
+    const raw = localStorage.getItem('gat_v1_clean') || localStorage.getItem('gat_v1');
+    if (!raw) { setCardStat('stat-gigs', 'Syncing…', 'muted'); return; }
     const d = JSON.parse(raw);
-    const events = d.events || [];
-    const today = todayISO();
-    const upcoming = events
-      .filter(ev => (ev.type === 'gig' ? ev.date : ev.endDate) >= today)
-      .map(ev => ({ name: ev.name, date: ev.type === 'gig' ? ev.date : ev.startDate }))
-      .filter(ev => ev.date)
-      .sort((a, b) => a.date.localeCompare(b.date));
-    if (!upcoming.length) { setCardStat('stat-gigs', 'No upcoming gigs or trips', 'muted'); return; }
-    const next = upcoming[0];
-    const days = Math.round((new Date(next.date) - new Date(today)) / 86400000);
-    const when = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : 'in ' + days + ' days';
-    const countLine = upcoming.length > 1
-      ? '<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:2px">' + (upcoming.length - 1) + ' more upcoming</div>'
-      : '';
-    const el = document.getElementById('stat-gigs');
-    if (el) {
-      el.className = 'card-stat ok';
-      el.innerHTML = '<div class="card-stat-row"><span class="card-stat-dot"></span><span>' +
-        (next.name || 'Untitled') + ' — ' + when + '</span></div>' + countLine;
+    const events = (d.events || []).filter(ev => !ev._deleted);
+    const todayStr = todayISO();
+    const now = new Date();
+
+    function gatSortKey(ev) {
+      if (ev.type === 'gig') return (ev.date || '') + 'T' + (ev.time || '23:59');
+      return (ev.startDate || ev.endDate || '') + 'T00:00';
     }
-  } catch (e) {
+
+    function isStillUpcoming(ev) {
+      const end  = ev.type === 'gig' ? ev.date : ev.endDate;
+      const done = ev.type === 'gig' ? (ev.done || ev.missed) : (ev.status === 'Completed' || ev.status === 'Cancelled');
+      if (done || !end || end < todayStr) return false;
+      if (ev.type === 'gig' && ev.time && end === todayStr) {
+        const [hh, mm] = ev.time.split(':').map(Number);
+        const gigTime = new Date(); gigTime.setHours(hh, mm, 0, 0);
+        if (now >= gigTime) return false;
+      }
+      return true;
+    }
+
+    const upcoming = events
+      .filter(isStillUpcoming)
+      .sort((a, b) => {
+        const ka = gatSortKey(a), kb = gatSortKey(b);
+        if (ka !== kb) return ka.localeCompare(kb);
+        if (a.type !== b.type) return a.type === 'trip' ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+
+    if (!upcoming.length) { setCardStat('stat-gigs', 'Nothing upcoming', 'muted'); return; }
+
+    const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
+
+    function daysUntil(ev) {
+      const ds = ev.type === 'gig' ? ev.date : ev.startDate;
+      if (!ds) return 0;
+      return Math.round((new Date(ds + 'T00:00:00') - todayD) / 86400000);
+    }
+
+    function fmtShortDate(ev) {
+      const ds = ev.type === 'gig' ? ev.date : ev.startDate;
+      if (!ds) return '';
+      const d = new Date(ds + 'T00:00:00');
+      return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    }
+
+    // GIG_TYPES mirrors GigsAndTrips.html GIG_TYPES array — used to resolve
+    // per-event-type icons (music=🎸, play=🎭, comedy=😂, sport=⚽ etc.)
+    const GIG_TYPES = [
+      {key:'music',       icon:'🎸'}, {key:'play',        icon:'🎭'},
+      {key:'musical',     icon:'🎶'}, {key:'comedy',      icon:'😂'},
+      {key:'sport',       icon:'⚽'}, {key:'festival',    icon:'🎪'},
+      {key:'cinema',      icon:'🎬'}, {key:'gym',         icon:'🏋️'},
+      {key:'appointment', icon:'📅'}, {key:'pets',        icon:'🐶'},
+      {key:'food',        icon:'🍽️'}, {key:'other',       icon:'📌'},
+    ];
+    const TRIP_TYPE_ICONS = {holiday:'🌴', visit:'🗺️', visitors:'🏠'};
+    function gigTypeIcon(ev) {
+      if (ev.type !== 'gig') return TRIP_TYPE_ICONS[ev.tripType] || '🌴';
+      const t = GIG_TYPES.find(t => t.key === (ev.gigType || 'music'));
+      return (t || GIG_TYPES[0]).icon;
+    }
+    function evIcon(ev) { return gigTypeIcon(ev); }
+
+    // ── Check for active trip (currently on one) ──────────────────
+    const activeTrip = events.find(ev =>
+      ev.type === 'trip' && !ev._deleted
+      && ev.status !== 'Cancelled' && ev.status !== 'Completed'
+      && ev.startDate && ev.endDate
+      && ev.startDate <= todayStr && ev.endDate >= todayStr
+    );
+
+    // ── Next event hero ───────────────────────────────────────────
+    const next = upcoming[0];
+    const diff = daysUntil(next);
+    const name = next.name || (next.type === 'gig' ? 'Gig' : 'Trip');
+    const fmtD = fmtShortDate(next);
+    const timeStr = next.type === 'gig' && next.time ? ` · ${next.time}` : '';
+
+    let countdownLabel;
+    if (diff === 0)      countdownLabel = `<span class="val" style="color:var(--accent)">${evIcon(next)} Today</span>`;
+    else if (diff === 1) countdownLabel = `<span class="val">${evIcon(next)} Tomorrow</span>`;
+    else                 countdownLabel = `<span class="val">${evIcon(next)} ${diff} days</span>`;
+
+    // Hero block — name prominent, date + time on same row
+    let html = `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <span style="font-size:14px;font-weight:700;color:var(--ink);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</span>
+      ${countdownLabel}
+    </div>
+    <div style="font-size:11px;color:var(--ink2);margin-top:2px">${fmtD}${timeStr}</div>`;
+
+    // Venue line for gigs
+    if (next.type === 'gig' && next.venue) {
+      html += `<div style="font-size:11px;color:var(--ink3);margin-top:2px">📍 ${next.venue}</div>`;
+    }
+
+    // Active trip banner
+    if (activeTrip && (!next || activeTrip.id !== next.id)) {
+      const tripEnd = new Date(activeTrip.endDate + 'T00:00:00');
+      const daysLeft = Math.round((tripEnd - todayD) / 86400000);
+      html += `<div style="margin-top:6px;padding:5px 8px;border-radius:6px;background:rgba(249,115,22,.12);font-size:11px;color:#f97316;font-weight:600">
+        ✈️ On trip: ${activeTrip.name || 'Trip'} · ${daysLeft} day${daysLeft!==1?'s':''} left
+      </div>`;
+    }
+
+    // Pipeline — next 2 events after the first
+    const pipeline = upcoming.slice(1, 3);
+    if (pipeline.length) {
+      html += `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;display:flex;flex-direction:column;gap:4px">`;
+      pipeline.forEach(ev => {
+        const d2 = daysUntil(ev);
+        const d2Str = d2 === 0 ? 'Today' : d2 === 1 ? 'Tomorrow' : `${d2}d`;
+        const evName = ev.name || (ev.type === 'gig' ? 'Gig' : 'Trip');
+        const evVenue = ev.type === 'gig' && ev.venue ? ` · ${ev.venue}` : '';
+        const evTime  = ev.type === 'gig' && ev.time ? ` · ${ev.time}` : '';
+        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="font-size:11px;color:var(--ink2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${evIcon(ev)} ${evName}${evVenue}${evTime}</span>
+          <span style="font-size:11px;color:var(--ink3);white-space:nowrap">${fmtShortDate(ev)} <span style="color:var(--ink2);font-weight:600">${d2Str}</span></span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    // Summary footer
+    const gigCount  = upcoming.filter(e => e.type === 'gig').length;
+    const tripCount = upcoming.filter(e => e.type === 'trip').length;
+    const parts = [];
+    if (gigCount)  parts.push(`${gigCount} gig${gigCount!==1?'s':''}`);
+    if (tripCount) parts.push(`${tripCount} trip${tripCount!==1?'s':''}`);
+    if (parts.length) {
+      html += `<div style="font-size:10px;color:var(--ink3);margin-top:6px">${parts.join(' · ')} upcoming</div>`;
+    }
+
+    // ── Conflict detection ────────────────────────────────────────
+    const activeGigs  = events.filter(e => e.type === 'gig'  && !e.missed && e.date  && e.date  >= todayStr);
+    const activeTrips = events.filter(e => e.type === 'trip' && e.status !== 'Cancelled' && e.status !== 'Completed' && e.endDate && e.endDate >= todayStr);
+    const conflicts   = [];
+
+    const gigsByDate = {};
+    activeGigs.forEach(g => { if (!g.date) return; (gigsByDate[g.date] = gigsByDate[g.date] || []).push(g); });
+    if (Object.values(gigsByDate).some(gs => gs.length > 1)) conflicts.push('⚠️ gig/gig clash');
+
+    if (activeGigs.some(g => activeTrips.some(t =>
+      t.startDate && t.endDate && g.date >= t.startDate && g.date <= t.endDate && g.tripId !== t.id
+    ))) conflicts.push('⚠️ gig/trip clash');
+
+    if (activeTrips.some((t, i) => activeTrips.slice(i + 1).some(t2 =>
+      t.startDate && t.endDate && t2.startDate && t2.endDate &&
+      t.startDate <= t2.endDate && t.endDate >= t2.startDate
+    ))) conflicts.push('⚠️ trips overlap');
+
+    if (conflicts.length) {
+      html += `<div style="margin-top:6px;font-size:11px;color:#d97706;font-weight:700">${conflicts.join(' · ')}</div>`;
+    }
+
+    // Write directly for full-width layout
+    const statEl = document.getElementById('stat-gigs');
+    if (statEl) {
+      statEl.className = 'card-stat' + (diff === 0 ? ' ok' : '');
+      statEl.innerHTML = html;
+    }
+  } catch(e) {
     setCardStat('stat-gigs', 'Open app to load', 'muted');
   }
 }
