@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.59</title>
+<title>Gym Tracker v2.60</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.59</div></span>
+      <span>Gym Tracker<div class="ver">v2.60</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -932,6 +932,23 @@
 // timestamp), a race-free sync can still show it that way — the v2.49
 // Restore button is the deliberate fix for that, not something this
 // silently auto-corrects.
+// v2.60 (GYM-058, hotfix): the v2.59 Programs restructure accidentally
+// deleted the renderPlanCard() function itself while its surrounding
+// caller (renderPlanList/renderProgramCard) was being rewritten — it was
+// still being called, just never defined, which threw "Can't find
+// variable: renderPlanCard" the instant anything tried to render the
+// Plans tab. Because renderAll() calls renderPlanList() on every load
+// and after nearly every action, this broke the entire render pipeline,
+// not just Plans — matching "no programs or plans showing". It also
+// explains the failed program import: save(_env) runs before renderAll()
+// in that flow, so the import very likely completed and saved correctly
+// underneath; the crash inside the subsequent renderAll() was just
+// caught by the import's own try/catch and misreported as an import
+// failure. Restored renderPlanCard() unchanged from before v2.59 — no
+// other logic changed. Verified this time with an integration test that
+// loads the real file and calls the real render functions directly,
+// rather than hand-written stand-ins, specifically to catch this class
+// of "called but never defined" mistake.
 // v2.59 (GYM-057): Programs & Plans restructure. The Plans tab (now
 // labelled "Prog & Plans") lists programs first as their own
 // collapsed-by-default cards — expand one to see its plans, using the
@@ -1062,7 +1079,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.59';
+const VERSION = '2.60';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2344,6 +2361,39 @@ function exerciseName(id) { const e = exerciseById(id); return e ? e.name : '(re
 function exerciseType(id) { const e = exerciseById(id); return e ? e.type : 'reps'; }
 function planById(id) { return _env.data.plans.find(p=>p.id===id); }
 
+// GYM-058 fix: this function was accidentally deleted in v2.59 while the
+// surrounding list logic (renderPlanList/renderProgramCard) was being
+// restructured for Programs — it's called from both, but its own
+// definition never made it into that release, which threw "Can't find
+// variable: renderPlanCard" the moment the Plans tab (or anything that
+// refreshes it, including a program import) tried to render. Restored
+// here unchanged from before that restructure.
+function renderPlanCard(p, idx, list, sessions) {
+  const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const last = done[0];
+  const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
+  const timeTotal = planTimeTotal(p.items);
+  const timeStr = timeTotal>0 ? ' · ⏱ ~'+timeTotal+' min' : '';
+  return `<div class="list-item">
+    <div class="li-top">
+      <div>
+        <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
+        <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
+      </div>
+      <span style="display:flex;align-items:center;gap:2px;flex-shrink:0">
+        <button class="pib-reorder" onclick="movePlanOrder('${p.id}',-1)" ${idx===0?'disabled':''} title="Move up">▲</button>
+        <button class="pib-reorder" onclick="movePlanOrder('${p.id}',1)" ${idx===list.length-1?'disabled':''} title="Move down">▼</button>
+      </span>
+    </div>
+    <div class="li-actions">
+      <button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button>
+      <button class="btn btn-secondary btn-sm" onclick="openPlanEditor('${p.id}')">Edit</button>
+      ${last?`<button class="btn btn-secondary btn-sm" onclick="updatePlanFromLastSession('${p.id}')">🔄 Update targets</button>`:''}
+      <button class="btn btn-secondary btn-sm" onclick="archivePlan('${p.id}')">📦 Archive</button>
+      <button class="btn btn-danger btn-sm" onclick="deletePlan('${p.id}')">Delete</button>
+    </div>
+  </div>`;
+}
 // GYM-057: programs are now their own collapsed-by-default card, listed
 // first, showing plan count and an ★ Active badge; expanding reveals its
 // plans rendered via the same renderPlanCard used everywhere else.
