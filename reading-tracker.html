@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.25</title>
+<title>Reading Tracker v3.26</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -696,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.25</span></div>
+    <div class="rt-logo">My Reading <span>v3.26</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1125,7 +1125,7 @@
         <option value="genre">Genre</option>
         <option value="pages_asc">Pages ↑</option>
         <option value="pages_desc">Pages ↓</option>
-        <option value="tag_group">Group by tag</option>
+        <option value="tag_group" selected>Group by tag</option>
       </select>
     </div>
     <div id="wlTagFilterBar"></div>
@@ -1562,6 +1562,21 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.26 (MR-017): cross-device sync gap — tags/ownership added on one
+// device not showing up on another. Root cause: the cloud push after any
+// edit is debounced 1.5s (syncToCloud/_syncTimer) to batch rapid saves,
+// but nothing ever flushed that pending timer early — if the tab was
+// backgrounded (switching to check another device) or closed before the
+// 1.5s fired, the setTimeout was simply dropped and the push never
+// happened. The edit was never lost locally (still correctly in
+// localStorage on the device that made it), it just never left that
+// device, so a pull from anywhere else legitimately fetched the old
+// pre-edit cloud data — indistinguishable from "sync silently reverted
+// my changes" without knowing the debounce was the reason. Added
+// flushPendingSync(), wired to visibilitychange (tab hidden) and pagehide
+// (tab closed/navigated away), which immediately runs the pending push
+// instead of waiting out the rest of the debounce window.
+// Also: "Group by tag" is now the default wishlist sort, per request.
 // v3.25 (MR-016): "Group by tag" added to the wishlist sort dropdown.
 // One section per tag (alphabetical), each with its own "+ tracker"
 // button reusing createTrackerFromTag(); an item with multiple tags
@@ -1962,26 +1977,50 @@ function syncToCloud() {
   if (!_currentUser) return;
   _pendingSync = true;
   clearTimeout(_syncTimer);
-  _syncTimer = setTimeout(async () => {
-    if (!_currentUser || !_pendingSync) return;
-    _pendingSync = false;
-    showSync("saving", "Saving…");
-    let ok = await pushAllToCloud();
-    // v2.6 (MR-002): one silent retry before surfacing an error. This call
-    // fires automatically (e.g. right after cold app-open, pushing local
-    // data up when no cloud copy was found) rather than from a direct user
-    // action, so a single transient hiccup shouldn't read as a real error —
-    // a manual push/pull is still one tap away if it genuinely keeps failing.
-    if (!ok) {
-      await new Promise(r => setTimeout(r, 1200));
-      ok = await pushAllToCloud();
-    }
-    // v2.7 (MR-003): include the captured reason so if this recurs, the
-    // actual cause is visible instead of a generic message.
-    const failMsg = "Cloud save failed" + (_lastCloudError ? " (" + _lastCloudError + ")" : "") + " — data saved locally";
-    showSync(ok ? "ok" : "red", ok ? "Saved ✓" : failMsg);
-  }, 1500); // 1.5s debounce — batches rapid saves
+  _syncTimer = setTimeout(runPendingSync, 1500); // 1.5s debounce — batches rapid saves
 }
+
+// v3.26 (MR-017): extracted from syncToCloud's setTimeout callback so
+// flushPendingSync() (below) can run the exact same push immediately,
+// instead of duplicating it.
+async function runPendingSync() {
+  if (!_currentUser || !_pendingSync) return;
+  _pendingSync = false;
+  showSync("saving", "Saving…");
+  let ok = await pushAllToCloud();
+  // v2.6 (MR-002): one silent retry before surfacing an error. This call
+  // fires automatically (e.g. right after cold app-open, pushing local
+  // data up when no cloud copy was found) rather than from a direct user
+  // action, so a single transient hiccup shouldn't read as a real error —
+  // a manual push/pull is still one tap away if it genuinely keeps failing.
+  if (!ok) {
+    await new Promise(r => setTimeout(r, 1200));
+    ok = await pushAllToCloud();
+  }
+  // v2.7 (MR-003): include the captured reason so if this recurs, the
+  // actual cause is visible instead of a generic message.
+  const failMsg = "Cloud save failed" + (_lastCloudError ? " (" + _lastCloudError + ")" : "") + " — data saved locally";
+  showSync(ok ? "ok" : "red", ok ? "Saved ✓" : failMsg);
+}
+
+// v3.26 (MR-017): a pending debounced push is just a setTimeout — if the
+// tab is closed, backgrounded, or the phone app is switched away from
+// before that 1.5s timer fires, the timer is simply dropped and the push
+// never happens. The edit stays correct in localStorage on that device
+// (nothing is lost there), but it never reaches the cloud, so any other
+// device pulls the old pre-edit data — looking exactly like "my tags/
+// ownership changes didn't sync," because they genuinely never left the
+// device that made them. Flush immediately (skip the remaining debounce)
+// the moment the tab is hidden or about to be torn down, so a same-second
+// device switch has already started the push instead of still waiting
+// out the debounce window.
+function flushPendingSync() {
+  if (!_pendingSync) return;
+  clearTimeout(_syncTimer);
+  runPendingSync();
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushPendingSync(); });
+window.addEventListener("pagehide", flushPendingSync);
 
 // ── Periodic background pull ────────────────────────────────────────────
 // v3.9 (MR-005): now a real per-record pull (was a whole-blob pull under
@@ -4533,7 +4572,7 @@ function renderWishlistView() {
   body.innerHTML = "";
 
   // Sort
-  const sort = document.getElementById("wlSortSel")?.value || "manual";
+  const sort = document.getElementById("wlSortSel")?.value || "tag_group";
   let sorted = [...wl];
   // v3.25 (MR-016): Group by tag mode ignores the standalone single-tag
   // filter — narrowing to one tag here before grouping would leave only
