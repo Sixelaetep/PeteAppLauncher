@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.20</title>
+<title>Reading Tracker v3.21</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -673,7 +673,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.20</span></div>
+    <div class="rt-logo">My Reading <span>v3.21</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1265,9 +1265,21 @@ const state = {
   get activeBookId() { return this._t ? this._t.activeBookId : null; },
   get books()        { return this._t ? this._t.books        : []; },
   get entries()      { return this._t ? this._t.entries      : []; },
-  set trackerName(v)  { if (this._t) this._t.trackerName  = v; },
-  set targetDate(v)   { if (this._t) this._t.targetDate   = v; },
-  set activeBookId(v) { if (this._t) this._t.activeBookId = v; },
+  // v3.21 (MR-012 root cause): these setters used to write the field and
+  // nothing else. The tracker record syncs to the cloud last-write-wins on
+  // t.updatedAt — but updatedAt was only ever stamped once, at creation
+  // (see backfillReadingTimestamps' `if (!t.updatedAt)`), and never
+  // refreshed on real edits. Pinning a different active book, renaming a
+  // tracker, or changing its target date is a genuine change to that
+  // record and MUST bump updatedAt, or a later background sync can pull
+  // in a stale cloud copy of the tracker — still showing the OLD active
+  // book — and the merge has no way to know your local pin is newer. That
+  // silent revert (visible card stays on the new book, but the underlying
+  // activeBookId snaps back to the just-completed one) is exactly what
+  // produced "must be higher than chapter 72" on a card reading "0 of 87".
+  set trackerName(v)  { if (this._t) { this._t.trackerName  = v; this._t.updatedAt = new Date().toISOString(); } },
+  set targetDate(v)   { if (this._t) { this._t.targetDate   = v; this._t.updatedAt = new Date().toISOString(); } },
+  set activeBookId(v) { if (this._t) { this._t.activeBookId = v; this._t.updatedAt = new Date().toISOString(); } },
   set books(v)        { if (this._t) this._t.books        = v; },
   set entries(v)      { if (this._t) this._t.entries      = v; },
 };
@@ -1500,6 +1512,20 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.21 (MR-012 — real root cause, found from a screenshot after v3.20):
+// v3.20 hardened the visible symptoms, but the actual cause was upstream —
+// tracker-level fields (activeBookId, trackerName, targetDate) synced
+// last-write-wins on t.updatedAt, but that timestamp was only ever
+// stamped once at creation and never refreshed on real edits. Pinning a
+// new active book didn't count as "newer," so a later background sync
+// could pull in a stale cloud copy of the tracker — still pointing at
+// the just-completed book — and silently revert the pin. The Now
+// Reading card stayed on the new book's title, but validation (which
+// reads state.activeBookId live) then measured against the reverted-to
+// book's chapter count. Fixed by stamping t.updatedAt on every write
+// through the state proxy's trackerName/targetDate/activeBookId setters,
+// so sync correctly treats a pin/rename/target change as the latest
+// edit to that tracker record and it survives the next merge.
 // v3.20 (MR-012): "next book shows old book's last chapter" fix.
 // Progress display was already correctly scoped per-bookId (highestPageFor
 // filters by bookId, so a freshly-activated book with no entries always
