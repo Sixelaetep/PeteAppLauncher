@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.19</title>
+<title>Reading Tracker v3.20</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -673,7 +673,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.19</span></div>
+    <div class="rt-logo">My Reading <span>v3.20</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1500,6 +1500,27 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.20 (MR-012): "next book shows old book's last chapter" fix.
+// Progress display was already correctly scoped per-bookId (highestPageFor
+// filters by bookId, so a freshly-activated book with no entries always
+// computed as 0) — but three real issues combined to make it look like a
+// carried-over chapter number in practice:
+//  1. setActiveBook() didn't clear the shared #nrLogPage quick-log input,
+//     so a number typed (but not yet submitted) for the book you just
+//     finished could still be sitting in the box when you pinned the next
+//     book — now cleared on every active-book switch.
+//  2. toggleManualComplete() referenced _nrCt, a variable scoped inside
+//     renderNowReading() and never in scope here — a genuine ReferenceError
+//     on the "already fully logged, nothing to toggle" path. Fixed to look
+//     up the active tracker itself.
+//  3. Books finished via the manual-complete tick (no final entry logged
+//     that day) previously left no timestamp — so the "your next book's
+//     daily target should still be reduced by what you finished today"
+//     cross-book credit only applied when completion came from an actual
+//     logged entry. Books now stamp completedDate when they're marked
+//     done (either route); the Now Reading credit calc uses it as a
+//     fallback so a same-day manual completion still counts fully towards
+//     today's target, matching the entry-logged case.
 // v3.19: save() now posts RT_DATA_UPDATED to window.parent after every
 // localStorage write. The launcher listens for this and calls
 // refreshCardStats() so the Reading card updates immediately when
@@ -2250,6 +2271,14 @@ function renderBooks() {
 // ── Active book & Now Reading card ───────────────────────────────────
 function setActiveBook(bookId) {
   state.activeBookId = state.activeBookId === bookId ? null : bookId;
+  // v3.20 (MR-012): the Now Reading quick-log input is one shared element
+  // reused for whichever book is active — clear any unsubmitted value so
+  // a number typed for the book you just finished can never carry over
+  // (visually or via accidental submit) into the newly-activated book.
+  const nrInp = document.getElementById("nrLogPage");
+  if (nrInp) nrInp.value = "";
+  const nrHint = document.getElementById("nrLogHint");
+  if (nrHint) { nrHint.textContent = ""; nrHint.className = "nr-log-hint field-hint"; }
   render();
 }
 
@@ -2317,12 +2346,18 @@ function renderNowReading(reqDaily) {
   let pagesReadTodayOtherBooks = 0;
   state.books.forEach(b => {
     if (b.id === book.id) return; // skip active book
-    const bookTodayEntries = todayAllBooks.filter(e => e.bookId === b.id);
-    if (bookTodayEntries.length === 0) return;
-    const highestToday = Math.max(...bookTodayEntries.map(e => safePage(e.pageTo)));
     const bPrior = state.entries.filter(e => e.bookId === b.id && e.date < today);
     const bStart = bPrior.length > 0 ? Math.max(...bPrior.map(e => safePage(e.pageTo))) : 0;
-    pagesReadTodayOtherBooks += Math.max(0, highestToday - bStart);
+    const bookTodayEntries = todayAllBooks.filter(e => e.bookId === b.id);
+    if (bookTodayEntries.length > 0) {
+      const highestToday = Math.max(...bookTodayEntries.map(e => safePage(e.pageTo)));
+      pagesReadTodayOtherBooks += Math.max(0, highestToday - bStart);
+    } else if (b.completedDate === today) {
+      // v3.20 (MR-012): finished today via the manual-complete tick, with
+      // no final-chapter entry logged — still credit the remaining pages/
+      // chapters towards today, same as the logged-entry case above.
+      pagesReadTodayOtherBooks += Math.max(0, b.pages - bStart);
+    }
   });
 
   const reqRemaining = Math.max(0, (reqDaily || 0) - pagesReadTodayOtherBooks);
@@ -2424,13 +2459,22 @@ function toggleManualComplete(bookId) {
   // If pages are fully logged (auto-complete), unticking clears manualComplete only
   // but the book will still show complete from page count — warn the user
   const fullyLogged = highestPageFor(bookId) >= book.pages;
+  // v3.20 (MR-012): was `_nrCt`, a variable scoped inside renderNowReading()
+  // and never in scope here — threw a ReferenceError every time this branch
+  // fired. Look the active tracker up fresh instead.
+  const _tmCt = appState.trackers.find(t => t.id === appState.activeTrackerId);
   if (fullyLogged) {
     // Already complete via entries — checkbox is informational, nothing to toggle
-    showToast(`All ${unit(_nrCt, true)} are logged — edit entries to change progress`);
+    showToast(`All ${unit(_tmCt, true)} are logged — edit entries to change progress`);
     render(); // re-render to restore checked state
     return;
   }
   book.manualComplete = !book.manualComplete;
+  // v3.20 (MR-012): stamp when a book was manually finished so a same-day
+  // completion with no logged final entry can still credit today's target
+  // on whichever book becomes active next (see renderNowReading).
+  if (book.manualComplete) book.completedDate = todayISO();
+  else delete book.completedDate;
   showToast(book.manualComplete ? "Marked as complete ✓" : "Unmarked — back in progress");
   render();
 }
@@ -2649,6 +2693,10 @@ function logPages(bookId, pageTo, clearInputId) {
     if (el) el.value = "";
   }
   const nowComplete = pageTo >= book.pages;
+  // v3.20 (MR-012): stamp completion date so the cross-book daily-target
+  // credit (renderNowReading) can recognise "finished today" consistently,
+  // the same way it already does for entries logged today.
+  if (nowComplete) book.completedDate = todayISO();
   render();
   if (nowComplete) {
     showToast(`🎉 "${book.title}" finished!`);
