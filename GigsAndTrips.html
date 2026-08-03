@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.11</title>
+<title>Gigs &amp; Trips v7.12</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -273,6 +273,26 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .day-cost{font-size:13px;font-weight:600;color:var(--ink2)}
 .day-body{padding:0 14px 12px}
 
+/* ── Trip card day breakdown (GIG-037) — collapsed by default, two
+   levels: the toggle reveals a mini day list, each mini day-card's own
+   items are a second, independently-collapsible level underneath it.
+   Smaller versions of .day-card/.day-hdr/.day-num above. ── */
+.trip-days-toggle{display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 14px;font-size:12px;font-weight:600;color:var(--acc-dk);background:var(--acc-dim);cursor:pointer;border-top:1px solid var(--bdr);-webkit-tap-highlight-color:transparent}
+.trip-days-toggle:active{opacity:.7}
+.trip-days-mini{padding:8px 14px 12px;background:var(--surf);border-top:1px solid var(--bdr)}
+.mini-day-card{background:var(--card);border-radius:var(--rsm);border:1px solid var(--bdr);margin-bottom:6px;overflow:hidden}
+.mini-day-card:last-child{margin-bottom:0}
+.mini-day-hdr{display:flex;align-items:center;padding:7px 10px;gap:8px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.mini-day-num{width:20px;height:20px;border-radius:50%;background:var(--acc-dim);color:var(--acc-dk);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.mini-day-date{font-size:12px;font-weight:600;color:var(--ink);flex:1}
+.mini-day-count{font-size:11px;color:var(--ink3)}
+.mini-day-chevron{font-size:10px;color:var(--ink3)}
+.mini-day-items{padding:2px 10px 8px 38px;border-top:1px solid var(--bdr)}
+.mini-item-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;color:var(--ink2)}
+.mini-item-icon{flex-shrink:0}
+.mini-item-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-item-time{font-size:11px;color:var(--ink3);flex-shrink:0}
+
 /* ── Timeline strip ─────────────────────────────────────────────── */
 .tl-strip{display:flex;align-items:center;padding:8px 0 4px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .tl-strip::-webkit-scrollbar{display:none}
@@ -456,7 +476,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.11</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.12</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
@@ -1272,7 +1292,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.11</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.12</span>';
   document.getElementById('hdrAction').style.display='none';
 }
 
@@ -1795,6 +1815,78 @@ function renderGigCard(g, d){
   </div>`;
 }
 
+// ── Trip card day breakdown (GIG-037) ───────────────────────────────
+// Two independent collapse levels, both collapsed by default:
+// 1. _expandedTripCards — whether a trip card shows its day list at all
+// 2. _expandedTripCardDays — whether one specific day within an expanded
+//    trip card shows its item list (keyed 'tripId:dayId' since day ids
+//    aren't unique across trips)
+let _expandedTripCards=null;
+let _expandedTripCardDays=null;
+function toggleTripCardExpand(tripId){
+  if(!_expandedTripCards) _expandedTripCards=new Set();
+  if(_expandedTripCards.has(tripId)) _expandedTripCards.delete(tripId); else _expandedTripCards.add(tripId);
+  render();
+}
+function toggleTripCardDay(tripId,dayId){
+  if(!_expandedTripCardDays) _expandedTripCardDays=new Set();
+  const key=tripId+':'+dayId;
+  if(_expandedTripCardDays.has(key)) _expandedTripCardDays.delete(key); else _expandedTripCardDays.add(key);
+  render();
+}
+function tripItemCount(t){
+  return (t.days||[]).reduce((sum,day)=>sum+(day.items||[]).filter(it=>!it._placeholder).length,0);
+}
+// Items in day/time order (position order from the Trip Details view —
+// see sortDayTimeline, GIG-036), with times shown where set.
+function renderMiniDayItems(items){
+  if(!items.length) return `<div class="mini-day-items"><div style="font-size:11px;color:var(--ink4);padding:4px 0">No items yet</div></div>`;
+  let html=`<div class="mini-day-items">`;
+  sortDayTimeline(items).forEach(it=>{
+    const tm=itemTime(it);
+    html+=`<div class="mini-item-row">
+      <span class="mini-item-icon">${typeIcon(it.type)}</span>
+      <span class="mini-item-name">${esc(itemDisplayName(it))}</span>
+      ${tm?`<span class="mini-item-time">${tm}</span>`:''}
+    </div>`;
+  });
+  return html+`</div>`;
+}
+// The trip card's day-breakdown block: a toggle line ("N days · M items")
+// and, once expanded, one mini day-card per day — each independently
+// collapsible down to its item list, collapsed by default.
+function renderTripDaysBreakdown(t){
+  const dayCount=(t.days||[]).length;
+  if(!dayCount) return '';
+  const itemCount=tripItemCount(t);
+  const isExpanded=_expandedTripCards&&_expandedTripCards.has(t.id);
+  let html=`<div class="trip-days-toggle" onclick="event.stopPropagation();toggleTripCardExpand('${esc(t.id)}')">
+    <span>${isExpanded?'▾':'▸'} ${dayCount} day${dayCount!==1?'s':''} · ${itemCount} item${itemCount!==1?'s':''}</span>
+  </div>`;
+  if(isExpanded){
+    const sortedDays=(t.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    html+=`<div class="trip-days-mini">`;
+    sortedDays.forEach(day=>{
+      const realItems=(day.items||[]).filter(it=>!it._placeholder);
+      const dObj=new Date(day.date+'T00:00:00');
+      const dayKey=t.id+':'+day.id;
+      const dayExpanded=_expandedTripCardDays&&_expandedTripCardDays.has(dayKey);
+      html+=`<div class="mini-day-card">
+        <div class="mini-day-hdr" onclick="event.stopPropagation();toggleTripCardDay('${esc(t.id)}','${esc(day.id)}')">
+          <span class="mini-day-num">${day.dayNumber}</span>
+          <span class="mini-day-date">${fmtDateShort(day.date)} ${dow[dObj.getDay()]}</span>
+          <span class="mini-day-count">${realItems.length} item${realItems.length!==1?'s':''}</span>
+          <span class="mini-day-chevron">${dayExpanded?'▾':'▸'}</span>
+        </div>
+        ${dayExpanded?renderMiniDayItems(realItems):''}
+      </div>`;
+    });
+    html+=`</div>`;
+  }
+  return html;
+}
+
 function renderTripCard(t, d){
   const nights=tripNights(t);
   const sc=t.status==='Completed'?'sp-completed':t.status==='Booked'?'sp-booked':t.status==='Cancelled'?'sp-cancelled':'sp-planning';
@@ -1849,6 +1941,7 @@ function renderTripCard(t, d){
     </div>
     ${gigsHtml}
     ${(t.status!=='Completed'&&t.status!=='Cancelled')?renderGymPlansInRange(t.startDate,t.endDate):''}
+    ${renderTripDaysBreakdown(t)}
   </div>`;
 }
 
@@ -3951,6 +4044,14 @@ function tripNights(t){
 // clipboard too (copyTripItineraryToClipboard). Food/Attraction/Keystop/
 // Other item types gained a new optional time field to support this;
 // Travel/Accommodation reuse their existing departure/check-in time.
+// v7.12 (GIG-037): trip cards in Upcoming/Past now show a "N days · M
+// items" toggle (renderTripDaysBreakdown), collapsed by default. Expanding
+// reveals a mini day-card per day of the trip (smaller version of the
+// Trip Details day-card); each mini day-card is itself independently
+// collapsible down to its item list (also collapsed by default), shown
+// in the same day/time order as Trip Details (sortDayTimeline, GIG-036)
+// with times displayed where set. All toggles stopPropagation so they
+// don't also trigger the card's own openTripDetail() navigation.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
