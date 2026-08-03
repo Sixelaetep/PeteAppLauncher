@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.23</title>
+<title>Reading Tracker v3.24</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -695,7 +695,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.23</span></div>
+    <div class="rt-logo">My Reading <span>v3.24</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1560,6 +1560,15 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.24 (MR-015): deleting a tracker no longer silently wipes its books.
+// Raised by Pete asking what happens to books in a deleted tracker — the
+// honest answer was "gone, no safety net," inconsistent with removing a
+// single book (moveBookToWishlist), which archives progress and sends it
+// to the wishlist. deleteTracker() now does the same at tracker scope:
+// every book becomes a wishlist item with entries/notes/review archived
+// (restored automatically if added back to a tracker later), and only
+// the emptied-out tracker record + the original book/entry records get
+// tombstoned in the cloud.
 // v3.23 (MR-014): searchable tags + a sync-correctness sweep.
 //  - Root cause of "tags not saving": same class of bug as MR-012's
 //    activeBookId sync-revert, now on wishlist items — editing tags (or
@@ -4015,14 +4024,48 @@ function renderDashboard() {
   updateWishlistCard();
 }
 
+// v3.24 (MR-015): deleting a tracker used to be a full, silent wipe of
+// every book and entry inside it — inconsistent with removing a single
+// book, which sends it back to the wishlist with progress archived
+// (moveBookToWishlist). This now does the same thing at tracker scope:
+// every book in the tracker becomes a wishlist item with its reading
+// history/notes/review archived (restored automatically if it's ever
+// added back to a tracker), and only the now-empty tracker record itself
+// plus the original book/entry records get tombstoned — the wishlist
+// items are new records, not tombstoned copies.
 function deleteTracker(id) {
-  if (!confirm("Delete this tracker and all its data? This cannot be undone.")) return;
   const tracker = appState.trackers.find(t => t.id === id);
+  if (!tracker) return;
+  const bookCount = (tracker.books || []).length;
+  const bookWord  = bookCount === 1 ? "book" : "books";
+  if (!confirm(`Delete "${tracker.trackerName}"? ${bookCount > 0 ? `Its ${bookCount} ${bookWord} will be sent back to the wishlist (progress archived) — the tracker itself cannot be undone.` : "This cannot be undone."}`)) return;
+
+  const wType = isAudible(tracker) ? "audiobook" : "book";
+  (tracker.books || []).forEach(book => {
+    const bookEntries = (tracker.entries || []).filter(e => e.bookId === book.id);
+    appState.wishlist.push({
+      id: uid(),
+      title:  book.title,
+      author: book.author || "",
+      genre:  book.genre  || "",
+      pages:  book.pages  || 0,
+      type:   wType,
+      tags:   [],
+      ownership: book.ownership || "wanted",
+      archivedProgress: {
+        entries: bookEntries.map(e => ({ date: e.date, pageTo: e.pageTo })),
+        notes:   book.notes  || [],
+        review:  book.review || { rating: 0, text: "" }
+      }
+    });
+  });
+
   appState.trackers = appState.trackers.filter(t => t.id !== id);
   save();
   renderDashboard();
-  showToast("Tracker deleted");
-  if (tracker) tombstoneTrackerInCloud(tracker);
+  updateWishlistCard();
+  showToast(bookCount > 0 ? `Tracker deleted — ${bookCount} ${bookWord} sent to wishlist ✓` : "Tracker deleted");
+  tombstoneTrackerInCloud(tracker);
 }
 
 // v3.10 (MR-010): deleteTracker only ever spliced the tracker out of the
