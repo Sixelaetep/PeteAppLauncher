@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.29</title>
+<title>Reading Tracker v3.30</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -696,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.29</span></div>
+    <div class="rt-logo">My Reading <span>v3.30</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1392,6 +1392,43 @@ function renderRtSyncLog() {
     : '<div class="log-entry info">No sync activity yet</div>';
 }
 
+// v3.30 (MR-016): the actual, confirmed root cause — found by reading the
+// real pal-sync.js source Pete shared, not by guessing further.
+//  - Bug in v3.29's OWN diagnostics: "0 wishlist rows seen in cloud fetch"
+//    was checking row.id, but rows returned by fetchTableRows() are
+//    shaped { record_key, data, updated_at } — there is no row.id. Every
+//    prior diagnostic reading was meaningless; fixed to read record_key
+//    (prefix match) and row.data (tags/ownership) correctly, and now logs
+//    the CLOUD's own tagged/owned counts directly, independent of the
+//    merge outcome, so a genuinely empty/untagged cloud can be told apart
+//    from a merge that just didn't pick the tags up.
+//  - The real bug: table().pull() only ever pushes a record to Supabase
+//    if its id is brand-new (missing from cloud entirely) or an
+//    unconfirmed tombstone. There is no case in that function for "this
+//    id already exists in the cloud, my local copy is just newer, push
+//    it." That's a structural property of the shared library — confirmed
+//    from its source, not inferred — and it means the ordinary batched
+//    sync (pushAllToCloud → pullAllFromCloud → table().pull()) can never
+//    propagate an EDIT to a book or wishlist item that was already synced
+//    before the edit. Since virtually every one of Pete's 16 wishlist
+//    items and existing tracker books predate the tags/ownership/notes
+//    features, ordinary edits to them were silently never reaching the
+//    cloud via the normal sync path — regardless of how correct touch(),
+//    save(), or renderAll() were, because none of that matters if nothing
+//    ever calls upsert() for an existing record.
+//  - v3.29 already added pushWishlistItemNow() for wishlist edits, which
+//    sidesteps this correctly (upsert() is a plain PATCH-or-POST that
+//    doesn't care whether the record is new). This release extends the
+//    exact same direct-push pattern to books: pushBookNow(), wired into
+//    every book mutation (ownership, manual-complete, rating, review,
+//    notes, book edit, and the completedDate stamp in logPages) —
+//    correctly including trackerId, which flattenForSync()/
+//    reassembleFromSync() need to attach a pulled book to the right
+//    tracker.
+//  - No new Supabase table needed — this closes the gap without any
+//    infrastructure change, by no longer depending on table().pull()'s
+//    push step for anything except brand-new records and deletions,
+//    which is genuinely all it was ever designed to handle.
 // v3.29 (MR-016): detailed, content-level diagnostics — not just "synced ✓"
 // but what was actually IN each push/pull, specifically for wishlist
 // tags/ownership since that's the one collection reported as not
@@ -1937,14 +1974,23 @@ async function pullAllFromCloud() {
     const rows = await window.PalSync.fetchTableRows('reading_records');
     const flat = flattenForSync();
 
-    // v3.29 (MR-016): diagnostics — logged before any merge happens, so we
-    // can see exactly what this device had locally and what actually came
-    // back from Supabase for wishlist records specifically, rather than
-    // inferring it from whether the screen looks right afterwards.
+    // v3.30 (MR-016): the v3.29 diagnostic was itself buggy — it checked
+    // row.id, which doesn't exist on what fetchTableRows() actually
+    // returns. Read pal-sync.js's real source (Pete shared it): each row
+    // is shaped { record_key, data, updated_at } — the record's own id
+    // lives at row.data.id, and the prefix lives in row.record_key, not
+    // row.id. That bug made every "0 wishlist rows seen in cloud fetch"
+    // log meaningless — it would have shown 0 even if the cloud had every
+    // row correctly. Fixed here to inspect the ACTUAL cloud content
+    // directly (not just post-merge counts), so we can tell "cloud
+    // genuinely has no tags on these rows" apart from "cloud has them
+    // but the merge/render didn't pick them up."
+    const wlRows = Array.isArray(rows) ? rows.filter(r => typeof r.record_key === "string" && r.record_key.indexOf("wishlist_") === 0) : [];
+    const wlCloudTagged = wlRows.filter(r => r.data && Array.isArray(r.data.tags) && r.data.tags.length > 0).length;
+    const wlCloudOwned  = wlRows.filter(r => r.data && r.data.ownership === "owned").length;
     const wlLocalTagged = flat.wishlist.filter(w => (w.tags||[]).length > 0).length;
     const wlLocalOwned  = flat.wishlist.filter(w => w.ownership === "owned").length;
-    const wlCloudRows   = Array.isArray(rows) ? rows.filter(r => typeof r.id === "string" && r.id.startsWith("wishlist_")).length : "n/a";
-    logSyncDiag(`Wishlist before pull: ${flat.wishlist.length} local (${wlLocalTagged} tagged, ${wlLocalOwned} owned) · ${wlCloudRows} wishlist rows seen in cloud fetch`, "info");
+    logSyncDiag(`Wishlist before pull: ${flat.wishlist.length} local (${wlLocalTagged} tagged, ${wlLocalOwned} owned) · cloud has ${wlRows.length} wishlist rows (${wlCloudTagged} tagged, ${wlCloudOwned} owned)`, "info");
 
     const trackersResult = await _rtTrackers.pull(flat.trackers, 'id', 'updatedAt', rows);
     const booksResult    = await _rtBooks.pull(flat.books, 'id', 'updatedAt', rows);
@@ -1952,13 +1998,14 @@ async function pullAllFromCloud() {
     const wishlistResult = await _rtWishlist.pull(flat.wishlist, 'id', 'updatedAt', rows);
 
     // v3.29 (MR-016): same check, after the merge — if tagged/owned counts
-    // drop here relative to "before," the merge itself is the problem; if
-    // they're already 0 here despite tags existing locally in flat.wishlist
-    // (logged above), the fault is in what pal-sync's .pull() actually
-    // wrote to and read back from Supabase, not in this app's own code.
+    // drop here relative to what the cloud actually had (logged just
+    // above, now correctly), the MERGE is the problem; if the cloud
+    // itself already had 0 (also visible above), the fault is upstream of
+    // this device entirely — whatever pushed these records never sent
+    // tags/ownership in the first place.
     const wlMergedTagged = wishlistResult.merged.filter(w => !w._deleted && (w.tags||[]).length > 0).length;
     const wlMergedOwned  = wishlistResult.merged.filter(w => !w._deleted && w.ownership === "owned").length;
-    logSyncDiag(`Wishlist after pull: ${wishlistResult.merged.length} merged (${wlMergedTagged} tagged, ${wlMergedOwned} owned) · ${wishlistResult.pushedCount} pushed up`, "info");
+    logSyncDiag(`Wishlist after pull: ${wishlistResult.merged.length} merged (${wlMergedTagged} tagged, ${wlMergedOwned} owned) · ${wishlistResult.pushedCount} pushed up, ${wishlistResult.retriedDeleteCount||0} tombstone retries`, "info");
 
     reassembleFromSync({
       trackers: trackersResult.merged, books: booksResult.merged,
@@ -2649,7 +2696,7 @@ function setActiveBook(bookId) {
   // Owned tag, and does nothing on unpin.
   if (state.activeBookId === bookId) {
     const book = state.books.find(b => b.id === bookId);
-    if (book && book.ownership !== "owned") touch(book).ownership = "owned";
+    if (book && book.ownership !== "owned") { touch(book).ownership = "owned"; pushBookNow(book); }
   }
   // v3.20 (MR-012): the Now Reading quick-log input is one shared element
   // reused for whichever book is active — clear any unsubmitted value so
@@ -2859,6 +2906,7 @@ function toggleManualComplete(bookId) {
   // timestamp — same sync-revert protection as MR-012's activeBookId fix.
   // render() (below) already persists locally and schedules a sync push.
   touch(book);
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
   showToast(book.manualComplete ? "Marked as complete ✓" : "Unmarked — back in progress");
   render();
 }
@@ -3093,7 +3141,7 @@ function logPages(bookId, pageTo, clearInputId) {
   // v3.23 (MR-014): touch() so the completedDate stamp above refreshes
   // the book's sync timestamp too — render() (below) already persists
   // locally and schedules a sync push.
-  if (nowComplete) touch(book);
+  if (nowComplete) { touch(book); pushBookNow(book); } // v3.30 (MR-016): direct push, see function comment
   render();
   if (nowComplete) {
     showToast(`🎉 "${book.title}" finished!`);
@@ -3250,6 +3298,7 @@ function setRating(bookId, rating) {
   // timestamp — render() (below) already persists locally and schedules
   // a sync push.
   touch(book);
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
   render();
 }
 
@@ -3261,6 +3310,7 @@ function saveReview(bookId) {
   if (el) book.review.text = el.value;
   touch(book); // v3.23 (MR-014): same sync-revert fix as setRating
   save(); // save without full re-render to avoid losing focus
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────
@@ -3278,6 +3328,7 @@ function addNote(bookId) {
   // timestamp — render() (below) already persists locally and schedules
   // a sync push.
   touch(book);
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
   showToast("Note saved ✓");
   render();
   // Re-open notes section after render
@@ -3296,6 +3347,7 @@ function deleteNote(bookId, noteIdx) {
   if (!book || !book.notes) return;
   book.notes.splice(noteIdx, 1);
   touch(book); // v3.23 (MR-014): same sync-timestamp fix as addNote
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
   showToast("Note deleted");
   render();
   setTimeout(() => {
@@ -3330,6 +3382,7 @@ function saveBookEdit(bookId) {
   // timestamp — render() (below) already persists locally and schedules
   // a sync push.
   touch(book);
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
   showToast("Book updated ✓");
   render();
   // Collapse edit section after save
@@ -3352,6 +3405,7 @@ function toggleBookOwnership(bookId) {
   book.ownership = (book.ownership || "wanted") === "owned" ? "wanted" : "owned";
   touch(book); // v3.23 (MR-014): sync-revert fix, same root cause as MR-012/tags
   save();
+  pushBookNow(book); // v3.30 (MR-016): direct push, see function comment
   render();
 }
 
@@ -4687,6 +4741,34 @@ async function pushWishlistItemNow(w) {
     logSyncDiag(`Direct push "${w.title}" — tags: [${(w.tags||[]).join(', ')}], ownership: ${w.ownership||'wanted'}`, "ok");
   } catch(e) {
     logSyncDiag(`Direct push FAILED for "${w.title}": ${e && e.message ? e.message : 'unknown error'}`, "err");
+  }
+}
+
+// v3.30 (MR-016): same direct-push pattern as pushWishlistItemNow, for
+// tracker books. Confirmed by reading pal-sync.js's actual source (Pete
+// shared it): table().pull() only ever pushes a record to Supabase if
+// its id is either brand-new (missing from cloud entirely) or an
+// unconfirmed tombstone — there is no third case for "this record
+// already exists in the cloud, but my local copy is simply newer, push
+// it." That's a structural property of the shared library, not a bug
+// specific to this app, and it means the ordinary batched sync
+// (pushAllToCloud → pullAllFromCloud → table().pull()) can never
+// propagate an edit to a book/wishlist item that was already synced
+// before the edit — which describes almost everything Pete owns, since
+// most books/wishlist items existed long before tags/ownership/notes
+// were added as features. Direct upsert() bypasses this entirely: it's
+// a plain PATCH-or-POST that doesn't care whether the record is new.
+// Must include trackerId — flattenForSync()/reassembleFromSync() use it
+// to know which tracker a pulled book belongs to; omitting it would
+// mean another device correctly receives the row but silently can't
+// attach it to anything.
+async function pushBookNow(book) {
+  if (!window.PalSync.hasSession()) { logSyncDiag(`Skipped direct push for book "${book.title}" — not signed in`, "err"); return; }
+  try {
+    await _rtBooks.upsert(book.id, Object.assign({}, book, { trackerId: appState.activeTrackerId }));
+    logSyncDiag(`Direct push book "${book.title}"`, "ok");
+  } catch(e) {
+    logSyncDiag(`Direct push FAILED for book "${book.title}": ${e && e.message ? e.message : 'unknown error'}`, "err");
   }
 }
 
