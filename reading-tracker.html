@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.28</title>
+<title>Reading Tracker v3.29</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -696,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.28</span></div>
+    <div class="rt-logo">My Reading <span>v3.29</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1392,6 +1392,20 @@ function renderRtSyncLog() {
     : '<div class="log-entry info">No sync activity yet</div>';
 }
 
+// v3.29 (MR-016): detailed, content-level diagnostics — not just "synced ✓"
+// but what was actually IN each push/pull, specifically for wishlist
+// tags/ownership since that's the one collection reported as not
+// surviving a sync. Logs into the same Sync & Backup modal log the app
+// already has, so this is visible without any new UI. Doesn't touch the
+// sync status chip (showSync) — this is detail alongside it, not a
+// replacement state.
+function logSyncDiag(msg, type) {
+  const ts = new Date().toLocaleTimeString("en-GB", {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  _syncLog.unshift({ts, msg, type: type || "info"});
+  if (_syncLog.length > 120) _syncLog.length = 120;
+  renderRtSyncLog();
+}
+
 // ── Top bar navigation ────────────────────────────────────────────────
 // ── Top-level tracker completion helper ──────────────────────────────
 function isTrackerCompleteFn(t) {
@@ -1565,6 +1579,47 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.29 (MR-016): full review of the wishlist sync architecture, as
+// requested. Findings, honestly:
+//  - trackers/books/entries/wishlist all share ONE generic Supabase table
+//    (reading_records) via pal-sync.js, distinguished only by an id
+//    prefix (tracker_/book_/entry_/wishlist_). This app's OWN code for
+//    building and applying wishlist records — flattenForSync(),
+//    reassembleFromSync(), touch(), the v3.26 push-flush fix, the v3.27
+//    restore-timestamp fix, the v3.28 renderAll() fix — has now been
+//    re-verified end to end with reproducible tests and is correct: a
+//    fresh device pulling should receive whatever's actually in Supabase,
+//    with tags/ownership intact, and correctly show it.
+//  - "A different (fresh) browser shows no tags/ownership at all" is the
+//    key new fact — a brand-new device has no local data to conflict
+//    with, so if what it pulls is missing fields, those fields most
+//    likely never reached Supabase in the first place. That write
+//    happens inside pal-sync.js's .pull() (it merges AND upserts
+//    local-newer records in one call) — a shared library used by this
+//    app but not authored or visible from here, so its actual behaviour
+//    with these specific fields can't be directly inspected from this
+//    file.
+//  - Rather than build an entirely new Supabase table/schema from
+//    scratch — real infra work only Pete can execute (a migration +
+//    RLS policy, per the same pattern already true for e.g.
+//    gym_pt_sessions) — added two things that don't require any
+//    Supabase changes and that isolate the problem conclusively either
+//    way:
+//    1. pushWishlistItemNow(): every tag/ownership/wishlist-item edit
+//       now ALSO does a direct, immediate per-record upsert, reusing the
+//       exact _rtWishlist.upsert() call already proven reliable by
+//       tombstoning (deleted wishlist items correctly stay deleted
+//       across devices today — that only works if upsert() reaches
+//       Supabase correctly). This bypasses the batched multi-collection
+//       merge cycle entirely for this one write. If this still doesn't
+//       survive a sync, the fault is conclusively inside pal-sync.js,
+//       not this app.
+//    2. logSyncDiag() + detailed before/after counts in
+//       pullAllFromCloud(), visible in the existing Sync & Backup modal
+//       log: local wishlist count/tagged/owned before the pull, cloud
+//       row count seen for the wishlist_ prefix, and merged
+//       count/tagged/owned after. Next time this is tested, we get hard
+//       numbers instead of another round of guessing.
 // v3.28 (MR-015, re-opened): the actual reason "synced but new tag isn't
 // showing" kept happening after both v3.26 and v3.27. renderAll() was
 // called after every successful cloud pull (manual Pull button + the 60s
@@ -1881,10 +1936,30 @@ async function pullAllFromCloud() {
   try {
     const rows = await window.PalSync.fetchTableRows('reading_records');
     const flat = flattenForSync();
+
+    // v3.29 (MR-016): diagnostics — logged before any merge happens, so we
+    // can see exactly what this device had locally and what actually came
+    // back from Supabase for wishlist records specifically, rather than
+    // inferring it from whether the screen looks right afterwards.
+    const wlLocalTagged = flat.wishlist.filter(w => (w.tags||[]).length > 0).length;
+    const wlLocalOwned  = flat.wishlist.filter(w => w.ownership === "owned").length;
+    const wlCloudRows   = Array.isArray(rows) ? rows.filter(r => typeof r.id === "string" && r.id.startsWith("wishlist_")).length : "n/a";
+    logSyncDiag(`Wishlist before pull: ${flat.wishlist.length} local (${wlLocalTagged} tagged, ${wlLocalOwned} owned) · ${wlCloudRows} wishlist rows seen in cloud fetch`, "info");
+
     const trackersResult = await _rtTrackers.pull(flat.trackers, 'id', 'updatedAt', rows);
     const booksResult    = await _rtBooks.pull(flat.books, 'id', 'updatedAt', rows);
     const entriesResult  = await _rtEntries.pull(flat.entries, 'id', 'updatedAt', rows);
     const wishlistResult = await _rtWishlist.pull(flat.wishlist, 'id', 'updatedAt', rows);
+
+    // v3.29 (MR-016): same check, after the merge — if tagged/owned counts
+    // drop here relative to "before," the merge itself is the problem; if
+    // they're already 0 here despite tags existing locally in flat.wishlist
+    // (logged above), the fault is in what pal-sync's .pull() actually
+    // wrote to and read back from Supabase, not in this app's own code.
+    const wlMergedTagged = wishlistResult.merged.filter(w => !w._deleted && (w.tags||[]).length > 0).length;
+    const wlMergedOwned  = wishlistResult.merged.filter(w => !w._deleted && w.ownership === "owned").length;
+    logSyncDiag(`Wishlist after pull: ${wishlistResult.merged.length} merged (${wlMergedTagged} tagged, ${wlMergedOwned} owned) · ${wishlistResult.pushedCount} pushed up`, "info");
+
     reassembleFromSync({
       trackers: trackersResult.merged, books: booksResult.merged,
       entries: entriesResult.merged, wishlist: wishlistResult.merged
@@ -3298,7 +3373,7 @@ function moveBookToWishlist(bookId) {
   const wType = isAudible(_ct) ? "audiobook" : "book";
   const bookEntries = state.entries.filter(e => e.bookId === bookId);
 
-  appState.wishlist.push({
+  const newWishlistItem = {
     id: uid(),
     title:  book.title,
     author: book.author || "",
@@ -3307,18 +3382,21 @@ function moveBookToWishlist(bookId) {
     type:   wType,
     tags:   [],
     ownership: book.ownership || "wanted",
+    updatedAt: new Date().toISOString(),
     archivedProgress: {
       entries: bookEntries.map(e => ({ date: e.date, pageTo: e.pageTo })), // bookId re-keyed on restore
       notes:   book.notes  || [],
       review:  book.review || { rating: 0, text: "" }
     }
-  });
+  };
+  appState.wishlist.push(newWishlistItem);
 
   if (state.activeBookId === bookId) state.activeBookId = null;
   state.books   = state.books.filter(b => b.id !== bookId);
   state.entries = state.entries.filter(e => e.bookId !== bookId);
 
   save();
+  pushWishlistItemNow(newWishlistItem); // v3.29 (MR-016): direct push, see function comment
   showToast(`"${book.title}" moved to wishlist ✓`);
   render();
   updateWishlistCard();
@@ -4460,6 +4538,7 @@ function saveWishlistEdit(wid) {
   // tag can never be lost by forgetting to press Save.
   touch(w);
   save();
+  pushWishlistItemNow(w); // v3.29 (MR-016): direct push, see function comment
   // Re-render whichever view is active
   if (document.getElementById("wishlistApp").classList.contains("active")) renderWishlistView();
   updateWishlistCard();
@@ -4475,6 +4554,7 @@ function toggleWishlistOwnership(wid) {
   w.ownership = (w.ownership || "wanted") === "owned" ? "wanted" : "owned";
   touch(w); // v3.23 (MR-014): sync-revert fix, same root cause as tags
   save();
+  pushWishlistItemNow(w); // v3.29 (MR-016): direct push, see function comment
   renderWishlistView();
   updateWishlistCard();
 }
@@ -4528,6 +4608,7 @@ function addTagToWishlistItem(wid, rawTag) {
     w.tags.push(canonical);
     touch(w);
     save();
+    pushWishlistItemNow(w); // v3.29 (MR-016): direct push, see function comment
   }
   const inp = document.getElementById("wie-tag-search-" + wid);
   if (inp) { inp.value = ""; inp.focus(); }
@@ -4542,6 +4623,7 @@ function removeTagFromWishlistItem(wid, tag) {
   w.tags = w.tags.filter(t => t !== tag);
   touch(w);
   save();
+  pushWishlistItemNow(w); // v3.29 (MR-016): direct push, see function comment
   refreshWlTagChips(wid);
 }
 
@@ -4581,6 +4663,30 @@ async function tombstoneWishlistInCloud(item) {
     await _rtWishlist.upsert(item.id, Object.assign({}, item, { _deleted: true, updatedAt: new Date().toISOString() }));
   } catch(e) {
     console.warn('Wishlist delete sync failed:', e);
+  }
+}
+
+// v3.29 (MR-016): direct, immediate push for a single wishlist item —
+// bypasses the batched, multi-collection merge-and-push cycle
+// (pushAllToCloud → pullAllFromCloud → four .pull() calls) entirely for
+// this one write. Uses the exact same _rtWishlist.upsert() call that
+// tombstoning already depends on and that reliably works today (a
+// deleted wishlist item correctly stays deleted across every device —
+// that only happens if upsert() reaches Supabase with what we send). If
+// tags/ownership still don't survive with this direct, single-purpose
+// path, that's conclusive evidence the fault is inside pal-sync.js's
+// batched .pull() reconciliation itself — not this app's code — and no
+// further change here can fix it without seeing that file. Called
+// alongside the normal save()/touch() on every tag and ownership edit,
+// not instead of it — the batched sync still runs as before for
+// everything else.
+async function pushWishlistItemNow(w) {
+  if (!window.PalSync.hasSession()) { logSyncDiag(`Skipped direct push for "${w.title}" — not signed in`, "err"); return; }
+  try {
+    await _rtWishlist.upsert(w.id, Object.assign({}, w));
+    logSyncDiag(`Direct push "${w.title}" — tags: [${(w.tags||[]).join(', ')}], ownership: ${w.ownership||'wanted'}`, "ok");
+  } catch(e) {
+    logSyncDiag(`Direct push FAILED for "${w.title}": ${e && e.message ? e.message : 'unknown error'}`, "err");
   }
 }
 
@@ -4928,7 +5034,8 @@ function addToWishlistFromView() {
   const genre  = document.getElementById("wlAddGenre")?.value || "";
   const pages  = parseInt(document.getElementById("wlAddPages")?.value || "0") || 0;
   if (!title) { showToast("Title required"); return; }
-  appState.wishlist.push({ id: uid(), title, author, genre, pages, type: _wlType, tags: _wlAddTags, ownership: "wanted" });
+  const newItem = { id: uid(), title, author, genre, pages, type: _wlType, tags: _wlAddTags, ownership: "wanted", updatedAt: new Date().toISOString() };
+  appState.wishlist.push(newItem);
   document.getElementById("wlAddTitle").value  = "";
   document.getElementById("wlAddAuthor").value = "";
   document.getElementById("wlAddGenre").value  = "";
@@ -4937,6 +5044,7 @@ function addToWishlistFromView() {
   refreshWlAddTagsChips();
   _wlType = "book"; selectWlType("book");
   save(); renderWishlistView(); showToast("Added to wishlist ✓");
+  pushWishlistItemNow(newItem); // v3.29 (MR-016): direct push, see function comment
 }
 
 
