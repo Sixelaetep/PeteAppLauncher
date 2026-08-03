@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.10</title>
+<title>Gigs &amp; Trips v7.11</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -456,7 +456,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.10</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.11</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
@@ -561,6 +561,40 @@ const ITEM_TYPES = [
 function gigTypeInfo(k){ return GIG_TYPES.find(t=>t.key===k)||GIG_TYPES[0]; }
 function typeIcon(t){ const x=ITEM_TYPES.find(i=>i.id===t); return x?x.icon:'📌'; }
 function typeLabel(t){ const x=ITEM_TYPES.find(i=>i.id===t); return x?x.label:t; }
+
+// ── Item time + day/time ordering (GIG-036) ─────────────────────────
+// Travel and Accommodation already had a time-like field (departure /
+// check-in) before this change — reused as-is rather than duplicating a
+// second field. Food/Attraction/Keystop/Other gained a new optional
+// 'time' field. Returns null for anything left blank (untimed).
+function itemTime(it){
+  if(it._ghost) return null; // continuing stay — checkin belongs to an earlier day, not this one
+  if(it.type==='travel') return it.depTime||null;
+  if(it.type==='accommodation') return it.checkin||null;
+  return it.time||null;
+}
+// Display name — same logic already used by renderTlStrip/renderItemCard,
+// centralised here so the itinerary text generator (below) and the
+// calendar-link builder use exactly the same label the UI shows.
+function itemDisplayName(it){
+  if(it._linkedGig) return it.name;
+  if(it.type==='food') return it.name?`${it.subtype||'Food'} — ${it.name}`:(it.subtype||'Food');
+  return it.name||typeLabel(it.type);
+}
+// Sorts a day's mixed timeline (ghost stays, real items, linked gigs) so
+// untimed entries (ghost stays, items with no time set) come first as an
+// "all-day" block, then everything else in ascending time order — a day
+// with a trip shows its items in day/time order rather than manual
+// add-order. Stable within each bucket (no secondary sort key needed).
+function sortDayTimeline(items){
+  const timed=[], untimed=[];
+  items.forEach(it=>{
+    const t=it._linkedGig?(it.time||null):itemTime(it);
+    (t?timed:untimed).push({it,t});
+  });
+  timed.sort((a,b)=>a.t.localeCompare(b.t));
+  return [...untimed.map(x=>x.it),...timed.map(x=>x.it)];
+}
 function sym(curr){ const c=CURRENCIES.find(x=>x.c===curr); return c?c.s:'£'; }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
@@ -1238,7 +1272,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.10</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.11</span>';
   document.getElementById('hdrAction').style.display='none';
 }
 
@@ -2224,6 +2258,7 @@ function saveTrip(existingId){
     t.calendarAdded=true;
     t.updatedAt=new Date().toISOString();
     window.open(gcalTripUrl(t),'_blank','noopener');
+    copyTripItineraryToClipboard(t); // GIG-036 — see markCalendarAdded for the repeat-send path
   }
   saveEvent(t); closeModal();
   if(!isNew){ _view='tripDetail'; openTripDetail(t.id,_curTripTab); }
@@ -2369,7 +2404,7 @@ function openTripDetail(id, tab){
         // Timeline items — real items + ghost stays from multi-night acc + linked gigs
         const gigsThisDay=linkedGigs.filter(g=>g.date===day.date);
         const ghostsThisDay=getAccGhosts(trip,day.id);
-        const allTlItems=[...ghostsThisDay,...realItems,...gigsThisDay.map(g=>({...g,_linkedGig:true}))];
+        const allTlItems=sortDayTimeline([...ghostsThisDay,...realItems,...gigsThisDay.map(g=>({...g,_linkedGig:true}))]);
 
         html+=`<div class="day-card">
           <div class="day-hdr" onclick="openDayView('${esc(id)}','${esc(day.id)}')">
@@ -2446,8 +2481,8 @@ function openDayView(tripId,dayId,scrollToItems){
   const realItems=items.filter(it=>!it._placeholder);
   const placeholders=items.filter(it=>it._placeholder);
   const ghosts=getAccGhosts(trip,dayId);
-  const allDisplayItems=[...ghosts,...realItems];
-  const allTlItems=[...allDisplayItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))];
+  const allDisplayItems=sortDayTimeline([...ghosts,...realItems]);
+  const allTlItems=sortDayTimeline([...allDisplayItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
 
   let html=`<div style="padding:0 14px 90px">`;
 
@@ -2491,10 +2526,11 @@ function openDayView(tripId,dayId,scrollToItems){
     });
   }
 
-  // Real items
+  // Real items — sorted by time (GIG-036), untimed first, matching the
+  // timeline strip above so the two views never disagree on order
   if(realItems.length) html+=`<div class="section-hdr">Items</div>`;
-  realItems.forEach(it=>{
-    html+=renderItemCard(it,tripId,dayId,s);
+  sortDayTimeline(realItems).forEach(it=>{
+    html+=renderItemCard(it,tripId,dayId,s,trip,day);
   });
 
   // Meal placeholders
@@ -2546,7 +2582,7 @@ function getAccGhosts(trip,dayId){
   return ghosts;
 }
 
-function renderItemCard(it,tripId,dayId,s){
+function renderItemCard(it,tripId,dayId,s,trip,day){
   const name=it.type==='food'?(it.subtype||'Food'):it.name||typeLabel(it.type);
   let sub='';
   if(it.type==='travel') sub=`${it.subtype||''}${it.from||it.to?` · ${it.from||''}→${it.to||''}`:''}`; 
@@ -2574,7 +2610,7 @@ function renderItemCard(it,tripId,dayId,s){
       <div class="item-check${it.completed?' on':''}" onclick="event.stopPropagation();toggleDone('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">${it.completed?'✓':''}</div>
       <div class="item-type-icon">${typeIcon(it.type)}</div>
       <div class="item-main">
-        <div class="item-name">${esc(name)}</div>
+        <div class="item-name">${esc(name)}${it.calendarAdded?` <span class="cal-badge">📅 In Calendar</span>`:''}</div>
         ${sub?`<div class="item-sub">${esc(sub)}</div>`:''}
       </div>
       <div class="item-right">
@@ -2628,6 +2664,7 @@ function renderItemCard(it,tripId,dayId,s){
 
   card+=`<div class="item-actions">
     <button class="item-btn" onclick="openEditItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">✏️ Edit</button>
+    ${trip&&day?`<a class="item-btn" style="color:#1a73e8;text-decoration:none" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">📅 Add to Calendar</a>`:''}
     <button class="item-btn danger" onclick="deleteItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🗑 Delete</button>
   </div>`;
   card+=`</div></div>`;
@@ -2747,6 +2784,7 @@ function showItemForm(tripId,dayId,type,it){
     const mOpts=MEAL_TYPES.map(m=>`<option ${(it?.subtype||'Dinner')===m?'selected':''}>${m}</option>`).join('');
     fields+=`<div class="fg"><label>Meal type</label><select class="fi" id="ifSubtype">${mOpts}</select></div>
       <div class="fg"><label>Restaurant / place name</label><input class="fi" id="ifName" value="${esc(it?.name||'')}"></div>
+      <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>
       <div class="fg"><label>Cuisine</label><input class="fi" id="ifCuisine" placeholder="e.g. Italian, Thai" value="${esc(it?.cuisine||'')}"></div>
       <div class="fg"><label>Estimated cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCost" value="${it?.cost||''}"></div>
       <div class="fg"><label>Actual cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCostActual" placeholder="Leave blank if same" value="${it?.costActual!=null?it.costActual:''}"></div>
@@ -2754,6 +2792,7 @@ function showItemForm(tripId,dayId,type,it){
   } else if(type==='attraction'){
     fields+=`<div class="fg"><label>Name *</label><input class="fi" id="ifName" placeholder="Place or attraction name" value="${esc(it?.name||'')}"></div>
       <div class="fg"><label>Location</label><input class="fi" id="ifLocation" value="${esc(it?.location||'')}"></div>
+      <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>
       <div class="fg"><label>Opening hours</label><input class="fi" id="ifOpeningHours" placeholder="e.g. 9am–5pm" value="${esc(it?.openingHours||'')}"></div>
       <div class="fi-row">
         <div class="fg"><label>Cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCost" value="${it?.cost||''}"></div>
@@ -2763,9 +2802,11 @@ function showItemForm(tripId,dayId,type,it){
       <div class="fg"><label>Paid?</label><div class="tgl-row"><div class="tgl${it?.paid?' on':''}" id="ifPaid" onclick="this.classList.toggle('on');document.getElementById('ifPaidLbl').textContent=this.classList.contains('on')?'Paid':'Unpaid'"><div class="kn"></div></div><span class="tgl-lbl" id="ifPaidLbl">${it?.paid?'Paid':'Unpaid'}</span></div></div>`;
   } else if(type==='keystop'){
     fields+=`<div class="fg"><label>Name *</label><input class="fi" id="ifName" placeholder="e.g. Sagrada Família" value="${esc(it?.name||'')}"></div>
-      <div class="fg"><label>Location / address</label><input class="fi" id="ifLocation" value="${esc(it?.location||'')}"></div>`;
+      <div class="fg"><label>Location / address</label><input class="fi" id="ifLocation" value="${esc(it?.location||'')}"></div>
+      <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>`;
   } else { // other
     fields+=`<div class="fg"><label>Description</label><input class="fi" id="ifName" placeholder="What is this?" value="${esc(it?.desc||it?.name||'')}"></div>
+      <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>
       <div class="fi-row">
         <div class="fg"><label>Cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCost" value="${it?.cost||''}"></div>
         <div class="fg"><label>Actual (${s})</label><input class="fi" type="number" step="0.01" id="ifCostActual" value="${it?.costActual!=null?it.costActual:''}"></div>
@@ -2824,12 +2865,14 @@ function saveItem(tripId,dayId,type,existingId){
   } else if(type==='food'){
     it.subtype=document.getElementById('ifSubtype')?.value||'Dinner';
     it.name=name; it.cuisine=document.getElementById('ifCuisine')?.value.trim()||'';
+    it.time=getTimePicker('ifTime');
     it.cost=parseFloat(document.getElementById('ifCost')?.value||0)||0;
     const ca=document.getElementById('ifCostActual')?.value;
     it.costActual=ca!==''&&ca!=null?parseFloat(ca):null;
     it.booked=document.getElementById('ifBooked')?.classList.contains('on')||false;
   } else if(type==='attraction'){
     it.name=name; it.location=document.getElementById('ifLocation')?.value.trim()||'';
+    it.time=getTimePicker('ifTime');
     it.openingHours=document.getElementById('ifOpeningHours')?.value.trim()||'';
     it.cost=parseFloat(document.getElementById('ifCost')?.value||0)||0;
     const ca=document.getElementById('ifCostActual')?.value;
@@ -2838,8 +2881,10 @@ function saveItem(tripId,dayId,type,existingId){
     it.paid=document.getElementById('ifPaid')?.classList.contains('on')||false;
   } else if(type==='keystop'){
     it.name=name; it.location=document.getElementById('ifLocation')?.value.trim()||'';
+    it.time=getTimePicker('ifTime');
   } else {
     it.desc=name; it.name=name;
+    it.time=getTimePicker('ifTime');
     it.cost=parseFloat(document.getElementById('ifCost')?.value||0)||0;
     const ca=document.getElementById('ifCostActual')?.value;
     it.costActual=ca!==''&&ca!=null?parseFloat(ca):null;
@@ -3897,6 +3942,15 @@ function tripNights(t){
 // show "Day N of D" instead of counting down to an already-passed start.
 // Only shown on events that are still upcoming (not done/missed gigs,
 // not completed/cancelled trips).
+// v7.11 (GIG-036): trip items can now be added to Google Calendar
+// individually (gcalItemUrl/markItemCalendarAdded), day timelines and
+// item lists sort by time with untimed items first (sortDayTimeline),
+// and the trip's own calendar event embeds a full day-by-day itinerary
+// in its details (buildTripItinerary, truncated in the link — see
+// gcalTripUrl) with the untruncated version always copied to the
+// clipboard too (copyTripItineraryToClipboard). Food/Attraction/Keystop/
+// Other item types gained a new optional time field to support this;
+// Travel/Accommodation reuse their existing departure/check-in time.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
@@ -3958,6 +4012,11 @@ function markCalendarAdded(id){
   ev.calendarAdded=true;
   ev.updatedAt=new Date().toISOString();
   saveEvent(ev);
+  // v7.11 (GIG-036): trips also get their full itinerary copied to the
+  // clipboard on every calendar-add — see copyTripItineraryToClipboard.
+  // The overwritten showToast from that call is fine here; there's
+  // nothing else competing for the toast at this point in the flow.
+  if(ev.type==='trip') copyTripItineraryToClipboard(ev);
   closeModal(); // close the detail/edit modal after opening calendar tab
 }
 
@@ -3992,6 +4051,65 @@ function gcalGigUrl(g){
   return parts.join('&');
 }
 
+// ── Trip itinerary text (GIG-036) ────────────────────────────────────
+// Day-by-day plain-text summary: each day's date as a header line, then
+// its items (+ any linked gigs) underneath in day/time order — the same
+// order sortDayTimeline() puts on screen. Ghost stays are deliberately
+// excluded (they're a display-only echo of the real item on its actual
+// check-in day, so including them here would duplicate every night of a
+// multi-night stay). Used both for the trip's own calendar-link details
+// (truncated, see gcalTripUrl) and the full clipboard copy.
+function buildTripItinerary(trip){
+  const days=(trip.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(!days.length) return '';
+  const d=getData();
+  const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===trip.id);
+  const lines=[];
+  days.forEach(day=>{
+    const dObj=new Date(day.date+'T00:00:00');
+    const dateLabel=dObj.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    lines.push(`Day ${day.dayNumber} — ${dateLabel}`);
+    const realItems=(day.items||[]).filter(it=>!it._placeholder);
+    const gigsToday=linkedGigs.filter(g=>g.date===day.date).map(g=>({...g,_linkedGig:true}));
+    const sorted=sortDayTimeline([...realItems,...gigsToday]);
+    if(!sorted.length){
+      lines.push('  (nothing planned yet)');
+    } else {
+      sorted.forEach(it=>{
+        const icon=it._linkedGig?gigTypeInfo(it.gigType||'music').icon:typeIcon(it.type);
+        const t=it._linkedGig?(it.time||null):itemTime(it);
+        lines.push(`  ${t?t+' ':''}${icon} ${itemDisplayName(it)}`);
+      });
+    }
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+// Copies the full (untruncated) itinerary — plus destination/notes — to
+// the clipboard, with a document.execCommand fallback for browsers/
+// contexts where the async Clipboard API isn't available. Called on
+// every trip calendar-add (first send and repeats alike), per Pete's
+// choice of "both embed + clipboard backup".
+function copyTripItineraryToClipboard(trip){
+  const full=[trip.destination?('📍 '+trip.destination):'',trip.notes||'',buildTripItinerary(trip)].filter(Boolean).join('\n\n');
+  if(!full) return;
+  function fallbackCopy(text){
+    try{
+      const ta=document.createElement('textarea');
+      ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('Itinerary copied to clipboard ✓');
+    }catch(e){ /* clipboard is a nice-to-have here, not worth surfacing an error for */ }
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(full).then(()=>showToast('Itinerary copied to clipboard ✓')).catch(()=>fallbackCopy(full));
+  } else {
+    fallbackCopy(full);
+  }
+}
+
 function gcalTripUrl(t){
   const sd=t.startDate.replace(/-/g,'');
   const endExcl=new Date(t.endDate+'T00:00:00');
@@ -4003,7 +4121,18 @@ function gcalTripUrl(t){
   const parts=['https://calendar.google.com/calendar/render?action=TEMPLATE'];
   parts.push('text='+encodeURIComponent(tripIcon(t)+' '+t.name+_sentSuffix));
   parts.push('dates='+sd+'/'+ed);
-  const details=[t.destination||'',t.notes||''].filter(Boolean).join('\n');
+  // v7.11 (GIG-036): embed the day-by-day itinerary in the calendar
+  // event's own details, truncated to a safe length — Google's calendar
+  // template links can silently fail or truncate well before typical URL
+  // limits once everything is URL-encoded, so this stays conservative.
+  // The full, untruncated text always goes to the clipboard too (see
+  // copyTripItineraryToClipboard), so nothing is lost either way.
+  const MAX_ITINERARY_CHARS=1200;
+  let itinerary=buildTripItinerary(t);
+  if(itinerary.length>MAX_ITINERARY_CHARS){
+    itinerary=itinerary.slice(0,MAX_ITINERARY_CHARS).trim()+'\n…(truncated — full itinerary copied to clipboard)';
+  }
+  const details=[t.destination||'',t.notes||'',itinerary].filter(Boolean).join('\n\n');
   if(details) parts.push('details='+encodeURIComponent(details));
   if(t.destination) parts.push('location='+encodeURIComponent(t.destination));
   return parts.join('&');
@@ -4012,6 +4141,48 @@ function gcalTripUrl(t){
 // ═══════════════════════════════════════════════════════════════════
 // COMPLETION PROMPT — fires once per day on first open
 // ═══════════════════════════════════════════════════════════════════
+// ── Per-item calendar add (GIG-036) ──────────────────────────────────
+// Same [Sent D Mon] convention as gigs/trips (GIG-033). Timed items get
+// a 1-hour placeholder duration (there's no explicit end time on any
+// item type); untimed items become an all-day entry for that day.
+function gcalItemUrl(trip, day, it){
+  const t=itemTime(it);
+  let dates;
+  if(t){
+    const start=new Date(day.date+'T'+t+':00');
+    const end=new Date(start.getTime()+60*60*1000);
+    const fmt=d=>`${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}${String(d.getUTCDate()).padStart(2,'0')}T${String(d.getUTCHours()).padStart(2,'0')}${String(d.getUTCMinutes()).padStart(2,'0')}00Z`;
+    dates=fmt(start)+'/'+fmt(end);
+  } else {
+    const ds=day.date.replace(/-/g,'');
+    const next=new Date(day.date+'T00:00:00'); next.setDate(next.getDate()+1);
+    const nd=localDateStr(next).replace(/-/g,'');
+    dates=ds+'/'+nd;
+  }
+  const _sentSuffix=' [Sent '+new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})+']';
+  const parts=['https://calendar.google.com/calendar/render?action=TEMPLATE'];
+  parts.push('text='+encodeURIComponent(typeIcon(it.type)+' '+itemDisplayName(it)+_sentSuffix));
+  parts.push('dates='+dates);
+  const detailLines=[];
+  if(trip.name) detailLines.push('Part of trip: '+trip.name);
+  if(it.notes) detailLines.push(it.notes);
+  if(it.bookingRef) detailLines.push('Booking ref: '+it.bookingRef);
+  if(it.confirmNo) detailLines.push('Confirm no.: '+it.confirmNo);
+  if(detailLines.length) parts.push('details='+encodeURIComponent(detailLines.join('\n')));
+  const loc=it.location||it.address||(it.type==='travel'?(it.to||it.from||''):'');
+  if(loc) parts.push('location='+encodeURIComponent(loc));
+  return parts.join('&');
+}
+function markItemCalendarAdded(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  it.calendarAdded=true;
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  openDayView(tripId,dayId);
+}
+
 function checkCompletionPrompt(){
   const todayStr=localDateStr(new Date());
   const checkedKey=SK+'_cpChecked';
