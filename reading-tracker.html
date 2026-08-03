@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.26</title>
+<title>Reading Tracker v3.27</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -696,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.26</span></div>
+    <div class="rt-logo">My Reading <span>v3.27</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1533,6 +1533,9 @@ function doRtModalRestore() {
       appState.wishlist = [];
     }
     appState.activeTrackerId = null;
+    // v3.27 (MR-018): make the restore authoritative over a stale cloud
+    // copy — see stampImportedTimestamps().
+    stampImportedTimestamps(appState.trackers, appState.wishlist);
     save();
     const res = document.getElementById('rtModalRestoreResult');
     res.style.cssText = 'display:block;background:rgba(91,191,138,.15);color:var(--success)';
@@ -1562,6 +1565,23 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.27 (MR-018): JSON restore silently overwritten by a stale cloud
+// copy. Confirmed the exported JSON was correct (tags/ownership present)
+// and every restore path assigns it wholesale (no field stripping) — the
+// bug was one step later: save() right after a restore triggers the
+// normal debounced sync, which merges against the cloud per-record on
+// updatedAt. Restoring never bumped that timestamp, so it kept whatever
+// updatedAt was baked into the export. If the OTHER device's existing
+// cloud copy of those same record ids had a later updatedAt for any
+// reason — even holding worse data, e.g. missing tags because the
+// original push that would have added them never completed (MR-017) —
+// the merge kept the cloud's version and the restore vanished right
+// after appearing. This is exactly the "bump imported records' updatedAt
+// to import time" principle already used elsewhere in the suite; it just
+// hadn't been applied to this app's restore paths. Added
+// stampImportedTimestamps(), called from both doRtModalRestore() (Sync &
+// Backup modal) and doRestore() (dashboard restore), so a restore is now
+// always authoritative over whatever's in the cloud.
 // v3.26 (MR-017): cross-device sync gap — tags/ownership added on one
 // device not showing up on another. Root cause: the cloud push after any
 // edit is debounced 1.5s (syncToCloud/_syncTimer) to batch rapid saves,
@@ -1739,6 +1759,30 @@ function backfillReadingTimestamps() {
     (t.entries || []).forEach(e => { if (!e.updatedAt) e.updatedAt = now; });
   });
   (appState.wishlist || []).forEach(w => { if (!w.updatedAt) w.updatedAt = now; });
+}
+
+// v3.27 (MR-018): restoring a JSON backup used to just assign the parsed
+// data straight into appState, keeping whatever updatedAt each record
+// already had in the export. save() right after a restore triggers the
+// normal debounced sync, which is a MERGE against the cloud — and if the
+// cloud's copy of any of these same record ids happens to have a later
+// updatedAt for any reason (even holding worse/stale data, e.g. missing
+// tags because the original push that would have added them never
+// completed — see MR-017), the merge keeps the cloud's version and the
+// restore is silently discarded. A restore is supposed to be an
+// intentional, authoritative overwrite — unlike backfillReadingTimestamps
+// (which only fills in a MISSING updatedAt), this unconditionally bumps
+// every imported tracker/book/entry/wishlist-item to "now" so the restore
+// always wins the very next merge, matching the same principle already
+// used for HTML Vault / other restores in the suite.
+function stampImportedTimestamps(trackers, wishlist) {
+  const now = new Date().toISOString();
+  (trackers || []).forEach(t => {
+    t.updatedAt = now;
+    (t.books   || []).forEach(b => { b.updatedAt = now; });
+    (t.entries || []).forEach(e => { e.updatedAt = now; });
+  });
+  (wishlist || []).forEach(w => { w.updatedAt = now; });
 }
 
 // Flatten the nested UI structure into the four per-record arrays
@@ -3381,6 +3425,9 @@ function doRestore() {
     appState.trackers        = d.trackers;
     appState.wishlist        = d.wishlist || [];
     appState.activeTrackerId = null;
+    // v3.27 (MR-018): make the restore authoritative over a stale cloud
+    // copy — see stampImportedTimestamps().
+    stampImportedTimestamps(appState.trackers, appState.wishlist);
     save();
     const trackerLines = d.trackers.map(t =>
       `• ${t.trackerName} — ${t.books.length} book${t.books.length!==1?"s":""}, ${t.entries.length} session${t.entries.length!==1?"s":""}`
@@ -3404,6 +3451,7 @@ function doRestore() {
     t.books = d.books; t.entries = d.entries;
     if (d.activeBookId !== undefined) t.activeBookId = d.activeBookId;
     appState.trackers = [t]; appState.wishlist = []; appState.activeTrackerId = null;
+    stampImportedTimestamps(appState.trackers, appState.wishlist); // v3.27 (MR-018)
     save();
     showRestoreResult(true,
       `✓ Tracker restored: <strong>${t.trackerName}</strong><br>` +
