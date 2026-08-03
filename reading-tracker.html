@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.21</title>
+<title>Reading Tracker v3.22</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -205,6 +205,18 @@
   .book-prog-fill  { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-l)); transition: width .4s; }
   .book-prog-fill.done-fill { background: var(--success); }
   .remove-book-btn { background: none; border: none; color: var(--border); cursor: pointer; font-size: 18px; line-height: 1; padding: 0 0 0 8px; transition: color .2s; flex-shrink: 0; align-self: flex-start; }
+  /* MR-013: move-to-wishlist + ownership pill (book cards & wishlist items) */
+  .wishlist-return-btn { background: none; border: none; color: var(--border); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 0 0 6px; transition: color .2s; flex-shrink: 0; align-self: flex-start; }
+  .wishlist-return-btn:hover { color: var(--accent); }
+  .ownership-pill { font-size:10px; font-weight:600; letter-spacing:.3px; border-radius:10px; padding:2px 8px; cursor:pointer; border:1px solid; white-space:nowrap; font-family:'Inter',sans-serif; display:inline-block; margin-top:4px; }
+  .ownership-pill.wanted { background:rgba(122,138,153,.12); border-color:var(--border); color:var(--muted); }
+  .ownership-pill.owned  { background:rgba(91,191,138,.14); border-color:rgba(91,191,138,.4); color:var(--success); }
+  /* MR-013: freeform tag chips on wishlist items + filter bar */
+  .wl-tag-chip { font-size:9px; font-weight:600; letter-spacing:.3px; background:rgba(200,169,110,.12); border:1px solid rgba(200,169,110,.3); color:var(--accent); border-radius:8px; padding:2px 7px; display:inline-block; }
+  .wl-tag-filter-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .wl-tag-filter-btn { font-size:10px; font-weight:600; background:var(--surface); border:1px solid var(--border); color:var(--muted); border-radius:10px; padding:3px 10px; cursor:pointer; font-family:'Inter',sans-serif; }
+  .wl-tag-filter-btn.active { background:rgba(200,169,110,.15); border-color:var(--accent); color:var(--accent); }
+  .wl-create-from-tag { background:rgba(200,169,110,.15); border:1px solid rgba(200,169,110,.3); color:var(--accent); border-radius:6px; font-size:11px; font-weight:600; padding:6px 10px; cursor:pointer; font-family:'Inter',sans-serif; margin-bottom:10px; width:100%; }
   .remove-book-btn:hover { color: var(--danger); }
 
   /* Add book form */
@@ -673,7 +685,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.21</span></div>
+    <div class="rt-logo">My Reading <span>v3.22</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1134,6 +1146,7 @@
             <button id="wlTypeAudio" class="btn btn-ghost btn-sm" onclick="selectWlType('audiobook')">🎧</button>
           </div>
         </div>
+        <div class="field" style="grid-column:span 2"><label>Tags (comma-separated)</label><input type="text" id="wlAddTags" placeholder="e.g. cosy, series, holiday-read"></div>
       </div>
       <button class="btn btn-primary btn-sm btn-wide" onclick="addToWishlistFromView()">Add to wishlist</button>
     </div>
@@ -1512,6 +1525,27 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.22 (MR-013): wishlist ⇄ tracker workflow.
+//  - moveBookToWishlist(): new "↩" button on each book card sends it back
+//    to the wishlist instead of deleting it. Reading progress (entries,
+//    notes, review) is archived onto the wishlist item, not discarded —
+//    addWishlistToTracker() transparently restores it if the same item
+//    is ever added back to a tracker (buildBookFromWishlist/
+//    restoredEntriesFor). Per Pete: archived, not deleted, restorable.
+//  - Ownership tag ("☆ Wanted" / "✓ Owned") added to both wishlist items
+//    and tracker books, manually toggleable on either
+//    (toggleWishlistOwnership/toggleBookOwnership). setActiveBook() now
+//    auto-upgrades a book to Owned the moment it's pinned as active —
+//    never auto-downgrades, and does nothing on unpin.
+//  - Freeform, reusable tags on wishlist items (comma-separated in the
+//    edit form and the add-new form). renderWishlistView() gets a tag
+//    filter bar; selecting a tag shows a "Create tracker from this tag"
+//    bulk action (createTrackerFromTag) which builds a new tracker from
+//    every matching item in one go, carrying ownership + archived
+//    progress across. Mixed book/audiobook items under one tag can't
+//    share a tracker (types don't mix, same rule as adding singly), so
+//    the majority type is used and the rest are skipped with a toast —
+//    they stay on the wishlist, still tagged, nothing is lost.
 // v3.21 (MR-012 — real root cause, found from a screenshot after v3.20):
 // v3.20 hardened the visible symptoms, but the actual cause was upstream —
 // tracker-level fields (activeBookId, trackerName, targetDate) synced
@@ -2127,6 +2161,7 @@ function renderBooks() {
     const done        = isComplete(b.id);
     const manualDone  = !!b.manualComplete;
     const isFinished  = done || manualDone;
+    const ownership   = b.ownership || "wanted"; // MR-013: backward-compatible default for pre-existing books
     const _ct         = appState.trackers.find(t => t.id === appState.activeTrackerId);
     const _bUnit      = unit(_ct, false);
     const _bUnitP     = unit(_ct, true);
@@ -2176,6 +2211,7 @@ function renderBooks() {
         <div class="book-info">
           <div class="book-title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="book-author">${esc(b.author)}${b.genre ? ` <span style="font-size:10px;color:var(--accent);margin-left:4px">${esc(b.genre)}</span>` : ""}</div>
+          <button class="ownership-pill ${ownership}" onclick="toggleBookOwnership('${b.id}')" title="Tap to toggle">${ownership === "owned" ? "✓ Owned" : "☆ Wanted"}</button>
         </div>
         <div class="book-right">
           <div class="book-page-label">${isFinished ? "" : "on " + _bUnit}</div>
@@ -2184,6 +2220,7 @@ function renderBooks() {
           </div>
           <div class="book-total">of ${b.pages}</div>
         </div>
+        <button class="wishlist-return-btn" title="Move to wishlist" onclick="moveBookToWishlist('${b.id}')">↩</button>
         <button class="remove-book-btn" title="Remove book" onclick="removeBook('${b.id}')">×</button>
       </div>
       <div class="book-prog-track">
@@ -2297,6 +2334,14 @@ function renderBooks() {
 // ── Active book & Now Reading card ───────────────────────────────────
 function setActiveBook(bookId) {
   state.activeBookId = state.activeBookId === bookId ? null : bookId;
+  // v3.22 (MR-013): pinning a book as the active read/listen is a strong
+  // enough signal that you have it in hand — auto-mark it Owned. Only
+  // upgrades wanted→owned on activation; never downgrades an existing
+  // Owned tag, and does nothing on unpin.
+  if (state.activeBookId === bookId) {
+    const book = state.books.find(b => b.id === bookId);
+    if (book && book.ownership !== "owned") book.ownership = "owned";
+  }
   // v3.20 (MR-012): the Now Reading quick-log input is one shared element
   // reused for whichever book is active — clear any unsubmitted value so
   // a number typed for the book you just finished can never carry over
@@ -2956,6 +3001,62 @@ function saveBookEdit(bookId) {
       if (btn) btn.classList.remove("open");
     }
   }, 50);
+}
+
+// v3.22 (MR-013): ownership toggle — manual override, independent of
+// how the book got into the tracker. Auto-set to "owned" on pin lives
+// in setActiveBook(); this is the manual tap-to-toggle path.
+function toggleBookOwnership(bookId) {
+  const book = state.books.find(b => b.id === bookId);
+  if (!book) return;
+  book.ownership = (book.ownership || "wanted") === "owned" ? "wanted" : "owned";
+  save();
+  render();
+}
+
+// v3.22 (MR-013): send a tracker book back to the wishlist instead of
+// deleting it outright. Reading progress (entries, notes, review) is
+// archived onto the new wishlist item rather than discarded — if the
+// same title is ever added back to a tracker, addWishlistToTracker()
+// restores it transparently (see buildBookFromWishlist/restoredEntriesFor
+// below). This intentionally does NOT go through removeBook()'s
+// tombstone-and-forget path for the wishlist side: the book+entries are
+// tombstoned in the cloud (same as a real removal), but the archived
+// copy lives only in this device's wishlist item until it syncs.
+function moveBookToWishlist(bookId) {
+  const book = state.books.find(b => b.id === bookId);
+  if (!book) return;
+  if (!confirm(`Move "${book.title}" back to the wishlist? Reading progress is archived and will be restored automatically if you add it to a tracker again.`)) return;
+
+  const _ct   = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  const wType = isAudible(_ct) ? "audiobook" : "book";
+  const bookEntries = state.entries.filter(e => e.bookId === bookId);
+
+  appState.wishlist.push({
+    id: uid(),
+    title:  book.title,
+    author: book.author || "",
+    genre:  book.genre  || "",
+    pages:  book.pages  || 0,
+    type:   wType,
+    tags:   [],
+    ownership: book.ownership || "wanted",
+    archivedProgress: {
+      entries: bookEntries.map(e => ({ date: e.date, pageTo: e.pageTo })), // bookId re-keyed on restore
+      notes:   book.notes  || [],
+      review:  book.review || { rating: 0, text: "" }
+    }
+  });
+
+  if (state.activeBookId === bookId) state.activeBookId = null;
+  state.books   = state.books.filter(b => b.id !== bookId);
+  state.entries = state.entries.filter(e => e.bookId !== bookId);
+
+  save();
+  showToast(`"${book.title}" moved to wishlist ✓`);
+  render();
+  updateWishlistCard();
+  tombstoneBookInCloud(book, bookEntries);
 }
 
 function removeBook(id) {
@@ -3853,6 +3954,68 @@ function createTracker() {
 
 // ── Wishlist ──────────────────────────────────────────────────────────
 
+// ── MR-013: rebuild a tracker book from a wishlist item ───────────────
+// Carries ownership across, and if this item was previously sent back
+// from a tracker (moveBookToWishlist stamped archivedProgress on it),
+// transparently restores its notes/review. Entries are rebuilt
+// separately by restoredEntriesFor() since they need the new book's id.
+function buildBookFromWishlist(w, newId) {
+  const book = {
+    id: newId, title: w.title, author: w.author || "", genre: w.genre || "",
+    pages: w.pages || 0, manualComplete: false, ownership: w.ownership || "wanted"
+  };
+  if (w.archivedProgress) {
+    if (w.archivedProgress.notes)  book.notes  = w.archivedProgress.notes;
+    if (w.archivedProgress.review) book.review = w.archivedProgress.review;
+  }
+  return book;
+}
+function restoredEntriesFor(w, newId) {
+  if (!w.archivedProgress || !Array.isArray(w.archivedProgress.entries)) return [];
+  return w.archivedProgress.entries.map(e => ({ id: uid(), bookId: newId, date: e.date, pageTo: e.pageTo }));
+}
+
+// v3.22 (MR-013): bulk-create a tracker from every wishlist item sharing
+// a tag. Mixed book/audiobook items under one tag can't share a tracker
+// (types don't mix — see the existing type-compatibility check in
+// addWishlistToTracker), so this picks whichever type has more items
+// under the tag and skips the rest, telling you how many were skipped
+// so nothing silently vanishes — they simply stay on the wishlist,
+// still tagged, ready to run again for the other type if wanted.
+function createTrackerFromTag(tag) {
+  const matches = appState.wishlist.filter(w => (w.tags||[]).includes(tag));
+  if (matches.length === 0) { showToast("No books with that tag"); return; }
+
+  const bookCount  = matches.filter(w => (w.type||"book") !== "audiobook").length;
+  const audioCount = matches.length - bookCount;
+  const useAudible = audioCount > bookCount;
+  const wantType   = useAudible ? "audiobook" : "book";
+  const included   = matches.filter(w => (w.type||"book") === wantType);
+  const skipped    = matches.length - included.length;
+
+  const name = prompt(`Create ${useAudible ? "🎧 Audible" : "📚 Books"} tracker from "${tag}" (${included.length} book${included.length!==1?"s":""})?\nTracker name:`, tag);
+  if (!name || !name.trim()) return;
+
+  const newT = blankTracker(name.trim(), null, useAudible ? "audible" : "book");
+  included.forEach(w => {
+    const newId = uid();
+    newT.books.push(buildBookFromWishlist(w, newId));
+    newT.entries.push(...restoredEntriesFor(w, newId));
+  });
+  appState.trackers.push(newT);
+
+  const includedIds = new Set(included.map(w => w.id));
+  included.forEach(w => tombstoneWishlistInCloud(w));
+  appState.wishlist = appState.wishlist.filter(w => !includedIds.has(w.id));
+
+  _wlActiveTagFilter = null;
+  save();
+  renderWishlistView();
+  updateWishlistCard();
+  showToast(`Created "${name.trim()}" with ${included.length} book${included.length!==1?"s":""}` +
+    (skipped > 0 ? ` — skipped ${skipped} ${wantType==="audiobook"?"book":"audiobook"}${skipped!==1?"s":""} (different type)` : "") + " ✓");
+}
+
 // ── Add wishlist item to a tracker ───────────────────────────────────
 function addWishlistToTracker(wishlistId) {
   const w = appState.wishlist.find(x => x.id === wishlistId);
@@ -3861,17 +4024,21 @@ function addWishlistToTracker(wishlistId) {
   const val   = selEl ? selEl.value : null;
   if (!val) { showToast("Select a tracker first"); return; }
   const wType = w.type || "book";
+  const hasArchived = !!(w.archivedProgress && w.archivedProgress.entries && w.archivedProgress.entries.length > 0);
+  const restoredSuffix = hasArchived ? " — progress restored" : "";
 
   // "Create new tracker" option
   if (val === "_new_") {
     const name = prompt(`New ${wType === "audiobook" ? "🎧 Audible" : "📚 Books"} tracker name?`);
     if (!name || !name.trim()) return;
     const newT = blankTracker(name.trim(), null, wType === "audiobook" ? "audible" : "book");
-    newT.books.push({ id: uid(), title: w.title, author: w.author || "", genre: w.genre || "", pages: w.pages || 0 });
+    const newId = uid();
+    newT.books.push(buildBookFromWishlist(w, newId));
+    newT.entries.push(...restoredEntriesFor(w, newId));
     appState.trackers.push(newT);
     appState.wishlist = appState.wishlist.filter(x => x.id !== wishlistId);
     save(); renderWishlistView(); updateWishlistCard();
-    showToast(`"${w.title}" added to new tracker "${name.trim()}" ✓`);
+    showToast(`"${w.title}" added to new tracker "${name.trim()}"${restoredSuffix} ✓`);
     tombstoneWishlistInCloud(w);
     return;
   }
@@ -3890,14 +4057,16 @@ function addWishlistToTracker(wishlistId) {
     showToast(`"${w.title}" is already in ${t.trackerName}`); return;
   }
 
-  // Add with genre, 0 pages, not complete
-  t.books.push({ id: uid(), title: w.title, author: w.author || "", genre: w.genre || "", pages: w.pages || 0, manualComplete: false });
+  // Add with genre, restored progress if any, ownership carried across
+  const newId = uid();
+  t.books.push(buildBookFromWishlist(w, newId));
+  t.entries.push(...restoredEntriesFor(w, newId));
 
   // Remove from wishlist
   appState.wishlist = appState.wishlist.filter(x => x.id !== wishlistId);
 
   save();
-  showToast(`"${w.title}" added to ${t.trackerName} ✓`);
+  showToast(`"${w.title}" added to ${t.trackerName}${restoredSuffix} ✓`);
   if (document.getElementById("wishlistApp")?.classList.contains("active")) renderWishlistView();
   tombstoneWishlistInCloud(w);
   updateWishlistCard();
@@ -3915,17 +4084,32 @@ function saveWishlistEdit(wid) {
   const g  = document.getElementById("wie-genre-"  + wid)?.value || "";
   const p  = parseInt(document.getElementById("wie-pages-" + wid)?.value || "0") || 0;
   const ty = document.getElementById("wie-type-"   + wid)?.value;
+  const tagsRaw = document.getElementById("wie-tags-" + wid)?.value || "";
   if (!t) { showToast("Title cannot be empty"); return; }
   w.title  = t;
   w.author = a || "";
   w.genre  = g || "";
   w.pages  = p;
   w.type   = ty || "book";
+  // v3.22 (MR-013): freeform, comma-separated, trimmed, de-duped, empties dropped
+  w.tags   = [...new Set(tagsRaw.split(",").map(s => s.trim()).filter(Boolean))];
   save();
   // Re-render whichever view is active
   if (document.getElementById("wishlistApp").classList.contains("active")) renderWishlistView();
   else if (document.getElementById("wishlistApp")?.classList.contains("active")) renderWishlistView(); updateWishlistCard();
   showToast("Updated ✓");
+}
+
+// v3.22 (MR-013): ownership toggle for wishlist items — same manual
+// wanted/owned tag as tracker books (toggleBookOwnership), just without
+// the auto-set-on-pin behaviour since wishlist items aren't "active."
+function toggleWishlistOwnership(wid) {
+  const w = appState.wishlist.find(x => x.id === wid);
+  if (!w) return;
+  w.ownership = (w.ownership || "wanted") === "owned" ? "wanted" : "owned";
+  save();
+  renderWishlistView();
+  updateWishlistCard();
 }
 
 function deleteWishlistItem(wid) {
@@ -3980,6 +4164,17 @@ function genreSelectHTML(selectedVal, id) {
   return `<select id="${id}" class="wl-sort-sel" style="width:100%;padding:6px 8px;font-size:16px">${opts}</select>`;
 }
 
+// v3.22 (MR-013): single-select tag filter for grouping wishlist items by
+// freeform theme; also drives the bulk "create tracker from this tag"
+// action. Module-level so it survives across renderWishlistView() calls
+// (e.g. after editing an item) but resets on a fresh page load, same as
+// the sort dropdown's implicit default.
+let _wlActiveTagFilter = null;
+function toggleTagFilter(tag) {
+  _wlActiveTagFilter = (_wlActiveTagFilter === tag) ? null : tag;
+  renderWishlistView();
+}
+
 function renderWishlistView() {
   document.getElementById("wlDate").textContent = ukNumeric(todayISO());
   const wl = appState.wishlist || [];
@@ -3999,9 +4194,33 @@ function renderWishlistView() {
     return;
   }
 
+  // ── Tag filter bar (MR-013) ──────────────────────────────────────────
+  const allTags = [...new Set(wl.flatMap(w => w.tags || []))].sort((a,b) => a.localeCompare(b));
+  body.innerHTML = "";
+  if (allTags.length > 0) {
+    const bar = document.createElement("div");
+    bar.className = "wl-tag-filter-bar";
+    bar.innerHTML = allTags.map(tag =>
+      `<button class="wl-tag-filter-btn${_wlActiveTagFilter===tag?' active':''}" onclick="toggleTagFilter('${esc(tag)}')">${esc(tag)}</button>`
+    ).join("");
+    body.appendChild(bar);
+
+    if (_wlActiveTagFilter) {
+      const tagCount = wl.filter(w => (w.tags||[]).includes(_wlActiveTagFilter)).length;
+      const createBtn = document.createElement("button");
+      createBtn.className = "wl-create-from-tag";
+      createBtn.textContent = `+ Create tracker from "${_wlActiveTagFilter}" (${tagCount} book${tagCount!==1?"s":""})`;
+      createBtn.onclick = () => createTrackerFromTag(_wlActiveTagFilter);
+      body.appendChild(createBtn);
+    }
+  } else if (_wlActiveTagFilter) {
+    _wlActiveTagFilter = null; // last tag was removed elsewhere — clear stale filter
+  }
+
   // Sort
   const sort = document.getElementById("wlSortSel")?.value || "manual";
-  const sorted = [...wl];
+  let sorted = [...wl];
+  if (_wlActiveTagFilter) sorted = sorted.filter(w => (w.tags||[]).includes(_wlActiveTagFilter));
   if      (sort === "title_az")    sorted.sort((a,b) => a.title.localeCompare(b.title));
   else if (sort === "title_za")    sorted.sort((a,b) => b.title.localeCompare(a.title));
   else if (sort === "author")      sorted.sort((a,b) => (a.author||"").localeCompare(b.author||""));
@@ -4012,8 +4231,6 @@ function renderWishlistView() {
   // Split into sections
   const bookItems  = sorted.filter(w => (w.type||"book") !== "audiobook");
   const audioItems = sorted.filter(w => (w.type||"book") === "audiobook");
-
-  body.innerHTML = "";
 
   function renderSection(items, sectionLabel) {
     // Section header
@@ -4066,10 +4283,12 @@ function renderWishlistView() {
           <div class="wi-info" style="flex:1;min-width:0">
             <div class="wi-title">${wIcon} ${esc(w.title)}</div>
             ${w.author ? `<div class="wi-author">${esc(w.author)}</div>` : ""}
-            <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
+            <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;align-items:center">
               ${w.genre  ? `<div class="wi-genre">${esc(w.genre)}</div>` : ""}
               ${w.pages  ? `<div style="font-size:10px;color:var(--muted)">${Number(w.pages).toLocaleString()} ${unitLbl}</div>` : ""}
+              <button class="ownership-pill ${w.ownership==="owned"?"owned":"wanted"}" onclick="toggleWishlistOwnership('${w.id}')" title="Tap to toggle">${w.ownership==="owned"?"✓ Owned":"☆ Wanted"}</button>
             </div>
+            ${(w.tags && w.tags.length) ? `<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">${w.tags.map(tag=>`<span class="wl-tag-chip">${esc(tag)}</span>`).join("")}</div>` : ""}
           </div>
           <button class="collapsible-btn" style="padding:0;width:auto;flex-shrink:0" onclick="toggleSection('wle-${w.id}')">
             <span class="caret" style="font-size:11px">▶</span>
@@ -4093,6 +4312,8 @@ function renderWishlistView() {
                 <option value="audiobook" ${wType==="audiobook"?"selected":""}>🎧 Audiobook</option>
               </select>
             </div>
+            <div class="fe"><label style="font-size:10px;color:var(--muted)">Tags (comma-separated)</label>
+              <input type="text" id="wie-tags-${w.id}" value="${esc((w.tags||[]).join(', '))}" placeholder="e.g. cosy, series, holiday-read"></div>
           </div>
           <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="saveWishlistEdit('${w.id}')">Save</button>
         </div>
@@ -4148,12 +4369,15 @@ function addToWishlistFromView() {
   const author = document.getElementById("wlAddAuthor")?.value.trim() || "";
   const genre  = document.getElementById("wlAddGenre")?.value || "";
   const pages  = parseInt(document.getElementById("wlAddPages")?.value || "0") || 0;
+  const tagsRaw = document.getElementById("wlAddTags")?.value || "";
+  const tags   = [...new Set(tagsRaw.split(",").map(s => s.trim()).filter(Boolean))];
   if (!title) { showToast("Title required"); return; }
-  appState.wishlist.push({ id: uid(), title, author, genre, pages, type: _wlType });
+  appState.wishlist.push({ id: uid(), title, author, genre, pages, type: _wlType, tags, ownership: "wanted" });
   document.getElementById("wlAddTitle").value  = "";
   document.getElementById("wlAddAuthor").value = "";
   document.getElementById("wlAddGenre").value  = "";
   document.getElementById("wlAddPages").value  = "";
+  document.getElementById("wlAddTags").value   = "";
   _wlType = "book"; selectWlType("book");
   save(); renderWishlistView(); showToast("Added to wishlist ✓");
 }
