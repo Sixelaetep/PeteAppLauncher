@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.24</title>
+<title>Reading Tracker v3.25</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -227,6 +227,7 @@
   .wl-tag-filter-btn { font-size:10px; font-weight:600; background:var(--surface); border:1px solid var(--border); color:var(--muted); border-radius:10px; padding:3px 10px; cursor:pointer; font-family:'Inter',sans-serif; }
   .wl-tag-filter-btn.active { background:rgba(200,169,110,.15); border-color:var(--accent); color:var(--accent); }
   .wl-create-from-tag { background:rgba(200,169,110,.15); border:1px solid rgba(200,169,110,.3); color:var(--accent); border-radius:6px; font-size:11px; font-weight:600; padding:6px 10px; cursor:pointer; font-family:'Inter',sans-serif; margin-bottom:10px; width:100%; }
+  .wl-group-create-btn { background:rgba(200,169,110,.15); border:1px solid rgba(200,169,110,.3); color:var(--accent); border-radius:6px; font-size:10px; font-weight:600; padding:3px 9px; cursor:pointer; font-family:'Inter',sans-serif; text-transform:none; letter-spacing:normal; white-space:nowrap; flex-shrink:0; }
   .remove-book-btn:hover { color: var(--danger); }
 
   /* Add book form */
@@ -695,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.24</span></div>
+    <div class="rt-logo">My Reading <span>v3.25</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1124,6 +1125,7 @@
         <option value="genre">Genre</option>
         <option value="pages_asc">Pages ↑</option>
         <option value="pages_desc">Pages ↓</option>
+        <option value="tag_group">Group by tag</option>
       </select>
     </div>
     <div id="wlTagFilterBar"></div>
@@ -1560,6 +1562,19 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.25 (MR-016): "Group by tag" added to the wishlist sort dropdown.
+// One section per tag (alphabetical), each with its own "+ tracker"
+// button reusing createTrackerFromTag(); an item with multiple tags
+// appears in every matching section (a tag isn't a single owning
+// category the way book/audiobook type is, so no item is arbitrarily
+// forced into just one group). Untagged items get their own section.
+// The standalone single-tag filter bar is hidden in this mode — narrowing
+// to one tag there would collapse the grouped view down to just that
+// group, defeating the point of seeing every tag at once; its
+// create-tracker action moved into each group's header instead. Manual
+// drag-reorder is also unavailable here (same as every non-"manual" sort
+// mode already), since an item shown in two groups reordering "up" would
+// otherwise move it in the underlying list both groups draw from.
 // v3.24 (MR-015): deleting a tracker no longer silently wipes its books.
 // Raised by Pete asking what happens to books in a deleted tracker — the
 // honest answer was "gone, no safety net," inconsistent with removing a
@@ -4472,6 +4487,13 @@ function toggleTagFilter(tag) {
 function renderWlTagFilterBar() {
   const container = document.getElementById("wlTagFilterBar");
   if (!container) return;
+  // v3.25 (MR-016): the standalone single-tag filter + "create tracker
+  // from this tag" button are redundant with Group by tag mode (which
+  // already shows every tag as its own section, each with its own
+  // create-tracker action) — showing both would mean picking a filter
+  // tag here effectively collapses the grouped view down to one group,
+  // which fights the whole point of grouping. Hide this bar in that mode.
+  if (document.getElementById("wlSortSel")?.value === "tag_group") { container.innerHTML = ""; return; }
   const wl = appState.wishlist || [];
   const allTags = [...new Set(wl.flatMap(w => w.tags || []))].sort((a,b) => a.localeCompare(b));
   if (allTags.length === 0) { container.innerHTML = ""; _wlActiveTagFilter = null; return; }
@@ -4513,7 +4535,10 @@ function renderWishlistView() {
   // Sort
   const sort = document.getElementById("wlSortSel")?.value || "manual";
   let sorted = [...wl];
-  if (_wlActiveTagFilter) sorted = sorted.filter(w => (w.tags||[]).includes(_wlActiveTagFilter));
+  // v3.25 (MR-016): Group by tag mode ignores the standalone single-tag
+  // filter — narrowing to one tag here before grouping would leave only
+  // one group populated, defeating the point of seeing every tag at once.
+  if (_wlActiveTagFilter && sort !== "tag_group") sorted = sorted.filter(w => (w.tags||[]).includes(_wlActiveTagFilter));
   if      (sort === "title_az")    sorted.sort((a,b) => a.title.localeCompare(b.title));
   else if (sort === "title_za")    sorted.sort((a,b) => b.title.localeCompare(a.title));
   else if (sort === "author")      sorted.sort((a,b) => (a.author||"").localeCompare(b.author||""));
@@ -4525,11 +4550,16 @@ function renderWishlistView() {
   const bookItems  = sorted.filter(w => (w.type||"book") !== "audiobook");
   const audioItems = sorted.filter(w => (w.type||"book") === "audiobook");
 
-  function renderSection(items, sectionLabel) {
+  function renderSection(items, sectionLabel, headerExtra) {
     // Section header
     const hdr = document.createElement("div");
     hdr.className = "wl-section-hdr";
-    hdr.textContent = sectionLabel;
+    if (headerExtra) {
+      hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
+      hdr.innerHTML = `<span>${esc(sectionLabel)}</span>${headerExtra}`;
+    } else {
+      hdr.textContent = sectionLabel;
+    }
     body.appendChild(hdr);
 
     if (items.length === 0) {
@@ -4648,6 +4678,23 @@ function renderWishlistView() {
 
       body.appendChild(div);
     });
+  }
+
+  // v3.25 (MR-016): Group by tag — one section per tag (alphabetical),
+  // plus an Untagged section if any items have no tags. An item with
+  // multiple tags appears in every matching section (same semantics as
+  // Gmail labels / multi-select grouping), since a tag isn't a single
+  // owning category the way type (book/audiobook) is.
+  if (sort === "tag_group") {
+    const allTags = [...new Set(sorted.flatMap(w => w.tags || []))].sort((a,b) => a.localeCompare(b));
+    allTags.forEach(tag => {
+      const itemsForTag = sorted.filter(w => (w.tags||[]).includes(tag));
+      const createBtn = `<button class="wl-group-create-btn" onclick="createTrackerFromTag(decodeURIComponent('${encodeURIComponent(tag)}'))" title="Create tracker from this tag">+ tracker</button>`;
+      renderSection(itemsForTag, `🏷️ ${tag} (${itemsForTag.length})`, createBtn);
+    });
+    const untagged = sorted.filter(w => !(w.tags||[]).length);
+    if (untagged.length > 0) renderSection(untagged, `Untagged (${untagged.length})`);
+    return;
   }
 
   renderSection(bookItems,  "📚 Books");
