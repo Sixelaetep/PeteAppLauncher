@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.12</title>
+<title>Gigs &amp; Trips v7.13</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -476,7 +476,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.12</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.13</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
@@ -1262,10 +1262,20 @@ let _curDayId=null;
 let _curTripTab='itinerary';
 
 // ── Panel switching — never destroys other panels ─────────────────
-function showPanel(name){
+// v7.13 (GIG-038): added preserveScroll param. render() calls this
+// unconditionally on every refresh (including in-place toggles like
+// expanding a trip card's day breakdown, or a year/month group), and
+// resetting scrollTop=0 every time was what caused those toggles to
+// jump the whole app back to the top. Every call site that genuinely
+// wants a scroll-to-top (switchTab, opening a trip/day, deleting an
+// event back to the list, etc.) already calls showPanel() explicitly
+// itself *before* calling render() — so render()'s own internal call
+// can safely preserve scroll without losing any of those resets.
+function showPanel(name, preserveScroll){
   document.getElementById('panelList').style.display = name==='list' ? 'block' : 'none';
   document.getElementById('panelTrip').style.display = name==='trip' ? 'block' : 'none';
   document.getElementById('panelDay').style.display  = name==='day'  ? 'block' : 'none';
+  if(preserveScroll) return;
   // Scroll active panel to top
   const panelId = name==='list'?'panelList':name==='trip'?'panelTrip':'panelDay';
   document.getElementById(panelId).scrollTop=0;
@@ -1292,7 +1302,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.12</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.13</span>';
   document.getElementById('hdrAction').style.display='none';
 }
 
@@ -1577,9 +1587,9 @@ function fmtMonthLabel(mo){
 }
 function render(){
   loadGymXApp(); // GYM-039: refresh gym schedule summary each render
-  if(_tab==='reviews'){ showPanel('list'); renderReviews(); return; }
-  if(_tab==='venues'){  showPanel('list'); renderVenues();  return; }
-  showPanel('list');
+  if(_tab==='reviews'){ showPanel('list',true); renderReviews(); return; }
+  if(_tab==='venues'){  showPanel('list',true); renderVenues();  return; }
+  showPanel('list',true);
 
   const today=new Date(); today.setHours(0,0,0,0);
   const todayStr=localDateStr(today);
@@ -1834,8 +1844,15 @@ function toggleTripCardDay(tripId,dayId){
   if(_expandedTripCardDays.has(key)) _expandedTripCardDays.delete(key); else _expandedTripCardDays.add(key);
   render();
 }
+// v7.13 (GIG-038): now includes linked gigs — the previous version only
+// counted day.items, so a trip with a gig linked to one of its days
+// undercounted (and, worse, that gig never appeared in the expanded
+// mini day-card at all — see renderTripDaysBreakdown below).
 function tripItemCount(t){
-  return (t.days||[]).reduce((sum,day)=>sum+(day.items||[]).filter(it=>!it._placeholder).length,0);
+  const d=getData();
+  const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===t.id);
+  const itemsCount=(t.days||[]).reduce((sum,day)=>sum+(day.items||[]).filter(it=>!it._placeholder).length,0);
+  return itemsCount+linkedGigs.length;
 }
 // Items in day/time order (position order from the Trip Details view —
 // see sortDayTimeline, GIG-036), with times shown where set.
@@ -1843,9 +1860,10 @@ function renderMiniDayItems(items){
   if(!items.length) return `<div class="mini-day-items"><div style="font-size:11px;color:var(--ink4);padding:4px 0">No items yet</div></div>`;
   let html=`<div class="mini-day-items">`;
   sortDayTimeline(items).forEach(it=>{
-    const tm=itemTime(it);
+    const tm=it._linkedGig?(it.time||null):itemTime(it);
+    const icon=it._linkedGig?gigTypeInfo(it.gigType||'music').icon:typeIcon(it.type);
     html+=`<div class="mini-item-row">
-      <span class="mini-item-icon">${typeIcon(it.type)}</span>
+      <span class="mini-item-icon">${icon}</span>
       <span class="mini-item-name">${esc(itemDisplayName(it))}</span>
       ${tm?`<span class="mini-item-time">${tm}</span>`:''}
     </div>`;
@@ -1858,6 +1876,8 @@ function renderMiniDayItems(items){
 function renderTripDaysBreakdown(t){
   const dayCount=(t.days||[]).length;
   if(!dayCount) return '';
+  const d=getData();
+  const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===t.id);
   const itemCount=tripItemCount(t);
   const isExpanded=_expandedTripCards&&_expandedTripCards.has(t.id);
   let html=`<div class="trip-days-toggle" onclick="event.stopPropagation();toggleTripCardExpand('${esc(t.id)}')">
@@ -1869,6 +1889,12 @@ function renderTripDaysBreakdown(t){
     html+=`<div class="trip-days-mini">`;
     sortedDays.forEach(day=>{
       const realItems=(day.items||[]).filter(it=>!it._placeholder);
+      // v7.13 (GIG-038): merge in gigs linked to this trip that fall on
+      // this day — previously omitted entirely, so a linked gig never
+      // showed up in its expanded day here even though it does in the
+      // Trip Details day view.
+      const gigsThisDay=linkedGigs.filter(g=>g.date===day.date).map(g=>({...g,_linkedGig:true}));
+      const allDayItems=[...realItems,...gigsThisDay];
       const dObj=new Date(day.date+'T00:00:00');
       const dayKey=t.id+':'+day.id;
       const dayExpanded=_expandedTripCardDays&&_expandedTripCardDays.has(dayKey);
@@ -1876,10 +1902,10 @@ function renderTripDaysBreakdown(t){
         <div class="mini-day-hdr" onclick="event.stopPropagation();toggleTripCardDay('${esc(t.id)}','${esc(day.id)}')">
           <span class="mini-day-num">${day.dayNumber}</span>
           <span class="mini-day-date">${fmtDateShort(day.date)} ${dow[dObj.getDay()]}</span>
-          <span class="mini-day-count">${realItems.length} item${realItems.length!==1?'s':''}</span>
+          <span class="mini-day-count">${allDayItems.length} item${allDayItems.length!==1?'s':''}</span>
           <span class="mini-day-chevron">${dayExpanded?'▾':'▸'}</span>
         </div>
-        ${dayExpanded?renderMiniDayItems(realItems):''}
+        ${dayExpanded?renderMiniDayItems(allDayItems):''}
       </div>`;
     });
     html+=`</div>`;
