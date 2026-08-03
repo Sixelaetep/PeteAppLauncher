@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.27</title>
+<title>Reading Tracker v3.28</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -696,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.27</span></div>
+    <div class="rt-logo">My Reading <span>v3.28</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1565,6 +1565,19 @@ function showSessionExpiredBanner() {
   chip.onclick = () => location.reload();
 }
 
+// v3.28 (MR-015, re-opened): the actual reason "synced but new tag isn't
+// showing" kept happening after both v3.26 and v3.27. renderAll() was
+// called after every successful cloud pull (manual Pull button + the 60s
+// background poll) but was never defined anywhere in this file — a
+// ReferenceError, thrown right after save() had already run. The pull
+// itself always worked correctly (data was merged in and persisted to
+// localStorage); the crash just happened before anything told the
+// screen to redraw, so whatever view was open kept showing its stale
+// pre-pull DOM. Added the missing renderAll(), which refreshes whichever
+// view is actually on screen (tracker/wishlist/dashboard/past/reviews/
+// stats). v3.26 and v3.27 were both real, separate fixes for getting
+// edits TO the cloud correctly — this is the one for the pull side,
+// where "synced" silently stopped meaning "and the screen updated."
 // v3.27 (MR-018): JSON restore silently overwritten by a stale cloud
 // copy. Confirmed the exported JSON was correct (tags/ownership present)
 // and every restore path assigns it wholesale (no field stripping) — the
@@ -1998,6 +2011,54 @@ async function selectUser(userId) {
 }
 
 // ── Debounced cloud sync (called after every save) ────────────────────
+// v3.28 (MR-015): the actual root cause of "device B synced but the new
+// tag isn't showing." renderAll() was called after every successful pull
+// (both the manual Pull button and the 60s background poll) but was
+// NEVER DEFINED anywhere in this file — calling it threw a ReferenceError
+// straight after save() had already run. That meant the pull genuinely
+// worked every time: pullAllFromCloud() correctly merged in device A's
+// tag, reassembleFromSync() correctly updated appState.wishlist, and
+// save() correctly persisted it to localStorage — but the crash happened
+// before anything re-rendered the screen, so whatever view was open kept
+// showing its stale pre-pull DOM. The data was right there in appState
+// the whole time; the screen just never got told to redraw. (A full page
+// reload would have shown it correctly, since load() reads the
+// already-updated localStorage — which is probably why this read as an
+// intermittent/confusing bug rather than a total failure.)
+//
+// This single missing function explains the "high priority, still
+// happening after two rounds of sync-timing fixes" pattern: v3.26 (flush
+// pending pushes before the tab hides) and v3.27 (restores win the next
+// merge) both fixed real, separate bugs in getting data TO the cloud
+// correctly — but neither touched the pull path, which is where this
+// was. All three fixes were necessary; this was the one actually
+// responsible for "pulled, but doesn't show."
+//
+// Refreshes whichever view is actually on screen — mirrors the same
+// render calls each view's own showXxx() function already makes, minus
+// the panel-switching (a background pull shouldn't navigate you away
+// from what you're looking at).
+function renderAll() {
+  if (document.getElementById('trackerApp')?.classList.contains('active')) {
+    render();
+  } else if (document.getElementById('wishlistApp')?.classList.contains('active')) {
+    renderWishlistView();
+  } else if (_rtNavActive === 'past') {
+    renderAggStats('past');
+    renderPastPanel();
+  } else if (_rtNavActive === 'reviews') {
+    renderAggStats('past');
+    populateRvBookSelect();
+    renderAllReviews();
+  } else if (_rtNavActive === 'stats') {
+    renderAggStats('stats');
+    renderStats(_statsPeriod);
+  } else {
+    renderAggStats('trackers');
+    renderDashboard();
+  }
+}
+
 async function manualPullFromCloud() {
   if (!_currentUser) { showSync('red', 'Not signed in'); return; }
   showSync('saving', 'Pulling from cloud…');
