@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.11</title>
+<title>Claim Tracker v2.12</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -170,6 +170,16 @@
   .icon-btn:hover{background:var(--surface2);color:var(--ink)}
   .icon-btn.del:hover{background:rgba(247,129,102,0.12);color:var(--accent)}
 
+  /* ── Passenger mileage rows (CLA-011) ── */
+  .pax-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
+  .pax-row:last-child{border-bottom:none}
+  .pax-row input.pax-name{flex:1.6;width:auto;margin:0;font-size:14px;padding:8px 10px}
+  .pax-row input.pax-miles{flex:1;width:auto;margin:0;font-size:14px;padding:8px 10px}
+  .pax-empty{font-size:12px;color:var(--ink2);padding:4px 0 8px}
+  .btn-row-sm{display:flex;gap:8px;margin-top:8px;margin-bottom:0;flex-wrap:wrap}
+  .pax-summary{font-size:12px;color:var(--ink2);margin-top:2px}
+  .pax-summary strong{color:var(--accent4)}
+
   .stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
   .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
   .stat-card-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink2);margin-bottom:6px}
@@ -232,7 +242,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.11</div>
+        <div class="ver">v2.12</div>
       </div>
     </div>
     <div class="header-actions">
@@ -335,6 +345,12 @@
         <button class="deduct-btn" data-mode="none" onclick="setDeductMode(this)">None<span class="db-sub">&#8722;0 mi</span></button>
       </div>
       <div style="font-size:11px;color:var(--ink2);margin-top:6px;line-height:1.5"><strong>Full</strong> = home return &nbsp;&middot;&nbsp; <strong>Half</strong> = one-way home &nbsp;&middot;&nbsp; <strong>None</strong> = site-to-site</div>
+      <label>Passengers <span id="paxRateHintAdd" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+      <div id="paxList"></div>
+      <div class="btn-row-sm">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="addPaxRow('add')">+ Add Passenger</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="copyPaxRow('add')">Copy Previous</button>
+      </div>
       <div class="calc-preview" id="milCalcPreview">Enter miles above to see calculation</div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="addMileage()">Add Mileage</button>
@@ -371,6 +387,10 @@
       <div class="setting-row">
         <div><div class="setting-label">Mileage Rate</div><div class="setting-sublabel">&#163; per claimable mile</div></div>
         <div class="setting-control"><span style="font-size:13px;color:var(--ink2)">&#163;</span><input class="setting-input" id="settRate" type="number" step="0.01" min="0" value="0.55"></div>
+      </div>
+      <div class="setting-row">
+        <div><div class="setting-label">Passenger Rate</div><div class="setting-sublabel">&#163; per mile, per passenger</div></div>
+        <div class="setting-control"><span style="font-size:13px;color:var(--ink2)">&#163;</span><input class="setting-input" id="settPaxRate" type="number" step="0.01" min="0" value="0.05"></div>
       </div>
       <div class="setting-row">
         <div><div class="setting-label">Claim Window</div><div class="setting-sublabel">Months after expense to claim</div></div>
@@ -540,6 +560,22 @@
 // setSyncState() to show "N pending sync" instead of a bare error while
 // a retry is queued. Every sync error log message now also runs through
 // the shared PalSync.errorHint() instead of a bare err.message.
+// v2.12 (CLA-011): Passenger mileage. Mileage entries can now carry a
+// `passengers` array ([{id,name,miles}]) captured on the Add Mileage form
+// and in the edit modal (shared row-editor: addPaxRow/copyPaxRow/removePax/
+// updatePax, keyed by 'add' or 'edit' context, backing _milPassengers /
+// _editPassengers). Passenger miles are charged at a new, separately
+// editable `passengerRatePerMile` setting (default £0.05/mi) via
+// calcPassengerTotal(). The passenger subtotal is added to the driver
+// mileage amount in computeAmount(), addMileage(), saveEditEntry(),
+// markClaimed() and doClaimAll() — same freeze-on-claim pattern already
+// used for rate_per_mile (passenger_rate_per_mile, passenger_miles,
+// passenger_amount are stamped onto the entry when claimed so historic
+// claims aren't affected by later rate changes). Empty passenger rows
+// (no name, no miles) are dropped on save. Backwards compatible: entries
+// without a `passengers` array are treated as [], and both the envelope
+// and legacy-flat JSON import paths default passengerRatePerMile to 0.05
+// when absent from an older backup.
 // v2.11 (CLA-012): deleteEntry() switched from hard-delete (splice entry
 // out of local array, then attempt cloud tombstone) to soft-delete-first.
 // Previously, if the tombstone push failed (network blip, offline), local
@@ -606,6 +642,7 @@ function defaultEnvelope() {
       settings: {
         commuteOw:        11.5,
         ratePerMile:      0.55,
+        passengerRatePerMile: 0.05,
         claimWindowMonths: 3,
         categories:       [...DEFAULT_CATEGORIES],
         stdTrips:         DEFAULT_STD_TRIPS.map(t=>({...t})),
@@ -628,6 +665,7 @@ function load() {
       if (parsed.settings) {
         m.data.settings.commuteOw         = parsed.settings.commuteOw         ?? 11.5;
         m.data.settings.ratePerMile       = parsed.settings.ratePerMile       ?? 0.55;
+        m.data.settings.passengerRatePerMile = parsed.settings.passengerRatePerMile ?? 0.05;
         m.data.settings.claimWindowMonths = parsed.settings.claimWindowMonths ?? 3;
         m.data.settings.categories        = parsed.settings.categories        || [...DEFAULT_CATEGORIES];
         m.data.settings.stdTrips          = parsed.settings.stdTrips          || DEFAULT_STD_TRIPS.map(t=>({...t}));
@@ -647,6 +685,7 @@ function load() {
         const s = parsed.data.settings;
         env.data.settings.commuteOw         = s.commuteOw         ?? 11.5;
         env.data.settings.ratePerMile       = s.ratePerMile       ?? 0.55;
+        env.data.settings.passengerRatePerMile = s.passengerRatePerMile ?? 0.05;
         env.data.settings.claimWindowMonths = s.claimWindowMonths ?? 3;
         env.data.settings.categories        = s.categories        || [...DEFAULT_CATEGORIES];
         env.data.settings.stdTrips          = s.stdTrips          || DEFAULT_STD_TRIPS.map(t=>({...t}));
@@ -674,6 +713,8 @@ let _deductMode    = 'full';
 let _newStdDeduct  = 'full';
 let _editStdDeduct = 'full';
 let _editDeductMode = 'full';
+let _milPassengers  = [];      // [{name,miles}] — Add Mileage form, in-progress passenger rows
+let _editPassengers = [];      // [{name,miles}] — Edit modal, in-progress passenger rows
 let _claimedVisible = false;
 
 // ── Supabase sync state ──
@@ -956,6 +997,57 @@ function calcMileage(totalMiles, deductMode) {
   return {deductMiles, claimable, amount:claimable*rate};
 }
 
+// CLA-011: passenger mileage — sum of each passenger's miles at a flat
+// per-mile rate (default £0.05, editable in Settings). Kept separate from
+// calcMileage() (driver deduction logic doesn't apply to passengers).
+function calcPassengerTotal(passengers, rate) {
+  const r = rate ?? (getSettings().passengerRatePerMile ?? 0.05);
+  const miles = (passengers||[]).reduce((s,p)=>s+(parseFloat(p.miles)||0),0);
+  return {miles, amount: miles*r};
+}
+
+// ─── Passenger row editor (CLA-011) ────────────────────────────────
+// Shared between the Add Mileage form (ctx='add', backed by _milPassengers,
+// rendered into #paxList) and the Edit modal (ctx='edit', backed by
+// _editPassengers, rendered into #editPaxList).
+function paxArr(ctx) { return ctx==='edit' ? _editPassengers : _milPassengers; }
+
+function renderPaxRows(ctx) {
+  const arr  = paxArr(ctx);
+  const wrap = document.getElementById(ctx==='edit' ? 'editPaxList' : 'paxList');
+  if (!wrap) return;
+  wrap.innerHTML = !arr.length
+    ? '<div class="pax-empty">No passengers added</div>'
+    : arr.map((p,i)=>
+        '<div class="pax-row">'+
+          '<input type="text" class="pax-name" placeholder="Passenger name" value="'+escHtml(p.name||'')+'" oninput="updatePax(\''+ctx+'\','+i+',\'name\',this.value)">'+
+          '<input type="number" class="pax-miles" placeholder="Miles" step="0.1" min="0" value="'+(p.miles===''||p.miles==null?'':p.miles)+'" inputmode="decimal" oninput="updatePax(\''+ctx+'\','+i+',\'miles\',this.value)">'+
+          '<button type="button" class="icon-btn del" onclick="removePax(\''+ctx+'\','+i+')">\ud83d\uddd1\ufe0f</button>'+
+        '</div>'
+      ).join('');
+  if (ctx==='add') updateMilCalc(); else updateEditMilCalc();
+}
+
+function addPaxRow(ctx) { paxArr(ctx).push({name:'', miles:''}); renderPaxRows(ctx); }
+
+function copyPaxRow(ctx) {
+  const arr = paxArr(ctx);
+  if (!arr.length) { addPaxRow(ctx); return; }
+  const last = arr[arr.length-1];
+  arr.push({name:last.name, miles:last.miles});
+  renderPaxRows(ctx);
+}
+
+function removePax(ctx, idx) { paxArr(ctx).splice(idx,1); renderPaxRows(ctx); }
+
+function updatePax(ctx, idx, field, val) {
+  const arr = paxArr(ctx);
+  if (!arr[idx]) return;
+  arr[idx][field] = val;
+  // Recalculate the totals line without a full re-render (keeps focus/cursor in the input being typed into)
+  if (ctx==='add') updateMilCalc(); else updateEditMilCalc();
+}
+
 // ─── Claim window helpers ─────────────────────────────────────────
 // Returns the expiry date (Date object) for an entry based on entry_date
 function expiryDate(entry) {
@@ -1024,12 +1116,27 @@ function updateMilCalc() {
   const miles    = parseFloat(document.getElementById('milMiles').value);
   const preview  = document.getElementById('milCalcPreview');
   const saveCard = document.getElementById('saveAsStdCard');
+  updatePaxSummaryLine('add');
   if (!miles||miles<=0) { preview.innerHTML='Enter miles above to see calculation'; saveCard.style.display='none'; return; }
   const {deductMiles,claimable,amount} = calcMileage(miles,_deductMode);
+  const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+  const pax = calcPassengerTotal(_milPassengers, paxRate);
   const lbl = _deductMode==='full'?'full commute':_deductMode==='half'?'half commute':'no deduction';
-  preview.innerHTML = 'Total trip: <strong>'+miles+' mi</strong><br>Deduct ('+lbl+'): <strong>\u2212'+deductMiles+' mi</strong><br>Claimable: <strong>'+claimable.toFixed(1)+' mi</strong> @ \u00a3'+getSettings().ratePerMile+'/mi<br><div class="calc-total">'+fmtGBP(amount)+'</div>';
+  let html = 'Total trip: <strong>'+miles+' mi</strong><br>Deduct ('+lbl+'): <strong>\u2212'+deductMiles+' mi</strong><br>Claimable: <strong>'+claimable.toFixed(1)+' mi</strong> @ \u00a3'+getSettings().ratePerMile+'/mi';
+  if (pax.miles>0) html += '<br>Passengers: <strong>'+pax.miles.toFixed(1)+' mi</strong> @ \u00a3'+paxRate.toFixed(2)+'/mi = <strong>'+fmtGBP(pax.amount)+'</strong>';
+  html += '<div class="calc-total">'+fmtGBP(amount+pax.amount)+'</div>';
+  preview.innerHTML = html;
   document.getElementById('saveStdInfo').textContent = miles+' mi \u00b7 '+{full:'Full',half:'Half',none:'No'}[_deductMode]+' deduction';
   saveCard.style.display = 'block';
+}
+
+// Updates the £/mi hint next to the "Passengers" label so it always shows
+// the live setting rather than a hardcoded default. Safe no-op if the
+// relevant hint element isn't in the DOM yet (e.g. edit modal not open).
+function updatePaxSummaryLine(ctx) {
+  const rate = getSettings().passengerRatePerMile ?? 0.05;
+  const hint = document.getElementById(ctx==='edit' ? 'paxRateHintEdit' : 'paxRateHintAdd');
+  if (hint) hint.textContent = '(optional, \u00a3'+rate.toFixed(2)+'/mi each)';
 }
 
 function addMileage() {
@@ -1040,7 +1147,12 @@ function addMileage() {
   if (!reason)         { toast('Please enter a reason'); return; }
   if (!miles||miles<=0){ toast('Please enter valid miles'); return; }
   const {deductMiles,claimable,amount} = calcMileage(miles,_deductMode);
-  const entry = {id:uid(),type:'mileage',entry_date:date,reason,total_miles:miles,deduct_mode:_deductMode,deduct_miles:deductMiles,claimable_miles:claimable,rate_per_mile:getSettings().ratePerMile,amount,claimed:false,claimed_date:null,updated_at:new Date().toISOString()};
+  const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+  const passengers = _milPassengers
+    .map(p=>({id:uid(), name:(p.name||'').trim(), miles:parseFloat(p.miles)||0}))
+    .filter(p=>p.name || p.miles>0);
+  const pax = calcPassengerTotal(passengers, paxRate);
+  const entry = {id:uid(),type:'mileage',entry_date:date,reason,total_miles:miles,deduct_mode:_deductMode,deduct_miles:deductMiles,claimable_miles:claimable,rate_per_mile:getSettings().ratePerMile,passengers,passenger_rate_per_mile:paxRate,passenger_miles:pax.miles,passenger_amount:pax.amount,amount:amount+pax.amount,claimed:false,claimed_date:null,updated_at:new Date().toISOString()};
   getEntries().unshift(entry);
   mutateEntry(entry); clearMileageForm(); renderAll(); switchTab('claims'); toast('Mileage added \u2713');
 }
@@ -1050,6 +1162,8 @@ function clearMileageForm() {
   document.getElementById('milReason').value = '';
   document.getElementById('milMiles').value  = '';
   _deductMode = 'full';
+  _milPassengers = [];
+  renderPaxRows('add');
   document.querySelectorAll('#deductRow .deduct-btn').forEach(b=>b.classList.remove('active'));
   document.querySelector('#deductRow .deduct-btn[data-mode="full"]').classList.add('active');
   document.getElementById('milCalcPreview').innerHTML = 'Enter miles above to see calculation';
@@ -1100,7 +1214,7 @@ function doClaimAll() {
   const now      = new Date().toISOString();
   unclaimed.forEach(e => {
     e.claimed = true; e.claimed_date = date;
-    if (e.type==='mileage') { const c=calcMileage(e.total_miles,e.deduct_mode); e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable; e.rate_per_mile=getSettings().ratePerMile; e.amount=c.amount; }
+    if (e.type==='mileage') { const c=calcMileage(e.total_miles,e.deduct_mode); const paxRate=getSettings().passengerRatePerMile??0.05; const pax=calcPassengerTotal(e.passengers,paxRate); e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable; e.rate_per_mile=getSettings().ratePerMile; e.passenger_rate_per_mile=paxRate; e.passenger_miles=pax.miles; e.passenger_amount=pax.amount; e.amount=c.amount+pax.amount; }
     e.updated_at = now;
   });
   save(_env); closeModal('claimAllModal');
@@ -1116,7 +1230,7 @@ function doClaimAll() {
 
 function markClaimed(id) {
   const e = getEntries().find(e=>e.id===id); if (!e) return;
-  if (e.type==='mileage') { const c=calcMileage(e.total_miles,e.deduct_mode); e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable; e.rate_per_mile=getSettings().ratePerMile; e.amount=c.amount; }
+  if (e.type==='mileage') { const c=calcMileage(e.total_miles,e.deduct_mode); const paxRate=getSettings().passengerRatePerMile??0.05; const pax=calcPassengerTotal(e.passengers,paxRate); e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable; e.rate_per_mile=getSettings().ratePerMile; e.passenger_rate_per_mile=paxRate; e.passenger_miles=pax.miles; e.passenger_amount=pax.amount; e.amount=c.amount+pax.amount; }
   e.claimed=true; e.claimed_date=todayISO(); e.updated_at=new Date().toISOString();
   mutateEntry(e); renderAll(); toast('Marked as claimed \u2713');
 }
@@ -1148,7 +1262,9 @@ function deleteEntry(id) {
 function computeAmount(entry) {
   if (entry.type==='expense') return entry.amount||0;
   if (entry.claimed)          return entry.amount||0;
-  return calcMileage(entry.total_miles,entry.deduct_mode).amount;
+  const drive = calcMileage(entry.total_miles,entry.deduct_mode).amount;
+  const pax   = calcPassengerTotal(entry.passengers, getSettings().passengerRatePerMile ?? 0.05);
+  return drive + pax.amount;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1244,6 +1360,17 @@ function renderEntry(e) {
   if (!isMil&&e.category) metaItems.push(e.category);
   if (isMil&&!e.claimed)  { const {claimable}=calcMileage(e.total_miles,e.deduct_mode); metaItems.push(e.total_miles+' mi total \u00b7 '+claimable.toFixed(1)+' mi claimable'); }
   if (isMil&&e.claimed)   metaItems.push((e.claimable_miles||0).toFixed(1)+' mi @ \u00a3'+(e.rate_per_mile||getSettings().ratePerMile));
+  // CLA-011: passenger mileage summary — live calc while unclaimed, frozen figures once claimed
+  if (isMil&&(e.passengers||[]).length) {
+    const names = e.passengers.map(p=>p.name||'Unnamed').join(', ');
+    const n     = e.passengers.length;
+    if (!e.claimed) {
+      const pax = calcPassengerTotal(e.passengers, getSettings().passengerRatePerMile ?? 0.05);
+      if (pax.miles>0) metaItems.push(n+' passenger'+(n===1?'':'s')+' \u00b7 '+pax.miles.toFixed(1)+' mi \u00b7 +'+fmtGBP(pax.amount)+' (' +names+ ')');
+    } else if (e.passenger_miles) {
+      metaItems.push(n+' passenger'+(n===1?'':'s')+' \u00b7 '+e.passenger_miles.toFixed(1)+' mi @ \u00a3'+(e.passenger_rate_per_mile??0.05)+' \u00b7 +'+fmtGBP(e.passenger_amount||0)+' (' +names+ ')');
+    }
+  }
 
   // Age tag for unclaimed entries
   let ageTag = '';
@@ -1306,16 +1433,26 @@ function openEditEntry(id) {
     attachPennyInput('editAmt');
     setPennyValue('editAmt', e.amount);
   } else {
-    _editDeductMode = e.deduct_mode||'full';
-    document.getElementById('editModalBody').innerHTML = '<label>Date</label><input type="date" id="editDate" value="'+e.entry_date+'"><label>Reason</label><input type="text" id="editReason" value="'+escHtml(e.reason||'')+'"><label>Total Miles</label><input type="number" id="editMiles" value="'+e.total_miles+'" step="0.1" min="0" oninput="updateEditMilCalc()"><label>Commute Deduction</label><div class="deduct-row" id="editDeductRow"><button class="deduct-btn'+(e.deduct_mode==='full'?' active':'')+'" data-mode="full" onclick="setEditDeductMode(this)">Full<span class="db-sub">Home return</span></button><button class="deduct-btn'+(e.deduct_mode==='half'?' active':'')+'" data-mode="half" onclick="setEditDeductMode(this)">Half<span class="db-sub">Home one-way</span></button><button class="deduct-btn'+(e.deduct_mode==='none'?' active':'')+'" data-mode="none" onclick="setEditDeductMode(this)">None<span class="db-sub">Site-to-site</span></button></div><div class="calc-preview" id="editCalcPreview" style="margin-top:12px">'+editMilCalcHtml(e.total_miles,e.deduct_mode)+'</div><div class="btn-row"><button class="btn btn-primary" onclick="saveEditEntry()">Save</button><button class="btn btn-secondary" onclick="closeModal(\'editModal\')">Cancel</button></div>';
+    _editDeductMode  = e.deduct_mode||'full';
+    // CLA-011: seed the passenger editor with this entry's existing passengers
+    // (deep-copied so cancelling the modal doesn't mutate the saved entry).
+    _editPassengers  = (e.passengers||[]).map(p=>({name:p.name||'', miles:p.miles===0?0:(p.miles||'')}));
+    const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+    document.getElementById('editModalBody').innerHTML = '<label>Date</label><input type="date" id="editDate" value="'+e.entry_date+'"><label>Reason</label><input type="text" id="editReason" value="'+escHtml(e.reason||'')+'"><label>Total Miles</label><input type="number" id="editMiles" value="'+e.total_miles+'" step="0.1" min="0" oninput="updateEditMilCalc()"><label>Commute Deduction</label><div class="deduct-row" id="editDeductRow"><button class="deduct-btn'+(e.deduct_mode==='full'?' active':'')+'" data-mode="full" onclick="setEditDeductMode(this)">Full<span class="db-sub">Home return</span></button><button class="deduct-btn'+(e.deduct_mode==='half'?' active':'')+'" data-mode="half" onclick="setEditDeductMode(this)">Half<span class="db-sub">Home one-way</span></button><button class="deduct-btn'+(e.deduct_mode==='none'?' active':'')+'" data-mode="none" onclick="setEditDeductMode(this)">None<span class="db-sub">Site-to-site</span></button></div><label>Passengers <span id="paxRateHintEdit" style="font-weight:400;text-transform:none;letter-spacing:0">(optional, \u00a3'+paxRate.toFixed(2)+'/mi each)</span></label><div id="editPaxList"></div><div class="btn-row-sm"><button type="button" class="btn btn-secondary btn-sm" onclick="addPaxRow(\'edit\')">+ Add Passenger</button><button type="button" class="btn btn-secondary btn-sm" onclick="copyPaxRow(\'edit\')">Copy Previous</button></div><div class="calc-preview" id="editCalcPreview" style="margin-top:12px">'+editMilCalcHtml(e.total_miles,e.deduct_mode)+'</div><div class="btn-row"><button class="btn btn-primary" onclick="saveEditEntry()">Save</button><button class="btn btn-secondary" onclick="closeModal(\'editModal\')">Cancel</button></div>';
+    renderPaxRows('edit');
   }
   openModal('editModal');
 }
 
 function editMilCalcHtml(miles,mode) {
   const {deductMiles,claimable,amount} = calcMileage(miles,mode);
+  const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+  const pax = calcPassengerTotal(_editPassengers, paxRate);
   const lbl = mode==='full'?'full commute':mode==='half'?'half commute':'no deduction';
-  return 'Total: <strong>'+miles+' mi</strong> \u00b7 Deduct ('+lbl+'): <strong>\u2212'+deductMiles+' mi</strong> \u00b7 Claimable: <strong>'+claimable.toFixed(1)+' mi</strong><div class="calc-total">'+fmtGBP(amount)+'</div>';
+  let html = 'Total: <strong>'+miles+' mi</strong> \u00b7 Deduct ('+lbl+'): <strong>\u2212'+deductMiles+' mi</strong> \u00b7 Claimable: <strong>'+claimable.toFixed(1)+' mi</strong>';
+  if (pax.miles>0) html += '<br>Passengers: <strong>'+pax.miles.toFixed(1)+' mi</strong> @ \u00a3'+paxRate.toFixed(2)+'/mi = <strong>'+fmtGBP(pax.amount)+'</strong>';
+  html += '<div class="calc-total">'+fmtGBP(amount+pax.amount)+'</div>';
+  return html;
 }
 
 function setEditDeductMode(btn) {
@@ -1323,12 +1460,12 @@ function setEditDeductMode(btn) {
   document.querySelectorAll('#editDeductRow .deduct-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   const miles = parseFloat(document.getElementById('editMiles')?.value||0);
-  if (miles>0) document.getElementById('editCalcPreview').innerHTML = editMilCalcHtml(miles,_editDeductMode);
+  document.getElementById('editCalcPreview').innerHTML = editMilCalcHtml(miles||0,_editDeductMode);
 }
 
 function updateEditMilCalc() {
   const miles = parseFloat(document.getElementById('editMiles')?.value||0);
-  if (miles>0) document.getElementById('editCalcPreview').innerHTML = editMilCalcHtml(miles,_editDeductMode);
+  document.getElementById('editCalcPreview').innerHTML = editMilCalcHtml(miles||0,_editDeductMode);
 }
 
 function saveEditEntry() {
@@ -1341,7 +1478,21 @@ function saveEditEntry() {
   } else {
     e.total_miles = parseFloat(document.getElementById('editMiles').value)||0;
     e.deduct_mode = _editDeductMode;
-    if (!e.claimed) { const c=calcMileage(e.total_miles,e.deduct_mode); e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable; e.amount=c.amount; }
+    // CLA-011: passenger list is always saved, even on a claimed entry (so
+    // a name typo can be fixed) — but the frozen claimed amount only
+    // recalculates for entries that are still unclaimed, matching the
+    // existing driver-mileage behaviour above.
+    e.passengers = _editPassengers
+      .map(p=>({id:p.id||uid(), name:(p.name||'').trim(), miles:parseFloat(p.miles)||0}))
+      .filter(p=>p.name || p.miles>0);
+    if (!e.claimed) {
+      const c = calcMileage(e.total_miles,e.deduct_mode);
+      const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+      const pax = calcPassengerTotal(e.passengers, paxRate);
+      e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable;
+      e.passenger_rate_per_mile=paxRate; e.passenger_miles=pax.miles; e.passenger_amount=pax.amount;
+      e.amount=c.amount+pax.amount;
+    }
   }
   e.updated_at = new Date().toISOString();
   mutateEntry(e); closeModal('editModal'); renderAll(); toast('Entry updated \u2713');
@@ -1379,8 +1530,9 @@ function renderStats() {
 function renderSettings() {
   document.getElementById('settCommuteOw').value     = getSettings().commuteOw;
   document.getElementById('settRate').value          = getSettings().ratePerMile;
+  document.getElementById('settPaxRate').value       = getSettings().passengerRatePerMile ?? 0.05;
   document.getElementById('settClaimWindow').value   = getSettings().claimWindowMonths || 3;
-  renderStdTripList(); renderCategoryList(); renderExpenseCategorySelect(); updateDeductLabels();
+  renderStdTripList(); renderCategoryList(); renderExpenseCategorySelect(); updateDeductLabels(); updatePaxSummaryLine('add');
 }
 
 function updateDeductLabels() {
@@ -1390,16 +1542,19 @@ function updateDeductLabels() {
 }
 
 function saveMileageSettings() {
-  const ow     = parseFloat(document.getElementById('settCommuteOw').value);
-  const rate   = parseFloat(document.getElementById('settRate').value);
+  const ow      = parseFloat(document.getElementById('settCommuteOw').value);
+  const rate    = parseFloat(document.getElementById('settRate').value);
+  const paxRate = parseFloat(document.getElementById('settPaxRate').value);
   const claimWindowMonths = parseInt(document.getElementById('settClaimWindow').value);
   if (isNaN(ow)||ow<0)       { toast('Enter a valid commute distance'); return; }
   if (isNaN(rate)||rate<=0)  { toast('Enter a valid rate'); return; }
+  if (isNaN(paxRate)||paxRate<0) { toast('Enter a valid passenger rate'); return; }
   if (isNaN(claimWindowMonths)||claimWindowMonths<1){ toast('Claim window must be at least 1 month'); return; }
   getSettings().commuteOw         = ow;
   getSettings().ratePerMile       = rate;
+  getSettings().passengerRatePerMile = paxRate;
   getSettings().claimWindowMonths = claimWindowMonths;
-  mutate(); updateDeductLabels(); renderClaims(); toast('Settings saved \u2713');
+  mutate(); updateDeductLabels(); updatePaxSummaryLine('add'); renderClaims(); toast('Settings saved \u2713');
 }
 
 function renderStdTripList() {
@@ -1556,12 +1711,15 @@ function importJSON(event) {
         _env.data.entries  = _env.data.entries  || [];
         _env.data.settings = _env.data.settings || defaultEnvelope().data.settings;
         _env.data.settings.claimWindowMonths = _env.data.settings.claimWindowMonths ?? 3;
+        // CLA-011: older backups predate the passenger-rate setting — default it in.
+        _env.data.settings.passengerRatePerMile = _env.data.settings.passengerRatePerMile ?? 0.05;
       } else if (parsed.entries !== undefined) {
         const fresh = defaultEnvelope();
         fresh.data.entries = parsed.entries||[];
         if (parsed.settings) {
           fresh.data.settings.commuteOw         = parsed.settings.commuteOw         ?? 11.5;
           fresh.data.settings.ratePerMile       = parsed.settings.ratePerMile       ?? 0.55;
+          fresh.data.settings.passengerRatePerMile = parsed.settings.passengerRatePerMile ?? 0.05;
           fresh.data.settings.claimWindowMonths = parsed.settings.claimWindowMonths ?? 3;
           fresh.data.settings.categories        = parsed.settings.categories        || fresh.data.settings.categories;
           fresh.data.settings.stdTrips          = parsed.settings.stdTrips          || fresh.data.settings.stdTrips;
