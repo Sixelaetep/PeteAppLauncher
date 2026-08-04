@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.12</title>
+<title>Claim Tracker v2.13</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -80,6 +80,7 @@
     .sync-banner{max-width:872px}
     .header{padding:0 calc((100% - 900px)/2 + 14px)}
     .tab-bar{padding:0 calc((100% - 900px)/2)}
+    .hero-row{grid-template-columns:repeat(4,1fr)}
   }
   .tab-panel.active{display:block}
 
@@ -90,12 +91,20 @@
   .hero-pence{font-size:22px}
   .hero-sub{font-size:12px;color:var(--ink2);margin-top:6px}
   .hero-sub strong{color:var(--ink)}
-  .hero-row{display:flex;gap:10px;margin-top:12px}
-  .hero-stat{flex:1;background:var(--surface2);border-radius:8px;padding:10px 12px}
+  .hero-row{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}
+  .hero-stat{background:var(--surface2);border-radius:8px;padding:10px 12px}
   .hero-stat-label{font-size:10px;color:var(--ink2);text-transform:uppercase;letter-spacing:0.05em}
   .hero-stat-val{font-size:17px;font-weight:700;color:var(--ink);margin-top:2px}
   .hero-stat-val.green{color:var(--accent2)}
   .hero-stat-val.orange{color:var(--accent4)}
+  .hero-stat-val.purple{color:#a78bfa}
+
+  /* ── CLA-012: mileage / passenger breakdown block on entry cards ── */
+  .mil-breakdown{margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:8px;display:flex;flex-direction:column;gap:3px}
+  .mil-breakdown-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--ink2)}
+  .mil-breakdown-row .label{display:flex;align-items:center;gap:4px}
+  .mil-breakdown-row.total{border-top:1px solid var(--border);margin-top:3px;padding-top:5px;font-weight:700;color:var(--ink);font-size:13px}
+  .mil-breakdown-names{font-size:10px;color:var(--ink3);margin-top:-1px}
 
   /* ── Expiry alert banner ── */
   .expiry-alert{background:rgba(247,129,102,0.1);border:1px solid rgba(247,129,102,0.35);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;font-size:12px;color:var(--accent);line-height:1.5}
@@ -242,7 +251,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.12</div>
+        <div class="ver">v2.13</div>
       </div>
     </div>
     <div class="header-actions">
@@ -278,6 +287,7 @@
       <div class="hero-row">
         <div class="hero-stat"><div class="hero-stat-label">Expenses</div><div class="hero-stat-val orange" id="heroExpenses">&#163;0.00</div></div>
         <div class="hero-stat"><div class="hero-stat-label">Mileage</div><div class="hero-stat-val green" id="heroMileage">&#163;0.00</div></div>
+        <div class="hero-stat"><div class="hero-stat-label">Passengers</div><div class="hero-stat-val purple" id="heroPassengers">&#163;0.00</div></div>
         <div class="hero-stat"><div class="hero-stat-label">Entries</div><div class="hero-stat-val" id="heroCount">0</div></div>
       </div>
     </div>
@@ -560,6 +570,22 @@
 // setSyncState() to show "N pending sync" instead of a bare error while
 // a retry is queued. Every sync error log message now also runs through
 // the shared PalSync.errorHint() instead of a bare err.message.
+// v2.13 (CLA-012, NOTE — issue-ID collision: this brief's CLA-012 is a
+// different issue to the CLA-012 already shipped in v2.11 below (soft-
+// delete). Flagged to Pete; not renumbered here since the brief specified
+// CLA-012 explicitly — check Test & Issues for a duplicate ID before the
+// next release). Mileage/passenger delineation. Pete's decision: keep a
+// single claimed flag per entry (no split claim-state per part) — instead,
+// (1) the claim overview hero gets its own "Passengers" stat, separate
+// from "Mileage" (which is now driver-only, previously included passenger
+// amounts); (2) each mileage entry card with passengers now renders a
+// distinct .mil-breakdown block (🚗 Mileage / 🤝 Passengers(n) + names /
+// Total), instead of folding passenger figures into the meta line; (3)
+// markClaimed() and doClaimAll() now show a confirm() dialog before
+// marking claimed whenever passenger mileage is present, asking Pete to
+// confirm he's claimed both portions in his own claim system (doClaimAll
+// shows one aggregate confirm covering all affected entries in the batch,
+// not one per entry). No change to the claimed data model itself.
 // v2.12 (CLA-011): Passenger mileage. Mileage entries can now carry a
 // `passengers` array ([{id,name,miles}]) captured on the Add Mileage form
 // and in the edit modal (shared row-editor: addPaxRow/copyPaxRow/removePax/
@@ -1211,6 +1237,18 @@ function doClaimAll() {
   const date     = document.getElementById('claimAllDate').value;
   // Only claim entries that are within the claim window
   const unclaimed = getEntries().filter(e=>!e.claimed&&!e._deleted&&claimStatus(e)!=='expired');
+  // CLA-012: single claimed flag per entry — but Pete claims mileage and
+  // passenger mileage separately in his own claim system, so before a bulk
+  // claim touches any entry with passenger mileage, confirm both portions
+  // have actually been claimed there. One aggregate confirm for the whole
+  // batch (not one per entry) to keep bulk-claim usable.
+  const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+  const withPax = unclaimed.filter(e=>e.type==='mileage' && calcPassengerTotal(e.passengers,paxRate).amount>0);
+  if (withPax.length) {
+    const paxTotal = withPax.reduce((s,e)=>s+calcPassengerTotal(e.passengers,paxRate).amount,0);
+    const proceed = confirm(withPax.length+' of these '+unclaimed.length+' entr'+(unclaimed.length===1?'y':'ies')+' include'+(unclaimed.length===1?'s':'')+' passenger mileage, totalling '+fmtGBP(paxTotal)+'.\n\nHave you claimed BOTH the mileage and the passenger portions in your claim system?\n\nOK = yes, mark all as claimed.\nCancel = go back.');
+    if (!proceed) return;
+  }
   const now      = new Date().toISOString();
   unclaimed.forEach(e => {
     e.claimed = true; e.claimed_date = date;
@@ -1230,6 +1268,18 @@ function doClaimAll() {
 
 function markClaimed(id) {
   const e = getEntries().find(e=>e.id===id); if (!e) return;
+  // CLA-012: same single-claimed-flag decision as doClaimAll — confirm
+  // both portions have been claimed in Pete's own claim system before
+  // marking a mileage entry with passenger mileage as claimed.
+  if (e.type==='mileage') {
+    const paxRate = getSettings().passengerRatePerMile ?? 0.05;
+    const pax = calcPassengerTotal(e.passengers, paxRate);
+    if (pax.amount>0) {
+      const n = (e.passengers||[]).length;
+      const proceed = confirm('This entry includes '+n+' passenger'+(n===1?'':'s')+' totalling '+fmtGBP(pax.amount)+'.\n\nHave you claimed BOTH the mileage and the passenger portions in your claim system?\n\nOK = yes, mark as claimed.\nCancel = go back.');
+      if (!proceed) return;
+    }
+  }
   if (e.type==='mileage') { const c=calcMileage(e.total_miles,e.deduct_mode); const paxRate=getSettings().passengerRatePerMile??0.05; const pax=calcPassengerTotal(e.passengers,paxRate); e.deduct_miles=c.deductMiles; e.claimable_miles=c.claimable; e.rate_per_mile=getSettings().ratePerMile; e.passenger_rate_per_mile=paxRate; e.passenger_miles=pax.miles; e.passenger_amount=pax.amount; e.amount=c.amount+pax.amount; }
   e.claimed=true; e.claimed_date=todayISO(); e.updated_at=new Date().toISOString();
   mutateEntry(e); renderAll(); toast('Marked as claimed \u2713');
@@ -1279,11 +1329,17 @@ function renderClaims() {
   const claimable = unclaimed.filter(e => claimStatus(e) !== 'expired');
   const totalUnc = claimable.reduce((s,e)=>s+computeAmount(e),0);
   const expUnc   = claimable.filter(e=>e.type==='expense').reduce((s,e)=>s+(e.amount||0),0);
-  const milUnc   = claimable.filter(e=>e.type==='mileage').reduce((s,e)=>s+computeAmount(e),0);
+  const paxRate  = getSettings().passengerRatePerMile ?? 0.05;
+  // CLA-012: Mileage stat is now driver-only (was previously combined with
+  // passenger amounts); Passengers gets its own stat so the two are
+  // visually distinct in the claim overview, same as on the entry cards.
+  const milUnc   = claimable.filter(e=>e.type==='mileage').reduce((s,e)=>s+calcMileage(e.total_miles,e.deduct_mode).amount,0);
+  const paxUnc   = claimable.filter(e=>e.type==='mileage').reduce((s,e)=>s+calcPassengerTotal(e.passengers,paxRate).amount,0);
   const parts    = fmtGBP(totalUnc).split('.');
   document.getElementById('heroAmount').innerHTML  = parts[0]+'<span class="hero-pence">.'+parts[1]+'</span>';
   document.getElementById('heroExpenses').textContent = fmtGBP(expUnc);
   document.getElementById('heroMileage').textContent  = fmtGBP(milUnc);
+  document.getElementById('heroPassengers').textContent = fmtGBP(paxUnc);
   document.getElementById('heroCount').textContent    = claimable.length;
 
   const sub    = nextSubmissionDate();
@@ -1360,15 +1416,30 @@ function renderEntry(e) {
   if (!isMil&&e.category) metaItems.push(e.category);
   if (isMil&&!e.claimed)  { const {claimable}=calcMileage(e.total_miles,e.deduct_mode); metaItems.push(e.total_miles+' mi total \u00b7 '+claimable.toFixed(1)+' mi claimable'); }
   if (isMil&&e.claimed)   metaItems.push((e.claimable_miles||0).toFixed(1)+' mi @ \u00a3'+(e.rate_per_mile||getSettings().ratePerMile));
-  // CLA-011: passenger mileage summary — live calc while unclaimed, frozen figures once claimed
-  if (isMil&&(e.passengers||[]).length) {
-    const names = e.passengers.map(p=>p.name||'Unnamed').join(', ');
+
+  // CLA-012: mileage vs passenger breakdown, rendered as its own block
+  // (not folded into the meta line) so the two totals — and the overall
+  // total — are all clearly delineated. Live figures while unclaimed,
+  // frozen figures once claimed (same split already used elsewhere).
+  let breakdown = '';
+  if (isMil && (e.passengers||[]).length) {
     const n     = e.passengers.length;
+    const names = e.passengers.map(p=>p.name||'Unnamed').join(', ');
+    let driveAmt, paxAmt;
     if (!e.claimed) {
-      const pax = calcPassengerTotal(e.passengers, getSettings().passengerRatePerMile ?? 0.05);
-      if (pax.miles>0) metaItems.push(n+' passenger'+(n===1?'':'s')+' \u00b7 '+pax.miles.toFixed(1)+' mi \u00b7 +'+fmtGBP(pax.amount)+' (' +names+ ')');
-    } else if (e.passenger_miles) {
-      metaItems.push(n+' passenger'+(n===1?'':'s')+' \u00b7 '+e.passenger_miles.toFixed(1)+' mi @ \u00a3'+(e.passenger_rate_per_mile??0.05)+' \u00b7 +'+fmtGBP(e.passenger_amount||0)+' (' +names+ ')');
+      driveAmt = calcMileage(e.total_miles,e.deduct_mode).amount;
+      paxAmt   = calcPassengerTotal(e.passengers, getSettings().passengerRatePerMile ?? 0.05).amount;
+    } else {
+      driveAmt = (e.claimable_miles||0)*(e.rate_per_mile||getSettings().ratePerMile);
+      paxAmt   = e.passenger_amount||0;
+    }
+    if (paxAmt>0) {
+      breakdown = '<div class="mil-breakdown">'+
+        '<div class="mil-breakdown-row"><span class="label">\ud83d\ude97 Mileage</span><span>'+fmtGBP(driveAmt)+'</span></div>'+
+        '<div class="mil-breakdown-row"><span class="label">\ud83e\udd1d Passengers ('+n+')</span><span>'+fmtGBP(paxAmt)+'</span></div>'+
+        '<div class="mil-breakdown-names">'+escHtml(names)+'</div>'+
+        '<div class="mil-breakdown-row total"><span>Total</span><span>'+fmtGBP(amount)+'</span></div>'+
+      '</div>';
     }
   }
 
@@ -1393,6 +1464,7 @@ function renderEntry(e) {
     '<div class="entry-item-top">'+badge+' '+ageTag+'<span class="entry-amount'+(e.claimed?' claimed-amt':status==='expired'?' claimed-amt':'')+'">'+(status==='expired'?'<s>':'')+fmtGBP(amount)+(status==='expired'?'</s>':'')+'</span></div>'+
     '<div class="entry-desc">'+escHtml(e.reason||'\u2014')+'</div>'+
     '<div class="entry-meta">'+metaItems.map(m=>'<span>'+escHtml(m)+'</span>').join('')+'</div>'+
+    breakdown+
     '<div class="entry-actions">'+claimBtn+
       '<button class="btn btn-secondary btn-sm" onclick="openEditEntry(\''+e.id+'\')\">\u270f\ufe0f Edit</button>'+
       '<button class="btn btn-danger btn-sm" onclick="deleteEntry(\''+e.id+'\')\">\ud83d\uddd1\ufe0f</button>'+
