@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.30</title>
+<title>Reading Tracker v3.31</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -696,7 +696,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.30</span></div>
+    <div class="rt-logo">My Reading <span>v3.31</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2039,6 +2039,18 @@ const RT_USER_MAP = {
   '0e5607ff-7bc8-420e-92c6-fa82b680a0f0': 'lex'
 };
 
+// v3.31 (MR security audit): all three places that resolve a Supabase
+// uid to a reading-tracker user key used to do `RT_USER_MAP[uid] || ...
+// || 'pete'` — so ANY account that could successfully authenticate
+// against this Supabase project (not just Pete/Lex) got treated as
+// 'pete' rather than being turned away, unlike GigsAndTrips' standalone
+// login which already checks its own allow-list (KNOWN_USERS) and
+// rejects an unrecognized-but-valid account. Single point of truth now:
+// returns the mapped key, or null for anyone not in RT_USER_MAP.
+function rtAuthorizedUser(uid) {
+  return RT_USER_MAP[uid] || null;
+}
+
 function hidePinScreen() {
   const overlay = document.getElementById("pinOverlay");
   if (overlay) overlay.classList.remove("show");
@@ -2080,13 +2092,21 @@ async function doRtLogin() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error_description || 'Sign in failed');
+    // v3.31 (MR security audit): check the allow-list BEFORE persisting
+    // anything — previously the token was saved to localStorage and
+    // _sbAccessToken set first, then an unrecognized uid just fell back
+    // to 'pete' rather than being turned away, so any account able to
+    // authenticate against this Supabase project got full use of the
+    // app under a misleading 'pete' label. Same rejection GigsAndTrips'
+    // standalone login already applies to its own login form.
+    const userId = rtAuthorizedUser(data.user?.id);
+    if (!userId) throw new Error('This account is not authorised');
     _sbAccessToken = data.access_token;
     localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
     _sbUserId = data.user?.id || null; // v2.8 (MR-003)
     // v3.9 (MR-005): feed this standalone-obtained token into pal-sync.js
     // too, so table()/pull()/upsert() work the same as via the launcher.
     window.PalSync.setSession(_sbAccessToken, _sbUserId);
-    const userId = RT_USER_MAP[data.user?.id] || 'pete';
     hidePinScreen();
     afterRtAuth(userId);
   } catch(e) {
@@ -5328,10 +5348,17 @@ window.addEventListener('message', function(e) {
 });
 window.PalSync.initSession({
   onSession: function(token, userId) {
+    // v3.31 (MR security audit): the launcher already gates entry via
+    // its own KNOWN_USERS check before ever broadcasting PAL_SESSION, so
+    // this should be unreachable in practice — but if RT_USER_MAP here
+    // and the launcher's KNOWN_USERS ever drift (a new suite user added
+    // to one and not the other), silently falling back to 'pete' would
+    // show that person Pete's own data instead of failing safely.
+    const userKey = rtAuthorizedUser(userId);
+    if (!userKey) { showRtDirectLogin(); return; }
     _sbAccessToken = token;
     _sbUserId = userId;
     hidePinScreen();
-    const userKey = RT_USER_MAP[userId] || localStorage.getItem('rt-user') || 'pete';
     if (!window._rtInited) { window._rtInited = true; afterRtAuth(userKey); }
   },
   onNoSession: function() {
@@ -5356,12 +5383,18 @@ window.PalSync.initSession({
     });
     if (res.ok) {
       const data = await res.json();
+      // v3.31 (MR security audit): a stored refresh_token for an
+      // unrecognized account (e.g. a stray session on a shared device)
+      // used to be silently resumed and labelled 'pete'. Now checked
+      // against the same allow-list as the login form, and the stray
+      // session is cleared rather than resumed.
+      const userKey = rtAuthorizedUser(data.user?.id);
+      if (!userKey) { localStorage.removeItem('rt_session'); return; }
       _sbAccessToken = data.access_token;
       _sbUserId = data.user?.id || _sbUserId; // v2.8 (MR-003)
       localStorage.setItem('rt_session', JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token }));
       window.PalSync.setSession(_sbAccessToken, _sbUserId);
       hidePinScreen();
-      const userKey = RT_USER_MAP[data.user?.id] || localStorage.getItem('rt-user') || 'pete';
       if (!window._rtInited) { window._rtInited = true; afterRtAuth(userKey); }
       return;
     }
