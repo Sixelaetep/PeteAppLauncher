@@ -390,6 +390,21 @@
   .allocation-wrap tr:not(.current-row) td{color:var(--muted);}
   .allocation-wrap tr:not(.current-row) td.name-cell{color:var(--text);}
 
+  /* ---------- At-retirement breakdown ---------- */
+  .at-retirement{
+    margin:8px 0 12px;padding:12px 14px;
+    background:var(--panel-alt);border:1px solid var(--border);border-radius:var(--radius-sm);
+  }
+  .at-retirement-title{
+    font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:0.05em;
+    color:var(--muted-2);margin:0 0 8px;
+  }
+  .at-retirement-row{
+    display:flex;align-items:baseline;gap:6px;font-size:13px;margin:4px 0;color:var(--text);flex-wrap:wrap;
+  }
+  .ar-dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none;}
+  .muted-inline{color:var(--muted);font-family:var(--mono);font-size:12px;}
+
   /* ---------- Retirement security ---------- */
   .target-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
   .target-preset.active{border-color:var(--accent);color:var(--text);background:var(--accent-soft);}
@@ -509,7 +524,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v1.18</span></h1>
+      <h1>Horizon <span class="version-badge">v1.19</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -637,6 +652,7 @@
       <span class="target-current" id="extra-model-note" style="margin-top:20px;"></span>
     </div>
     <p class="assumptions-note" style="margin-top:6px;">Drives the allocation table on each scenario below, and the retirement-age lever further down. Defaults to what's actually unallocated in Cash flow &amp; saving — raise it to explore a hypothetical raise, bonus, or side income.</p>
+    <p class="assumptions-note">Each scenario now shows guaranteed pension income, estimated DC income, and net worth as three separate figures — deliberately never summed into one number, since a guaranteed income stream and a savings pot aren't the same thing. One honest limitation: contributions are modelled as continuing at the same rate right through to 90, not stopping or changing at retirement — so "net worth at 90" shows what happens if saving carries on as-is, not what happens if you start drawing it down.</p>
 
     <div class="scenario-list" id="scenario-list" style="margin-top:16px;"></div>
     <div class="btn-row">
@@ -1008,6 +1024,25 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v1.19 (2026-08-07) — HZN-001: "guaranteed income in retirement vs
+     pot of money or net worth" — three figures that were getting
+     blurred together are now shown as three separate, colour-coded
+     lines on every scenario card (baseline included): guaranteed
+     pension income (£/yr AND £/mo — was yr-only everywhere), estimated
+     DC income (only shown when non-zero, clearly marked as estimated
+     not guaranteed), and net worth/capital at retirement → at 90 —
+     explicitly labelled "not income" so it reads as the pot itself,
+     not another income stream. New computeAtRetirementBreakdown() and
+     buildAtRetirementHtml() — deliberately never sum these three
+     together into one combined number, unlike the existing Retirement
+     Security table's "Income available" column, which still does
+     (that's a different, already-established question — feasibility
+     against a target — this is the plain "what do I actually have"
+     question). New transparency note: the model assumes contributions
+     continue unchanged through to 90, not stopping or reducing at
+     retirement — "net worth at 90" shows the if-nothing-changes
+     trajectory, not a drawdown/spending model, which doesn't exist
+     yet (would be a bigger, separate piece of work).
    v1.18 (2026-08-06) — Mobile redesign, targeted at three specific
      reported problems, not a general rewrite:
      1. Input boxes "jumping" — every text/number input and the
@@ -1309,7 +1344,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "1.18";
+var VERSION = "1.19";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -1811,6 +1846,24 @@ function scenarioRetirementGapAtAge(settings, scenarioResult, age){
   var housingReal = toDisplay(housingCostAtAge(scenarioResult, settings, age), age, settings, "real");
   var neededReal = targetReal + housingReal;
   return {availableReal: availableReal, housingReal: housingReal, neededReal: neededReal, gapReal: availableReal - neededReal};
+}
+
+// HZN-001 — "what is guaranteed income in retirement vs pot of money or net
+// worth": three deliberately SEPARATE figures, never summed into one number.
+// guaranteedAnnual/estimatedAnnual are income (a recurring stream);
+// netWorthAtRetirement/netWorthAtHorizon are capital (a pot you hold, not
+// income you're owed) — this is exactly the distinction that was getting
+// lost when everything fed into a single combined total elsewhere.
+function computeAtRetirementBreakdown(settings, scenarioResult, retireAge){
+  var totals = pensionIncomeTotalsAtAge(settings, retireAge);
+  var retirePoint = pointAtAge(scenarioResult.points, retireAge);
+  var horizonPoint = pointAtAge(scenarioResult.points, HORIZON_AGE);
+  return {
+    guaranteedAnnual: totals.guaranteed,
+    estimatedAnnual: totals.estimated,
+    netWorthAtRetirement: retirePoint ? retirePoint.netWorth : 0,
+    netWorthAtHorizon: horizonPoint ? horizonPoint.netWorth : 0
+  };
 }
 
 function findAgeReachingTarget(settings, scenarioResult, maxAge){
@@ -2335,6 +2388,28 @@ function renderAssumptionsForm(){
    Rendering — scenario list
    ========================================================= */
 
+// Shared by baseline and every buy-scenario card — keeps the three
+// figures visually distinct (colour-coded dot per figure) rather than
+// letting them blur into one number.
+function buildAtRetirementHtml(settings, scenarioResult, retireAge){
+  var b = computeAtRetirementBreakdown(settings, scenarioResult, retireAge);
+  var mode = state.displayMode;
+  var guaranteed = toDisplay(b.guaranteedAnnual, retireAge, settings, mode);
+  var estimated = toDisplay(b.estimatedAnnual, retireAge, settings, mode);
+  var nwRetire = toDisplay(b.netWorthAtRetirement, retireAge, settings, mode);
+  var nwHorizon = toDisplay(b.netWorthAtHorizon, HORIZON_AGE, settings, mode);
+
+  var html = '<div class="at-retirement">';
+  html += '<p class="at-retirement-title">At retirement (age ' + retireAge + ')</p>';
+  html += '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--teal);"></span>Guaranteed income: <strong>' + fmtGBP(guaranteed) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(guaranteed / 12) + '/mo)</span></div>';
+  if (estimated > 1){
+    html += '<div class="at-retirement-row"><span class="ar-dot" style="background:#B85FD9;"></span>+ Estimated, DC 4% rule: <strong>' + fmtGBP(estimated) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(estimated / 12) + '/mo)</span></div>';
+  }
+  html += '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--accent);"></span>Net worth (savings/property — not income): <strong>' + fmtGBP(nwRetire) + '</strong> <span class="muted-inline">→ ' + fmtGBP(nwHorizon) + ' at ' + HORIZON_AGE + '</span></div>';
+  html += '</div>';
+  return html;
+}
+
 function renderScenarioList(){
   var list = document.getElementById("scenario-list");
   var scenarios = activeScenarios();
@@ -2348,12 +2423,15 @@ function renderScenarioList(){
   document.getElementById("extra-model-note").textContent = "Real unallocated: £" + Math.round(unallocatedTop) + "/mo";
 
   // baseline card (always present, not editable/removable)
+  var baselineResult = projectScenario(settings, {type: "baseline"});
+  var retireAgeForBaseline = settings.assumptions.targetRetirementAge;
   html += '<div class="scenario-card">';
   html += '<div class="info"><span class="swatch" style="background:' + BASELINE_COLOR + '"></span>';
   html += '<span class="name">Keep renting</span>';
   html += '<span class="meta">baseline · current rent, inflating over time</span></div>';
   html += '<span class="badge-baseline">auto</span>';
   html += '</div>';
+  html += buildAtRetirementHtml(settings, baselineResult, retireAgeForBaseline);
 
   scenarios.forEach(function(sc, idx){
     var color = BUY_COLORS[idx % BUY_COLORS.length];
@@ -2438,6 +2516,7 @@ function renderScenarioList(){
     html += '<button class="small danger-text" data-delete="' + sc.recordKey + '">Delete</button>';
     html += '</div></div>';
     html += allocationTableHtml;
+    html += buildAtRetirementHtml(settings, result, settings.assumptions.targetRetirementAge);
   });
 
   list.innerHTML = html;
@@ -3721,6 +3800,7 @@ window.__horizonTestHooks = {
   syncArrayToRecords: syncArrayToRecords,
   softDeleteRecord: softDeleteRecord,
   simulateDrawdown: simulateDrawdown,
+  computeAtRetirementBreakdown: computeAtRetirementBreakdown,
   computeCashFlow: computeCashFlow,
   _setStateForTest: function(s){ state = s; }
 };
