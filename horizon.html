@@ -753,7 +753,7 @@
 
   <section class="panel" id="panel-checkpoints">
     <div class="panel-head"><h2 class="panel-title">Checkpoints</h2></div>
-    <p class="panel-sub">Save a dated snapshot of where things stand — income, outgoings, savings, deposit, one-off costs, and pensions — so you can look back later and see what's actually changed. Comparing two checkpoints against each other comes in a future release; for now, save and review.</p>
+    <p class="panel-sub">Save a dated snapshot of where things stand — income, outgoings, savings, deposit, one-off costs, pensions, and progress against your flagged savings target — so you can look back later and see what's actually changed. Comparing two checkpoints against each other comes in a future release; for now, save and review.</p>
     <div class="scenario-list" id="checkpoint-list"></div>
     <div class="btn-row"><button class="primary" id="btn-save-checkpoint">+ Save checkpoint</button></div>
   </section>
@@ -1136,11 +1136,10 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
-   v2.2 (2026-08-07) — HZN-005, Parts A and B only. Part C ("checkpoints
-     track progress against the target") was specified in a docx that
-     cut off mid-heading with no body content — not built, not
-     designed, nothing guessed at. Flagged to Pete rather than
-     invented; a genuine v2.3 candidate once the spec exists.
+   v2.2 (2026-08-07) — HZN-005, all three parts complete. Part C's
+     spec arrived after Parts A and B shipped (the first pass of the
+     docx cut off mid-heading with no body content for Part C — flagged
+     rather than guessed at; the complete spec came through afterward).
      PART A — seed migration fix + manual restore. Old
      seedOneoffCostsIfNeeded() only seeded when a session had ZERO
      oneoff_* records of any kind — a returning session that already
@@ -1184,14 +1183,40 @@
      track / short." buildSavingsGoalHtml() (block 6) now labels which
      mode is active — "Target: derived from this scenario" vs "Target:
      manual" — and shows the same two components when derived.
+     PART C — checkpoints track progress against the target.
+     snapshotCurrentState() now captures a targetPlan block: the
+     flagged targetScenarioId plus the full derived plan
+     (depositMonthly/retirementMonthly/totalMonthly/totalAnnual) AND
+     the actual allocation/gap/onTrack it was being measured against
+     — all AS THEY STOOD at checkpoint time, not recomputed later
+     against live data (a checkpoint is a snapshot, not a live query).
+     Always present from v2.2 onward, even with nothing flagged
+     (targetScenarioId:null, everything else zeroed) — that's what
+     distinguishes "genuinely no target at this checkpoint" from a
+     pre-v2.2 checkpoint that has no targetPlan key at all, since the
+     field didn't exist yet when it was saved. renderCheckpointsList's
+     detail view shows "Target then £A/yr, allocated £C/yr — on track
+     / £D short", or "no target set then" for either of the two "no
+     target" cases above — deliberately identical rendering for both,
+     since the practical meaning to the reader is the same either way.
      TESTING — this whole codebase (v2.0/v2.1) predates this session,
-     so before touching anything a fresh 41-check smoke suite was
-     built from scratch covering the existing one-off cost engine,
-     ownership scoping, allocation resolution, ranking, verdicts, and
-     the retirement drawdown simulator — all pass. New Part A/B
+     so before touching anything a fresh smoke suite was built from
+     scratch covering the existing one-off cost engine, ownership
+     scoping, allocation resolution, ranking, verdicts, and the
+     retirement drawdown simulator — all pass. New Part A/B/C
      functions (insertMissingOneoffSeeds, computeTargetSavingsPlan,
-     resolveActiveTargetPlan) exposed on __horizonTestHooks and
-     covered by new tests alongside the inherited ones.
+     resolveActiveTargetPlan, the extended snapshotCurrentState)
+     exposed on __horizonTestHooks and covered by 19 new tests
+     alongside the 41 inherited ones (60 total), including the exact
+     five scenarios named in the brief: (c) flagging derives the
+     effective target from the scenario's own requirement, (d) a
+     second flag replaces the first, (e) an already-on-track scenario
+     yields a genuine £0 target, (f) an unachievable requirement
+     surfaces honestly rather than a fabricated number, (g) a
+     checkpoint captures and correctly renders target progress, with
+     a pre-v2.2 checkpoint (no targetPlan field) confirmed to render
+     gracefully via a real injected-legacy-data end-to-end test, not
+     just a unit check.
    v2.1 (2026-08-07) — HZN-004: one-off costs learn to distinguish
      OWNING-SPECIFIC costs (a boiler, a roof, a rewire — only relevant
      once you actually own a home) from UNIVERSAL ones (a car, a laptop,
@@ -4857,8 +4882,34 @@ function confirmImport(){
    cloned so later edits to real data can never mutate a saved checkpoint.
    ========================================================= */
 
+// v2.2 — HZN-005 part C: captures the target-scenario progress AS IT
+// STOOD at checkpoint time — targetScenarioId plus the full derived plan
+// (deposit/retirement/total) and the actual allocation/gap/onTrack it
+// was being measured against. Always present from v2.2 onward, even
+// when nothing was flagged (targetScenarioId: null, everything else
+// zeroed) — that's what distinguishes a genuine "no target was flagged
+// at this checkpoint" from a pre-v2.2 checkpoint that has no targetPlan
+// key at all, since this field didn't exist yet when it was saved.
 function snapshotCurrentState(){
   var settings = getSettings();
+  var active = resolveActiveTargetPlan(settings);
+  var targetPlan;
+  if (active){
+    var alloc = getScenarioAllocation(settings, active.scenarioDef);
+    var goal = computeAnnualSavingsGoal(settings, alloc, active.plan.totalAnnual);
+    targetPlan = {
+      targetScenarioId: active.targetId,
+      depositMonthly: active.plan.depositMonthly,
+      retirementMonthly: active.plan.retirementMonthly,
+      totalMonthly: active.plan.totalMonthly,
+      totalAnnual: active.plan.totalAnnual,
+      actualAnnual: goal.actualAnnual,
+      gapAnnual: goal.gapAnnual,
+      onTrack: goal.onTrack
+    };
+  } else {
+    targetPlan = {targetScenarioId: null, depositMonthly: 0, retirementMonthly: 0, totalMonthly: 0, totalAnnual: 0, actualAnnual: 0, gapAnnual: 0, onTrack: true};
+  }
   return {
     household: JSON.parse(JSON.stringify(settings.household)),
     assumptions: JSON.parse(JSON.stringify(settings.assumptions)),
@@ -4866,7 +4917,8 @@ function snapshotCurrentState(){
     outgoingItems: JSON.parse(JSON.stringify(activeOutgoingItems())),
     pensions: JSON.parse(JSON.stringify(activePensions())),
     // v2.0 — HZN-003: one-off costs are now part of the captured picture.
-    oneoffItems: JSON.parse(JSON.stringify(activeOneoffItems()))
+    oneoffItems: JSON.parse(JSON.stringify(activeOneoffItems())),
+    targetPlan: targetPlan
   };
 }
 
@@ -4913,12 +4965,26 @@ function renderCheckpointsList(){
     var dateStr = new Date(cp.timestamp).toLocaleDateString("en-GB", {day:"numeric", month:"short", year:"numeric"});
     var pensionNames = s.pensions.map(function(p){ return p.name; }).join(", ") || "none";
 
+    // v2.2 — HZN-005 part C: s.targetPlan is undefined for any checkpoint
+    // saved before this field existed (pre-v2.2), and targetScenarioId is
+    // null for a v2.2+ checkpoint where nothing happened to be flagged at
+    // that time — both render identically as "no target set then", since
+    // the practical meaning to the reader is the same either way.
+    var targetLine;
+    if (!s.targetPlan || s.targetPlan.targetScenarioId == null){
+      targetLine = "no target set then";
+    } else {
+      var tp = s.targetPlan;
+      targetLine = "Target then £" + Math.round(tp.totalAnnual) + "/yr, allocated £" + Math.round(tp.actualAnnual) + "/yr — " + (tp.onTrack ? "on track" : ("£" + Math.round(Math.abs(tp.gapAnnual)) + " short"));
+    }
+
     var detail = '<div class="allocation-wrap" id="cp-detail-' + cp.recordKey + '" style="display:none;">' +
       '<p style="margin:8px 0 4px;font-size:13px;">Reference age <strong>' + num(s.household.referenceAge, 0) + '</strong></p>' +
       '<p style="margin:0 0 4px;font-size:13px;">Income £' + Math.round(cf.incomeMonthly) + '/mo · Outgoings £' + Math.round(cf.outgoings) + '/mo (' + s.outgoingItems.length + ' items) · Rent £' + Math.round(cf.rent) + '/mo · Remaining £' + Math.round(cf.remaining) + '/mo</p>' +
       '<p style="margin:0 0 4px;font-size:13px;">Savings £' + Math.round(num(s.household.currentSavings,0)) + ' (+£' + Math.round(num(s.household.monthlySavings,0)) + '/mo) · Deposit £' + Math.round(num(s.household.currentDepositPot,0)) + ' (+£' + Math.round(num(s.household.monthlyDepositSavings,0)) + '/mo)</p>' +
       '<p style="margin:0 0 4px;font-size:13px;">Pensions (' + s.pensions.length + '): ' + escHtml(pensionNames) + '</p>' +
-      '<p style="margin:0;font-size:13px;">One-off costs (' + oneoffItemsSnap.length + '): ' + escHtml(oneoffItemsSnap.map(function(o){ return o.label; }).join(", ") || "none") + '</p>' +
+      '<p style="margin:0 0 4px;font-size:13px;">One-off costs (' + oneoffItemsSnap.length + '): ' + escHtml(oneoffItemsSnap.map(function(o){ return o.label; }).join(", ") || "none") + '</p>' +
+      '<p style="margin:0;font-size:13px;">🎯 ' + escHtml(targetLine) + '</p>' +
       '</div>';
 
     return '<div class="scenario-card">' +
