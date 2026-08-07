@@ -591,7 +591,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v2.1</span></h1>
+      <h1>Horizon <span class="version-badge">v2.2</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -625,6 +625,8 @@
       <span class="target-current" id="extra-model-note" style="margin-top:20px;"></span>
     </div>
     <p class="assumptions-note" style="margin-top:6px;">Drives each one-pager's allocation table (block 1) and the retirement-age lever. Defaults to what's actually unallocated in Setup's cash flow — raise it to explore a hypothetical raise, bonus, or side income.</p>
+
+    <div id="target-plan-summary"></div>
 
     <div class="scenario-list" id="scenario-master-list" style="margin-top:16px;"></div>
     <div class="btn-row">
@@ -722,7 +724,10 @@
     <div class="panel-head"><h2 class="panel-title">One-off costs</h2></div>
     <p class="panel-sub">Timed, lumpy costs a monthly figure can't capture — a boiler, a car, a wedding. Each is entered in today's money and draws from a pot you nominate (deposit, savings, or pension) at the age it happens, or repeats every N years. Shown as markers on every scenario's path chart (block 3) and factored into Through retirement (block 5).</p>
     <div class="scenario-list" id="oneoff-list"></div>
-    <div class="btn-row"><button class="primary" id="btn-add-oneoff">+ Add one-off cost</button></div>
+    <div class="btn-row">
+      <button class="primary" id="btn-add-oneoff">+ Add one-off cost</button>
+      <button class="ghost" id="btn-restore-oneoff-defaults">Restore default one-off costs</button>
+    </div>
   </section>
 
   <section class="panel" id="panel-assumptions">
@@ -1131,6 +1136,62 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v2.2 (2026-08-07) — HZN-005, Parts A and B only. Part C ("checkpoints
+     track progress against the target") was specified in a docx that
+     cut off mid-heading with no body content — not built, not
+     designed, nothing guessed at. Flagged to Pete rather than
+     invented; a genuine v2.3 candidate once the spec exists.
+     PART A — seed migration fix + manual restore. Old
+     seedOneoffCostsIfNeeded() only seeded when a session had ZERO
+     oneoff_* records of any kind — a returning session that already
+     carried the single v2.0 "Boiler replacement" example failed that
+     check and silently never received the other 11 starter items.
+     New shared insertMissingOneoffSeeds(records) — inserts every
+     ONEOFF_SEED_LIST item whose label doesn't already match an
+     existing ACTIVE oneoff_* record (soft-deleted ones don't block a
+     restore of their own tombstone). seedOneoffCostsIfNeeded() now
+     fires whenever assumptions.oneoffSeeded simply isn't set,
+     regardless of existing count, and relies on that de-dupe instead
+     of an all-or-nothing guard. New "Restore default one-off costs"
+     button in Setup calls the same helper on demand — NOT gated by
+     oneoffSeeded, which only controls the one-time automatic
+     migration — for anyone who deleted some or all of the starter set.
+     PART B — savings target derived from a flagged scenario.
+     New assumptions.targetScenarioId (string|null, "__baseline__"
+     allowed) — exactly one target at a time, setting one clears any
+     other. "Set as target"/"Unflag target" control + a 🎯 badge on
+     every master-list card and the one-pager header. New
+     computeTargetSavingsPlan(settings, targetScenarioResult): the
+     monthly/annual saving required for that specific scenario to
+     succeed, as two SEPARATE always-visible components —
+     depositMonthly (via requiredMonthlyDeposit, n/a for baseline or a
+     scenario that never buys) and retirementMonthly (via
+     requiredMonthlyRetirementSaving against that scenario's own
+     shortfall, 0 if already on track) — never collapsed into one
+     opaque number, and an unachievable solver result is surfaced
+     honestly (achievable:false) rather than substituting a false
+     figure. New resolveActiveTargetPlan(settings) — the single place
+     "is there an active target, and what does it require" gets
+     answered, reused by the Target plan summary panel and block 6 so
+     neither can disagree with the other; returns null gracefully if
+     the flagged scenario has since been deleted. computeAnnualSavingsGoal()
+     gained a third, optional targetOverride parameter — existing
+     2-argument calls are completely unaffected, exactly the same
+     backward-compatible pattern this codebase already uses elsewhere.
+     New renderTargetPlanSummary() — a compact panel at the top of the
+     Scenarios zone, shown only when something's flagged: "£X/mo (£Y
+     deposit + £Z retirement) needed, £A/mo currently allocated, on
+     track / short." buildSavingsGoalHtml() (block 6) now labels which
+     mode is active — "Target: derived from this scenario" vs "Target:
+     manual" — and shows the same two components when derived.
+     TESTING — this whole codebase (v2.0/v2.1) predates this session,
+     so before touching anything a fresh 41-check smoke suite was
+     built from scratch covering the existing one-off cost engine,
+     ownership scoping, allocation resolution, ranking, verdicts, and
+     the retirement drawdown simulator — all pass. New Part A/B
+     functions (insertMissingOneoffSeeds, computeTargetSavingsPlan,
+     resolveActiveTargetPlan) exposed on __horizonTestHooks and
+     covered by new tests alongside the inherited ones.
    v2.1 (2026-08-07) — HZN-004: one-off costs learn to distinguish
      OWNING-SPECIFIC costs (a boiler, a roof, a rewire — only relevant
      once you actually own a home) from UNIVERSAL ones (a car, a laptop,
@@ -1721,7 +1782,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "2.1";
+var VERSION = "2.2";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -1789,7 +1850,11 @@ function defaultState(){
             // full ONEOFF_SEED_LIST below directly, so it's marked
             // seeded from the start — seedOneoffCostsIfNeeded() only
             // needs to do anything for sessions that predate v2.1.
-            oneoffSeeded: true
+            oneoffSeeded: true,
+            // v2.2 — HZN-005 part B1: null = no scenario flagged as the
+            // savings target. "__baseline__" is a valid value (Keep
+            // renting can be flagged same as any buy scenario).
+            targetScenarioId: null
           }
         },
         updatedAt: now
@@ -1955,32 +2020,55 @@ function migrateOneoffScopeIfNeeded(parsedState){
   return parsedState;
 }
 
+// v2.2 — HZN-005 part A: shared by both the automatic migration below and
+// the manual "Restore default one-off costs" button — inserts every
+// ONEOFF_SEED_LIST item whose label doesn't already match an existing
+// ACTIVE oneoff_* record (soft-deleted ones don't count as "existing" —
+// a deleted seed should be restorable, not silently blocked forever by
+// its own tombstone). Returns the count actually added.
+function insertMissingOneoffSeeds(records){
+  var existingLabels = {};
+  Object.keys(records).forEach(function(k){
+    if (k.indexOf("oneoff_") !== 0) return;
+    var rec = records[k];
+    if (rec && !rec.deleted && rec.data && rec.data.label) existingLabels[rec.data.label] = true;
+  });
+  var now = new Date().toISOString();
+  var addedCount = 0;
+  ONEOFF_SEED_LIST.forEach(function(seed){
+    if (existingLabels[seed.label]) return;
+    records["oneoff_seed_" + uid()] = {data: Object.assign({}, seed), updatedAt: now, deleted: false};
+    addedCount++;
+  });
+  return addedCount;
+}
+
 // v2.1 — HZN-004 part 4: ONE-TIME seed migration for returning/synced
 // sessions. defaultState() (used only for a genuinely fresh install —
 // no localStorage, no cloud data at all) already includes
 // ONEOFF_SEED_LIST directly, so this only needs to backfill sessions
-// that existed before v2.1. Fires only when BOTH: (a) the user
-// currently has ZERO oneoff_* records of ANY kind (active or soft-
-// deleted — if even one exists, they already have a history with one-
-// off costs, whether that's the single v2.0 boiler example, their own
-// custom entries, or a previous run of this very migration, and this
-// must never silently pile 12 more records on top of that), AND (b)
-// assumptions.oneoffSeeded is not yet set. Either way, oneoffSeeded is
-// set to true afterwards so this NEVER reconsiders seeding again —
-// once a user has edited or deleted their one-off costs (down to zero
-// or otherwise), the seeds must not reappear.
+// that existed before v2.1.
+// v2.2 — HZN-005 part A fix: the original guard only seeded when the
+// user had ZERO oneoff_* records of any kind — meaning a returning
+// session that already carried the single v2.0 "Boiler replacement"
+// example failed that check and never received the other 11 seeds. Now
+// fires whenever assumptions.oneoffSeeded is simply not yet set,
+// regardless of how many oneoff_* records already exist, and relies on
+// insertMissingOneoffSeeds' label de-dupe to avoid creating a second
+// boiler — so an existing single seed correctly gains the rest, a
+// fully custom set is left alone (nothing to de-dupe against, but
+// nothing forced in either — actually: custom items with different
+// labels DO still receive the full seed set alongside them, which is
+// the intended "backfill the standard set" behaviour). Either way,
+// oneoffSeeded is set to true afterwards so this NEVER reconsiders
+// seeding again — once a user has edited things down, they stay how
+// they left them; anyone wanting the defaults back uses the manual
+// Restore button instead (see restoreDefaultOneoffCosts below), which
+// deliberately isn't gated by this flag.
 function seedOneoffCostsIfNeeded(parsedState){
   var settings = parsedState.records.settings.data;
   if (settings.assumptions.oneoffSeeded) return parsedState;
-  var hasAnyOneoffRecords = Object.keys(parsedState.records).some(function(k){ return k.indexOf("oneoff_") === 0; });
-  if (hasAnyOneoffRecords){
-    settings.assumptions.oneoffSeeded = true;
-    return parsedState;
-  }
-  var now = new Date().toISOString();
-  ONEOFF_SEED_LIST.forEach(function(seed){
-    parsedState.records["oneoff_seed_" + uid()] = {data: Object.assign({}, seed), updatedAt: now, deleted: false};
-  });
+  insertMissingOneoffSeeds(parsedState.records);
   settings.assumptions.oneoffSeeded = true;
   return parsedState;
 }
@@ -1999,17 +2087,88 @@ function getScenarioAllocation(settings, scenario){
   return { depositMonthly: num(legacyDeposit, 0), savingsMonthly: num(h.monthlySavings, 0), pensionMonthly: 0 };
 }
 
-// v2.0 — HZN-003 part D: annual savings-goal tracker. Compares
-// assumptions.annualSavingsTarget against what's ACTUALLY allocated —
-// deposit + savings + pension, ×12 — for a given resolved allocation
-// (see getScenarioAllocation). Pure, and deliberately doesn't care WHERE
-// the target came from (household default or a scenario's own
-// allocation); the caller decides which allocation to check.
-function computeAnnualSavingsGoal(settings, allocation){
-  var targetAnnual = num(settings.assumptions.annualSavingsTarget, 0);
+// v2.0 — HZN-003 part D: annual savings-goal tracker. Compares a target
+// against what's ACTUALLY allocated — deposit + savings + pension, ×12 —
+// for a given resolved allocation (see getScenarioAllocation). Pure, and
+// deliberately doesn't care WHERE the allocation came from (household
+// default or a scenario's own allocation); the caller decides which
+// allocation to check.
+// v2.2 — HZN-005 part B2: targetOverride (optional) lets a caller supply
+// a DERIVED target (from computeTargetSavingsPlan, when a scenario is
+// flagged) instead of the manual assumptions.annualSavingsTarget —
+// backward compatible, existing 2-argument calls are unaffected.
+function computeAnnualSavingsGoal(settings, allocation, targetOverride){
+  var targetAnnual = (targetOverride != null) ? targetOverride : num(settings.assumptions.annualSavingsTarget, 0);
   var actualAnnual = (num(allocation.depositMonthly, 0) + num(allocation.savingsMonthly, 0) + num(allocation.pensionMonthly, 0)) * 12;
   var gapAnnual = actualAnnual - targetAnnual;
   return { targetAnnual: targetAnnual, actualAnnual: actualAnnual, gapAnnual: gapAnnual, onTrack: gapAnnual >= -0.5 };
+}
+
+// v2.2 — HZN-005 part B2: derives the monthly/annual saving REQUIRED for
+// a flagged "target" scenario to actually succeed, as two separate,
+// always-visible components — never collapsed into one opaque number.
+// depositMonthly: what it takes to hit the deposit by this scenario's
+// own purchase trigger (fixedAge uses that age directly; asap uses its
+// own resolved purchaseAge if it reaches one, else the target retirement
+// age as a sensible "have it sorted by retirement" fallback deadline).
+// n/a (depositApplicable:false) for baseline or any non-buy scenario —
+// there's nothing to save a deposit toward. retirementMonthly: what it
+// takes to close THIS scenario's own retirement-income shortfall via
+// requiredMonthlyRetirementSaving, 0 if it's already on track. Either
+// solver returning achievable:false is surfaced honestly (achievable
+// false, monthly 0) rather than silently substituting a false figure.
+function computeTargetSavingsPlan(settings, targetScenarioResult){
+  var retireAge = settings.assumptions.targetRetirementAge;
+  var scenarioDef = targetScenarioResult.scenario;
+  var isBuyScenario = !!(scenarioDef && scenarioDef.type === "buy");
+
+  var depositMonthly = 0, depositAchievable = true, depositApplicable = false;
+  if (isBuyScenario){
+    depositApplicable = true;
+    var targetAge = scenarioDef.triggerMode === "fixedAge" ? scenarioDef.triggerAge : (targetScenarioResult.purchaseAge || retireAge);
+    var depositTarget = requiredMonthlyDeposit(settings, scenarioDef, targetAge);
+    depositAchievable = depositTarget.achievable;
+    depositMonthly = depositTarget.achievable ? num(depositTarget.monthly, 0) : 0;
+  }
+
+  var gap = scenarioRetirementGapAtAge(settings, targetScenarioResult, retireAge);
+  var retirementMonthly = 0, retirementAchievable = true;
+  if (gap.gapReal < 0){
+    var saveTarget = requiredMonthlyRetirementSaving(settings, -gap.gapReal, retireAge);
+    retirementAchievable = saveTarget.achievable;
+    retirementMonthly = saveTarget.achievable ? num(saveTarget.monthly, 0) : 0;
+  }
+
+  var totalMonthly = depositMonthly + retirementMonthly;
+  return {
+    depositMonthly: depositMonthly,
+    depositApplicable: depositApplicable,
+    depositAchievable: depositAchievable,
+    retirementMonthly: retirementMonthly,
+    retirementAchievable: retirementAchievable,
+    totalMonthly: totalMonthly,
+    totalAnnual: totalMonthly * 12,
+    achievable: depositAchievable && retirementAchievable
+  };
+}
+
+// v2.2 — HZN-005 part B1/B2: resolves the currently-flagged target
+// scenario's derived plan, or null if nothing is flagged, or if the
+// flagged scenario has since been deleted (targetScenarioId pointing at
+// a dead id — treated the same as "no target", not an error). The one
+// place "is there an active target, and what does it require" gets
+// answered, so the Setup readout, block 6, and the Target plan summary
+// panel can't disagree with each other.
+function resolveActiveTargetPlan(settings){
+  var targetId = settings.assumptions.targetScenarioId;
+  if (!targetId) return null;
+  var scenarioDef = findScenarioDefById(targetId);
+  if (!scenarioDef) return null;
+  var oneoffItems = activeOneoffItems();
+  var result = projectScenario(settings, scenarioDef, oneoffItems);
+  var plan = computeTargetSavingsPlan(settings, result);
+  var name = targetId === "__baseline__" ? "Keep renting" : scenarioDef.name;
+  return {targetId: targetId, scenarioDef: scenarioDef, name: name, result: result, plan: plan};
 }
 
 // v2.0 — the master list's single traffic-light verdict pill. Deliberately
@@ -3546,13 +3705,16 @@ function renderScenarioMasterList(){
           ? '<span class="rank-badge rank-1" title="Best retirement-security margin">🏆 #1 of ' + rankData.total + '</span>'
           : '<span class="rank-badge" title="Retirement-security margin">#' + e.rank + ' of ' + rankData.total + '</span>')
       : "";
+    var isTarget = settings.assumptions.targetScenarioId === e.id;
+    var targetBadge = isTarget ? '<span class="rank-badge rank-1" title="Flagged as your savings target">🎯 Target</span>' : "";
+    var targetBtn = '<button class="small ghost" data-set-target="' + e.id + '">' + (isTarget ? "Unflag target" : "Set as target") + '</button>';
     return '<div class="scenario-card master-card" data-open-scenario="' + e.id + '">' +
       '<div class="master-card-top">' +
         '<div class="master-card-name-row">' +
           '<span class="swatch" style="background:' + e.color + '"></span>' +
           '<div><span class="name">' + escHtml(e.name) + '</span><span class="meta">' + summary + '</span></div>' +
         '</div>' +
-        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' + rankBadge + '<span class="verdict-pill tier-' + e.verdict.tier + '">' + e.verdict.label + '</span></div>' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' + targetBadge + rankBadge + '<span class="verdict-pill tier-' + e.verdict.tier + '">' + e.verdict.label + '</span>' + targetBtn + '</div>' +
       '</div>' +
       '<div class="master-figures">' +
         '<div class="master-figure"><span class="figure-label">Retirement income vs target</span><span class="figure-value ' + (gapReal >= 0 ? "figure-ok" : "figure-bad") + '">' + gapText + '</span></div>' +
@@ -3564,6 +3726,19 @@ function renderScenarioMasterList(){
   list.innerHTML = html;
   list.querySelectorAll("[data-open-scenario]").forEach(function(card){
     card.addEventListener("click", function(){ openOnePager(card.getAttribute("data-open-scenario")); });
+  });
+  // v2.2 — HZN-005 part B1: stopPropagation so flagging a target doesn't
+  // also trigger the card's own click-to-open-onepager handler above.
+  list.querySelectorAll("[data-set-target]").forEach(function(btn){
+    btn.addEventListener("click", function(e){
+      e.stopPropagation();
+      var id = btn.getAttribute("data-set-target");
+      var liveSettings = getSettings();
+      liveSettings.assumptions.targetScenarioId = (liveSettings.assumptions.targetScenarioId === id) ? null : id;
+      state.records.settings.updatedAt = new Date().toISOString();
+      saveState();
+      renderScenariosZone();
+    });
   });
 }
 
@@ -3733,14 +3908,32 @@ function buildThroughRetirementHtml(settings, result, oneoffItems){
 }
 
 // Block 6 — savings goal (NEW, HZN-003 part D).
-function buildSavingsGoalHtml(settings, alloc){
-  var goal = computeAnnualSavingsGoal(settings, alloc);
+// v2.2 — HZN-005 part B2: id (optional) lets this use the DERIVED target
+// (from computeTargetSavingsPlan) when this specific scenario is the
+// flagged target, instead of the manual assumptions.annualSavingsTarget
+// — falls back to manual when nothing's flagged, or when a DIFFERENT
+// scenario is the flagged one. Either way, which mode is active is
+// labelled explicitly rather than left ambiguous.
+function buildSavingsGoalHtml(settings, alloc, id){
+  var isFlaggedTarget = id != null && settings.assumptions.targetScenarioId === id;
+  var targetOverride = null;
+  var modeLabel = "Target: manual";
+  var derivedNote = "";
+  if (isFlaggedTarget){
+    var result = projectScenario(settings, findScenarioDefById(id), activeOneoffItems());
+    var plan = computeTargetSavingsPlan(settings, result);
+    targetOverride = plan.totalAnnual;
+    modeLabel = "🎯 Target: derived from this scenario's own deposit + retirement requirements";
+    derivedNote = " (" + fmtGBP(plan.depositMonthly) + "/mo deposit + " + fmtGBP(plan.retirementMonthly) + "/mo retirement)";
+  }
+  var goal = computeAnnualSavingsGoal(settings, alloc, targetOverride);
   var pct = goal.targetAnnual > 0 ? Math.round((goal.actualAnnual / goal.targetAnnual) * 100) : 100;
-  var html = '<div class="goal-track ' + (goal.onTrack ? "ok" : "off") + '">' +
+  var html = '<p class="assumptions-note" style="margin:0 0 8px;">' + modeLabel + derivedNote + '</p>';
+  html += '<div class="goal-track ' + (goal.onTrack ? "ok" : "off") + '">' +
     '<span>Target <strong>' + fmtGBP(goal.targetAnnual) + '/yr</strong> vs actual <strong>' + fmtGBP(goal.actualAnnual) + '/yr</strong> (' + pct + '%)</span>' +
     '<strong>' + (goal.onTrack ? "On track" : ("Short " + fmtGBP(Math.abs(goal.gapAnnual)) + "/yr")) + '</strong>' +
     '</div>';
-  html += '<p class="assumptions-note" style="margin-top:8px;">Actual = this scenario\'s deposit + savings + pension allocation (' + fmtGBP(alloc.depositMonthly) + ' + ' + fmtGBP(alloc.savingsMonthly) + ' + ' + fmtGBP(alloc.pensionMonthly) + ' = ' + fmtGBP(alloc.depositMonthly + alloc.savingsMonthly + alloc.pensionMonthly) + '/mo), ×12. Target is editable in Setup → Assumptions.</p>';
+  html += '<p class="assumptions-note" style="margin-top:8px;">Actual = this scenario\'s deposit + savings + pension allocation (' + fmtGBP(alloc.depositMonthly) + ' + ' + fmtGBP(alloc.savingsMonthly) + ' + ' + fmtGBP(alloc.pensionMonthly) + ' = ' + fmtGBP(alloc.depositMonthly + alloc.savingsMonthly + alloc.pensionMonthly) + '/mo), ×12.' + (isFlaggedTarget ? '' : ' Target is editable in Setup → Assumptions, or flag this scenario as the target on the Scenarios list to derive it automatically.') + '</p>';
   return html;
 }
 
@@ -3762,9 +3955,15 @@ function renderOnePager(id){
   var rankData = buildScenarioRankData(settings, oneoffItems);
   var thisEntry = rankData.entries.filter(function(e){ return e.id === id; })[0];
 
+  var isTargetOnePager = settings.assumptions.targetScenarioId === id;
+  var targetBadgeOnePager = isTargetOnePager ? '<span class="rank-badge rank-1" title="Flagged as your savings target">🎯 Target</span>' : "";
+  var targetBtnOnePager = '<button class="small ghost" id="onepager-target-btn">' + (isTargetOnePager ? "Unflag target" : "Set as target") + '</button>';
+
   var html = '<div class="onepager-title-row"><h2>' + escHtml(name) + '</h2>' +
+    targetBadgeOnePager +
     '<span class="verdict-pill tier-' + thisEntry.verdict.tier + '">' + thisEntry.verdict.label + '</span>' +
     (rankData.total > 1 ? ('<span class="rank-badge' + (thisEntry.rank === 1 ? ' rank-1' : '') + '">' + (thisEntry.rank === 1 ? '🏆 ' : '') + '#' + thisEntry.rank + ' of ' + rankData.total + '</span>') : '') +
+    targetBtnOnePager +
     '</div>';
 
   var block4Html = buildAtRetirementHtml(settings, result, retireAge) + buildRetirementLeversHtml(settings, result, retireAge, thisEntry.gap, unallocated, modeledExtra);
@@ -3774,9 +3973,17 @@ function renderOnePager(id){
   html += onePagerBlock(3, "The path", buildPathBlockHtml(settings, result, retireAge));
   html += onePagerBlock(4, "At retirement", block4Html);
   html += onePagerBlock(5, "Through retirement", buildThroughRetirementHtml(settings, result, oneoffItems));
-  html += onePagerBlock(6, "Savings goal", buildSavingsGoalHtml(settings, alloc));
+  html += onePagerBlock(6, "Savings goal", buildSavingsGoalHtml(settings, alloc, id));
 
   document.getElementById("onepager-content").innerHTML = html;
+
+  document.getElementById("onepager-target-btn").addEventListener("click", function(){
+    var liveSettings = getSettings();
+    liveSettings.assumptions.targetScenarioId = (liveSettings.assumptions.targetScenarioId === id) ? null : id;
+    state.records.settings.updatedAt = new Date().toISOString();
+    saveState();
+    renderScenariosZone();
+  });
 
   var actionsEl = document.getElementById("onepager-actions");
   if (isBaseline){
@@ -3795,7 +4002,41 @@ function renderOnePager(id){
   }
 }
 
+// v2.2 — HZN-005 part B3: compact "Target plan" summary, shown only when
+// a scenario is flagged as the savings target. Reuses
+// resolveActiveTargetPlan + computeAnnualSavingsGoal so this can never
+// disagree with block 6 (buildSavingsGoalHtml) or the Setup readout
+// about what the derived target actually is.
+function renderTargetPlanSummary(){
+  var settings = getSettings();
+  var el = document.getElementById("target-plan-summary");
+  var active = resolveActiveTargetPlan(settings);
+  if (!active){
+    el.innerHTML = "";
+    return;
+  }
+  var plan = active.plan;
+  var alloc = getScenarioAllocation(settings, active.scenarioDef);
+  var goal = computeAnnualSavingsGoal(settings, alloc, plan.totalAnnual);
+
+  var depositPart = plan.depositApplicable
+    ? (plan.depositAchievable ? (fmtGBP(plan.depositMonthly) + "/mo deposit") : "deposit target not achievable")
+    : "no deposit needed";
+  var retirementPart = plan.retirementAchievable
+    ? (plan.retirementMonthly > 0 ? (fmtGBP(plan.retirementMonthly) + "/mo retirement") : "already on track for retirement")
+    : "retirement shortfall not closeable by saving alone";
+  var statusHtml = goal.onTrack
+    ? ("<strong>On track</strong> — +" + fmtGBP(Math.abs(goal.gapAnnual)) + "/yr above what's needed")
+    : ("<strong>" + fmtGBP(Math.abs(goal.gapAnnual)) + "/yr short</strong>");
+
+  el.innerHTML = '<div class="goal-track ' + (goal.onTrack ? "ok" : "off") + '" style="margin-bottom:16px;flex-direction:column;align-items:flex-start;gap:6px;">' +
+    '<span>🎯 To make "' + escHtml(active.name) + '" succeed: <strong>' + fmtGBP(plan.totalMonthly) + '/mo</strong> (' + depositPart + ' + ' + retirementPart + ') = ' + fmtGBP(plan.totalAnnual) + '/yr.</span>' +
+    '<span>Currently allocating ' + fmtGBP(goal.actualAnnual / 12) + '/mo (' + fmtGBP(goal.actualAnnual) + '/yr) — ' + statusHtml + '</span>' +
+    '</div>';
+}
+
 function renderScenariosZone(){
+  renderTargetPlanSummary();
   renderScenarioMasterList();
   if (selectedScenarioId){
     var stillExists = selectedScenarioId === "__baseline__" || activeScenarios().some(function(sc){ return sc.recordKey === selectedScenarioId; });
@@ -4479,6 +4720,21 @@ function renderOneoffList(){
   });
 }
 
+// v2.2 — HZN-005 part A: manual "Restore default one-off costs" — same
+// label de-dupe as the automatic migration (insertMissingOneoffSeeds),
+// but callable anytime and deliberately NOT gated by
+// assumptions.oneoffSeeded, which only controls the one-time automatic
+// backfill. Lets anyone who deleted some or all of the starter set get
+// them back without waiting on (or re-triggering) that migration.
+function restoreDefaultOneoffCosts(){
+  var addedCount = insertMissingOneoffSeeds(state.records);
+  saveState();
+  renderAll();
+  setStatus(addedCount > 0
+    ? ("Restored " + addedCount + " default one-off cost(s).")
+    : "All default one-off costs are already present.");
+}
+
 /* =========================================================
    Import from On Budget
 
@@ -5097,6 +5353,7 @@ function init(){
 
   // v2.0 — one-off cost modal + Scenarios/one-pager navigation
   document.getElementById("btn-add-oneoff").addEventListener("click", function(){ openOneoffModal(null); });
+  document.getElementById("btn-restore-oneoff-defaults").addEventListener("click", restoreDefaultOneoffCosts);
   document.getElementById("btn-oneoff-cancel").addEventListener("click", closeOneoffModal);
   document.getElementById("btn-oneoff-save").addEventListener("click", saveOneoffFromModal);
   document.getElementById("oneoff-modal-overlay").addEventListener("click", function(e){
@@ -5204,6 +5461,11 @@ window.__horizonTestHooks = {
   migrateOneoffScopeIfNeeded: migrateOneoffScopeIfNeeded,
   seedOneoffCostsIfNeeded: seedOneoffCostsIfNeeded,
   ONEOFF_SEED_LIST: ONEOFF_SEED_LIST,
+  // v2.2 — HZN-005 additions
+  insertMissingOneoffSeeds: insertMissingOneoffSeeds,
+  restoreDefaultOneoffCosts: restoreDefaultOneoffCosts,
+  computeTargetSavingsPlan: computeTargetSavingsPlan,
+  resolveActiveTargetPlan: resolveActiveTargetPlan,
   _setStateForTest: function(s){ state = s; }
 };
 
