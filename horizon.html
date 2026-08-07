@@ -591,7 +591,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v2.0.1</span></h1>
+      <h1>Horizon <span class="version-badge">v2.1</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -1062,6 +1062,14 @@
         <div class="radio-opt" id="oo-pot-pension" data-pot="pension">Pension (scenario's chosen pot)</div>
       </div>
     </div>
+    <div class="field" style="margin-top:14px;">
+      <label>Who does this apply to?</label>
+      <div class="radio-row">
+        <div class="radio-opt" id="oo-scope-all" data-scope="all">Applies to any scenario</div>
+        <div class="radio-opt" id="oo-scope-ownedOnly" data-scope="ownedOnly">Only once a home is owned</div>
+      </div>
+      <p class="assumptions-note" style="margin-top:6px;">"Only once a home is owned" costs are ignored while renting and for any scenario before it buys — they start from the purchase age (or your chosen starting age, whichever is later), never before.</p>
+    </div>
     <div class="modal-actions">
       <button class="ghost" id="btn-oneoff-cancel">Cancel</button>
       <button class="primary" id="btn-oneoff-save">Save one-off cost</button>
@@ -1123,6 +1131,89 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v2.1 (2026-08-07) — HZN-004: one-off costs learn to distinguish
+     OWNING-SPECIFIC costs (a boiler, a roof, a rewire — only relevant
+     once you actually own a home) from UNIVERSAL ones (a car, a laptop,
+     a big trip — everyone pays these, renting or owning), plus a
+     realistic 12-item starter set replacing the single v2.0 boiler
+     example. Additive and backward-compatible — the v2.0 calculation
+     engine, cloud sync, and v1.x/v2.0 migration are all untouched;
+     nothing here rewrites projectScenario's, pensionIncomeAtAge's, or
+     simulateDrawdown's core maths, only extends their inputs, exactly
+     like v2.0's original one-off costs did.
+     1. New scope field. oneoff_* records gain data.scope: "all"
+        (default) | "ownedOnly". "all" behaves exactly as every one-off
+        did before v2.1 — applies on its timing regardless of ownership,
+        rent baseline included. "ownedOnly" applies ONLY in years the
+        scenario actually owns the property (from its own purchaseAge
+        onward) — never on the rent baseline, never before that
+        scenario's own purchase. A recurring ownedOnly cost's first
+        occurrence is max(timing.startAge, purchaseAge), then every N
+        years from there — so a cost nominally "due" before the
+        purchase shifts its whole cycle to start counting from
+        ownership itself, rather than firing retroactively. A single-
+        age ownedOnly cost fires only if that specific age is itself
+        already owned — otherwise it simply never happens in that
+        scenario's timeline. Backward-compatible: oneoffScope() treats
+        any oneoff_* record without a scope (every one saved before
+        v2.1) as "all" everywhere it's read; a small migrateOneoffScopeIfNeeded()
+        also backfills the explicit field on load/import for tidiness,
+        though the fallback alone is sufficient for correctness.
+     2. Engine — scope applied correctly, the important part.
+        buildOneoffSchedule() now keeps the two scopes SEPARATE rather
+        than pre-summing: schedule.always is resolved exactly as before
+        (timing-only, independent of ownership); schedule.ownedOnlyItems
+        is deliberately left AS RAW ITEMS, unresolved, since ownedOnly
+        applicability depends on purchaseAge — which for an "asap"-
+        trigger scenario is only discovered mid-loop inside
+        projectScenario, not known ahead of time. New
+        ownedOnlyItemFiresAtAge() (single-age predicate, used inside
+        projectScenario's forward loop, checked right after the purchase
+        trigger so `bought`/`purchaseAge` already reflect this age's
+        final state — inclusive of the exact purchase age itself, which
+        counts as "owned by that age") and ownedOnlyOccurrencesForItem()
+        (full-horizon resolution GIVEN a final purchaseAge, used once
+        the loop has finished or by simulateRetirementDrawdown, which
+        receives the scenario's already-fixed purchaseAge on
+        scenarioResult). Both floor at 0 and respect the existing pot
+        ring-fence exactly as scope:"all" always did. Threaded through:
+        projectScenario (deposit/savings pots, in-loop, plus a resolved
+        pensionExtraOutflows for any ownedOnly "from pension" cost, built
+        once purchaseAge is final); simulateRetirementDrawdown (a
+        retiree who never bought, purchaseAge===null, is correctly never
+        charged ownedOnly repair costs — ownedOnlyOccurrencesForItem
+        returns [] whenever purchaseAge is null); and the combined
+        oneoffOccurrences list powering chart markers and the one-
+        pager's block 3 list, which now only ever shows ownedOnly
+        markers at ages a scenario actually owned — the rent baseline
+        shows none of them, by construction.
+     3. UI. One-off modal gains a scope selector — "Applies to any
+        scenario" vs "Only once a home is owned" — with a short helper
+        line explaining the ownedOnly behaviour. Setup's one-off list
+        rows now show a small "universal" / "owned only" tag so the
+        distinction is visible without opening each item.
+     4. Preseeded starter set. defaultState() (fresh installs only) now
+        includes 12 realistic one-off costs instead of the single v2.0
+        boiler example — 4 universal (car replacement, furniture, tech
+        refresh, a milestone trip) and 8 owning-specific (boiler, roof,
+        rewire, kitchen/bathroom refits, windows, external decorating,
+        boundary/driveway/garden — see ONEOFF_SEED_LIST for the exact
+        figures and timings). New ONE-TIME seedOneoffCostsIfNeeded()
+        migration brings the same starter set to returning/synced
+        sessions that predate v2.1 — fires only when the user currently
+        has ZERO oneoff_* records of any kind (active or soft-deleted;
+        even one existing record, including a pre-v2.1 boiler example
+        or a previous run of this migration, means it never re-seeds on
+        top of that) AND the new assumptions.oneoffSeeded flag isn't yet
+        set; either way, oneoffSeeded is then set to true so the seeds
+        never reappear once a user has edited or deleted them. Rides the
+        normal sync pipeline as ordinary oneoff_* records + one settings
+        flag — no schema change.
+     TESTING — new pure helpers exposed on __horizonTestHooks
+     (oneoffScope, ownedOnlyOccurrencesForItem, ownedOnlyItemFiresAtAge,
+     migrateOneoffScopeIfNeeded, seedOneoffCostsIfNeeded, ONEOFF_SEED_LIST),
+     satisfying HZN-4-T1..T4 — see the accompanying test manifest. All
+     HZN-2.0-T1..T10 continue to pass unchanged.
    v2.0.1 (2026-08-07) — HZN-003, two small fixes, additive only — the
      v2.0 calculation engine, cloud sync, and v1.x migration are all
      untouched:
@@ -1630,17 +1721,39 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "2.0.1";
+var VERSION = "2.1";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
 var BUY_COLORS = ["#E3A458", "#E08850", "#D96B5B", "#C9505F", "#B85FD9", "#7EA8E3"];
 var BASELINE_COLOR = "#5FC9BA";
 
+// v2.1 — HZN-004 part 4: a realistic starter set of one-off costs, split
+// into UNIVERSAL (scope:"all" — applies whether renting or owning) and
+// OWNING-SPECIFIC (scope:"ownedOnly" — only once a home is actually
+// owned). Declared here, ahead of defaultState(), since fresh installs
+// fold this directly into their default records; seedOneoffCostsIfNeeded()
+// further below reuses the exact same list for returning/synced sessions
+// that predate v2.1.
+var ONEOFF_SEED_LIST = [
+  { label: "Car replacement", amount: 15000, timing: {everyNYears: 8, startAge: 45}, fromPot: "savings", category: "Transport", scope: "all" },
+  { label: "Replacement furniture", amount: 2500, timing: {everyNYears: 12, startAge: 48}, fromPot: "savings", category: "Home", scope: "all" },
+  { label: "Tech / laptop refresh", amount: 1500, timing: {everyNYears: 5, startAge: 46}, fromPot: "savings", category: "Tech", scope: "all" },
+  { label: "Big milestone trip", amount: 5000, timing: {everyNYears: 10, startAge: 50}, fromPot: "savings", category: "Leisure", scope: "all" },
+  { label: "Boiler replacement", amount: 3500, timing: {everyNYears: 15, startAge: 60}, fromPot: "savings", category: "Repairs", scope: "ownedOnly" },
+  { label: "Roof works", amount: 6000, timing: {everyNYears: 25, startAge: 65}, fromPot: "savings", category: "Repairs", scope: "ownedOnly" },
+  { label: "Full rewire", amount: 5000, timing: {everyNYears: 30, startAge: 65}, fromPot: "savings", category: "Repairs", scope: "ownedOnly" },
+  { label: "Kitchen refit", amount: 8000, timing: {everyNYears: 20, startAge: 60}, fromPot: "savings", category: "Renovation", scope: "ownedOnly" },
+  { label: "Bathroom refit", amount: 5000, timing: {everyNYears: 20, startAge: 62}, fromPot: "savings", category: "Renovation", scope: "ownedOnly" },
+  { label: "Windows / external doors", amount: 7000, timing: {everyNYears: 25, startAge: 63}, fromPot: "savings", category: "Repairs", scope: "ownedOnly" },
+  { label: "External decorating", amount: 2000, timing: {everyNYears: 7, startAge: 55}, fromPot: "savings", category: "Maintenance", scope: "ownedOnly" },
+  { label: "Boundary / driveway / garden", amount: 3000, timing: {everyNYears: 15, startAge: 58}, fromPot: "savings", category: "Maintenance", scope: "ownedOnly" }
+];
+
 /* ---------- default state ---------- */
 function defaultState(){
   var now = new Date().toISOString();
-  return {
+  var base = {
     version: VERSION,
     lastUpdated: now,
     lastExported: null,
@@ -1671,7 +1784,12 @@ function defaultState(){
             modeledExtraMonthly: null,
             contingencyReserveRent: 5000,
             contingencyReserveBuy: 15000,
-            annualSavingsTarget: 6000
+            annualSavingsTarget: 6000,
+            // v2.1 — HZN-004 part 4: a fresh install already gets the
+            // full ONEOFF_SEED_LIST below directly, so it's marked
+            // seeded from the start — seedOneoffCostsIfNeeded() only
+            // needs to do anything for sessions that predate v2.1.
+            oneoffSeeded: true
           }
         },
         updatedAt: now
@@ -1747,13 +1865,15 @@ function defaultState(){
         updatedAt: now,
         deleted: false
       },
-      oneoff_example_boiler: {
-        data: { label: "Boiler replacement", amount: 3500, timing: { everyNYears: 15, startAge: 60 }, fromPot: "savings", category: "Repairs" },
-        updatedAt: now,
-        deleted: false
-      }
     }
   };
+  // v2.1 — HZN-004 part 4: fresh installs get the full realistic starter
+  // set (ONEOFF_SEED_LIST, defined above VERSION/defaultState) instead
+  // of the single v2.0 boiler example.
+  ONEOFF_SEED_LIST.forEach(function(seed, idx){
+    base.records["oneoff_default_" + idx] = {data: Object.assign({}, seed), updatedAt: now, deleted: false};
+  });
+  return base;
 }
 
 var state = null;
@@ -1815,6 +1935,56 @@ function migrateScenarioAllocationIfNeeded(parsedState){
   });
   return parsedState;
 }
+// v2.1 — HZN-004, additive: every oneoff_* record gains an explicit
+// scope field ("all" | "ownedOnly"). Not strictly required for correct
+// behaviour — oneoffScope() already treats an absent/unrecognised scope
+// as "all" everywhere it's read — but backfilling it explicitly here
+// keeps saved data self-describing and avoids relying on that fallback
+// forever. Runs once per record (skips any that already have a scope
+// set, so it's safe to call on every load).
+function migrateOneoffScopeIfNeeded(parsedState){
+  var now = new Date().toISOString();
+  Object.keys(parsedState.records).forEach(function(key){
+    if (key.indexOf("oneoff_") !== 0) return;
+    var rec = parsedState.records[key];
+    if (!rec || !rec.data) return;
+    if (rec.data.scope === "all" || rec.data.scope === "ownedOnly") return;
+    rec.data.scope = "all";
+    rec.updatedAt = now;
+  });
+  return parsedState;
+}
+
+// v2.1 — HZN-004 part 4: ONE-TIME seed migration for returning/synced
+// sessions. defaultState() (used only for a genuinely fresh install —
+// no localStorage, no cloud data at all) already includes
+// ONEOFF_SEED_LIST directly, so this only needs to backfill sessions
+// that existed before v2.1. Fires only when BOTH: (a) the user
+// currently has ZERO oneoff_* records of ANY kind (active or soft-
+// deleted — if even one exists, they already have a history with one-
+// off costs, whether that's the single v2.0 boiler example, their own
+// custom entries, or a previous run of this very migration, and this
+// must never silently pile 12 more records on top of that), AND (b)
+// assumptions.oneoffSeeded is not yet set. Either way, oneoffSeeded is
+// set to true afterwards so this NEVER reconsiders seeding again —
+// once a user has edited or deleted their one-off costs (down to zero
+// or otherwise), the seeds must not reappear.
+function seedOneoffCostsIfNeeded(parsedState){
+  var settings = parsedState.records.settings.data;
+  if (settings.assumptions.oneoffSeeded) return parsedState;
+  var hasAnyOneoffRecords = Object.keys(parsedState.records).some(function(k){ return k.indexOf("oneoff_") === 0; });
+  if (hasAnyOneoffRecords){
+    settings.assumptions.oneoffSeeded = true;
+    return parsedState;
+  }
+  var now = new Date().toISOString();
+  ONEOFF_SEED_LIST.forEach(function(seed){
+    parsedState.records["oneoff_seed_" + uid()] = {data: Object.assign({}, seed), updatedAt: now, deleted: false};
+  });
+  settings.assumptions.oneoffSeeded = true;
+  return parsedState;
+}
+
 // Resolves a scenario's three-way allocation for display/engine use —
 // the one place this gets read, so callers never need to know whether a
 // scenario is v2.0-native (has .allocation already) or still running on
@@ -1864,6 +2034,8 @@ function loadState(){
     parsed.records.settings.data = backfillSettingsDefaults(parsed.records.settings.data);
     parsed = migrateIncomeOutgoingsIfNeeded(parsed);
     parsed = migrateScenarioAllocationIfNeeded(parsed);
+    parsed = migrateOneoffScopeIfNeeded(parsed);
+    parsed = seedOneoffCostsIfNeeded(parsed);
     // A session that predates the display-mode toggle has only ever shown
     // nominal figures — default it to Nominal rather than silently
     // switching what they see. Fresh installs get "real" from defaultState().
@@ -2099,25 +2271,112 @@ function oneoffNominalAmountAtAge(item, age, settings){
   var inflation = num(settings.assumptions.inflationRate, 0.025);
   return num(item.amount, 0) * Math.pow(1 + inflation, years);
 }
-// Builds the full one-off schedule for a projection run: per-pot
-// {age: nominalAmount} maps (deposit/savings/pension, summed if more than
-// one item lands on the same age) plus a flat occurrences list (chart
-// markers, Setup summary) — nominal throughout, ready to subtract
-// directly inside projectScenario's loop or feed into the pension engine.
+// v2.1 — HZN-004: resolves an item's scope. Absence (undefined/anything
+// other than the literal "ownedOnly") is ALWAYS treated as "all" — this
+// is the single place that default is applied, so every consumer below
+// gets it for free without needing its own fallback logic. Backward-
+// compatible with every oneoff_* record saved before v2.1, which has no
+// scope field at all.
+function oneoffScope(item){
+  return (item && item.scope === "ownedOnly") ? "ownedOnly" : "all";
+}
+// v2.1 — HZN-004: resolves ownedOnly occurrences for a single item GIVEN
+// a scenario's actual purchaseAge (null if the scenario never buys —
+// including the "Keep renting" baseline, which always passes null here).
+// Mirrors oneoffOccurrencesForItem's shape but applies the ownedOnly
+// rule throughout: nothing fires before purchaseAge; a single atAge cost
+// fires only if that specific age is itself >= purchaseAge (i.e.
+// already owned by then — otherwise it simply never happens in this
+// scenario's timeline, it doesn't roll over to a later date); a
+// recurring cost's first occurrence is max(timing.startAge, purchaseAge),
+// then every N years from THERE — so a recurring cost nominally "due"
+// before the purchase shifts its whole cycle to start counting from the
+// purchase itself, rather than firing retroactively or skipping years.
+function ownedOnlyOccurrencesForItem(item, purchaseAge, referenceAge, horizonAge){
+  var out = [];
+  if (purchaseAge == null) return out;
+  var t = item && item.timing;
+  if (!t) return out;
+  if (t.atAge != null){
+    var atAge = Math.round(t.atAge);
+    if (atAge >= purchaseAge && atAge >= referenceAge && atAge <= horizonAge){
+      out.push({age: atAge, amount: num(item.amount, 0)});
+    }
+    return out;
+  }
+  if (t.everyNYears){
+    var n = Math.max(1, Math.round(t.everyNYears));
+    var startAge = (t.startAge != null) ? Math.round(t.startAge) : referenceAge;
+    var effectiveStart = Math.max(startAge, purchaseAge);
+    for (var a2 = effectiveStart; a2 <= horizonAge; a2 += n){
+      if (a2 >= referenceAge) out.push({age: a2, amount: num(item.amount, 0)});
+    }
+  }
+  return out;
+}
+// v2.1 — HZN-004: single-age predicate version of the same rule, used
+// inside projectScenario's forward loop where purchaseAge becomes known
+// (and stays fixed) partway through — equivalent in outcome to calling
+// ownedOnlyOccurrencesForItem and checking membership, just evaluated
+// one age at a time as the loop naturally advances, without needing a
+// second pass once the purchase has actually happened.
+function ownedOnlyItemFiresAtAge(item, age, purchaseAge, referenceAge){
+  if (purchaseAge == null || age < purchaseAge) return false;
+  var t = item && item.timing;
+  if (!t) return false;
+  if (t.atAge != null) return Math.round(t.atAge) === age;
+  if (t.everyNYears){
+    var n = Math.max(1, Math.round(t.everyNYears));
+    var startAge = (t.startAge != null) ? Math.round(t.startAge) : referenceAge;
+    var effectiveStart = Math.max(startAge, purchaseAge);
+    return age >= effectiveStart && (age - effectiveStart) % n === 0;
+  }
+  return false;
+}
+// Builds the full one-off schedule for a projection run. v2.1 — HZN-004:
+// the two scopes are kept SEPARATE rather than pre-summed, because
+// ownedOnly applicability depends on purchaseAge, which isn't known
+// until projectScenario's own loop runs (particularly for "asap"-trigger
+// scenarios, where the purchase age itself is discovered mid-loop, not
+// computed ahead of time). Returns:
+//   schedule.always        — {deposit,savings,pension}: {age: amount}
+//                             maps, fully resolved here exactly as before
+//                             v2.1 (scope:"all" never depends on
+//                             ownership, so nothing changes for it).
+//   schedule.ownedOnlyItems — {deposit,savings,pension}: RAW item lists,
+//                             deliberately left unresolved — the caller
+//                             (projectScenario, simulateRetirementDrawdown)
+//                             resolves these once it knows the scenario's
+//                             actual purchaseAge (or null, for baseline /
+//                             a scenario that never buys), via
+//                             ownedOnlyOccurrencesForItem /
+//                             ownedOnlyItemFiresAtAge above.
+// alwaysOccurrences is the scope:"all" portion of the flat occurrence
+// list (chart markers / one-off list) — the ownedOnly portion is added
+// by the caller once resolved against a real purchaseAge, since an
+// occurrence list built here with no purchaseAge context would have no
+// way to know which ages actually apply.
 function buildOneoffSchedule(oneoffItems, settings, horizonAge){
   var referenceAge = num(settings.household.referenceAge, 45);
-  var schedule = {deposit: {}, savings: {}, pension: {}};
-  var occurrences = [];
+  var schedule = {
+    always: {deposit: {}, savings: {}, pension: {}},
+    ownedOnlyItems: {deposit: [], savings: [], pension: []}
+  };
+  var alwaysOccurrences = [];
   (oneoffItems || []).forEach(function(item){
     var pot = (item.fromPot === "pension" || item.fromPot === "savings") ? item.fromPot : "deposit";
+    if (oneoffScope(item) === "ownedOnly"){
+      schedule.ownedOnlyItems[pot].push(item);
+      return;
+    }
     var occs = oneoffOccurrencesForItem(item, referenceAge, horizonAge);
     occs.forEach(function(o){
       var nominal = oneoffNominalAmountAtAge(item, o.age, settings);
-      schedule[pot][o.age] = (schedule[pot][o.age] || 0) + nominal;
-      occurrences.push({age: o.age, amountReal: o.amount, amountNominal: nominal, label: item.label, fromPot: pot, category: item.category, recordKey: item.recordKey});
+      schedule.always[pot][o.age] = (schedule.always[pot][o.age] || 0) + nominal;
+      alwaysOccurrences.push({age: o.age, amountReal: o.amount, amountNominal: nominal, label: item.label, fromPot: pot, category: item.category, recordKey: item.recordKey, scope: "all"});
     });
   });
-  return {schedule: schedule, occurrences: occurrences};
+  return {schedule: schedule, alwaysOccurrences: alwaysOccurrences};
 }
 // Applies a scenario's own pensionTargetKey to a pensions list — used
 // ONLY to model the three-way allocation lever's pension row (pension
@@ -2184,17 +2443,71 @@ function projectScenario(settings, scenario, oneoffItems){
   // v2.0 — HZN-003 part B: one-off costs scheduled against the deposit
   // or savings pot specifically, expanded once up front (nominal, nominal
   // per-age amounts) so the loop below only needs a map lookup per year.
+  // v2.1 — HZN-004: schedule.always is resolved exactly as before;
+  // schedule.ownedOnlyItems is deliberately left unresolved (see
+  // buildOneoffSchedule) since ownedOnly applicability depends on this
+  // scenario's own purchaseAge, discovered below during this very loop.
   var oneoffResult = buildOneoffSchedule(oneoffItems, settings, HORIZON_AGE);
-  var depositSchedule = oneoffResult.schedule.deposit;
-  var savingsSchedule = oneoffResult.schedule.savings;
+  var depositSchedule = oneoffResult.schedule.always.deposit;
+  var savingsSchedule = oneoffResult.schedule.always.savings;
+  var ownedOnlyDepositItems = oneoffResult.schedule.ownedOnlyItems.deposit;
+  var ownedOnlySavingsItems = oneoffResult.schedule.ownedOnlyItems.savings;
+  var ownedOnlyOccurrences = [];
+
+  // v2.1 — HZN-004: applies any ownedOnly-scope costs firing at `age`
+  // against the ring-fenced pots, floored at 0 — identical mechanics to
+  // the always-scope deduction just above it. Shared by both call sites
+  // below (the common "already owned since an earlier age" case, and
+  // the one-off special case of the exact purchase age itself) so the
+  // logic only needs to be written once.
+  function applyOwnedOnlyCostsAtAge(currentAge, currentPurchaseAge){
+    var depositTotal = 0;
+    ownedOnlyDepositItems.forEach(function(item){
+      if (ownedOnlyItemFiresAtAge(item, currentAge, currentPurchaseAge, h.referenceAge)){
+        var nominalD = oneoffNominalAmountAtAge(item, currentAge, settings);
+        depositTotal += nominalD;
+        ownedOnlyOccurrences.push({age: currentAge, amountReal: num(item.amount, 0), amountNominal: nominalD, label: item.label, fromPot: "deposit", category: item.category, recordKey: item.recordKey, scope: "ownedOnly"});
+      }
+    });
+    var savingsTotal = 0;
+    ownedOnlySavingsItems.forEach(function(item){
+      if (ownedOnlyItemFiresAtAge(item, currentAge, currentPurchaseAge, h.referenceAge)){
+        var nominalS = oneoffNominalAmountAtAge(item, currentAge, settings);
+        savingsTotal += nominalS;
+        ownedOnlyOccurrences.push({age: currentAge, amountReal: num(item.amount, 0), amountNominal: nominalS, label: item.label, fromPot: "savings", category: item.category, recordKey: item.recordKey, scope: "ownedOnly"});
+      }
+    });
+    if (depositTotal) depositPot = Math.max(0, depositPot - depositTotal);
+    if (savingsTotal) generalSavings = Math.max(0, generalSavings - savingsTotal);
+  }
 
   for (var i = 0; i <= steps; i++){
+    // Captured before anything this iteration does — true only if the
+    // purchase already happened on a STRICTLY EARLIER age. Used below to
+    // decide whether ownedOnly costs for THIS age can be applied
+    // up front (same position/visibility as always-scope costs) or need
+    // to wait for the purchase trigger later in this same iteration
+    // (only relevant for the exact purchase age itself, handled below).
+    var boughtBeforeThisAge = bought;
+
     // Applied BEFORE the point is recorded for this age, against ONLY
     // the pot the one-off nominated — a "savings" one-off can never
     // reduce the deposit pot and vice versa, preserving the ring-fence.
-    // Floored at 0 rather than allowed to go negative.
+    // Floored at 0 rather than allowed to go negative. This is the
+    // scope:"all" (universal) portion — applies on this timing
+    // regardless of ownership, exactly as every one-off did pre-v2.1.
     if (depositSchedule[age]) depositPot = Math.max(0, depositPot - depositSchedule[age]);
     if (savingsSchedule[age]) generalSavings = Math.max(0, generalSavings - savingsSchedule[age]);
+
+    // v2.1 — HZN-004: scope:"ownedOnly" costs for any age genuinely
+    // AFTER the purchase (the common case) — applied here, same
+    // position as always-scope costs above, so they're visible in
+    // THIS age's own recorded point, not deferred to the next one.
+    // Never fires for the rent baseline or any age before purchase,
+    // since boughtBeforeThisAge is simply never true then.
+    if (boughtBeforeThisAge){
+      applyOwnedOnlyCostsAtAge(age, purchaseAge);
+    }
 
     points.push({
       age: age,
@@ -2223,6 +2536,15 @@ function projectScenario(settings, scenario, oneoffItems){
         mortgageBalance = Math.max(0, scenario.targetHousePrice - equityDeposit);
         mortgagePayment = computeMortgagePayment(mortgageBalance, a.mortgageRate, a.mortgageTermYears);
         initialMortgagePayment = mortgagePayment;
+        // v2.1 — HZN-004: the ONE special case boughtBeforeThisAge above
+        // can't cover — the exact age the purchase itself happens. The
+        // property counts as "owned by that age" per spec, so an
+        // ownedOnly cost scheduled for this very age still applies —
+        // just deferred to affect the state carried into THIS age's
+        // growth calculation (and therefore visible starting next age's
+        // point), matching the existing convention that the purchase's
+        // own effects likewise aren't visible until the following point.
+        applyOwnedOnlyCostsAtAge(age, purchaseAge);
       }
     }
 
@@ -2262,9 +2584,28 @@ function projectScenario(settings, scenario, oneoffItems){
   // instead they're surfaced here as extra outflows keyed by the
   // scenario's own pensionTargetKey, for scenarioRetirementGapAtAge /
   // computeAtRetirementBreakdown to feed into the DC drawdown simulation.
+  // v2.1 — HZN-004: purchaseAge is now FINAL (fixed for the rest of this
+  // scenario's life once set, or permanently null for baseline / a
+  // scenario that never buys), so ownedOnly pension one-offs can be
+  // resolved here in one pass via ownedOnlyOccurrencesForItem — "an
+  // ownedOnly 'from pension' cost only applies once owned" falls out
+  // naturally, since that helper returns [] entirely when purchaseAge is
+  // null, and only returns ages >= purchaseAge otherwise.
   var pensionExtraOutflows = {};
-  if (scenario && scenario.pensionTargetKey && oneoffResult.schedule.pension){
-    pensionExtraOutflows[scenario.pensionTargetKey] = oneoffResult.schedule.pension;
+  if (scenario && scenario.pensionTargetKey){
+    var pensionScheduleByAge = {};
+    Object.keys(oneoffResult.schedule.always.pension).forEach(function(ageKey){
+      pensionScheduleByAge[ageKey] = (pensionScheduleByAge[ageKey] || 0) + oneoffResult.schedule.always.pension[ageKey];
+    });
+    oneoffResult.schedule.ownedOnlyItems.pension.forEach(function(item){
+      var occs = ownedOnlyOccurrencesForItem(item, purchaseAge, h.referenceAge, HORIZON_AGE);
+      occs.forEach(function(o){
+        var nominalP = oneoffNominalAmountAtAge(item, o.age, settings);
+        pensionScheduleByAge[o.age] = (pensionScheduleByAge[o.age] || 0) + nominalP;
+        ownedOnlyOccurrences.push({age: o.age, amountReal: o.amount, amountNominal: nominalP, label: item.label, fromPot: "pension", category: item.category, recordKey: item.recordKey, scope: "ownedOnly"});
+      });
+    });
+    pensionExtraOutflows[scenario.pensionTargetKey] = pensionScheduleByAge;
   }
 
   return {
@@ -2274,7 +2615,13 @@ function projectScenario(settings, scenario, oneoffItems){
     mortgageClearAge: mortgageClearAge,
     initialMortgagePayment: initialMortgagePayment,
     shortfall: shortfall,
-    oneoffOccurrences: oneoffResult.occurrences,
+    // v2.1 — HZN-004: combines the scope:"all" occurrences (resolved
+    // up front in buildOneoffSchedule, independent of ownership) with
+    // the scope:"ownedOnly" ones gathered above (only ever pushed for
+    // ages this scenario actually owned) — chart markers and the
+    // one-pager's occurrence list (block 3) consume this single list
+    // without needing to know scope exists.
+    oneoffOccurrences: oneoffResult.alwaysOccurrences.concat(ownedOnlyOccurrences),
     pensionExtraOutflows: pensionExtraOutflows
   };
 }
@@ -2431,13 +2778,34 @@ function simulateRetirementDrawdown(settings, scenarioResult, oneoffItems){
   // one-off is already reflected in the pension income figure via
   // pensionInputs.extraOutflows, so it must not also be subtracted from
   // net worth (that would double-count the same cost).
+  // v2.1 — HZN-004: always-scope costs sum in unconditionally, exactly
+  // as before v2.1. ownedOnly-scope costs are resolved against this
+  // scenario's OWN final purchaseAge (available on scenarioResult,
+  // fixed by the time projectScenario returned it) — a retiree who
+  // never bought (purchaseAge === null, e.g. the "Keep renting"
+  // baseline, or a buy scenario that never actually reaches its
+  // deposit target) is correctly never charged these, since
+  // ownedOnlyOccurrencesForItem returns [] whenever purchaseAge is null.
   var oneoffResult = buildOneoffSchedule(oneoffItems, settings, horizonAge);
   var netWorthOneoffByAge = {};
-  Object.keys(oneoffResult.schedule.deposit).forEach(function(age){
-    netWorthOneoffByAge[age] = (netWorthOneoffByAge[age] || 0) + oneoffResult.schedule.deposit[age];
+  Object.keys(oneoffResult.schedule.always.deposit).forEach(function(age){
+    netWorthOneoffByAge[age] = (netWorthOneoffByAge[age] || 0) + oneoffResult.schedule.always.deposit[age];
   });
-  Object.keys(oneoffResult.schedule.savings).forEach(function(age){
-    netWorthOneoffByAge[age] = (netWorthOneoffByAge[age] || 0) + oneoffResult.schedule.savings[age];
+  Object.keys(oneoffResult.schedule.always.savings).forEach(function(age){
+    netWorthOneoffByAge[age] = (netWorthOneoffByAge[age] || 0) + oneoffResult.schedule.always.savings[age];
+  });
+  var drawdownPurchaseAge = scenarioResult && scenarioResult.purchaseAge;
+  oneoffResult.schedule.ownedOnlyItems.deposit.forEach(function(item){
+    ownedOnlyOccurrencesForItem(item, drawdownPurchaseAge, referenceAge, horizonAge).forEach(function(o){
+      var nominal = oneoffNominalAmountAtAge(item, o.age, settings);
+      netWorthOneoffByAge[o.age] = (netWorthOneoffByAge[o.age] || 0) + nominal;
+    });
+  });
+  oneoffResult.schedule.ownedOnlyItems.savings.forEach(function(item){
+    ownedOnlyOccurrencesForItem(item, drawdownPurchaseAge, referenceAge, horizonAge).forEach(function(o){
+      var nominal = oneoffNominalAmountAtAge(item, o.age, settings);
+      netWorthOneoffByAge[o.age] = (netWorthOneoffByAge[o.age] || 0) + nominal;
+    });
   });
 
   var points = [];
@@ -3993,7 +4361,7 @@ var ONEOFF_POT_LABEL = {deposit: "Deposit pot", savings: "Savings", pension: "Pe
 var editingOneoffKey = null;
 function oneoffDefaults(){
   var referenceAge = num(getSettings().household.referenceAge, 45);
-  return { label: "", amount: 1000, timing: {atAge: referenceAge + 10}, fromPot: "savings", category: "Other" };
+  return { label: "", amount: 1000, timing: {atAge: referenceAge + 10}, fromPot: "savings", category: "Other", scope: "all" };
 }
 function openOneoffModal(recordKey){
   editingOneoffKey = recordKey || null;
@@ -4009,6 +4377,7 @@ function openOneoffModal(recordKey){
   document.getElementById("oo-startage").value = (data.timing && data.timing.startAge != null) ? data.timing.startAge : referenceAge;
   setOneoffTiming(isRecurring ? "recurring" : "atAge");
   setOneoffPot(data.fromPot || "savings");
+  setOneoffScope(oneoffScope(data));
   document.getElementById("oneoff-modal-overlay").classList.add("open");
   document.getElementById("oo-label").focus();
 }
@@ -4029,6 +4398,13 @@ function setOneoffPot(pot){
     document.getElementById("oo-pot-" + p).classList.toggle("active", p === pot);
   });
 }
+// v2.1 — HZN-004 part 3: scope selector wiring — mirrors setOneoffPot's
+// pattern exactly.
+function setOneoffScope(scope){
+  document.getElementById("oneoff-modal-overlay").dataset.scope = scope;
+  document.getElementById("oo-scope-all").classList.toggle("active", scope === "all");
+  document.getElementById("oo-scope-ownedOnly").classList.toggle("active", scope === "ownedOnly");
+}
 function saveOneoffFromModal(){
   var label = document.getElementById("oo-label").value.trim();
   if (!label) label = "Untitled cost";
@@ -4036,6 +4412,7 @@ function saveOneoffFromModal(){
   var category = document.getElementById("oo-category").value.trim() || "Other";
   var timingMode = document.getElementById("oneoff-modal-overlay").dataset.timing || "atAge";
   var pot = document.getElementById("oneoff-modal-overlay").dataset.pot || "savings";
+  var scope = document.getElementById("oneoff-modal-overlay").dataset.scope === "ownedOnly" ? "ownedOnly" : "all";
   var referenceAge = num(getSettings().household.referenceAge, 45);
   var timing;
   if (timingMode === "recurring"){
@@ -4048,13 +4425,17 @@ function saveOneoffFromModal(){
     if (isNaN(atAge)) atAge = referenceAge + 10;
     timing = { atAge: atAge };
   }
-  var data = { label: label, amount: amount, timing: timing, fromPot: pot, category: category };
+  var data = { label: label, amount: amount, timing: timing, fromPot: pot, category: category, scope: scope };
   var key = editingOneoffKey || ("oneoff_" + uid());
   state.records[key] = { data: data, updatedAt: new Date().toISOString(), deleted: false };
   saveState();
   closeOneoffModal();
   renderAll();
 }
+// v2.1 — HZN-004 part 3: small "universal"/"owned only" tag on each
+// Setup list row, so the scope distinction is visible at a glance
+// without opening the item to check.
+var ONEOFF_SCOPE_LABEL = {all: "universal", ownedOnly: "owned only"};
 function renderOneoffList(){
   var list = document.getElementById("oneoff-list");
   var items = activeOneoffItems();
@@ -4066,10 +4447,16 @@ function renderOneoffList(){
       var timingText = (item.timing && item.timing.everyNYears)
         ? ("every " + item.timing.everyNYears + " yrs from age " + num(item.timing.startAge, referenceAge))
         : ("at age " + (item.timing && item.timing.atAge));
+      var scope = oneoffScope(item);
+      var scopeTagStyle = scope === "ownedOnly"
+        ? "color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft);"
+        : "color:var(--teal);border-color:var(--teal-soft);background:var(--teal-soft);";
+      var scopeTag = '<span class="badge-baseline" style="' + scopeTagStyle + '">' + ONEOFF_SCOPE_LABEL[scope] + '</span>';
       return '<div class="scenario-card">' +
         '<div class="info"><span class="swatch" style="background:' + BUY_COLORS[1] + '"></span>' +
         '<span class="name">' + escHtml(item.label) + '</span>' +
         '<span class="meta">' + fmtGBP(num(item.amount, 0)) + " today's £ · " + timingText + ' · from ' + (ONEOFF_POT_LABEL[item.fromPot] || item.fromPot) + ' · ' + escHtml(item.category || "Other") + '</span></div>' +
+        scopeTag +
         '<div class="scenario-actions">' +
         '<button class="small ghost" data-oneoff-edit="' + item.recordKey + '">Edit</button>' +
         '<button class="small danger-text" data-oneoff-delete="' + item.recordKey + '">Delete</button>' +
@@ -4481,6 +4868,8 @@ function importJSON(file){
       state.records.settings.data = backfillSettingsDefaults(state.records.settings.data);
       state = migrateIncomeOutgoingsIfNeeded(state);
       state = migrateScenarioAllocationIfNeeded(state);
+      state = migrateOneoffScopeIfNeeded(state);
+      state = seedOneoffCostsIfNeeded(state);
       if (state.displayMode !== "real" && state.displayMode !== "nominal") state.displayMode = "nominal";
       state.version = VERSION;
       saveState();
@@ -4718,6 +5107,8 @@ function init(){
   ["deposit", "savings", "pension"].forEach(function(p){
     document.getElementById("oo-pot-" + p).addEventListener("click", function(){ setOneoffPot(p); });
   });
+  document.getElementById("oo-scope-all").addEventListener("click", function(){ setOneoffScope("all"); });
+  document.getElementById("oo-scope-ownedOnly").addEventListener("click", function(){ setOneoffScope("ownedOnly"); });
   document.getElementById("btn-onepager-back").addEventListener("click", backToScenarioList);
 
   document.getElementById("btn-sync-export").addEventListener("click", exportJSON);
@@ -4806,6 +5197,13 @@ window.__horizonTestHooks = {
   // v2.0.1 — HZN-003 fixes
   resolvePreviewPensionTargetKey: resolvePreviewPensionTargetKey,
   buildAllocationTableHtml: buildAllocationTableHtml,
+  // v2.1 — HZN-004 additions
+  oneoffScope: oneoffScope,
+  ownedOnlyOccurrencesForItem: ownedOnlyOccurrencesForItem,
+  ownedOnlyItemFiresAtAge: ownedOnlyItemFiresAtAge,
+  migrateOneoffScopeIfNeeded: migrateOneoffScopeIfNeeded,
+  seedOneoffCostsIfNeeded: seedOneoffCostsIfNeeded,
+  ONEOFF_SEED_LIST: ONEOFF_SEED_LIST,
   _setStateForTest: function(s){ state = s; }
 };
 
