@@ -532,7 +532,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v1.20</span></h1>
+      <h1>Horizon <span class="version-badge">v1.21</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -1039,6 +1039,33 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v1.21 (2026-08-07) — HZN-002, three parts:
+     1. Net worth added to the allocation-modelling table on scenario
+        cards — was showing purchase age and retirement-income gap per
+        allocation split, but not what net worth itself would actually
+        be at retirement under each split. New column, using the same
+        computeAllocationVariant() re-projection as the other columns.
+     2. Housing column in Retirement Security now says what the figure
+        actually is — "rent, still inflating" / "mortgage still active,
+        clears age X" / "mortgage cleared" — instead of a bare number.
+        The £9,989/yr some buy scenarios showed wasn't a bug: a
+        standard repayment mortgage has a flat nominal payment for its
+        whole term, and buying at 50 with a 25-year term means the
+        mortgage is still running at 67. The number was always right;
+        it just didn't explain itself.
+     3. New contingency reserve: nowhere previously tested whether net
+        worth was enough to cover one-off costs (boiler, roof, car) —
+        it was all treated as spendable retirement income. New
+        contingencyReserveRent/contingencyReserveBuy assumptions
+        (defaults £5,000 / £15,000 — higher for owning, since repairs
+        are the homeowner's problem and mostly aren't the renter's),
+        held back by netWorthDrawdownIncomeAtAge() before computing
+        drawdown income, so Retirement Security's numbers are properly
+        conservative rather than assuming every pound is available to
+        live on. New contingencyReserveAtAge() helper — reused by both
+        the drawdown calculation and the at-retirement breakdown, which
+        now shows the reserve and the resulting "discretionary net
+        worth" explicitly rather than adjusting the number silently.
    v1.20 (2026-08-07) — Three follow-ups to the v1.19 at-retirement
      breakdown, plus annual expenses:
      1. Labels clarified — "Guaranteed" now explicitly says "Defined
@@ -1382,7 +1409,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "1.20";
+var VERSION = "1.21";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -1420,7 +1447,9 @@ function defaultState(){
             incomeGrowthRate: 0.02,
             targetRetirementAge: 67,
             targetLivingCost: 45400,
-            modeledExtraMonthly: null
+            modeledExtraMonthly: null,
+            contingencyReserveRent: 5000,
+            contingencyReserveBuy: 15000
           }
         },
         updatedAt: now
@@ -1856,6 +1885,19 @@ function housingCostAtAge(scenarioResult, settings, age){
   return num(scenarioResult.initialMortgagePayment, 0);
 }
 
+// HZN-002 — "nowhere tests if net worth is enough to deal with one-off
+// expenses... needs to be higher in buy model, not required in rent
+// model." A flat, editable reserve held back from the drawdown-income
+// calculation below — money that's there on paper but shouldn't be
+// counted as spendable retirement income, since it's the buffer for a
+// boiler, a roof, a car, the stuff that isn't a monthly bill but isn't
+// optional either. Owning carries this risk; renting mostly doesn't
+// (a landlord's problem), hence two separately editable figures.
+function contingencyReserveAtAge(scenarioResult, age, settings){
+  var owns = scenarioResult.purchaseAge != null && scenarioResult.purchaseAge <= age;
+  return owns ? num(settings.assumptions.contingencyReserveBuy, 15000) : num(settings.assumptions.contingencyReserveRent, 5000);
+}
+
 // Your accumulated savings are a retirement income source too, not just
 // pensions — this was the gap in the original design. For a scenario that
 // never buys, general savings + deposit pot are just "savings" (no reason
@@ -1863,13 +1905,17 @@ function housingCostAtAge(scenarioResult, settings, age){
 // For a buy scenario, deposit pot is already folded into general savings
 // the moment the purchase happens, so summing both is always correct and
 // never double-counts. Drawn down at the same 4% rule DC pots use
-// elsewhere. Nominal — callers convert to real as needed.
+// elsewhere. Nominal — callers convert to real as needed. The contingency
+// reserve (see contingencyReserveAtAge) is held back first — money kept
+// in reserve isn't available to draw income from.
 function netWorthDrawdownIncomeAtAge(scenarioResult, age, settings){
   var point = pointAtAge(scenarioResult.points, age);
   if (!point) return 0;
   var liquidPot = num(point.generalSavings, 0) + num(point.depositPot, 0);
-  if (liquidPot <= 0) return 0;
-  return liquidPot * 0.04;
+  var reserve = contingencyReserveAtAge(scenarioResult, age, settings);
+  var spendable = liquidPot - reserve;
+  if (spendable <= 0) return 0;
+  return spendable * 0.04;
 }
 
 // Scans forward from the target retirement age to find the first age at
@@ -1901,11 +1947,15 @@ function computeAtRetirementBreakdown(settings, scenarioResult, retireAge){
   var totals = pensionIncomeTotalsAtAge(settings, retireAge);
   var retirePoint = pointAtAge(scenarioResult.points, retireAge);
   var horizonPoint = pointAtAge(scenarioResult.points, HORIZON_AGE);
+  var netWorthAtRetirement = retirePoint ? retirePoint.netWorth : 0;
+  var reserve = contingencyReserveAtAge(scenarioResult, retireAge, settings);
   return {
     guaranteedAnnual: totals.guaranteed,
     estimatedAnnual: totals.estimated,
-    netWorthAtRetirement: retirePoint ? retirePoint.netWorth : 0,
-    netWorthAtHorizon: horizonPoint ? horizonPoint.netWorth : 0
+    netWorthAtRetirement: netWorthAtRetirement,
+    netWorthAtHorizon: horizonPoint ? horizonPoint.netWorth : 0,
+    contingencyReserve: reserve,
+    discretionaryNetWorth: Math.max(0, netWorthAtRetirement - reserve)
   };
 }
 
@@ -1930,12 +1980,14 @@ function computeAllocationVariant(settings, sc, depositMonthly, savingsMonthly){
   var result = projectScenario(settingsVariant, scenarioVariant);
   var retireAge = settings.assumptions.targetRetirementAge;
   var gap = scenarioRetirementGapAtAge(settingsVariant, result, retireAge);
+  var retirePoint = pointAtAge(result.points, retireAge);
   return {
     depositMonthly: depositMonthly,
     savingsMonthly: savingsMonthly,
     purchaseAge: result.purchaseAge,
     shortfall: result.shortfall,
-    gapReal: gap.gapReal
+    gapReal: gap.gapReal,
+    netWorthAtRetirement: retirePoint ? retirePoint.netWorth : 0
   };
 }
 
@@ -2231,7 +2283,9 @@ var ASSUMPTION_FIELDS = [
   {key:"rentInflationRate", label:"Rent inflation", pct:true, step:0.1},
   {key:"incomeGrowthRate", label:"Income / salary growth", pct:true, step:0.1},
   {key:"targetRetirementAge", label:"Target retirement age", prefix:null, suffix:"yrs", step:1},
-  {key:"targetLivingCost", label:"Target living cost (excl. housing)", prefix:"£", suffix:"/yr", step:500}
+  {key:"targetLivingCost", label:"Target living cost (excl. housing)", prefix:"£", suffix:"/yr", step:500},
+  {key:"contingencyReserveRent", label:"Contingency reserve — renting", prefix:"£", suffix:null, step:500},
+  {key:"contingencyReserveBuy", label:"Contingency reserve — owning (repairs)", prefix:"£", suffix:null, step:500}
 ];
 
 function buildFieldHtml(f, value, idPrefix){
@@ -2463,6 +2517,9 @@ function buildAtRetirementHtml(settings, scenarioResult, retireAge){
   var total = guaranteed + estimated;
   var nwRetire = toDisplay(b.netWorthAtRetirement, retireAge, settings, mode);
   var nwHorizon = toDisplay(b.netWorthAtHorizon, HORIZON_AGE, settings, mode);
+  var reserve = toDisplay(b.contingencyReserve, retireAge, settings, mode);
+  var discretionary = toDisplay(b.discretionaryNetWorth, retireAge, settings, mode);
+  var owns = scenarioResult.purchaseAge != null;
 
   var html = '<div class="at-retirement">';
   html += '<p class="at-retirement-title">At retirement (age ' + retireAge + ')</p>';
@@ -2471,7 +2528,9 @@ function buildAtRetirementHtml(settings, scenarioResult, retireAge){
     html += '<div class="at-retirement-row"><span class="ar-dot" style="background:#B85FD9;"></span>+ Estimated — <span class="muted-inline">Defined Contribution pot(s), drawdown</span>: <strong>' + fmtGBP(estimated) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(estimated / 12) + '/mo)</span></div>';
     html += '<div class="at-retirement-row" style="border-top:1px dashed var(--border-soft);padding-top:6px;margin-top:6px;">= Total pension income: <strong>' + fmtGBP(total) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(total / 12) + '/mo)</span></div>';
   }
-  html += '<div class="at-retirement-row" style="margin-top:8px;"><span class="ar-dot" style="background:var(--accent);"></span>Net worth — <span class="muted-inline">savings, deposit pot' + (scenarioResult.purchaseAge != null ? ", home equity" : "") + ' — NOT pension, not income</span>: <strong>' + fmtGBP(nwRetire) + '</strong> <span class="muted-inline">→ ' + fmtGBP(nwHorizon) + ' at ' + HORIZON_AGE + ', assuming saving continues unchanged and none of it is spent</span></div>';
+  html += '<div class="at-retirement-row" style="margin-top:8px;"><span class="ar-dot" style="background:var(--accent);"></span>Net worth — <span class="muted-inline">savings, deposit pot' + (owns ? ", home equity" : "") + ' — NOT pension, not income</span>: <strong>' + fmtGBP(nwRetire) + '</strong> <span class="muted-inline">→ ' + fmtGBP(nwHorizon) + ' at ' + HORIZON_AGE + ', assuming saving continues unchanged and none of it is spent</span></div>';
+  html += '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--muted-2);"></span>− Contingency reserve — <span class="muted-inline">' + (owns ? "owning, held back for repairs (boiler, roof, etc.)" : "renting") + '</span>: <strong>' + fmtGBP(reserve) + '</strong></div>';
+  html += '<div class="at-retirement-row" style="border-top:1px dashed var(--border-soft);padding-top:6px;">= Discretionary net worth: <strong>' + fmtGBP(discretionary) + '</strong> <span class="muted-inline">— what\'s actually free beyond the reserve; this is also what the drawdown-income figures above are based on, not the raw total</span></div>';
   html += '</div>';
   return html;
 }
@@ -2578,19 +2637,21 @@ function renderScenarioList(){
           ? ("age " + sc.triggerAge + (v.shortfall ? " (shortfall)" : ""))
           : (v.purchaseAge != null ? ("age " + v.purchaseAge) : "never");
         var gapText = (v.gapReal >= 0 ? "+" : "−") + fmtGBP(Math.abs(v.gapReal)) + "/yr";
+        var nwText = fmtGBP(toDisplay(v.netWorthAtRetirement, retireAgeForCard, settings, state.displayMode));
         return '<tr' + (i === 0 ? ' class="current-row"' : '') + '>' +
           '<td class="name-cell">' + escHtml(r.label) + '</td>' +
           '<td>£' + Math.round(r.deposit) + '</td>' +
           '<td>£' + Math.round(r.savings) + '</td>' +
           '<td>' + ageText + '</td>' +
           '<td>' + gapText + '</td>' +
+          '<td>' + nwText + '</td>' +
           '</tr>';
       }).join("");
       var hypNote = isHypothetical
         ? ('<p style="margin:6px 0 0;font-size:11.5px;color:var(--accent);">Modelling £' + Math.round(modeledExtra) + '/mo — £' + Math.round(modeledExtra - unallocated) + '/mo more than your real £' + Math.round(unallocated) + '/mo unallocated. Hypothetical until it actually exists.</p>')
         : "";
       allocationTableHtml = '<div class="allocation-wrap"><div class="table-scroll"><table class="stats"><thead><tr>' +
-        '<th>Allocation</th><th>Deposit £/mo</th><th>Savings £/mo</th><th>Buys at</th><th>Retirement (real)</th>' +
+        '<th>Allocation</th><th>Deposit £/mo</th><th>Savings £/mo</th><th>Buys at</th><th>Retirement (real)</th><th>Net worth at retirement</th>' +
         '</tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' + hypNote + '</div>';
     } else {
       allocationTableHtml = '<div class="allocation-wrap"><p style="margin:6px 0 0;font-size:12.5px;color:var(--muted-2);">No extra to model — check the "Extra to model" field above, or the "Cash flow & saving" panel: either everything is already allocated, or outgoings currently exceed what\'s coming in.</p></div>';
@@ -2950,9 +3011,19 @@ function renderRetirementSecurity(){
 
     if (idx === 0){ baselineGap = gapReal; baselineResult = s; }
 
+    var housingQualifier;
+    var stillRentingAtRetire = s.purchaseAge == null || s.purchaseAge > retireAge;
+    if (stillRentingAtRetire){
+      housingQualifier = "rent, still inflating";
+    } else if (s.mortgageClearAge != null && s.mortgageClearAge <= retireAge){
+      housingQualifier = "mortgage cleared";
+    } else {
+      housingQualifier = "mortgage still active" + (s.mortgageClearAge != null ? (", clears age " + s.mortgageClearAge) : "");
+    }
+
     rows += "<tr>";
     rows += '<td class="name-cell">' + escHtml(s.name) + "</td>";
-    rows += "<td>" + fmtGBP(gap.housingReal) + "/yr</td>";
+    rows += "<td>" + fmtGBP(gap.housingReal) + "/yr <span class=\"muted-inline\">(" + housingQualifier + ")</span></td>";
     rows += "<td>" + fmtGBP(gap.neededReal) + "/yr</td>";
     rows += "<td>" + fmtGBP(gap.availableReal) + "/yr</td>";
     rows += "<td>" + pill + "</td>";
@@ -3914,6 +3985,7 @@ window.__horizonTestHooks = {
   outgoingAmount: outgoingAmount,
   outgoingFrequency: outgoingFrequency,
   outgoingMonthlyEquivalent: outgoingMonthlyEquivalent,
+  contingencyReserveAtAge: contingencyReserveAtAge,
   computeCashFlow: computeCashFlow,
   _setStateForTest: function(s){ state = s; }
 };
