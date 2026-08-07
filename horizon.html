@@ -372,6 +372,14 @@
     border:1px solid var(--danger-soft);background:var(--danger-soft);
     border-radius:20px;padding:2px 8px;
   }
+  .rank-badge{
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    border:1px solid var(--border);border-radius:20px;padding:2px 9px;
+    white-space:nowrap;flex:none;
+  }
+  .rank-badge.rank-1{
+    color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft);font-weight:600;
+  }
   .scenario-actions{display:flex;gap:4px;flex:none;}
 
   /* ---------- Allocation scenarios table (attaches below a scenario card) ---------- */
@@ -524,7 +532,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v1.19</span></h1>
+      <h1>Horizon <span class="version-badge">v1.20</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -910,7 +918,7 @@
         <input type="text" id="io-label" placeholder="e.g. Salary, Groceries">
       </div>
       <div class="field has-prefix">
-        <label for="io-amount">Monthly amount</label>
+        <label for="io-amount" id="io-amount-label">Monthly amount</label>
         <div class="unit-wrap"><span class="prefix">£</span><input type="number" id="io-amount" min="0" step="10"></div>
       </div>
     </div>
@@ -933,6 +941,13 @@
         <option>Debt/finance</option>
         <option>Other</option>
       </select>
+    </div>
+    <div class="field" id="io-frequency-field" style="margin-top:4px;display:none;">
+      <label>How often?</label>
+      <div class="radio-row">
+        <div class="radio-opt" id="io-freq-monthly" data-freq="monthly">Monthly — bills, groceries</div>
+        <div class="radio-opt" id="io-freq-annual" data-freq="annual">Annual — holidays, one big yearly cost</div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="ghost" id="btn-io-cancel">Cancel</button>
@@ -1024,6 +1039,29 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v1.20 (2026-08-07) — Three follow-ups to the v1.19 at-retirement
+     breakdown, plus annual expenses:
+     1. Labels clarified — "Guaranteed" now explicitly says "Defined
+        Benefit + State Pension" and "Estimated" says "Defined
+        Contribution pot(s), drawdown", since the previous wording was
+        genuinely ambiguous about which pension types fed which figure.
+        New "= Total pension income" line (guaranteed+estimated summed)
+        — shown alongside the components, not instead of them.
+     2. Scenario ranking: every scenario (baseline included) is now
+        ranked by retirement-security margin (guaranteed+estimated
+        income plus savings drawdown, minus housing and target living
+        cost, in today's money) — reusing the same question the
+        Retirement tab already answers, deliberately not net worth
+        alone, since the biggest pot with a retirement income shortfall
+        isn't actually the safer plan. #1 gets a gold badge; every
+        card shows its rank and margin so the ranking is explainable,
+        not a black box.
+     3. Outgoing items can now be Monthly or Annual (holidays, one big
+        yearly cost) — new amount/frequency fields, backward-compatible
+        with existing monthlyAmount-only records via outgoingAmount()/
+        outgoingFrequency()/outgoingMonthlyEquivalent() helpers, the
+        single place that distinction gets resolved for every consumer
+        (cash flow, card display, On Budget import).
    v1.19 (2026-08-07) — HZN-001: "guaranteed income in retirement vs
      pot of money or net worth" — three figures that were getting
      blurred together are now shown as three separate, colour-coded
@@ -1344,7 +1382,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "1.19";
+var VERSION = "1.20";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -1434,22 +1472,27 @@ function defaultState(){
         deleted: false
       },
       outgoing_example_groceries: {
-        data: { label: "Groceries", category: "Groceries", monthlyAmount: 500 },
+        data: { label: "Groceries", category: "Groceries", amount: 500, frequency: "monthly" },
         updatedAt: now,
         deleted: false
       },
       outgoing_example_utilities: {
-        data: { label: "Utilities", category: "Utilities", monthlyAmount: 300 },
+        data: { label: "Utilities", category: "Utilities", amount: 300, frequency: "monthly" },
         updatedAt: now,
         deleted: false
       },
       outgoing_example_transport: {
-        data: { label: "Transport", category: "Transport", monthlyAmount: 300 },
+        data: { label: "Transport", category: "Transport", amount: 300, frequency: "monthly" },
         updatedAt: now,
         deleted: false
       },
       outgoing_example_other: {
-        data: { label: "Subscriptions & other", category: "Other", monthlyAmount: 400 },
+        data: { label: "Subscriptions & other", category: "Other", amount: 400, frequency: "monthly" },
+        updatedAt: now,
+        deleted: false
+      },
+      outgoing_example_holidays: {
+        data: { label: "Holidays", category: "Other", amount: 2000, frequency: "annual" },
         updatedAt: now,
         deleted: false
       }
@@ -1479,7 +1522,7 @@ function migrateIncomeOutgoingsIfNeeded(parsedState){
     }
   }
   if (!hasOutgoingItems && num(h.monthlyOutgoings, 0) > 0){
-    parsedState.records["outgoing_" + uid()] = {data: {label: "Outgoings (migrated)", category: "Other", monthlyAmount: h.monthlyOutgoings}, updatedAt: now, deleted: false};
+    parsedState.records["outgoing_" + uid()] = {data: {label: "Outgoings (migrated)", category: "Other", amount: h.monthlyOutgoings, frequency: "monthly"}, updatedAt: now, deleted: false};
   }
   return parsedState;
 }
@@ -2236,6 +2279,23 @@ function renderRentForm(){ renderFieldGroup(RENT_FIELDS, "rent-grid", "rent-"); 
 function renderSavingsForm(){ renderFieldGroup(SAVINGS_FIELDS, "savings-grid", "sv-"); }
 function renderDepositForm(){ renderFieldGroup(DEPOSIT_FIELDS, "deposit-grid", "d-"); }
 
+// Outgoing items can now be monthly OR annual (holidays, one big yearly
+// cost, etc.) — these three helpers are the only place that distinction
+// gets resolved, so every consumer (cash flow, card display, import)
+// reads it the same way. Backward-compatible: records saved before this
+// existed only had monthlyAmount, implicitly monthly — outgoingAmount()
+// falls back to that field when the newer `amount` isn't present.
+function outgoingAmount(item){
+  return (item.amount != null) ? item.amount : num(item.monthlyAmount, 0);
+}
+function outgoingFrequency(item){
+  return item.frequency || "monthly";
+}
+function outgoingMonthlyEquivalent(item){
+  var amt = outgoingAmount(item);
+  return outgoingFrequency(item) === "annual" ? amt / 12 : amt;
+}
+
 // Pure — no DOM. Income − outgoings − rent = what's actually left to
 // allocate each month, checked against monthlySavings + monthlyDepositSavings
 // so the two fields aren't just independently-typed numbers with no link
@@ -2244,7 +2304,7 @@ function renderDepositForm(){ renderFieldGroup(DEPOSIT_FIELDS, "deposit-grid", "
 function computeCashFlow(household, incomeItems, outgoingItems){
   var h = household;
   var incomeMonthly = (incomeItems || []).reduce(function(sum, item){ return sum + num(item.monthlyAmount, 0); }, 0);
-  var outgoings = (outgoingItems || []).reduce(function(sum, item){ return sum + num(item.monthlyAmount, 0); }, 0);
+  var outgoings = (outgoingItems || []).reduce(function(sum, item){ return sum + outgoingMonthlyEquivalent(item); }, 0);
   var rent = num(h.currentRent, 0);
   var remaining = incomeMonthly - outgoings - rent;
   var toSavings = num(h.monthlySavings, 0);
@@ -2297,10 +2357,14 @@ function renderIncomeOutgoingsList(){
   var outgoingHtml = outgoingItems.length === 0
     ? '<p class="panel-sub" style="margin:4px 0 0;">No outgoings added yet.</p>'
     : outgoingItems.map(function(item){
+        var freq = outgoingFrequency(item);
+        var amountText = freq === "annual"
+          ? ("£" + Math.round(outgoingAmount(item)) + "/yr (£" + Math.round(outgoingMonthlyEquivalent(item)) + "/mo)")
+          : ("£" + Math.round(outgoingAmount(item)) + "/mo");
         return '<div class="scenario-card">' +
           '<div class="info"><span class="swatch" style="background:' + BUY_COLORS[0] + '"></span>' +
           '<span class="name">' + escHtml(item.label) + '</span>' +
-          '<span class="meta">' + escHtml(item.category || "Other") + ' · £' + Math.round(num(item.monthlyAmount,0)) + '/mo</span></div>' +
+          '<span class="meta">' + escHtml(item.category || "Other") + ' · ' + amountText + '</span></div>' +
           '<div class="scenario-actions">' +
           '<button class="small ghost" data-io-edit="' + item.recordKey + '" data-io-type="outgoing">Edit</button>' +
           '<button class="small danger-text" data-io-delete="' + item.recordKey + '">Delete</button>' +
@@ -2396,16 +2460,18 @@ function buildAtRetirementHtml(settings, scenarioResult, retireAge){
   var mode = state.displayMode;
   var guaranteed = toDisplay(b.guaranteedAnnual, retireAge, settings, mode);
   var estimated = toDisplay(b.estimatedAnnual, retireAge, settings, mode);
+  var total = guaranteed + estimated;
   var nwRetire = toDisplay(b.netWorthAtRetirement, retireAge, settings, mode);
   var nwHorizon = toDisplay(b.netWorthAtHorizon, HORIZON_AGE, settings, mode);
 
   var html = '<div class="at-retirement">';
   html += '<p class="at-retirement-title">At retirement (age ' + retireAge + ')</p>';
-  html += '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--teal);"></span>Guaranteed income: <strong>' + fmtGBP(guaranteed) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(guaranteed / 12) + '/mo)</span></div>';
+  html += '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--teal);"></span>Guaranteed — <span class="muted-inline">Defined Benefit + State Pension</span>: <strong>' + fmtGBP(guaranteed) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(guaranteed / 12) + '/mo)</span></div>';
   if (estimated > 1){
-    html += '<div class="at-retirement-row"><span class="ar-dot" style="background:#B85FD9;"></span>+ Estimated, DC 4% rule: <strong>' + fmtGBP(estimated) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(estimated / 12) + '/mo)</span></div>';
+    html += '<div class="at-retirement-row"><span class="ar-dot" style="background:#B85FD9;"></span>+ Estimated — <span class="muted-inline">Defined Contribution pot(s), drawdown</span>: <strong>' + fmtGBP(estimated) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(estimated / 12) + '/mo)</span></div>';
+    html += '<div class="at-retirement-row" style="border-top:1px dashed var(--border-soft);padding-top:6px;margin-top:6px;">= Total pension income: <strong>' + fmtGBP(total) + '/yr</strong> <span class="muted-inline">(' + fmtGBP(total / 12) + '/mo)</span></div>';
   }
-  html += '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--accent);"></span>Net worth (savings/property — not income): <strong>' + fmtGBP(nwRetire) + '</strong> <span class="muted-inline">→ ' + fmtGBP(nwHorizon) + ' at ' + HORIZON_AGE + '</span></div>';
+  html += '<div class="at-retirement-row" style="margin-top:8px;"><span class="ar-dot" style="background:var(--accent);"></span>Net worth — <span class="muted-inline">savings, deposit pot' + (scenarioResult.purchaseAge != null ? ", home equity" : "") + ' — NOT pension, not income</span>: <strong>' + fmtGBP(nwRetire) + '</strong> <span class="muted-inline">→ ' + fmtGBP(nwHorizon) + ' at ' + HORIZON_AGE + ', assuming saving continues unchanged and none of it is spent</span></div>';
   html += '</div>';
   return html;
 }
@@ -2422,6 +2488,32 @@ function renderScenarioList(){
   document.getElementById("extra-modeled").value = Math.round(modeledExtraTop);
   document.getElementById("extra-model-note").textContent = "Real unallocated: £" + Math.round(unallocatedTop) + "/mo";
 
+  // Rank every scenario (baseline included) by retirement-security margin —
+  // guaranteed+estimated income plus savings drawdown, minus housing cost,
+  // minus the target living cost, all in today's money. Chosen deliberately
+  // over ranking by net worth alone: a scenario with the biggest pot but a
+  // retirement income shortfall isn't actually the safer plan, and this
+  // reuses the same "will this actually cover a moderate life" question
+  // the Retirement tab already answers, rather than inventing a new metric.
+  var retireAgeForRank = settings.assumptions.targetRetirementAge;
+  var rankEntries = [{id: "__baseline__", gapReal: scenarioRetirementGapAtAge(settings, projectScenario(settings, {type: "baseline"}), retireAgeForRank).gapReal}];
+  scenarios.forEach(function(sc){
+    rankEntries.push({id: sc.recordKey, gapReal: scenarioRetirementGapAtAge(settings, projectScenario(settings, sc), retireAgeForRank).gapReal});
+  });
+  var rankSorted = rankEntries.slice().sort(function(a, b){ return b.gapReal - a.gapReal; });
+  var rankMap = {}, gapByRank = {};
+  rankSorted.forEach(function(e, i){ rankMap[e.id] = i + 1; gapByRank[e.id] = e.gapReal; });
+  var totalRanked = rankSorted.length;
+
+  function rankBadgeHtml(id){
+    if (totalRanked < 2) return "";
+    var rank = rankMap[id];
+    var gap = gapByRank[id];
+    var gapText = (gap >= 0 ? "+" : "−") + fmtGBP(Math.abs(gap)) + "/yr margin";
+    if (rank === 1) return '<span class="rank-badge rank-1" title="Best retirement-security margin">🏆 #1 of ' + totalRanked + ' · ' + gapText + '</span>';
+    return '<span class="rank-badge" title="Retirement-security margin">#' + rank + ' of ' + totalRanked + ' · ' + gapText + '</span>';
+  }
+
   // baseline card (always present, not editable/removable)
   var baselineResult = projectScenario(settings, {type: "baseline"});
   var retireAgeForBaseline = settings.assumptions.targetRetirementAge;
@@ -2429,6 +2521,7 @@ function renderScenarioList(){
   html += '<div class="info"><span class="swatch" style="background:' + BASELINE_COLOR + '"></span>';
   html += '<span class="name">Keep renting</span>';
   html += '<span class="meta">baseline · current rent, inflating over time</span></div>';
+  html += rankBadgeHtml("__baseline__");
   html += '<span class="badge-baseline">auto</span>';
   html += '</div>';
   html += buildAtRetirementHtml(settings, baselineResult, retireAgeForBaseline);
@@ -2510,6 +2603,7 @@ function renderScenarioList(){
     html += '<span class="meta">' + fmtGBPCompact(sc.targetHousePrice) + ' · ' + Math.round(sc.depositPercent*100) + '% deposit · ' + triggerText + '</span>';
     html += '<span class="meta" style="color:var(--accent);">' + escHtml(targetLine) + '</span>';
     html += '</div></div>';
+    html += rankBadgeHtml(sc.recordKey);
     if (result.shortfall) html += '<span class="warn">deposit shortfall</span>';
     html += '<div class="scenario-actions">';
     html += '<button class="small ghost" data-edit="' + sc.recordKey + '">Edit</button>';
@@ -3101,16 +3195,23 @@ function openIOModal(type, recordKey){
   editingIOKey = recordKey || null;
   editingIOType = type;
   var data = recordKey ? state.records[recordKey].data : (
-    type === "income" ? {label: "", owner: "Pete", monthlyAmount: 0} : {label: "", category: "Other", monthlyAmount: 0}
+    type === "income" ? {label: "", owner: "Pete", monthlyAmount: 0} : {label: "", category: "Other", amount: 0, frequency: "monthly"}
   );
   document.getElementById("io-modal-title").textContent = (recordKey ? "Edit " : "Add ") + type;
-  document.getElementById("io-modal-sub").textContent = type === "income" ? "A recurring monthly income amount." : "A recurring monthly outgoing amount.";
+  document.getElementById("io-modal-sub").textContent = type === "income" ? "A recurring monthly income amount." : "A recurring outgoing — monthly, or annual for things like holidays.";
   document.getElementById("io-label").value = data.label || "";
-  document.getElementById("io-amount").value = num(data.monthlyAmount, 0);
   document.getElementById("io-owner-field").style.display = type === "income" ? "block" : "none";
   document.getElementById("io-category-field").style.display = type === "outgoing" ? "block" : "none";
-  if (type === "income") setIOOwner(data.owner || "Pete");
-  if (type === "outgoing") document.getElementById("io-category").value = data.category || "Other";
+  document.getElementById("io-frequency-field").style.display = type === "outgoing" ? "block" : "none";
+  if (type === "income"){
+    document.getElementById("io-amount-label").textContent = "Monthly amount";
+    document.getElementById("io-amount").value = num(data.monthlyAmount, 0);
+    setIOOwner(data.owner || "Pete");
+  } else {
+    document.getElementById("io-category").value = data.category || "Other";
+    setIOFrequency(outgoingFrequency(data));
+    document.getElementById("io-amount").value = outgoingAmount(data);
+  }
   document.getElementById("io-modal-overlay").classList.add("open");
   document.getElementById("io-label").focus();
 }
@@ -3126,6 +3227,13 @@ function setIOOwner(owner){
   document.getElementById("io-owner-lex").classList.toggle("active", owner === "Lex");
 }
 
+function setIOFrequency(freq){
+  document.getElementById("io-modal-overlay").dataset.frequency = freq;
+  document.getElementById("io-freq-monthly").classList.toggle("active", freq === "monthly");
+  document.getElementById("io-freq-annual").classList.toggle("active", freq === "annual");
+  document.getElementById("io-amount-label").textContent = freq === "annual" ? "Annual amount" : "Monthly amount";
+}
+
 function saveIOFromModal(){
   var label = document.getElementById("io-label").value.trim();
   if (!label) label = editingIOType === "income" ? "Untitled income" : "Untitled outgoing";
@@ -3133,7 +3241,7 @@ function saveIOFromModal(){
 
   var data = editingIOType === "income"
     ? {label: label, owner: document.getElementById("io-modal-overlay").dataset.owner || "Pete", monthlyAmount: amount}
-    : {label: label, category: document.getElementById("io-category").value, monthlyAmount: amount};
+    : {label: label, category: document.getElementById("io-category").value, amount: amount, frequency: document.getElementById("io-modal-overlay").dataset.frequency || "monthly"};
 
   var prefix = editingIOType === "income" ? "income_" : "outgoing_";
   var key = editingIOKey || (prefix + uid());
@@ -3241,7 +3349,7 @@ function confirmImport(){
       state.records[key] = {data: {label: item.name, owner: "Pete", monthlyAmount: item.amount}, updatedAt: now, deleted: false};
     } else {
       var okey = "outgoing_" + uid();
-      state.records[okey] = {data: {label: item.name, category: item.category || "Other", monthlyAmount: item.amount}, updatedAt: now, deleted: false};
+      state.records[okey] = {data: {label: item.name, category: item.category || "Other", amount: item.amount, frequency: "monthly"}, updatedAt: now, deleted: false};
     }
     importedCount++;
   });
@@ -3650,6 +3758,8 @@ function init(){
   });
   document.getElementById("io-owner-pete").addEventListener("click", function(){ setIOOwner("Pete"); });
   document.getElementById("io-owner-lex").addEventListener("click", function(){ setIOOwner("Lex"); });
+  document.getElementById("io-freq-monthly").addEventListener("click", function(){ setIOFrequency("monthly"); });
+  document.getElementById("io-freq-annual").addEventListener("click", function(){ setIOFrequency("annual"); });
 
   document.getElementById("btn-import-onbudget").addEventListener("click", function(){
     document.getElementById("file-import-onbudget").click();
@@ -3801,6 +3911,9 @@ window.__horizonTestHooks = {
   softDeleteRecord: softDeleteRecord,
   simulateDrawdown: simulateDrawdown,
   computeAtRetirementBreakdown: computeAtRetirementBreakdown,
+  outgoingAmount: outgoingAmount,
+  outgoingFrequency: outgoingFrequency,
+  outgoingMonthlyEquivalent: outgoingMonthlyEquivalent,
   computeCashFlow: computeCashFlow,
   _setStateForTest: function(s){ state = s; }
 };
