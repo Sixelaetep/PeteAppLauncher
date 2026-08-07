@@ -591,7 +591,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v2.2</span></h1>
+      <h1>Horizon <span class="version-badge">v2.3</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -1136,6 +1136,21 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v2.3 (2026-08-07) — Bug fix, found while building the end-to-end user
+     guide: the "Discretionary net worth" contingency reserve was
+     showing as e.g. £8,713 for what should have been a plain £15,000.
+     contingencyReserveAtAge() was returning the raw as-entered (real,
+     today's-money) figure directly, but everywhere it's used
+     (netWorthDrawdownIncomeAtAge, computeAtRetirementBreakdown) treats
+     it as nominal — subtracting a real figure from a nominal one is a
+     unit mismatch, and toDisplay()'s real-mode deflation on the way to
+     the screen then deflated an already-real figure a second time.
+     Fixed the same way it was fixed once before in the v1.x line: the
+     function now inflates the reserve to its nominal equivalent at the
+     given age before returning, so toDisplay() correctly recovers the
+     original figure in real mode instead of double-deflating it. This
+     exact fix existed in v1.21 but wasn't present in the v2.x codebase
+     built in a different session — a real regression, not a new bug.
    v2.2 (2026-08-07) — HZN-005, all three parts complete. Part C's
      spec arrived after Parts A and B shipped (the first pass of the
      docx cut off mid-heading with no body content for Part C — flagged
@@ -1807,7 +1822,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "2.2";
+var VERSION = "2.3";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -2852,9 +2867,23 @@ function housingCostAtAge(scenarioResult, settings, age){
 // boiler, a roof, a car, the stuff that isn't a monthly bill but isn't
 // optional either. Owning carries this risk; renting mostly doesn't
 // (a landlord's problem), hence two separately editable figures.
+// contingencyReserveRent/Buy are entered in TODAY'S money, same as
+// targetLivingCost — "a boiler costs about £X now." Everything else this
+// gets combined with (net worth, drawdown income) is nominal, so this
+// returns the reserve inflated to its nominal equivalent AT the given
+// age, not the raw assumption value — subtracting a real figure from a
+// nominal one directly is a unit-mismatch bug, and toDisplay() deflating
+// it a second time on the way to the screen makes an already-correct
+// £15,000 display as something like £8,700. Callers wanting the raw
+// as-entered figure should read settings.assumptions.contingencyReserveRent/
+// Buy directly, not this function.
 function contingencyReserveAtAge(scenarioResult, age, settings){
   var owns = scenarioResult.purchaseAge != null && scenarioResult.purchaseAge <= age;
-  return owns ? num(settings.assumptions.contingencyReserveBuy, 15000) : num(settings.assumptions.contingencyReserveRent, 5000);
+  var realReserve = owns ? num(settings.assumptions.contingencyReserveBuy, 15000) : num(settings.assumptions.contingencyReserveRent, 5000);
+  var referenceAge = num(settings.household.referenceAge, 45);
+  var years = Math.max(0, age - referenceAge);
+  var inflation = num(settings.assumptions.inflationRate, 0.025);
+  return realReserve * Math.pow(1 + inflation, years);
 }
 
 // Your accumulated savings are a retirement income source too, not just
