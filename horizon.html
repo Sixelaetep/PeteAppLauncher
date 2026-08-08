@@ -841,7 +841,8 @@
   <div class="tab-section" data-tab-section="mortgage" hidden>
   <section class="panel" id="panel-mortgage" style="margin-top:18px;">
     <div class="panel-head"><h2 class="panel-title">Mortgage options</h2></div>
-    <p class="panel-sub">Compare mortgage products — property value, deposit %, rate, term, overpayment. Select one to drive Scenario 2 ("Buy when ready") throughout the Overview and Survivability tabs: its deposit + costs set the Growth Pot target, and its rate/term/overpayment set the mortgage payment once bought.</p>
+    <p class="panel-sub">Compare mortgage products — property value, deposit %, rate, term, overpayment. Select one to drive Scenario 2 ("Buy when ready") throughout the Overview and Survivability tabs: its deposit + costs set the Growth Pot target, and its rate/term/overpayment set the mortgage payment once bought. "Growth Pot ready" below is computed from the same engine as the Overview's "Earliest age to buy" — they will always agree (HZN-602).</p>
+    <p class="assumptions-note">Big one-off costs (car, tech, trips) are assumed to start after purchase in the Buy scenario, so they don't delay your deposit (HZN-601). See each option's card below for how much this affected it, and the one-off cost list in Setup for which items are deferred.</p>
     <div class="scenario-list" id="mortgage-list"></div>
     <div class="btn-row"><button class="primary" id="btn-add-mortgage">+ Add mortgage option</button></div>
   </section>
@@ -1370,6 +1371,47 @@
    simulateDrawdownFlat — byte-identical maths), birth-date-driven age,
    nominal/real toggle, cloud sync, On Budget import.
 
+   v3.5 (2026-08-08) changelog — Horizon Development Brief v3.5
+   (DepositSaveFix.md, HZN-601..603): fixes a ~20-year disagreement
+   between the Mortgage tab's "Growth Pot ready" preview and the
+   Overview's "Earliest age to buy" on Pete's real data (51 vs 71).
+   - HZN-601 (Pete, 08/08/2026 decision): in the BUY scenario, universal
+     (scope:"all") Growth-Pot one-off costs (car, tech, milestone trips,
+     furniture) are now SKIPPED entirely for every age before the house
+     is bought — they don't fire, and don't stack/back-pay at purchase
+     either (design option (a), Pete's recommended/confirmed choice).
+     Rationale: nobody replaces the car or funds a milestone trip
+     mid-way through scraping a deposit together. The Rent scenario is
+     completely unchanged — universal one-offs still fire from
+     referenceAge exactly as before. Emergency-Pot and Pension-Pot
+     one-offs are unaffected in BOTH scenarios. Reuses the same gating
+     pattern as the existing ownedOnly-scope deferral, applied inline in
+     simulateHousehold's per-age cost-application step rather than
+     touching the one-off records themselves (no data migration).
+     simulateHousehold now also returns deferredGrowthOneoffCount /
+     deferredGrowthOneoffTotalNominal, so the UI can show what was
+     actually suppressed for a given run.
+   - HZN-602 (Preferred option, per the brief): the Mortgage tab's
+     "Growth Pot ready" figure is no longer computed by the old
+     lightweight preview (computeMortgageOptionSummary — flat £/mo
+     estimate, NO one-off costs, no declining/growing surplus — the
+     exact source of the age-51-vs-71 disagreement). A new
+     computeMortgageOptionSummaryReal runs the REAL simulateHousehold
+     Buy engine, forcing each mortgage option as if selected in turn, so
+     every option on the Mortgage tab is now computed with the exact
+     same purchase-trigger logic the Overview tab uses — the two tabs
+     agree by construction, not by coincidence. The old
+     computeMortgageOptionSummary function is left in place (still
+     exported via window.__horizonTestHooks) but is no longer called by
+     renderMortgageList.
+   - HZN-603: two small transparency additions surfacing the HZN-601
+     deferral assumption where it matters: (1) a one-line note on each
+     Mortgage tab card, only shown when at least one occurrence was
+     actually deferred, stating the count and total £ deferred and to
+     what age; (2) a "deferred until owned in Buy" tag on universal
+     Growth-Pot one-off items in the Setup tab's one-off cost list, so
+     the behaviour is visible right where these items are edited.
+
    v3.4 (2026-08-08) changelog — Horizon Shortfall & Life Insurance Brief
    (HZN-501..504): quantifies the survivor gap in money terms and shows
    concrete ways to close it, on the Survivability tab.
@@ -1573,7 +1615,7 @@
      default for DB, 0% for State Pension). oneoff_* fromPot "deposit"→
      "growth", "savings"→"emergency".
    ========================================================= */
-var VERSION = "3.4";
+var VERSION = "3.5";
 var STORAGE_KEY = "horizon_state_v1"; // unchanged — carries Pete's real saved data forward through migration
 
 /* ---------- generic helpers (unchanged from v2.4) ---------- */
@@ -1699,6 +1741,17 @@ function simulateGrowthPotReadyAge(settings, household, totalNeeded){
   }
   return null;
 }
+// v3.5 — HZN-602: kept ONLY as the fallback used by simulateGrowthPotReadyAge
+// callers elsewhere (none currently) and for reference — the Mortgage tab
+// itself now calls computeMortgageOptionSummaryReal below, which drives the
+// "Growth Pot ready" figure from the REAL simulateHousehold engine instead
+// of this lightweight flat-contribution/no-one-offs estimate. That
+// lightweight estimate is exactly what caused the ~20-year disagreement
+// between the Mortgage tab ("age 51") and the Overview ("age 71") on
+// Pete's real data — see DepositSaveFix.md. Left in place, unchanged,
+// rather than deleted, since it's still exported via
+// window.__horizonTestHooks and may be useful for a rough what-if outside
+// the full engine.
 function computeMortgageOptionSummary(settings, m, household, contribAnnualEstimate){
   var propertyValue = num(m.propertyValue, 0);
   var depositNeeded = propertyValue * num(m.depositPercent, 0);
@@ -1732,6 +1785,48 @@ function computeMortgageOptionSummary(settings, m, household, contribAnnualEstim
     payoffAgeStandard: (readyAge != null && payoffYearsStandard != null) ? readyAge + payoffYearsStandard : null,
     payoffYearsOverpay: payoffYearsOverpay,
     payoffAgeOverpay: (readyAge != null && payoffYearsOverpay != null) ? readyAge + payoffYearsOverpay : null
+  };
+}
+// v3.5 — HZN-602 (Preferred option per the brief): drives the Mortgage
+// tab's "Growth Pot ready" and "Paid off" figures from the REAL
+// simulateHousehold Buy run — using THIS specific mortgage record forced
+// as if it were selected, regardless of what's actually chosen — so every
+// option on the Mortgage tab can be compared like-for-like using the
+// EXACT SAME purchase-trigger logic the Overview tab uses (full cash
+// flow, HZN-601's pre-purchase one-off deferral, declining/growing
+// surplus as income and outgoings inflate, etc). This makes the two tabs
+// agree BY CONSTRUCTION — they are now, literally, the same calculation.
+function computeMortgageOptionSummaryReal(settings, m, household, incomeItems, outgoingItems, pensions, oneoffItems, drawdownMethod){
+  var propertyValue = num(m.propertyValue, 0);
+  var depositNeeded = propertyValue * num(m.depositPercent, 0);
+  var totalCosts = num(m.solicitorFees, 0) + num(m.surveyFees, 0) + num(m.otherCosts, 0);
+  var totalNeeded = depositNeeded + totalCosts;
+  var mortgageAmount = Math.max(0, propertyValue - depositNeeded);
+  var rate = num(m.mortgageRate, 0);
+  var term = num(m.termYears, 25);
+  var overpaymentMonthly = num(m.overpaymentMonthly, 0);
+  var standardPayment = computeMortgagePayment(mortgageAmount, rate, term);
+  var payoffYearsStandard = simulateMortgagePayoffYears(mortgageAmount, rate, term, 0);
+  var payoffYearsOverpay = overpaymentMonthly > 0 ? simulateMortgagePayoffYears(mortgageAmount, rate, term, overpaymentMonthly * 12) : null;
+
+  var probeAssumptions = Object.assign({}, settings.assumptions, {selectedMortgageId: m.recordKey});
+  var probeSettings = {household: household, assumptions: probeAssumptions};
+  var res = simulateHousehold(probeSettings, household, incomeItems, outgoingItems, pensions, oneoffItems, [m], {
+    scenarioType: "buy", drawdownMethod: drawdownMethod || "incomeNeeds", deathPhase: "both", deathPersonAge: null
+  });
+  var readyAge = res.purchaseAge;
+  return {
+    depositNeeded: depositNeeded, totalCosts: totalCosts, totalNeeded: totalNeeded,
+    mortgageAmount: mortgageAmount, standardPayment: standardPayment,
+    depositReadyAge: readyAge,
+    payoffYearsStandard: payoffYearsStandard,
+    payoffAgeStandard: (readyAge != null && payoffYearsStandard != null) ? readyAge + payoffYearsStandard : null,
+    payoffYearsOverpay: payoffYearsOverpay,
+    payoffAgeOverpay: (readyAge != null && payoffYearsOverpay != null) ? readyAge + payoffYearsOverpay : null,
+    // HZN-603 — surfaced back to the UI so the deferral assumption behind
+    // this figure is visible, not silently baked in.
+    deferredOneoffCount: res.deferredGrowthOneoffCount || 0,
+    deferredOneoffTotalNominal: res.deferredGrowthOneoffTotalNominal || 0
   };
 }
 
@@ -2213,6 +2308,13 @@ function simulateHousehold(settings, household, incomeItems, outgoingItems, pens
   var totalGrowthContributionsNominal = 0; // HZN-201 — cumulative nominal £ actually added to the Growth Pot pre-retirement
   var bought = false, purchaseAge = null, propertyValue = 0, mortgageBalance = 0, mortgagePayment = 0, mortgageClearAge = null;
   var shortfallAtPurchase = false;
+  // v3.5 — HZN-601/603: tracks how many universal Growth-Pot one-off
+  // occurrences were suppressed pre-purchase (Buy scenario only), and
+  // their combined nominal £ value — surfaced back to the UI so the
+  // deferral assumption is visible (HZN-603), not a silent behind-the-
+  // scenes change.
+  var deferredGrowthOneoffTotalNominal = 0;
+  var deferredGrowthOneoffCount = 0;
   // HZN-401 — "at retirement" balance-sheet snapshot, captured BEFORE that
   // year's drawdown/surplus-sweep is applied (see capture point inside the
   // loop below). Fixes a loop-ordering bug where Method A's forced-4%
@@ -2297,7 +2399,30 @@ function simulateHousehold(settings, household, incomeItems, outgoingItems, pens
 
     var boughtBeforeThisAge = bought;
     if (emergencySchedule[age]) emergencyPot = Math.max(0, emergencyPot - emergencySchedule[age]);
-    if (growthSchedule[age]) growthPot = Math.max(0, growthPot - growthSchedule[age]);
+    // v3.5 — HZN-601 (Pete, 08/08/2026 decision): in the BUY scenario,
+    // universal (scope:"all") Growth-Pot one-off costs are suppressed
+    // entirely — not deferred, SKIPPED per the brief's recommended
+    // design (a) — for every age before the house is actually bought.
+    // Rationale: nobody replaces the car or funds a milestone trip
+    // mid-way through scraping a deposit together; those discretionary
+    // lumps realistically start once the purchase is done. This mirrors
+    // the existing ownedOnly-scope gating (applyOwnedOnlyCosts below)
+    // but applies it to universal Growth-Pot items specifically while a
+    // purchase is still pending, rather than changing the records
+    // themselves. The RENT scenario is completely unaffected — universal
+    // one-offs still fire from referenceAge exactly as before (renting
+    // still means paying for cars etc). Emergency-Pot and Pension-Pot
+    // one-offs are also unaffected in both scenarios — this is
+    // specifically about not letting discretionary Growth-Pot lumps
+    // delay the deposit.
+    if (growthSchedule[age]){
+      if (isBuy && !bought){
+        deferredGrowthOneoffTotalNominal += growthSchedule[age];
+        deferredGrowthOneoffCount++;
+      } else {
+        growthPot = Math.max(0, growthPot - growthSchedule[age]);
+      }
+    }
     if (boughtBeforeThisAge) applyOwnedOnlyCosts(age, purchaseAge);
 
     var housingCostNominal;
@@ -2518,7 +2643,8 @@ function simulateHousehold(settings, household, incomeItems, outgoingItems, pens
     retireAge: retireAge, mortgageSelected: !!mortgageTerms,
     atRetirementSnapshot: atRetirementSnapshot, // HZN-401/402 — method-independent "at retirement" balance sheet
     dcDrawdownYear1: atRetirementSnapshot ? atRetirementSnapshot.dcDrawdownYear1 : null, // HZN-403
-    equityReleaseApplied: equityReleased, equityReleasedAmountNominal: equityReleasedAmountNominal, equityReleaseAppliedAge: equityReleaseAppliedAge // HZN-408
+    equityReleaseApplied: equityReleased, equityReleasedAmountNominal: equityReleasedAmountNominal, equityReleaseAppliedAge: equityReleaseAppliedAge, // HZN-408
+    deferredGrowthOneoffCount: deferredGrowthOneoffCount, deferredGrowthOneoffTotalNominal: deferredGrowthOneoffTotalNominal // HZN-601/603
   };
 }
 
@@ -3745,9 +3871,17 @@ function renderOneoffList(){
       var timingText = (item.timing && item.timing.everyNYears) ? ("every " + item.timing.everyNYears + " yrs from age " + num(item.timing.startAge, referenceAge)) : ("at age " + (item.timing && item.timing.atAge));
       var scope = oneoffScope(item);
       var scopeStyle = scope === "ownedOnly" ? "color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft);" : "color:var(--teal);border-color:var(--teal-soft);background:var(--teal-soft);";
+      // v3.5 — HZN-603: a small tag on universal (scope:"all") Growth-Pot
+      // items — the only ones affected by HZN-601's Buy-scenario deferral
+      // — so the behaviour is visible right where these items are edited,
+      // not just implied by the Mortgage tab's note.
+      var deferTag = (scope === "all" && item.fromPot === "growth")
+        ? '<span style="font-family:var(--mono);font-size:10.5px;border-radius:20px;padding:2px 8px;color:var(--muted);border:1px solid var(--border);background:var(--panel-alt-2);" title="In the Buy scenario, this cost is suppressed until the house is bought (HZN-601) — it still fires normally in the Rent scenario.">deferred until owned in Buy</span>'
+        : '';
       return '<div class="scenario-card"><div class="info"><span class="swatch" style="background:' + BUY_COLORS[1] + '"></span>' +
         '<span class="name">' + escHtml(item.label) + '</span><span class="meta">' + fmtGBP(num(item.amount,0)) + " today's £ · " + timingText + ' · from ' + (ONEOFF_POT_LABEL[item.fromPot] || item.fromPot) + '</span></div>' +
         '<span style="font-family:var(--mono);font-size:11px;border-radius:20px;padding:2px 8px;' + scopeStyle + '">' + ONEOFF_SCOPE_LABEL[scope] + '</span>' +
+        deferTag +
         '<div class="scenario-actions"><button class="small ghost" data-oneoff-edit="' + item.recordKey + '">Edit</button><button class="small danger-text" data-oneoff-delete="' + item.recordKey + '">Delete</button></div></div>';
     }).join("");
   }
@@ -3791,16 +3925,28 @@ function renderMortgageList(){
   var options = activeMortgageOptions();
   if (options.length === 0){ list.innerHTML = '<p class="panel-sub" style="margin:4px 0 0;">No mortgage options added yet.</p>'; return; }
   var selectedId = settings.assumptions.selectedMortgageId;
-  var cf = computeCashFlow(settings.household, activeIncomeItems(), activeOutgoingItems());
-  var contribAnnualEstimate = Math.max(0, cf.toGrowthMonthly) * 12;
+  // v3.5 — HZN-602: figures below now come from computeMortgageOptionSummaryReal
+  // (the real simulateHousehold Buy engine, forcing EACH option as if
+  // selected in turn) instead of the old flat-contribution/no-one-offs
+  // preview — so this tab's "Growth Pot ready" and the Overview's
+  // "Earliest age to buy" are now, by construction, the same calculation
+  // and can never silently disagree the way they used to (DepositSaveFix.md).
+  var incomeItems = activeIncomeItems(), outgoingItems = activeOutgoingItems(), pensions = activePensions(), oneoffItems = activeOneoffItems();
+  var method = state.drawdownMethod;
   list.innerHTML = options.map(function(m){
-    var s = computeMortgageOptionSummary(settings, m, settings.household, contribAnnualEstimate);
+    var s = computeMortgageOptionSummaryReal(settings, m, settings.household, incomeItems, outgoingItems, pensions, oneoffItems, method);
     var isSelected = selectedId === m.recordKey;
-    var depositReadyText = s.depositReadyAge != null ? ("age " + s.depositReadyAge) : "not within 60 years at current saving rate";
+    var depositReadyText = s.depositReadyAge != null ? ("age " + s.depositReadyAge) : "not within the plan at current saving rate";
     var payoffText = s.depositReadyAge == null ? "can't calculate — deposit is never ready at the current saving rate" :
       (s.payoffYearsStandard == null ? "does not clear — payment doesn't cover interest at this rate/term" : ("age " + s.payoffAgeStandard + " (" + s.payoffYearsStandard + " yrs after deposit ready)"));
     var selectedBadge = isSelected ? '<span class="rank-badge rank-1">✓ Selected — drives Scenario 2</span>' : "";
     var selectBtn = '<button class="small ' + (isSelected ? "ghost" : "primary") + '" data-select-mortgage="' + m.recordKey + '">' + (isSelected ? "Unselect" : "Select for Scenario 2") + '</button>';
+    // HZN-603 — one-line transparency note on the deferral assumption
+    // actually in force for THIS option, only shown when it has a real
+    // effect (i.e. at least one occurrence was actually deferred).
+    var deferralNote = s.deferredOneoffCount > 0
+      ? '<p class="assumptions-note" style="margin-top:8px;">Big one-off costs (car, tech, trips) are assumed to start after purchase in the Buy scenario, so they don\u2019t delay this deposit (HZN-601) — ' + s.deferredOneoffCount + ' occurrence(s) worth ' + fmtGBP(s.deferredOneoffTotalNominal) + ' deferred to after age ' + (s.depositReadyAge != null ? s.depositReadyAge : "purchase") + '.</p>'
+      : '';
     return '<div class="scenario-card" style="flex-direction:column;align-items:stretch;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
         '<div class="info"><span class="swatch" style="background:' + BUY_COLORS[0] + '"></span><span class="name">' + escHtml(m.name) + '</span>' +
@@ -3810,9 +3956,9 @@ function renderMortgageList(){
       '<div class="at-retirement" style="margin-top:10px;">' +
         '<div class="at-retirement-row">Deposit needed: <strong>' + fmtGBP(s.depositNeeded) + '</strong> <span class="muted-inline">+ £' + Math.round(s.totalCosts) + ' costs = ' + fmtGBP(s.totalNeeded) + ' total</span></div>' +
         '<div class="at-retirement-row">Mortgage amount: <strong>' + fmtGBP(s.mortgageAmount) + '</strong> <span class="muted-inline">standard payment £' + Math.round(s.standardPayment/12) + '/mo</span></div>' +
-        '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--accent);"></span>Growth Pot ready (preview): <strong>' + depositReadyText + '</strong></div>' +
+        '<div class="at-retirement-row"><span class="ar-dot" style="background:var(--accent);"></span>Growth Pot ready: <strong>' + depositReadyText + '</strong> <span class="muted-inline">(same figure as Overview\u2019s "Earliest age to buy" — HZN-602)</span></div>' +
         '<div class="at-retirement-row"><span class="ar-dot" style="background:#B85FD9;"></span>Paid off (standard): <strong>' + payoffText + '</strong></div>' +
-      '</div><div class="btn-row" style="margin-top:10px;">' + selectBtn + '</div></div>';
+      '</div>' + deferralNote + '<div class="btn-row" style="margin-top:10px;">' + selectBtn + '</div></div>';
   }).join("");
   list.querySelectorAll("[data-mortgage-edit]").forEach(function(btn){ btn.addEventListener("click", function(){ openMortgageModal(btn.getAttribute("data-mortgage-edit")); }); });
   list.querySelectorAll("[data-mortgage-delete]").forEach(function(btn){
@@ -5522,7 +5668,7 @@ window.__horizonTestHooks = {
   computeSurvivabilityThreshold: computeSurvivabilityThreshold, computeDeathBufferToday: computeDeathBufferToday,
   compareSnapshots: compareSnapshots, buildComparableSnapshot: buildComparableSnapshot, snapshotCurrentState: snapshotCurrentState,
   guaranteedIncomeAtAge: guaranteedIncomeAtAge, projectPensionStart: projectPensionStart,
-  resolveMortgageTerms: resolveMortgageTerms, computeMortgageOptionSummary: computeMortgageOptionSummary,
+  resolveMortgageTerms: resolveMortgageTerms, computeMortgageOptionSummary: computeMortgageOptionSummary, computeMortgageOptionSummaryReal: computeMortgageOptionSummaryReal,
   toDisplay: toDisplay, fmtGBP: fmtGBP,
   // v3.3 — HZN-406/407
   computeSurvivorDrivers: computeSurvivorDrivers, computeThresholdSensitivity: computeThresholdSensitivity,
