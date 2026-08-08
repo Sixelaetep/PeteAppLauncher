@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.31</title>
+<title>Reading Tracker v3.32</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -569,6 +569,20 @@
   .book-log-row input[type=number]:focus { border-color:var(--accent); }
   .book-log-row .btn { align-self:stretch; }
   .book-log-hint { font-size:11px; margin-top:4px; min-height:16px; }
+  /* v3.32 (MR-017): Pages/% log-mode toggle, shared style for book cards and Now Reading card */
+  .log-mode-toggle { display:flex; gap:4px; margin-bottom:6px; }
+  /* v3.32 (HZN-004): 3-way tracking mode toggle */
+  .tracking-mode-toggle { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
+  .tm-btn { font-size:12px; font-weight:600; padding:8px 6px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--muted); cursor:pointer; font-family:'Inter',sans-serif; text-align:center; }
+  .tm-btn.active { background:rgba(200,169,110,.15); border-color:var(--accent); color:var(--accent); }
+  .pace-info-box { border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.7; color:var(--text); }
+  .pace-info-box .pace-row { display:flex; justify-content:space-between; gap:8px; }
+  .pace-info-box .pace-label { color:var(--muted); }
+  .pace-info-box .pace-delta-ahead { color:var(--success); font-weight:600; }
+  .pace-info-box .pace-delta-behind { color:var(--danger); font-weight:600; }
+  .pace-info-box .pace-delta-ontrack { color:var(--muted); }
+  .log-mode-btn { flex:0 0 auto; font-size:10px; font-weight:600; padding:3px 10px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--muted); cursor:pointer; font-family:'Inter',sans-serif; }
+  .log-mode-btn.active { background:rgba(200,169,110,.15); border-color:var(--accent); color:var(--accent); }
   /* Log button on Now Reading card */
   .nr-log-row { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:stretch; margin-top:12px; }
   .nr-log-row input[type=number] { background:var(--bg); border:1px solid rgba(200,169,110,.4); border-radius:8px; color:var(--text); font-family:'Inter',sans-serif; font-size:16px; font-weight:600; padding:9px 12px; outline:none; width:100%; transition:border-color .2s; color-scheme:dark; -moz-appearance:textfield; appearance:textfield; }
@@ -696,7 +710,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.31</span></div>
+    <div class="rt-logo">My Reading <span>v3.32</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -954,6 +968,10 @@
     </div>
     <div class="nr-counts" id="nrCounts"></div>
     <div class="nr-done-banner" id="nrDoneBanner">✓ Today's reading done — great work!</div>
+    <div class="log-mode-toggle" id="nrLogModeToggle" style="display:none">
+      <button class="log-mode-btn" id="nrLogModeBtnPages" onclick="setBookLogMode(state.activeBookId,'pages')">Pages</button>
+      <button class="log-mode-btn" id="nrLogModeBtnPercent" onclick="setBookLogMode(state.activeBookId,'percent')">%</button>
+    </div>
     <div class="nr-log-row" id="nrLogRow" style="display:none">
       <input type="number" id="nrLogPage" placeholder="Page I reached" min="1"
         oninput="onNrLogInput()">
@@ -1043,9 +1061,17 @@
       <div class="card-title">Tracker Settings</div>
       <div class="settings-name field mb-16">
         <label>Tracker name</label>
-        <input type="text" id="settingsName" placeholder="e.g. Five Books North" oninput="onNameChange()">
+        <input type="text" id="settingsName" placeholder="e.g. Five Books North" oninput="onNameChange()" onblur="onNameBlur()">
       </div>
-      <div class="form-2col mb-12">
+      <div class="field mb-12">
+        <label>Tracking mode</label>
+        <div class="tracking-mode-toggle">
+          <button class="tm-btn" id="tmBtnNone" onclick="setTrackingMode('none')">No target</button>
+          <button class="tm-btn" id="tmBtnDate" onclick="setTrackingMode('date')">Target date</button>
+          <button class="tm-btn" id="tmBtnPace" onclick="setTrackingMode('pace')">Reading pace</button>
+        </div>
+      </div>
+      <div id="tmDateFields" class="form-2col mb-12" style="display:none">
         <div class="field">
           <label>Target finish date</label>
           <input type="date" id="settingsTarget" onchange="onTargetChange()">
@@ -1054,6 +1080,13 @@
           <label>Target (UK format)</label>
           <div id="settingsTargetUK" style="padding:9px 11px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)"></div>
         </div>
+      </div>
+      <div id="tmPaceFields" class="mb-12" style="display:none">
+        <div class="field mb-12">
+          <label id="tmPaceLabel">Expected pages per day</label>
+          <input type="number" id="settingsPace" min="0.1" step="0.1" placeholder="e.g. 20" onchange="onPaceChange()">
+        </div>
+        <div id="tmPaceInfo" class="pace-info-box"></div>
       </div>
       <div id="settingsTargetInfo" style="font-size:12px;color:var(--muted);margin-bottom:4px"></div>
       <div class="divider"></div>
@@ -1392,6 +1425,50 @@ function renderRtSyncLog() {
     : '<div class="log-entry info">No sync activity yet</div>';
 }
 
+// v3.32 (MR-017, HZN-004): percent-based logging + a third tracking mode.
+// Note: HZN-004 carries Horizon's issue prefix but its content (page
+// targets, reading pace) is unambiguously this app — treated as a
+// misfiled ticket ID, not a wrong-app request; worth correcting in
+// Test & Issues.
+//  - MR-017: books can now be logged by % read instead of an absolute
+//    page number (book.logMode, per-book and persisted — a Kindle book
+//    stays in % mode across every future log). Percent is converted to
+//    an equivalent page number right at the input boundary
+//    (logFromBook/logFromNowReading); logPages() itself and everything
+//    downstream is completely unchanged, per the brief's "not a full
+//    rewrite" instruction. Toggle available on both the Now Reading card
+//    and each book's own log section.
+//  - HZN-004: a third tracker mode alongside the existing "no target"
+//    and "date-driven" — trackingMode 'pace': state an expected pages/
+//    chapters-per-day rate, and the app locks an "original" projected
+//    finish date from today's remaining pages (per the brief: "at start
+//    note the original date calculated"). That original is NEVER
+//    recalculated by ordinary page-logging — only an explicit pace
+//    change re-locks it, exactly like setting it fresh. Alongside it,
+//    a live "currently tracking to finish" projection uses ACTUAL
+//    average pace so far, with a days-ahead/behind delta against the
+//    locked original. Mode-switching is non-destructive (switching away
+//    from date/pace doesn't clear those fields, so switching back
+//    restores them). trackingModeOf() resolves the effective mode with
+//    full backward compatibility — existing trackers with no explicit
+//    trackingMode infer it from whether targetDate is set, unchanged
+//    from before this feature existed.
+//  - Scoping decision: pace mode gets its own display in Settings, the
+//    header subtitle, and the dashboard tracker card — it does NOT hook
+//    into the Now Reading widget's daily-requirement bar, which remains
+//    a "date mode" concept only. Pace mode's whole premise (projecting
+//    forward from actual pace) doesn't map onto "pages required today
+//    to hit a fixed deadline" the same way, and wiring a second bar
+//    variant into that widget was judged out of scope for this pass —
+//    flagged as a reasonable follow-up if wanted.
+//  - Found while building this: trackers have the exact same
+//    cross-device sync gap as MR-016's books/wishlist finding — pal-
+//    sync.js's pull() never pushes an update to a tracker that already
+//    exists in the cloud. Added pushTrackerNow(), wired into name/
+//    target-date/active-flag edits (pre-existing) and the new pace-mode
+//    setters, plus extended flattenForSync()'s tracker field whitelist
+//    to include the new pace fields so a brand-new pace tracker doesn't
+//    lose them on its first (local-only) push.
 // v3.30 (MR-016): the actual, confirmed root cause — found by reading the
 // real pal-sync.js source Pete shared, not by guessing further.
 //  - Bug in v3.29's OWN diagnostics: "0 wishlist rows seen in cloud fetch"
@@ -1901,6 +1978,12 @@ function flattenForSync() {
     trackers.push({
       id: t.id, trackerName: t.trackerName, targetDate: t.targetDate,
       type: t.type, active: t.active, activeBookId: t.activeBookId,
+      // v3.32 (HZN-004): the 3-way tracking mode and its pace-mode fields
+      // — omitting these here would mean a brand-new pace-mode tracker,
+      // pushed via pull()'s "local-only record" step, reaches the cloud
+      // missing exactly the fields that make it a pace tracker.
+      trackingMode: t.trackingMode, expectedPace: t.expectedPace,
+      paceSetDate: t.paceSetDate, originalProjectedFinish: t.originalProjectedFinish,
       updatedAt: t.updatedAt
     });
     (t.books || []).forEach(b => books.push(Object.assign({}, b, { trackerId: t.id })));
@@ -2394,6 +2477,28 @@ function daysLeft(target) {
   if (!target) return null;
   return Math.max(1, Math.ceil((new Date(target + "T00:00:00") - new Date(todayISO() + "T00:00:00")) / 86400000));
 }
+
+// v3.32 (HZN-004): resolves a tracker's effective tracking mode.
+// Backward compatible — trackers created before this feature have no
+// explicit trackingMode field, so it's inferred from whether a
+// targetDate is set, exactly matching the old implicit 2-mode behaviour.
+function trackingModeOf(t) {
+  if (!t) return "none";
+  if (t.trackingMode) return t.trackingMode;
+  return t.targetDate ? "date" : "none";
+}
+
+// Given pages remaining and an expected pace (pages/chapters per day),
+// project a finish date forward from fromDateISO. Returns null if the
+// pace is invalid or there's nothing left to read.
+function projectedFinishDate(remainingPages, pace, fromDateISO) {
+  if (!pace || pace <= 0 || remainingPages <= 0) return null;
+  const days = Math.ceil(remainingPages / pace);
+  const d = new Date(fromDateISO + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // ── Page / progress calculations ──────────────────────────────────────
 // Guard against undefined/null/NaN pageTo values (e.g. from old exports)
 function safePage(val) {
@@ -2458,11 +2563,6 @@ function render() {
   const tr  = totalRead();
   const rem = Math.max(0, tp - tr);
   const pct = tp > 0 ? Math.min(100, Math.round((tr/tp)*100)) : 0;
-  const dl  = daysLeft(state.targetDate);   // null if no target date
-  const req = (dl && rem > 0) ? Math.floor(rem/dl) : 0;
-  const uniqueDays = [...new Set(state.entries.map(e => e.date))].length;
-  const avg = uniqueDays > 0 ? Math.round(tr / uniqueDays) : 0;
-  const done = tp > 0 && tr >= tp;
 
   // Tracker type helpers
   const ct      = appState.trackers.find(t => t.id === appState.activeTrackerId);
@@ -2472,10 +2572,32 @@ function render() {
   const unitCP  = unitCap(ct, true); // "Pages" or "Chapters"
   const unitCS  = unitCap(ct, false);// "Page" or "Chapter"
 
+  // v3.32 (HZN-004): the daily-requirement bar is a "date" mode concept —
+  // gated by trackingModeOf() rather than just state.targetDate's
+  // truthiness, since switching tracking mode is deliberately
+  // non-destructive (a pace-mode tracker can still have a leftover
+  // targetDate from when it was previously in date mode, and shouldn't
+  // be treated as date-driven because of it).
+  const _mode = trackingModeOf(ct);
+  const dl  = _mode === "date" ? daysLeft(state.targetDate) : null;   // null if not in date mode
+  const req = (dl && rem > 0) ? Math.floor(rem/dl) : 0;
+  const uniqueDays = [...new Set(state.entries.map(e => e.date))].length;
+  const avg = uniqueDays > 0 ? Math.round(tr / uniqueDays) : 0;
+  const done = tp > 0 && tr >= tp;
+
   // Header
   document.getElementById("headerDate").textContent = ukNumeric(todayISO());
   document.getElementById("headerName").textContent = state.trackerName || "Reading Tracker";
-  const targetStr = state.targetDate ? `target ${ukLong(state.targetDate)}` : "no target date";
+  // v3.32 (HZN-004): pace mode shows its own projected-finish summary in
+  // the header subtitle, in place of "target [date]" / "no target date".
+  let targetStr = "no target date";
+  if (_mode === "date" && state.targetDate) {
+    targetStr = `target ${ukLong(state.targetDate)}`;
+  } else if (_mode === "pace" && ct && ct.expectedPace) {
+    const avgPace = uniqueDays > 0 ? tr / uniqueDays : 0;
+    const projected = avgPace > 0 ? projectedFinishDate(rem, avgPace, todayISO()) : null;
+    targetStr = projected ? `projected finish ${ukLong(projected)}` : `${ct.expectedPace} ${unitP}/day planned`;
+  }
   document.getElementById("headerSub").textContent  =
     `${tp.toLocaleString()} ${unitP} · ${state.books.length} book${state.books.length!==1?"s":""} · ${targetStr}`;
   document.title = state.trackerName || "Reading Tracker";
@@ -2649,9 +2771,15 @@ function renderBooks() {
         Log ${_bUnitP}
       </button>
       <div class="collapsible-body" id="log-${b.id}">
+        <div class="log-mode-toggle">
+          <button class="log-mode-btn ${b.logMode!=='percent'?'active':''}" onclick="setBookLogMode('${b.id}','pages')">${_bUnitC}</button>
+          <button class="log-mode-btn ${b.logMode==='percent'?'active':''}" onclick="setBookLogMode('${b.id}','percent')">%</button>
+        </div>
         <div class="book-log-row">
-          <input type="number" id="book-log-page-${b.id}" placeholder="${_bUnitC.slice(0,-1)} I reached (e.g. ${Math.min(b.pages, currentPage + 20)})"
-            min="${currentPage + 1}" max="${b.pages}"
+          <input type="number" id="book-log-page-${b.id}"
+            placeholder="${b.logMode==='percent' ? '% read (e.g. 45)' : _bUnitC.slice(0,-1) + ' I reached (e.g. ' + Math.min(b.pages, currentPage + 20) + ')'}"
+            min="${b.logMode==='percent' ? 0 : currentPage + 1}" max="${b.logMode==='percent' ? 100 : b.pages}"
+            step="${b.logMode==='percent' ? '0.1' : '1'}"
             oninput="onBookLogInput('${b.id}')">
           <button class="btn btn-primary btn-sm" onclick="logFromBook('${b.id}')">Log</button>
         </div>
@@ -2758,6 +2886,24 @@ function renderNowReading(reqDaily) {
   const nrLbl = document.getElementById("nrLabel");
   if (nrLbl) nrLbl.textContent = _nrAud ? "Now Listening" : "Now Reading";
 
+  // v3.32 (MR-017): sync the Pages/% toggle and the log input's attributes
+  // to this book's logMode — done once here, before either branch below,
+  // so it's consistent regardless of whether this book has a daily target.
+  const nrIsPct = book.logMode === "percent";
+  const modeToggle = document.getElementById("nrLogModeToggle");
+  const modeBtnPages = document.getElementById("nrLogModeBtnPages");
+  const modeBtnPercent = document.getElementById("nrLogModeBtnPercent");
+  if (modeToggle) modeToggle.style.display = "flex";
+  if (modeBtnPages) { modeBtnPages.textContent = _nrUnitC + "s"; modeBtnPages.classList.toggle("active", !nrIsPct); }
+  if (modeBtnPercent) modeBtnPercent.classList.toggle("active", nrIsPct);
+  const nrLogInpEarly = document.getElementById("nrLogPage");
+  if (nrLogInpEarly) {
+    nrLogInpEarly.placeholder = nrIsPct ? "% read (e.g. 45)" : `${_nrUnitC} I reached`;
+    nrLogInpEarly.min = nrIsPct ? 0 : 1;
+    nrLogInpEarly.max = nrIsPct ? 100 : book.pages;
+    nrLogInpEarly.step = nrIsPct ? "0.1" : "1";
+  }
+
   // Helper: set a segment's width (as % of book total pages)
   const toW = p => (Math.max(0, p) / book.pages * 100).toFixed(2) + "%";
 
@@ -2782,8 +2928,6 @@ function renderNowReading(reqDaily) {
     document.getElementById("nrCounts").innerHTML      = "";
     const logRow2 = document.getElementById("nrLogRow");
     if (logRow2) logRow2.style.display = "grid";
-    const logInp = document.getElementById("nrLogPage");
-    if (logInp) logInp.placeholder = `${_nrUnitC} I reached`;
     return;
   }
 
@@ -3102,15 +3246,65 @@ function renderSettings() {
   document.getElementById("settingsName").value = state.trackerName;
   document.getElementById("settingsTarget").value = state.targetDate || "";
   document.getElementById("settingsTargetUK").textContent = state.targetDate ? ukNumeric(state.targetDate) : "No target set";
+  const ct4   = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  const _sUnitP = unit(ct4, true);
+  const mode = trackingModeOf(ct4);
+
+  // v3.32 (HZN-004): 3-way mode toggle — show/hide the relevant field
+  // block and highlight the active button.
+  const btnNone = document.getElementById("tmBtnNone");
+  const btnDate = document.getElementById("tmBtnDate");
+  const btnPace = document.getElementById("tmBtnPace");
+  if (btnNone) btnNone.classList.toggle("active", mode === "none");
+  if (btnDate) btnDate.classList.toggle("active", mode === "date");
+  if (btnPace) btnPace.classList.toggle("active", mode === "pace");
+  const dateFields = document.getElementById("tmDateFields");
+  const paceFields = document.getElementById("tmPaceFields");
+  if (dateFields) dateFields.style.display = mode === "date" ? "grid" : "none";
+  if (paceFields) paceFields.style.display = mode === "pace" ? "block" : "none";
+
   const dl   = daysLeft(state.targetDate);
   const rem  = Math.max(0, totalPages() - totalRead());
   const req  = (dl && rem > 0) ? Math.floor(rem/dl) : 0;
   const done = totalPages() > 0 && totalRead() >= totalPages();
-  const ct4   = appState.trackers.find(t => t.id === appState.activeTrackerId);
-  const _sUnitP = unit(ct4, true);
-  document.getElementById("settingsTargetInfo").textContent = !state.targetDate
-    ? "No target date — reading at your own pace"
+  document.getElementById("settingsTargetInfo").textContent = mode !== "date"
+    ? ""
     : `${dl} day${dl!==1?"s":""} until ${ukLong(state.targetDate)} · ${done ? "all done!" : req > 0 ? `${req} ${_sUnitP} per day required` : ""}`;
+
+  // v3.32 (HZN-004): pace mode — expected pace input, plus the locked
+  // "original" projection vs. a live "current" projection from ACTUAL
+  // average pace so far (same avg calc render() already uses), with a
+  // days-ahead/behind delta between the two.
+  if (mode === "pace" && ct4) {
+    const paceLbl = document.getElementById("tmPaceLabel");
+    if (paceLbl) paceLbl.textContent = `Expected ${_sUnitP} per day`;
+    const paceInp = document.getElementById("settingsPace");
+    if (paceInp) paceInp.value = ct4.expectedPace || "";
+
+    const tr = totalRead(), tp = totalPages();
+    const remaining = Math.max(0, tp - tr);
+    const uniqueDays = [...new Set(state.entries.map(e => e.date))].length;
+    const avgPace = uniqueDays > 0 ? tr / uniqueDays : 0;
+    const currentProjected = avgPace > 0 ? projectedFinishDate(remaining, avgPace, todayISO()) : null;
+
+    let deltaHTML = "";
+    if (currentProjected && ct4.originalProjectedFinish) {
+      const deltaDays = Math.round((new Date(currentProjected) - new Date(ct4.originalProjectedFinish)) / 86400000);
+      if (deltaDays < 0)      deltaHTML = `<div class="pace-row"><span class="pace-label">vs. your plan</span><span class="pace-delta-ahead">${Math.abs(deltaDays)} day${Math.abs(deltaDays)!==1?"s":""} ahead</span></div>`;
+      else if (deltaDays > 0) deltaHTML = `<div class="pace-row"><span class="pace-label">vs. your plan</span><span class="pace-delta-behind">${deltaDays} day${deltaDays!==1?"s":""} behind</span></div>`;
+      else                    deltaHTML = `<div class="pace-row"><span class="pace-label">vs. your plan</span><span class="pace-delta-ontrack">Right on plan</span></div>`;
+    }
+
+    const infoEl = document.getElementById("tmPaceInfo");
+    if (infoEl) {
+      infoEl.innerHTML = !ct4.expectedPace
+        ? `Set your expected ${_sUnitP} per day above to see a projected finish date.`
+        : `<div class="pace-row"><span class="pace-label">Original estimate${ct4.paceSetDate ? " (set " + ukNumeric(ct4.paceSetDate) + ")" : ""}</span><span>${ct4.originalProjectedFinish ? ukNumeric(ct4.originalProjectedFinish) : "—"}</span></div>` +
+          `<div class="pace-row"><span class="pace-label">Currently tracking to finish</span><span>${currentProjected ? ukNumeric(currentProjected) : "No reading logged yet"}</span></div>` +
+          deltaHTML;
+    }
+  }
+
   const activeCb = document.getElementById("settingsActive");
   if (activeCb) {
     const ct = appState.trackers.find(t => t.id === appState.activeTrackerId);
@@ -3171,10 +3365,23 @@ function logPages(bookId, pageTo, clearInputId) {
 }
 
 // Log from individual book card
+// v3.32 (MR-017): shared page↔percent helper — used by all four log
+// functions below so the % handling lives in one place rather than
+// four times over.
+function pctOf(page, totalPages) {
+  return totalPages > 0 ? Math.round((page / totalPages) * 1000) / 10 : 0; // 1 decimal place
+}
+
 function logFromBook(bookId) {
   const inputEl = document.getElementById("book-log-page-" + bookId);
-  const pageTo  = parseInt(inputEl ? inputEl.value : "", 10);
-  if (isNaN(pageTo) || pageTo <= 0) { showToast("Enter a page number"); return; }
+  const book    = state.books ? state.books.find(b => b.id === bookId) : null;
+  const isPct   = !!(book && book.logMode === "percent");
+  const raw     = parseFloat(inputEl ? inputEl.value : "");
+  if (isNaN(raw) || raw <= 0 || (isPct && raw > 100)) { showToast(isPct ? "Enter a valid percentage" : "Enter a page number"); return; }
+  // v3.32 (MR-017): percent is only ever converted to an equivalent page
+  // number here, right at the input boundary — logPages() itself and
+  // everything downstream of it is completely unchanged.
+  const pageTo = isPct ? Math.round((raw / 100) * (book ? book.pages : 0)) : Math.round(raw);
   logPages(bookId, pageTo, "book-log-page-" + bookId);
   // Collapse the log section after logging
   setTimeout(() => {
@@ -3197,28 +3404,36 @@ function onBookLogInput(bookId) {
   const _uPlur = unit(_ct, true);    // "pages" / "chapters"
   const current = highestPageFor(bookId);
   const book    = state.books ? state.books.find(b => b.id === bookId) : null;
+  const isPct   = !!(book && book.logMode === "percent");
   const val     = inputEl.value;
   if (!val) {
     hintEl.className = "book-log-hint field-hint";
-    hintEl.textContent = current > 0 ? `Currently on ${_uSing} ${current}` : "Not started yet";
+    hintEl.textContent = current > 0 ? `Currently on ${_uSing} ${current}${isPct && book ? ` (${pctOf(current, book.pages)}%)` : ""}` : "Not started yet";
     return;
   }
-  const pageTo = parseInt(val, 10);
-  if (isNaN(pageTo) || pageTo <= 0)        { hintEl.className = "book-log-hint field-hint error";    hintEl.textContent = `Enter a valid ${_uSing} number`; return; }
-  if (pageTo <= current)                    { hintEl.className = "book-log-hint field-hint warn";     hintEl.textContent = `Must be higher than current ${_uSing} (${current})`; return; }
-  if (book && pageTo > book.pages)          { hintEl.className = "book-log-hint field-hint warn";     hintEl.textContent = `Book only has ${book.pages} ${_uPlur}`; return; }
+  const raw = parseFloat(val);
+  if (isPct && (isNaN(raw) || raw < 0 || raw > 100)) { hintEl.className = "book-log-hint field-hint error"; hintEl.textContent = "Enter a percentage between 0 and 100"; return; }
+  const pageTo = isPct ? Math.round((raw / 100) * (book ? book.pages : 0)) : parseInt(val, 10);
+  if (isNaN(pageTo) || pageTo <= 0)        { hintEl.className = "book-log-hint field-hint error";    hintEl.textContent = isPct ? "Enter a valid percentage" : `Enter a valid ${_uSing} number`; return; }
+  if (pageTo <= current)                    { hintEl.className = "book-log-hint field-hint warn";     hintEl.textContent = isPct && book ? `Must be higher than ${pctOf(current, book.pages)}%` : `Must be higher than current ${_uSing} (${current})`; return; }
+  if (book && pageTo > book.pages)          { hintEl.className = "book-log-hint field-hint warn";     hintEl.textContent = isPct ? "Can't exceed 100%" : `Book only has ${book.pages} ${_uPlur}`; return; }
   const diff = pageTo - current;
   hintEl.className = "book-log-hint field-hint positive";
-  hintEl.textContent = `+${diff} ${diff !== 1 ? _uPlur : _uSing} read`;
+  hintEl.textContent = isPct && book
+    ? `${pctOf(pageTo, book.pages)}% · +${diff} ${diff !== 1 ? _uPlur : _uSing} read`
+    : `+${diff} ${diff !== 1 ? _uPlur : _uSing} read`;
 }
 
 // Log from Now Reading card
 function logFromNowReading() {
   if (!state.activeBookId) return;
   const inputEl = document.getElementById("nrLogPage");
-  const pageTo  = parseInt(inputEl ? inputEl.value : "", 10);
+  const book    = state.books ? state.books.find(b => b.id === state.activeBookId) : null;
+  const isPct   = !!(book && book.logMode === "percent");
   const _nrCt2  = appState.trackers.find(t => t.id === appState.activeTrackerId);
-  if (isNaN(pageTo) || pageTo <= 0) { showToast(`Enter a ${unit(_nrCt2, false)} number`); return; }
+  const raw     = parseFloat(inputEl ? inputEl.value : "");
+  if (isNaN(raw) || raw <= 0 || (isPct && raw > 100)) { showToast(isPct ? "Enter a valid percentage" : `Enter a ${unit(_nrCt2, false)} number`); return; }
+  const pageTo = isPct ? Math.round((raw / 100) * (book ? book.pages : 0)) : Math.round(raw);
   logPages(state.activeBookId, pageTo, "nrLogPage");
   const hintEl = document.getElementById("nrLogHint");
   if (hintEl) { hintEl.textContent = ""; hintEl.className = "nr-log-hint field-hint"; }
@@ -3234,15 +3449,20 @@ function onNrLogInput() {
   const _uPlur  = unit(_nrCt2, true);
   const current = highestPageFor(state.activeBookId);
   const book    = state.books ? state.books.find(b => b.id === state.activeBookId) : null;
+  const isPct   = !!(book && book.logMode === "percent");
   const val     = inputEl.value;
-  if (!val) { hintEl.className = "nr-log-hint field-hint"; hintEl.textContent = current > 0 ? `Currently on ${_uSing} ${current}` : ""; return; }
-  const pageTo = parseInt(val, 10);
-  if (isNaN(pageTo) || pageTo <= 0)        { hintEl.className = "nr-log-hint field-hint error"; hintEl.textContent = `Enter a valid ${_uSing} number`; return; }
-  if (pageTo <= current)                   { hintEl.className = "nr-log-hint field-hint warn";  hintEl.textContent = `Must be higher than ${_uSing} ${current}`; return; }
-  if (book && pageTo > book.pages)         { hintEl.className = "nr-log-hint field-hint warn";  hintEl.textContent = `Book only has ${book.pages} ${_uPlur}`; return; }
+  if (!val) { hintEl.className = "nr-log-hint field-hint"; hintEl.textContent = current > 0 ? `Currently on ${_uSing} ${current}${isPct && book ? ` (${pctOf(current, book.pages)}%)` : ""}` : ""; return; }
+  const raw = parseFloat(val);
+  if (isPct && (isNaN(raw) || raw < 0 || raw > 100)) { hintEl.className = "nr-log-hint field-hint error"; hintEl.textContent = "Enter a percentage between 0 and 100"; return; }
+  const pageTo = isPct ? Math.round((raw / 100) * (book ? book.pages : 0)) : parseInt(val, 10);
+  if (isNaN(pageTo) || pageTo <= 0)        { hintEl.className = "nr-log-hint field-hint error"; hintEl.textContent = isPct ? "Enter a valid percentage" : `Enter a valid ${_uSing} number`; return; }
+  if (pageTo <= current)                   { hintEl.className = "nr-log-hint field-hint warn";  hintEl.textContent = isPct && book ? `Must be higher than ${pctOf(current, book.pages)}%` : `Must be higher than ${_uSing} ${current}`; return; }
+  if (book && pageTo > book.pages)         { hintEl.className = "nr-log-hint field-hint warn";  hintEl.textContent = isPct ? "Can't exceed 100%" : `Book only has ${book.pages} ${_uPlur}`; return; }
   const diff = pageTo - current;
   hintEl.className = "nr-log-hint field-hint positive";
-  hintEl.textContent = `+${diff} ${diff !== 1 ? _uPlur : _uSing} read`;
+  hintEl.textContent = isPct && book
+    ? `${pctOf(pageTo, book.pages)}% · +${diff} ${diff !== 1 ? _uPlur : _uSing} read`
+    : `+${diff} ${diff !== 1 ? _uPlur : _uSing} read`;
 }
 
 
@@ -3513,17 +3733,64 @@ function onNameChange() {
   render();
 }
 
+function onNameBlur() {
+  const ct = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  if (ct) pushTrackerNow(ct); // v3.32 (HZN-004): direct push, see function comment
+}
+
 function onActiveChange() {
   const ct = appState.trackers.find(t => t.id === appState.activeTrackerId);
   if (!ct) return;
   ct.active = document.getElementById("settingsActive").checked;
+  touch(ct);
   save();
+  pushTrackerNow(ct); // v3.32 (HZN-004): direct push, see function comment
   showToast(ct.active ? "Tracker set to active" : "Tracker set to inactive");
 }
 
 function onTargetChange() {
   state.targetDate = document.getElementById("settingsTarget").value;
+  const ct = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  if (ct) pushTrackerNow(ct); // v3.32 (HZN-004): direct push, see function comment
   render(); // render() already persists (see save() call at its end)
+}
+
+// v3.32 (HZN-004): switch between the 3 tracking modes. Deliberately
+// non-destructive — switching away from 'date' or 'pace' doesn't clear
+// targetDate/expectedPace, so switching back later restores them rather
+// than starting over. trackingModeOf() is what actually decides which
+// mode is "in effect" everywhere else in the app.
+function setTrackingMode(mode) {
+  const ct = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  if (!ct) return;
+  ct.trackingMode = mode;
+  touch(ct);
+  save();
+  pushTrackerNow(ct);
+  renderSettings();
+  render();
+}
+
+// v3.32 (HZN-004): setting or changing the expected pace is a deliberate
+// re-statement of intent — per the brief ("at start note the original
+// date calculated"), this locks a fresh "original" projected finish date
+// from TODAY's remaining pages, exactly like setting it for the first
+// time. Ongoing page-logging never touches originalProjectedFinish or
+// paceSetDate again after this — only another explicit pace change does.
+function onPaceChange() {
+  const ct = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  if (!ct) return;
+  const val = parseFloat(document.getElementById("settingsPace").value);
+  if (isNaN(val) || val <= 0) { showToast("Enter a valid pace"); return; }
+  ct.expectedPace = val;
+  ct.paceSetDate = todayISO();
+  const rem = Math.max(0, totalPages() - totalRead());
+  ct.originalProjectedFinish = projectedFinishDate(rem, val, todayISO());
+  touch(ct);
+  save();
+  pushTrackerNow(ct);
+  renderSettings();
+  render();
 }
 
 function clearSessions() {
@@ -4277,7 +4544,18 @@ function renderDashboard() {
       return s + (b.manualComplete && logged < b.pages ? b.pages : logged);
     }, 0);
     const pct  = tp > 0 ? Math.min(100, Math.round((tr/tp)*100)) : 0;
-    const dl   = t.targetDate ? Math.max(1, Math.ceil((new Date(t.targetDate + "T00:00:00") - new Date(todayISO() + "T00:00:00")) / 86400000)) : null;
+    // v3.32 (HZN-004): gate by trackingModeOf(t), not just targetDate's
+    // truthiness — mode-switching is non-destructive, so a pace-mode
+    // tracker can have a leftover targetDate from before without being
+    // treated as date-driven here.
+    const _tMode = trackingModeOf(t);
+    const dl   = _tMode === "date" && t.targetDate ? Math.max(1, Math.ceil((new Date(t.targetDate + "T00:00:00") - new Date(todayISO() + "T00:00:00")) / 86400000)) : null;
+    let paceProjected = null;
+    if (_tMode === "pace" && t.expectedPace) {
+      const tUniqueDays = [...new Set(t.entries.map(e => e.date))].length;
+      const tAvgPace = tUniqueDays > 0 ? tr / tUniqueDays : 0;
+      paceProjected = tAvgPace > 0 ? projectedFinishDate(Math.max(0, tp - tr), tAvgPace, todayISO()) : null;
+    }
     // A tracker is complete when every book individually is finished
     const allBooksComplete = t.books.length > 0 && t.books.every(b => {
       const logged = t.entries.filter(e=>e.bookId===b.id)
@@ -4308,11 +4586,11 @@ function renderDashboard() {
       <div class="tc-top">
         <div>
           <div class="tc-name">${esc(t.trackerName)}</div>
-          <div class="tc-meta">${t.books.length} ${tUnit}${t.books.length!==1?"s":""} · ${bComplete} complete${t.targetDate ? " · target " + ukNumeric(t.targetDate) : ""}${t.active===false?" · inactive":""}</div>
+          <div class="tc-meta">${t.books.length} ${tUnit}${t.books.length!==1?"s":""} · ${bComplete} complete${_tMode==="date" && t.targetDate ? " · target " + ukNumeric(t.targetDate) : ""}${_tMode==="pace" && t.expectedPace ? " · " + t.expectedPace + " " + unit(t,true) + "/day" : ""}${t.active===false?" · inactive":""}</div>
         </div>
         <div class="tc-right">
           <div class="tc-pct">${done ? "✓" : pct + "%"}</div>
-          <div class="tc-days">${done ? "All done!" : dl ? dl + " days left" : "No target set"}</div>
+          <div class="tc-days">${done ? "All done!" : dl ? dl + " days left" : paceProjected ? "Finish " + ukNumeric(paceProjected) : "No target set"}</div>
         </div>
       </div>
       <div class="tc-bar"><div class="tc-fill" style="width:${pct}%"></div></div>`;
@@ -4790,6 +5068,51 @@ async function pushBookNow(book) {
   } catch(e) {
     logSyncDiag(`Direct push FAILED for book "${book.title}": ${e && e.message ? e.message : 'unknown error'}`, "err");
   }
+}
+
+// v3.32 (HZN-004): same direct-push pattern, for tracker-level fields
+// (name, target date, active flag, tracking mode, pace). Found while
+// building the new pace-tracking mode: onNameChange/onTargetChange/
+// onActiveChange had the exact same gap as MR-016's books/wishlist
+// finding — pal-sync.js's pull() never pushes an update to a tracker
+// record that already exists in the cloud, only brand-new ones. Every
+// existing tracker predates this fix, so a tracker-level edit was
+// silently never reaching other devices. Wired into the pace-mode
+// setters below plus the pre-existing name/target/active handlers.
+async function pushTrackerNow(tracker) {
+  if (!window.PalSync.hasSession()) { logSyncDiag(`Skipped direct push for tracker "${tracker.trackerName}" — not signed in`, "err"); return; }
+  try {
+    await _rtTrackers.upsert(tracker.id, {
+      id: tracker.id, trackerName: tracker.trackerName, targetDate: tracker.targetDate,
+      type: tracker.type, active: tracker.active, activeBookId: tracker.activeBookId,
+      trackingMode: tracker.trackingMode, expectedPace: tracker.expectedPace,
+      paceSetDate: tracker.paceSetDate, originalProjectedFinish: tracker.originalProjectedFinish,
+      updatedAt: tracker.updatedAt
+    });
+    logSyncDiag(`Direct push tracker "${tracker.trackerName}"`, "ok");
+  } catch(e) {
+    logSyncDiag(`Direct push FAILED for tracker "${tracker.trackerName}": ${e && e.message ? e.message : 'unknown error'}`, "err");
+  }
+}
+
+// v3.32 (MR-017): a book's preferred log-entry mode ('pages', the
+// default, or 'percent' — for e.g. Kindle books where % read is what's
+// actually shown, not a page number). Persisted per-book since it's a
+// property of how that specific book's progress is tracked, not a
+// one-off session choice — a Kindle book stays in % mode across every
+// future log until changed. onBookLogInput/logFromBook and
+// onNrLogInput/logFromNowReading read this to decide how to interpret
+// the input; the underlying page-number logic in logPages() itself is
+// completely unchanged — percent is only ever converted to an equivalent
+// page number before reaching it.
+function setBookLogMode(bookId, mode) {
+  const book = state.books.find(b => b.id === bookId);
+  if (!book || book.logMode === mode) return;
+  book.logMode = mode;
+  touch(book);
+  save();
+  pushBookNow(book);
+  render();
 }
 
 // ── Wishlist navigation ───────────────────────────────────────────────
