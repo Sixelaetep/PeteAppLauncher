@@ -597,7 +597,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v4.0</span></h1>
+      <h1>Horizon <span class="version-badge">v4.1</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -695,7 +695,8 @@
 
   <section class="panel" id="panel-buckets">
     <div class="panel-head"><h2 class="panel-title">Buckets</h2></div>
-    <p class="panel-sub">Where the surplus above actually goes. Each bucket gets its own explicit £/mo — a Holiday fund, a House/repairs fund, a Family/emergency fund, a Retirement fund. Mark each one <strong>Grows indefinitely</strong> (never spent on purpose — this funds the house deposit, then keeps compounding toward retirement) or <strong>Used regularly</strong> (a sinking fund — topped up and spent down, tracked honestly, excluded entirely from the deposit and retirement maths). Whatever's left after every bucket's own allocation sweeps automatically into the growth bucket(s) — nothing to decide each month.</p>
+    <p class="panel-sub">Where the surplus above actually goes. Each bucket gets its own explicit £/mo — a Holiday fund, a House/repairs fund, a Family/emergency fund, a Retirement fund — and that figure is exactly what happens, nothing automatic on top. Mark each one <strong>Grows indefinitely</strong> (the deposit and retirement projections are driven entirely by this bucket's own £/mo — never spent on purpose, just compounds) or <strong>Used regularly</strong> (a sinking fund — shows what your wage is going toward and what that adds up to annually, tracked honestly, but completely excluded from every deposit and retirement calculation). Anything left over after every bucket's own allocation is shown, but goes nowhere on its own — raise a bucket's allocation if you want it put to work.</p>
+
     <div id="bucket-overallocated-warning"></div>
     <div class="scenario-list" id="bucket-list"></div>
     <div class="btn-row"><button class="primary" id="btn-add-bucket">+ Add bucket</button></div>
@@ -1163,6 +1164,24 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v4.1 (2026-08-08) — Fix: growth pot was still being calculated off
+     total household income minus outgoings, with buckets acting as
+     deductions from that total rather than the growth bucket being the
+     actual, sole driver — the opposite of what buckets were supposed to
+     mean. computeBucketFlows() and projectScenario() both stripped of
+     the "leftover sweeps automatically into growth" behaviour entirely.
+     Every bucket, growth included, now gets ONLY its own explicit £/mo
+     allocation — nothing automatic on top. Confirmed with a real-data
+     test: two households with wildly different total income (£3,000/mo
+     vs £9,000/mo) but the SAME £500/mo growth-bucket allocation now
+     produce an IDENTICAL growth trajectory, since total income no
+     longer has any bearing on it at all. Unallocated leftover is still
+     shown (so it's visible, not hidden), but goes nowhere on its own —
+     raising a bucket's own allocation is now the only way to direct
+     more toward it. Bucket list in Setup now also shows each bucket's
+     annual total (£/yr) alongside its monthly figure, and the panel
+     copy throughout corrected to describe the new, fully-explicit
+     behaviour rather than the old auto-sweep.
    v4.0 (2026-08-08) — Re-scoped around a simpler mental model, based on
      Pete's own description of how he actually thinks about this (three
      kinds of money, guaranteed income vs a backup pot, mortgage-first-
@@ -1963,7 +1982,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "4.0";
+var VERSION = "4.1";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -2503,26 +2522,22 @@ function activeBuckets(){
   return out;
 }
 
-// v4.0 — HZN-701: every bucket (sinking fund or growth) carries its own
-// explicit monthlyAllocation — matches how Pete actually thinks about
-// it ("£450/mo holiday, £300/mo repairs, £600/mo retirement"), not a
-// single pot absorbing everything. Whatever's left over after every
-// bucket's own allocation (surplus − sum of all allocations) sweeps
-// automatically into the growth bucket(s) ONLY — never into sinking
-// funds, since those are deliberately bounded, budgeted amounts, not
-// "whatever's left." Split evenly if more than one growth bucket exists
-// (the common case is exactly one). A negative leftover (allocated more
-// than the actual surplus) is surfaced honestly via overAllocated,
-// rather than silently letting a bucket go negative.
+// v4.0.1 — every bucket, growth included, gets ONLY its own explicit
+// monthlyAllocation — no automatic sweep of unallocated surplus into
+// growth. The earlier version routed "whatever's left" into the growth
+// bucket automatically, which quietly contradicted the entire point of
+// buckets being explicit, budgeted amounts (matching how Pete actually
+// specifies this — "£450/mo holiday, £600/mo retirement," not "growth
+// gets whatever's left"). leftover is still surfaced (unallocated
+// surplus — money not yet assigned anywhere), but it goes nowhere on
+// its own; Pete decides where it goes by raising a bucket's own
+// allocation. A negative leftover (allocated more than the actual
+// surplus) is surfaced honestly via overAllocated.
 function computeBucketFlows(surplusMonthly, buckets){
   var totalAllocated = buckets.reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0);
   var leftover = surplusMonthly - totalAllocated;
-  var growthBuckets = buckets.filter(function(b){ return b.growIndefinitely; });
-  var leftoverShare = (leftover > 0 && growthBuckets.length) ? leftover / growthBuckets.length : 0;
   var perBucket = buckets.map(function(b){
-    var flow = num(b.monthlyAllocation, 0);
-    if (b.growIndefinitely) flow += leftoverShare;
-    return {recordKey: b.recordKey, name: b.name, monthlyFlow: flow, growIndefinitely: !!b.growIndefinitely};
+    return {recordKey: b.recordKey, name: b.name, monthlyFlow: num(b.monthlyAllocation, 0), growIndefinitely: !!b.growIndefinitely};
   });
   return {
     totalAllocated: totalAllocated,
@@ -2833,23 +2848,17 @@ function projectScenario(settings, scenarioType, oneoffItems){
   var growthPot = growthBucketsList.reduce(function(s, b){ return s + num(b.currentBalance, 0); }, 0);
   var rentAnnual = num(h.currentRent, 0) * 12;
 
-  var cf = computeCashFlow(h, activeIncomeItems(), activeOutgoingItems());
-  // Before rent/mortgage — that's subtracted per-year below, since it
-  // differs depending on whether this scenario is still renting or has
-  // bought (and a bought scenario's mortgage clears at some point too).
-  var baseSurplusAnnual = (cf.incomeMonthly - cf.outgoings) * 12;
-  // v4.0 — HZN-701: every bucket's own £/mo allocation (sinking funds
-  // AND any growth buckets' own explicit rate) is a fixed nominal
-  // figure — not inflated year to year. A deliberate v1 simplification:
-  // Pete's real numbers (holiday/repairs/emergency/retirement) are
-  // stated as plain £/mo figures, and letting them silently inflate
-  // would be a modelling choice he didn't ask for. Only the LEFTOVER
-  // after all of them (which does still grow, since it's driven by
-  // baseSurplusAnnual/housing, both of which already inflate) compounds
-  // through the growth bucket(s).
-  var totalBucketAllocationMonthly = buckets.reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0);
-  var growthOwnAllocationMonthly = growthBucketsList.reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0);
-  var growthBucketCount = growthBucketsList.length;
+  // v4.0.1 — net worth modelling now comes ONLY from the growth
+  // bucket's own explicit £/mo allocation — NOT from total household
+  // income minus outgoings. That was the bug: the growth pot was
+  // effectively absorbing "everything left over," when it should be a
+  // deliberately budgeted figure exactly like every other bucket. There
+  // is deliberately no cash-flow/surplus figure feeding growth here any
+  // more — computeCashFlow's own surplus is used elsewhere (the Setup
+  // readout, the bucket over-allocation warning) to show what's
+  // actually available to allocate, but it no longer drives this
+  // projection directly.
+  var growthContributionAnnual = growthBucketsList.reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0) * 12;
 
   var bought = false;
   var propertyValue = 0;
@@ -2994,23 +3003,18 @@ function projectScenario(settings, scenarioType, oneoffItems){
       var actualDraw = Math.min(pointDraw, Math.max(0, growthPot));
       growthPot = growthPot * (1 + a.investmentGrowthRate) - actualDraw;
     } else {
-      // v4.0 — HZN-701: bucket allocations (sinking funds + any growth
-      // buckets' own rate) come off the top BEFORE the leftover sweeps
-      // into growth — matches computeBucketFlows' logic, applied here
-      // per-year since housing (and therefore the leftover) changes
-      // once a purchase happens. If allocations exceed what's actually
-      // available this year, the leftover just floors at 0 rather than
-      // pulling the growth pot negative — an over-committed household
-      // doesn't borrow against a pot that isn't growing.
-      var netAfterHousing = baseSurplusAnnual - housingThisYear;
-      var leftoverAnnual = Math.max(0, netAfterHousing - totalBucketAllocationMonthly * 12);
-      var growthContributionAnnual = growthOwnAllocationMonthly * 12 + leftoverAnnual;
+      // v4.0.1 — growth pot contribution is purely the growth bucket's
+      // own fixed £/mo allocation (computed once, above the loop) —
+      // housing cost and total household income/outgoings no longer
+      // affect this at all. Buying a house doesn't change how much
+      // flows into the growth bucket; it only changes what's spent on
+      // housing, which is Pete's own business to balance by adjusting
+      // his buckets, not something this projection decides for him.
       growthPot = growthPot * (1 + a.investmentGrowthRate) + growthContributionAnnual;
     }
     if (growthPot < 0) growthPot = 0;
 
     rentAnnual *= (1 + a.rentInflationRate);
-    baseSurplusAnnual *= (1 + a.incomeGrowthRate);
 
     age++;
     year++;
@@ -4699,12 +4703,15 @@ function renderBucketList(){
   }
   var cf = computeCashFlow(settings.household, activeIncomeItems(), activeOutgoingItems());
   var flows = computeBucketFlows(cf.surplus, buckets);
-  warningEl.innerHTML = flows.overAllocated
-    ? ('<div class="callout shortfall" style="margin-bottom:12px;">Buckets allocate £' + Math.round(flows.totalAllocated) + '/mo but only £' + Math.round(Math.max(0, cf.surplus)) + '/mo is actually left over — £' + Math.round(Math.abs(flows.leftover)) + '/mo over-committed. Reduce an allocation, or increase income/reduce outgoings.</div>')
-    : "";
+  var warningHtml = "";
+  if (flows.overAllocated){
+    warningHtml = '<div class="callout shortfall" style="margin-bottom:12px;">Buckets allocate £' + Math.round(flows.totalAllocated) + '/mo but only £' + Math.round(Math.max(0, cf.surplus)) + '/mo is actually left over — £' + Math.round(Math.abs(flows.leftover)) + '/mo over-committed. Reduce an allocation, or increase income/reduce outgoings.</div>';
+  } else if (flows.leftover > 0.5){
+    warningHtml = '<div class="assumptions-note" style="margin-bottom:12px;">£' + Math.round(flows.leftover) + '/mo (£' + Math.round(flows.leftover * 12) + '/yr) is left over after every bucket\'s own allocation — it isn\'t automatically added to anything. Raise a bucket\'s allocation (the growth bucket, most likely) if you want it actually put to work.</div>';
+  }
+  warningEl.innerHTML = warningHtml;
   list.innerHTML = buckets.map(function(b){
-    var flow = flows.perBucket.filter(function(pb){ return pb.recordKey === b.recordKey; })[0];
-    var flowText = flow ? ("£" + Math.round(flow.monthlyFlow) + "/mo actually flowing in" + (flow.monthlyFlow > num(b.monthlyAllocation, 0) + 0.5 ? " (includes leftover sweep)" : "")) : "";
+    var monthlyAlloc = num(b.monthlyAllocation, 0);
     var tag = b.growIndefinitely
       ? '<span class="rank-badge rank-1" title="Grows indefinitely — funds deposit + retirement">📈 Grows indefinitely</span>'
       : '<span class="rank-badge" title="Sinking fund — used regularly, excluded from deposit/retirement maths">🔁 Used regularly</span>';
@@ -4712,12 +4719,11 @@ function renderBucketList(){
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
         '<div class="info"><span class="swatch" style="background:' + (b.growIndefinitely ? BASELINE_COLOR : BUY_COLORS[1]) + '"></span>' +
         '<span class="name">' + escHtml(b.name) + '</span>' +
-        '<span class="meta">£' + Math.round(num(b.monthlyAllocation,0)) + '/mo allocated · £' + Math.round(num(b.currentBalance,0)) + ' current balance</span></div>' +
+        '<span class="meta">£' + Math.round(monthlyAlloc) + '/mo · £' + Math.round(monthlyAlloc * 12) + '/yr · £' + Math.round(num(b.currentBalance,0)) + ' current balance</span></div>' +
         '<div style="display:flex;gap:8px;align-items:center;">' + tag +
         '<button class="small ghost" data-bucket-edit="' + b.recordKey + '">Edit</button>' +
         '<button class="small danger-text" data-bucket-delete="' + b.recordKey + '">Delete</button>' +
         '</div></div>' +
-      (flowText ? ('<p class="assumptions-note" style="margin:8px 0 0;">' + flowText + '</p>') : "") +
     '</div>';
   }).join("");
   list.querySelectorAll("[data-bucket-edit]").forEach(function(btn){
