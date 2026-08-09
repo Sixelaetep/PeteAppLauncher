@@ -366,9 +366,9 @@
   .scenario-card .swatch{
     width:10px;height:10px;border-radius:50%;flex:none;
   }
-  .scenario-card .info{display:flex;align-items:center;gap:12px;flex:1;min-width:0;}
+  .scenario-card .info{display:flex;align-items:center;gap:12px;flex:1;min-width:0;flex-wrap:wrap;}
   .scenario-card .name{font-weight:600;font-size:14.5px;}
-  .scenario-card .meta{font-family:var(--mono);color:var(--muted);font-size:12.5px;}
+  .scenario-card .meta{font-family:var(--mono);color:var(--muted);font-size:12.5px;flex-basis:100%;display:block;margin-top:2px;}
   .scenario-card .badge-baseline{
     font-family:var(--mono);font-size:11px;color:var(--muted-2);
     border:1px solid var(--border);border-radius:20px;padding:2px 8px;
@@ -554,7 +554,7 @@
   /* ---------- Modal ---------- */
   .modal-overlay{
     position:fixed;inset:0;background:rgba(6,9,18,0.6);
-    display:none;align-items:center;justify-content:center;padding:20px;z-index:50;
+    display:none;align-items:center;justify-content:center;padding:20px;z-index:100;
   }
   .modal-overlay.open{display:flex;}
   .modal{
@@ -590,6 +590,14 @@
     .modal{padding:20px;max-width:calc(100vw - 32px);}
     .btn-row{gap:8px;}
     .btn-row button{flex:1 1 auto;}
+    /* HZN-008 — mobile audit: the name row and its badge row were only
+       wrapping onto separate lines when the name happened to be long
+       enough to force it — "Keep renting" (short) kept its badge
+       inline while "Buy when deposit's ready" (long) wrapped it below,
+       an inconsistent layout depending purely on title length. Forcing
+       the name row to claim the full width below this breakpoint means
+       every card behaves the same way regardless of title length. */
+    .master-card-name-row{flex:1 1 100%;}
   }
 </style>
 </head>
@@ -598,7 +606,7 @@
 <div class="topbar-sticky">
   <div class="topbar-inner">
     <div class="topbar-row">
-      <h1>Horizon <span class="version-badge">v4.4</span></h1>
+      <h1>Horizon <span class="version-badge">v4.5</span></h1>
       <span class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></span>
     </div>
     <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Sections">
@@ -622,7 +630,7 @@
   <div class="tab-section" data-tab-section="scenarios">
   <section class="panel" id="panel-scenarios-master">
     <div class="panel-head"><h2 class="panel-title">Scenarios</h2></div>
-    <p class="panel-sub">Two fixed scenarios — Keep renting, and Buy when the growth pot covers the deposit. Every pound left over each month flows into the growth pot automatically; there's no allocation to set. Select a card for the full one-pager: the decision, today's impact, the path, at retirement, and through retirement.</p>
+    <p class="panel-sub">Two fixed scenarios — Keep renting, and Buy when the growth pot covers the deposit. Each bucket you set up in Setup gets its own explicit £/mo — nothing flows anywhere automatically. Select a card for the full one-pager: the decision, today's impact, the path, at retirement, and through retirement.</p>
 
     <div class="scenario-list" id="scenario-master-list" style="margin-top:16px;"></div>
   </section>
@@ -666,7 +674,7 @@
 
   <section class="panel" id="panel-cashflow">
     <div class="panel-head"><h2 class="panel-title">Cash flow &amp; saving</h2></div>
-    <p class="panel-sub">Income, outgoings, rent, and where the difference goes — the whole chain in one place. Every pound left over flows automatically into the growth pot below — no manual allocation, nothing to decide each month. The emergency pot is separate and protected: never touched by any scenario, never counted as spendable.</p>
+    <p class="panel-sub">Income, outgoings, rent, and where the difference goes — the whole chain in one place. What's left is your surplus; see the Buckets panel below for where it actually goes — each bucket has its own explicit £/mo, nothing flows anywhere automatically. The emergency pot is separate and protected: never touched by any scenario, never counted as spendable.</p>
 
     <div class="mode-toggle" id="io-tab-toggle" role="group" aria-label="Income or outgoings">
       <button class="mode-btn" data-tab="income" id="io-tab-income">Income</button>
@@ -1099,9 +1107,14 @@
         <label for="bk-allocation">Monthly allocation</label>
         <div class="unit-wrap"><span class="prefix">£</span><input type="number" id="bk-allocation" min="0" step="25"></div>
       </div>
-      <div class="field has-prefix">
-        <label for="bk-balance">Current balance</label>
+      <div class="field has-prefix" id="bk-starting-balance-field">
+        <label for="bk-balance">Starting balance</label>
         <div class="unit-wrap"><span class="prefix">£</span><input type="number" id="bk-balance" min="0" step="100"></div>
+      </div>
+      <div class="field" id="bk-computed-balance-field" style="display:none;grid-column:1/-1;">
+        <label>Current balance</label>
+        <p style="margin:4px 0 0;font-size:15px;" id="bk-computed-balance-readout"></p>
+        <p class="assumptions-note" style="margin-top:4px;">Calculated from the transaction log below — no longer directly editable here. Add a credit or debit from the bucket's own transaction list on the Setup page.</p>
       </div>
     </div>
     <div class="field" style="margin-top:6px;">
@@ -1139,6 +1152,38 @@
     <div class="modal-actions">
       <button class="ghost" id="btn-tracker-cancel">Cancel</button>
       <button class="primary" id="btn-tracker-save">Save year</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="buckettx-modal-overlay">
+  <div class="modal">
+    <h3 id="buckettx-modal-title">Add transaction</h3>
+    <p class="modal-sub" id="buckettx-modal-sub"></p>
+    <div class="field" style="margin-top:6px;">
+      <label>Type</label>
+      <div class="radio-row">
+        <div class="radio-opt" id="btx-opt-credit" data-type="credit">Credit (money in)</div>
+        <div class="radio-opt" id="btx-opt-debit" data-type="debit">Debit (money out)</div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:10px;">
+      <div class="field has-prefix">
+        <label for="btx-amount">Amount</label>
+        <div class="unit-wrap"><span class="prefix">£</span><input type="number" id="btx-amount" min="0" step="10"></div>
+      </div>
+      <div class="field">
+        <label for="btx-date">Date</label>
+        <input type="date" id="btx-date">
+      </div>
+    </div>
+    <div class="field" style="margin-top:10px;">
+      <label for="btx-note">Note (optional)</label>
+      <input type="text" id="btx-note" placeholder="e.g. August contribution, boiler repair">
+    </div>
+    <div class="modal-actions">
+      <button class="ghost" id="btn-buckettx-cancel">Cancel</button>
+      <button class="primary" id="btn-buckettx-save">Save transaction</button>
     </div>
   </div>
 </div>
@@ -1197,6 +1242,75 @@
    Household buy-vs-rent scenario comparator + pension income.
 
    Changelog
+   v4.5 (2026-08-09) — HZN-008, two parts: a real iPhone layout review
+     (screenshots at actual iPhone viewport width, not guessed at) plus
+     a new bucket transaction log and house-readiness progress bar.
+     LAYOUT FIXES — three genuine bugs found via real mobile
+     screenshots, not assumptions: (1) .modal-overlay's z-index (50)
+     was LOWER than .topbar-sticky's (60), so every open modal — add
+     mortgage, add bucket, one-off, tracker, all of them — rendered
+     BEHIND the sticky header, which is almost certainly the exact
+     "elements covering one another" being reported. Fixed by raising
+     the modal overlay to z-index 100. (2) .scenario-card's generic
+     .meta text had no line-break rule — .master-card had one
+     (display:block) but nothing else did, so bucket/mortgage/pension/
+     tracker/checkpoint cards all ran name and meta text into each
+     other at narrow widths. Fixed generally (flex-basis:100% on
+     .meta), so it's corrected everywhere at once, not just for
+     buckets. (3) the verdict badge on scenario cards wrapped
+     inconsistently — inline for "Keep renting" for badges, below for
+     "Buy when deposit's ready" — purely because the second title was
+     long enough to force it and the first wasn't. Forced consistent
+     wrapping below 600px. One suspected bug (a clipped chart legend)
+     was checked properly with a cleanly-bounded screenshot and turned
+     out to be an artifact of how a tall screenshot had been chunked
+     for review, not a real issue — confirmed before "fixing" it,
+     rather than shipping a speculative change for something that
+     wasn't actually broken.
+     A SEPARATE, SERIOUS BUG found in the course of this review (not a
+     layout issue, but too important not to fix here): simulateDeposit
+     ReadyAge — the Mortgage tab's own "when's the deposit ready"
+     calculation — had been silently broken since the v3.0/v4.0 bucket
+     rewrite. It still read household.currentDepositPot, .monthly
+     DepositSavings, and assumptions.depositGrowthRate, all three
+     removed months ago — every read returned 0, so it always reported
+     "not within 60 years" regardless of real bucket balances. Fixed to
+     use the same real bucket-balance maths projectScenario itself
+     uses for its own buy-trigger check. Confirmed via a real test
+     using real numbers — this had been returning a false "never
+     ready" answer for every mortgage option shown on the tab.
+     STALE TEXT — five separate places (both Scenarios/Cash-flow panel
+     descriptions, the Setup surplus readout, block 2, and block 4's
+     retirement levers) still described the OLD single-growth-pot
+     model ("every pound flows automatically to the growth pot") —
+     wrong since the v4.1 fix that made bucket allocations fully
+     explicit. All five now describe what actually happens.
+     HZN-008 PART 2 — bucket transaction log. New buckettx_* records:
+     {bucketRecordKey, date, type: credit|debit, amount, note}. A
+     bucket's balance is no longer a directly-editable field at all —
+     it's the sum of its own real transaction history (new
+     computeBucketBalance/activeBucketTransactions), a genuine audit
+     trail rather than a single number silently overwritten each time.
+     New migrateBucketsToTransactionsIfNeeded(): every existing
+     bucket's old currentBalance becomes a single "Opening balance"
+     credit transaction, dated at migration — the real number carried
+     forward exactly, confirmed with a test that the computed balance
+     after migration matches the pre-migration value to the penny. New
+     bucket modal behaviour: a brand new bucket can still be given a
+     starting balance (becomes its first transaction); editing an
+     existing bucket shows its real computed balance read-only instead,
+     specifically to avoid the double-counting risk of re-entering an
+     "opening balance" on every edit. New Add/view/delete transaction
+     UI per bucket in Setup. New computeHouseReadinessProgress(): a
+     progress bar on every growth bucket showing combined growth-bucket
+     balance against the SELECTED mortgage's deposit + all purchase
+     costs — deliberately reusing the exact cashNeeded figure
+     projectScenario itself uses to trigger a purchase, so the bar and
+     the actual buy-trigger can never disagree about what "ready"
+     means. Verified end-to-end through the real UI (add a bucket with
+     a starting balance, add a transaction, confirm the displayed and
+     edit-modal balances both update correctly) and with 13 further
+     checks confirming nothing else in the app regressed.
    v4.4 (2026-08-09) — HZN-007: removed the "back to On Budget" button
      added in v4.3 (tab-bar HTML, its dedicated CSS, and the click
      handler) — the nested-iframe embedding reads clearly enough on its
@@ -2082,7 +2196,7 @@
    yet — records are just hard-removed from local state.
    ========================================================= */
 
-var VERSION = "4.4";
+var VERSION = "4.5";
 var STORAGE_KEY = "horizon_state_v1";
 var HORIZON_AGE = 90;
 
@@ -2419,6 +2533,7 @@ function loadState(){
     // correctly identifies it as needing migration.
     parsed = migrateToSinglePotModel(parsed);
     parsed = migrateToBucketsIfNeeded(parsed);
+    parsed = migrateBucketsToTransactionsIfNeeded(parsed);
     parsed.records.settings.data = backfillSettingsDefaults(parsed.records.settings.data);
     parsed = migrateIncomeOutgoingsIfNeeded(parsed);
     parsed = migrateOneoffScopeIfNeeded(parsed);
@@ -2622,6 +2737,70 @@ function activeBuckets(){
   return out;
 }
 
+// v4.5 — HZN-008: buckets no longer carry a directly-editable
+// currentBalance field at all — the balance is now the SUM of a real
+// transaction log (credits and debits), an actual audit trail rather
+// than a single number Pete overwrites each time. bucketRecordKey
+// (optional) filters to one bucket; omitted, returns every transaction
+// across every bucket. Sorted oldest-first, since this reads as a
+// ledger/history.
+function activeBucketTransactions(bucketRecordKey){
+  var out = [];
+  for (var key in state.records){
+    if (key.indexOf("buckettx_") !== 0) continue;
+    var rec = state.records[key];
+    if (!rec || rec.deleted) continue;
+    if (bucketRecordKey && rec.data.bucketRecordKey !== bucketRecordKey) continue;
+    out.push(Object.assign({recordKey: key}, rec.data));
+  }
+  out.sort(function(a, b){ return (a.date || "").localeCompare(b.date || ""); });
+  return out;
+}
+
+// The single place a bucket's balance is computed — every caller
+// (projectScenario, the Mortgage tab's deposit-ready calculation, the
+// Buckets panel, the house-readiness progress bar) reads through this,
+// so none of them can ever disagree about what a bucket is actually
+// worth.
+function computeBucketBalance(bucketRecordKey){
+  return activeBucketTransactions(bucketRecordKey).reduce(function(sum, tx){
+    var amt = num(tx.amount, 0);
+    return sum + (tx.type === "debit" ? -amt : amt);
+  }, 0);
+}
+
+// v4.5 — HZN-008: one-time migration. A bucket's old currentBalance
+// (directly editable, no history) becomes a single "Opening balance"
+// credit transaction, dated at migration time — real money carried
+// forward exactly, not dropped, just re-expressed as the first entry in
+// what's now a real ledger. Runs once per bucket: currentBalance is
+// deleted from the record afterward, so the presence of that field is
+// itself the "not yet migrated" signal.
+function migrateBucketsToTransactionsIfNeeded(parsedState){
+  var records = parsedState.records;
+  var now = new Date().toISOString();
+  Object.keys(records).forEach(function(key){
+    if (key.indexOf("bucket_") !== 0) return;
+    var rec = records[key];
+    if (!rec || !rec.data || rec.data.currentBalance == null) return;
+    var openingBalance = num(rec.data.currentBalance, 0);
+    if (Math.abs(openingBalance) > 0.005){
+      records["buckettx_" + uid()] = {
+        data: {
+          bucketRecordKey: key,
+          date: now.slice(0, 10),
+          type: openingBalance >= 0 ? "credit" : "debit",
+          amount: Math.abs(openingBalance),
+          note: "Opening balance (migrated)"
+        },
+        updatedAt: now, deleted: false
+      };
+    }
+    delete rec.data.currentBalance;
+  });
+  return parsedState;
+}
+
 // v4.2 — HZN-006: one record per age, not per timestamp — a lighter,
 // ongoing check-in ledger complementing Checkpoints (full state
 // snapshots). Sorted oldest-first, since this reads as a history.
@@ -2703,12 +2882,25 @@ function activeMortgageOptions(){
 // purchase costs for this specific mortgage option). Returns null if
 // it's never reached within 60 years (a genuinely unaffordable option
 // at current saving rates, surfaced honestly rather than guessed at).
+// v4.5 — HZN-008: this was silently broken since the v3.0/v4.0 bucket
+// rewrite — it still read h.currentDepositPot, h.monthlyDepositSavings,
+// and assumptions.depositGrowthRate, all three removed when the single
+// growth pot (and later, buckets) replaced the old deposit-pot model.
+// Every one of those reads always returned 0 (fields no longer exist),
+// so this always returned null ("not within 60 years") regardless of
+// actual data — the Mortgage tab's own "deposit ready" readout has been
+// non-functional this whole time. Now sums every growIndefinitely
+// bucket's real balance (via computeBucketBalance) and contribution,
+// exactly matching the maths projectScenario itself uses for its own
+// buy-trigger check, so the Mortgage tab and Scenarios can never
+// disagree about when a given target is reachable.
 function simulateDepositReadyAge(settings, totalNeeded){
   var h = settings.household;
-  var pot = num(h.currentDepositPot, 0);
-  var contribAnnual = num(h.monthlyDepositSavings, 0) * 12;
-  var growth = num(settings.assumptions.depositGrowthRate, 0.035);
-  var age = settings.household.referenceAge;
+  var growthBuckets = activeBuckets().filter(function(b){ return b.growIndefinitely; });
+  var pot = growthBuckets.reduce(function(s, b){ return s + computeBucketBalance(b.recordKey); }, 0);
+  var contribAnnual = growthBuckets.reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0) * 12;
+  var growth = num(settings.assumptions.investmentGrowthRate, 0.05);
+  var age = h.referenceAge;
   if (pot >= totalNeeded) return age;
   for (var i = 0; i < 60; i++){
     pot = pot * (1 + growth) + contribAnnual;
@@ -2984,7 +3176,7 @@ function projectScenario(settings, scenarioType, oneoffItems){
   // part of this projection — a fixed balance Pete manages himself.
   var buckets = activeBuckets();
   var growthBucketsList = buckets.filter(function(b){ return b.growIndefinitely; });
-  var growthPot = growthBucketsList.reduce(function(s, b){ return s + num(b.currentBalance, 0); }, 0);
+  var growthPot = growthBucketsList.reduce(function(s, b){ return s + computeBucketBalance(b.recordKey); }, 0);
   var rentAnnual = num(h.currentRent, 0) * 12;
 
   // v4.0.1 — net worth modelling now comes ONLY from the growth
@@ -3805,7 +3997,7 @@ function renderRemainingReadout(){
     ? incomeItems.map(function(i){ return escHtml(i.label) + " £" + Math.round(num(i.monthlyAmount,0)); }).join(" + ")
     : "no income items added yet";
   var surplusText = cf.surplus >= 0
-    ? ('<strong>£' + Math.round(cf.surplus) + '/mo to the growth pot</strong>')
+    ? ('<strong>£' + Math.round(cf.surplus) + '/mo surplus</strong> — see Buckets below for where it actually goes')
     : ('<strong style="color:var(--danger);">£' + Math.round(Math.abs(cf.surplus)) + '/mo short</strong> — outgoings and rent currently exceed income');
   el.innerHTML = '<p style="margin:0;font-size:14px;">Income <span style="color:var(--muted);">(' + incomeBreakdown + ') = £' + Math.round(cf.incomeMonthly) + '/mo</span> − outgoings <span style="color:var(--muted);">£' + Math.round(cf.outgoings) + '/mo</span> (' + outgoingItems.length + ' items) − rent <span style="color:var(--muted);">£' + Math.round(cf.rent) + '/mo</span> = ' + surplusText + '.</p>';
   el.className = "";
@@ -3988,13 +4180,32 @@ function buildDecisionBlockHtml(settings, scenarioType, result){
 
 // Block 2 — impact today. v3.0: one flow, no allocation split — 100% of
 // whatever's left over goes to the growth pot automatically.
+// v4.5 — HZN-008: was still claiming "all of it, no manual allocation
+// step" — true of the OLD single-growth-pot model, but wrong since the
+// v4.1 fix: only each bucket's own explicit £/mo allocation flows
+// anywhere now, and only growth buckets feed this scenario's own
+// trajectory. Now shows the real breakdown instead of a blanket claim.
 function buildImpactTodayHtml(settings, result){
   var referenceAge = num(settings.household.referenceAge, 45);
   var cf = computeCashFlow(settings.household, activeIncomeItems(), activeOutgoingItems());
   var housingMonthly = housingCostAtAge(result, settings, referenceAge) / 12;
   var remainingAfterHousing = cf.incomeMonthly - cf.outgoings - housingMonthly;
-  var html = '<p style="margin:0 0 10px;font-size:14px;">Income <span style="color:var(--muted);">' + fmtGBP(cf.incomeMonthly) + '/mo</span> − outgoings <span style="color:var(--muted);">' + fmtGBP(cf.outgoings) + '/mo</span> − housing <span style="color:var(--muted);">' + fmtGBP(housingMonthly) + '/mo</span> = <strong>' + fmtGBP(remainingAfterHousing) + '/mo to the growth pot</strong>.</p>';
-  html += '<p style="margin:0;font-size:13px;color:var(--muted);">All of it — there\'s no manual allocation step. This is what compounds toward the deposit, then keeps growing after.</p>';
+  var buckets = activeBuckets();
+  var growthMonthly = buckets.filter(function(b){ return b.growIndefinitely; }).reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0);
+  var sinkingMonthly = buckets.filter(function(b){ return !b.growIndefinitely; }).reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0);
+  var unallocated = remainingAfterHousing - growthMonthly - sinkingMonthly;
+
+  var html = '<p style="margin:0 0 10px;font-size:14px;">Income <span style="color:var(--muted);">' + fmtGBP(cf.incomeMonthly) + '/mo</span> − outgoings <span style="color:var(--muted);">' + fmtGBP(cf.outgoings) + '/mo</span> − housing <span style="color:var(--muted);">' + fmtGBP(housingMonthly) + '/mo</span> = <strong>' + fmtGBP(remainingAfterHousing) + '/mo surplus</strong>.</p>';
+  if (buckets.length === 0){
+    html += '<p style="margin:0;font-size:13px;color:var(--muted);">No buckets set up yet — add one in Setup to direct this surplus somewhere specific.</p>';
+  } else {
+    html += '<p style="margin:0 0 4px;font-size:14px;">Of that: <strong>' + fmtGBP(growthMonthly) + '/mo</strong> to growth buckets (what this scenario\'s trajectory is actually built from), <strong>' + fmtGBP(sinkingMonthly) + '/mo</strong> to sinking funds.</p>';
+    if (unallocated > 0.5){
+      html += '<p style="margin:0;font-size:13px;color:var(--muted);">£' + Math.round(unallocated) + '/mo left unallocated — nothing happens to it automatically; raise a bucket\'s allocation in Setup to put it to work.</p>';
+    } else if (unallocated < -0.5){
+      html += '<p style="margin:0;font-size:13px;color:var(--danger);">Buckets allocate £' + Math.round(Math.abs(unallocated)) + '/mo more than this scenario\'s actual surplus — over-committed.</p>';
+    }
+  }
   return html;
 }
 
@@ -4315,6 +4526,10 @@ function describeTier(target){
 // reused untouched — just relocated onto each one-pager's block 4,
 // appended after buildAtRetirementHtml's own (also untouched) output,
 // since that's where "the clear verdict lives" per HZN-003.
+// v4.5 — HZN-008: compared the extra saving needed against raw
+// household surplus ("within your current £X/mo surplus") — wrong
+// since v4.1, since surplus doesn't automatically fund growth anymore.
+// Compares against the actual current growth-bucket allocation instead.
 function buildRetirementLeversHtml(settings, scenarioResult, retireAge, gap){
   var MAX_SEARCH_AGE = 85;
   var gapReal = gap.gapReal;
@@ -4323,18 +4538,15 @@ function buildRetirementLeversHtml(settings, scenarioResult, retireAge, gap){
   }
   var reachAge = findAgeReachingTarget(settings, scenarioResult, MAX_SEARCH_AGE);
   var reachText = reachAge != null ? ("age " + reachAge) : ("not by " + MAX_SEARCH_AGE);
-  var cf = computeCashFlow(settings.household, activeIncomeItems(), activeOutgoingItems());
-  var currentSurplus = Math.max(0, cf.surplus);
+  var currentGrowthMonthly = activeBuckets().filter(function(b){ return b.growIndefinitely; }).reduce(function(s, b){ return s + num(b.monthlyAllocation, 0); }, 0);
   var saveTarget = requiredMonthlyRetirementSaving(settings, -gapReal, retireAge);
   var saveText;
   if (!saveTarget.achievable){
     saveText = "not achievable by " + retireAge + " through saving alone";
-  } else if (saveTarget.monthly > currentSurplus){
-    saveText = "+" + fmtGBP(saveTarget.monthly) + "/mo needed on top of what already flows to growth — more than your current " + fmtGBP(currentSurplus) + "/mo surplus";
   } else {
-    saveText = "+" + fmtGBP(saveTarget.monthly) + "/mo would close it — within your current " + fmtGBP(currentSurplus) + "/mo surplus";
+    saveText = "+" + fmtGBP(saveTarget.monthly) + "/mo would need to flow to growth buckets — currently " + fmtGBP(currentGrowthMonthly) + "/mo does";
   }
-  return '<p class="assumptions-note" style="margin-top:10px;">Shortfall of ' + fmtGBP(Math.abs(gapReal)) + '/yr at ' + retireAge + '. Two levers that could close it on their own: working to <strong>' + reachText + '</strong>, or a surplus of <strong>' + saveText + '</strong>.</p>';
+  return '<p class="assumptions-note" style="margin-top:10px;">Shortfall of ' + fmtGBP(Math.abs(gapReal)) + '/yr at ' + retireAge + '. Two levers that could close it on their own: working to <strong>' + reachText + '</strong>, or a growth-bucket allocation of <strong>' + saveText + '</strong>.</p>';
 }
 
 /* =========================================================
@@ -4799,12 +5011,28 @@ function setBucketGrowOption(growValue){
 
 function openBucketModal(recordKey){
   editingBucketKey = recordKey || null;
-  var data = recordKey ? state.records[recordKey].data : {name: "", monthlyAllocation: 0, growIndefinitely: false, currentBalance: 0};
+  var data = recordKey ? state.records[recordKey].data : {name: "", monthlyAllocation: 0, growIndefinitely: false};
   document.getElementById("bucket-modal-title").textContent = recordKey ? "Edit bucket" : "Add bucket";
   document.getElementById("bk-name").value = data.name;
   document.getElementById("bk-allocation").value = num(data.monthlyAllocation, 0);
-  document.getElementById("bk-balance").value = num(data.currentBalance, 0);
   setBucketGrowOption(data.growIndefinitely ? "true" : "false");
+
+  // v4.5 — HZN-008: starting balance only makes sense for a brand new
+  // bucket (creates a one-off opening transaction) — editing an
+  // existing bucket shows its real, computed balance instead, since
+  // re-showing "starting balance" as an editable field on every edit
+  // would risk creating a second opening transaction and double-
+  // counting real money.
+  if (recordKey){
+    document.getElementById("bk-starting-balance-field").style.display = "none";
+    document.getElementById("bk-computed-balance-field").style.display = "block";
+    document.getElementById("bk-computed-balance-readout").textContent = fmtGBP(computeBucketBalance(recordKey)) + " (" + activeBucketTransactions(recordKey).length + " transaction" + (activeBucketTransactions(recordKey).length === 1 ? "" : "s") + ")";
+  } else {
+    document.getElementById("bk-starting-balance-field").style.display = "block";
+    document.getElementById("bk-computed-balance-field").style.display = "none";
+    document.getElementById("bk-balance").value = 0;
+  }
+
   document.getElementById("bucket-modal-overlay").classList.add("open");
   document.getElementById("bk-name").focus();
 }
@@ -4820,14 +5048,45 @@ function saveBucketFromModal(){
   var data = {
     name: name,
     monthlyAllocation: parseFloat(document.getElementById("bk-allocation").value) || 0,
-    currentBalance: parseFloat(document.getElementById("bk-balance").value) || 0,
     growIndefinitely: document.getElementById("bucket-modal-overlay").dataset.grow === "true"
   };
+  var isNew = !editingBucketKey;
   var key = editingBucketKey || ("bucket_" + uid());
   state.records[key] = {data: data, updatedAt: new Date().toISOString(), deleted: false};
+
+  // A starting balance on a NEW bucket becomes its first transaction —
+  // the bucket record itself never carries a balance field again.
+  if (isNew){
+    var startingBalance = parseFloat(document.getElementById("bk-balance").value) || 0;
+    if (Math.abs(startingBalance) > 0.005){
+      state.records["buckettx_" + uid()] = {
+        data: {bucketRecordKey: key, date: new Date().toISOString().slice(0, 10), type: "credit", amount: startingBalance, note: "Starting balance"},
+        updatedAt: new Date().toISOString(), deleted: false
+      };
+    }
+  }
+
   saveState();
   closeBucketModal();
   renderAll();
+}
+
+// v4.5 — HZN-008: "the growth bucket can give a progress bar to buy
+// house readiness (deposit plus all other fees and costs)." Reuses the
+// SAME cashNeeded figure projectScenario itself uses to trigger a
+// purchase (deposit + solicitor/survey/other costs for the SELECTED
+// mortgage), so the progress bar and the actual buy-trigger can never
+// disagree about what "ready" means. null when no mortgage is selected
+// — there's nothing to show progress toward yet.
+function computeHouseReadinessProgress(settings){
+  var selectedMortgage = getSelectedMortgageOption(settings);
+  if (!selectedMortgage) return null;
+  var cashNeeded = num(selectedMortgage.propertyValue, 0) * num(selectedMortgage.depositPercent, 0)
+    + num(selectedMortgage.solicitorFees, 0) + num(selectedMortgage.surveyFees, 0) + num(selectedMortgage.otherCosts, 0);
+  var growthBalance = activeBuckets().filter(function(b){ return b.growIndefinitely; })
+    .reduce(function(s, b){ return s + computeBucketBalance(b.recordKey); }, 0);
+  var pct = cashNeeded > 0 ? Math.min(100, (growthBalance / cashNeeded) * 100) : 0;
+  return {growthBalance: growthBalance, cashNeeded: cashNeeded, pct: pct, ready: growthBalance >= cashNeeded, mortgageName: selectedMortgage.name};
 }
 
 function renderBucketList(){
@@ -4849,22 +5108,55 @@ function renderBucketList(){
     warningHtml = '<div class="assumptions-note" style="margin-bottom:12px;">£' + Math.round(flows.leftover) + '/mo (£' + Math.round(flows.leftover * 12) + '/yr) is left over after every bucket\'s own allocation — it isn\'t automatically added to anything. Raise a bucket\'s allocation (the growth bucket, most likely) if you want it actually put to work.</div>';
   }
   warningEl.innerHTML = warningHtml;
+
+  var readiness = computeHouseReadinessProgress(settings);
+
   list.innerHTML = buckets.map(function(b){
     var monthlyAlloc = num(b.monthlyAllocation, 0);
+    var balance = computeBucketBalance(b.recordKey);
+    var txCount = activeBucketTransactions(b.recordKey).length;
     var tag = b.growIndefinitely
       ? '<span class="rank-badge rank-1" title="Grows indefinitely — funds deposit + retirement">📈 Grows indefinitely</span>'
       : '<span class="rank-badge" title="Sinking fund — used regularly, excluded from deposit/retirement maths">🔁 Used regularly</span>';
+
+    var progressHtml = "";
+    if (b.growIndefinitely && readiness){
+      var pctRounded = Math.round(readiness.pct);
+      progressHtml = '<div style="margin-top:10px;">' +
+        '<p class="assumptions-note" style="margin:0 0 4px;">House readiness — deposit + all costs for "' + escHtml(readiness.mortgageName) + '": <strong>' + fmtGBP(readiness.growthBalance) + ' of ' + fmtGBP(readiness.cashNeeded) + '</strong> (' + pctRounded + '%)' + (readiness.ready ? ' — ready' : '') + '</p>' +
+        '<div style="background:var(--panel-alt);border-radius:6px;height:10px;overflow:hidden;">' +
+          '<div style="background:' + (readiness.ready ? "var(--teal)" : "var(--accent)") + ';height:100%;width:' + pctRounded + '%;transition:width .3s ease;"></div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    var txListHtml = activeBucketTransactions(b.recordKey).slice().reverse().map(function(tx){
+      var sign = tx.type === "debit" ? "−" : "+";
+      var color = tx.type === "debit" ? "var(--danger)" : "var(--teal)";
+      return '<div class="at-retirement-row"><span style="color:' + color + ';font-weight:600;">' + sign + fmtGBP(tx.amount) + '</span> <span class="muted-inline">' + escHtml(tx.date) + (tx.note ? (" — " + escHtml(tx.note)) : "") + '</span>' +
+        '<button class="small danger-text" style="margin-left:8px;float:right;" data-buckettx-delete="' + tx.recordKey + '">Delete</button></div>';
+    }).join("");
+
     return '<div class="scenario-card" style="flex-direction:column;align-items:stretch;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
         '<div class="info"><span class="swatch" style="background:' + (b.growIndefinitely ? BASELINE_COLOR : BUY_COLORS[1]) + '"></span>' +
         '<span class="name">' + escHtml(b.name) + '</span>' +
-        '<span class="meta">£' + Math.round(monthlyAlloc) + '/mo · £' + Math.round(monthlyAlloc * 12) + '/yr · £' + Math.round(num(b.currentBalance,0)) + ' current balance</span></div>' +
-        '<div style="display:flex;gap:8px;align-items:center;">' + tag +
+        '<span class="meta">£' + Math.round(monthlyAlloc) + '/mo · £' + Math.round(monthlyAlloc * 12) + '/yr · ' + fmtGBP(balance) + ' current balance</span></div>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' + tag +
         '<button class="small ghost" data-bucket-edit="' + b.recordKey + '">Edit</button>' +
         '<button class="small danger-text" data-bucket-delete="' + b.recordKey + '">Delete</button>' +
         '</div></div>' +
+      progressHtml +
+      '<div class="btn-row" style="margin-top:10px;">' +
+        '<button class="small ghost" data-buckettx-toggle="' + b.recordKey + '">' + txCount + ' transaction' + (txCount === 1 ? "" : "s") + ' ▾</button>' +
+        '<button class="small primary" data-buckettx-add="' + b.recordKey + '">+ Add transaction</button>' +
+      '</div>' +
+      '<div class="allocation-wrap" id="buckettx-list-' + b.recordKey + '" style="display:none;margin-top:8px;">' +
+        (txListHtml || '<p class="assumptions-note" style="margin:0;">No transactions yet.</p>') +
+      '</div>' +
     '</div>';
   }).join("");
+
   list.querySelectorAll("[data-bucket-edit]").forEach(function(btn){
     btn.addEventListener("click", function(){ openBucketModal(btn.getAttribute("data-bucket-edit")); });
   });
@@ -4872,13 +5164,76 @@ function renderBucketList(){
     btn.addEventListener("click", function(){
       var key = btn.getAttribute("data-bucket-delete");
       var name = state.records[key] && state.records[key].data.name;
-      if (confirm('Delete bucket "' + name + '"? Its current balance will no longer count toward anything.')){
+      if (confirm('Delete bucket "' + name + '"? Its transactions will no longer count toward anything.')){
         softDeleteRecord(key);
         saveState();
         renderAll();
       }
     });
   });
+  list.querySelectorAll("[data-buckettx-toggle]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var key = btn.getAttribute("data-buckettx-toggle");
+      var el = document.getElementById("buckettx-list-" + key);
+      el.style.display = el.style.display === "none" ? "block" : "none";
+    });
+  });
+  list.querySelectorAll("[data-buckettx-add]").forEach(function(btn){
+    btn.addEventListener("click", function(){ openBucketTxModal(btn.getAttribute("data-buckettx-add")); });
+  });
+  list.querySelectorAll("[data-buckettx-delete]").forEach(function(btn){
+    btn.addEventListener("click", function(e){
+      e.stopPropagation();
+      var key = btn.getAttribute("data-buckettx-delete");
+      if (confirm("Delete this transaction?")){
+        softDeleteRecord(key);
+        saveState();
+        renderAll();
+      }
+    });
+  });
+}
+
+// v4.5 — HZN-008: add a credit or debit against a specific bucket —
+// the only way a bucket's balance can change now, replacing the old
+// direct-edit "current balance" field with a real, auditable entry.
+var currentBucketTxBucketKey = null;
+function openBucketTxModal(bucketRecordKey){
+  currentBucketTxBucketKey = bucketRecordKey;
+  var bucket = state.records[bucketRecordKey] && state.records[bucketRecordKey].data;
+  document.getElementById("buckettx-modal-title").textContent = "Add transaction";
+  document.getElementById("buckettx-modal-sub").textContent = bucket ? ('For "' + bucket.name + '" — current balance ' + fmtGBP(computeBucketBalance(bucketRecordKey))) : "";
+  document.getElementById("btx-amount").value = "";
+  document.getElementById("btx-date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("btx-note").value = "";
+  setBucketTxType("credit");
+  document.getElementById("buckettx-modal-overlay").classList.add("open");
+  document.getElementById("btx-amount").focus();
+}
+function closeBucketTxModal(){
+  document.getElementById("buckettx-modal-overlay").classList.remove("open");
+  currentBucketTxBucketKey = null;
+}
+function setBucketTxType(type){
+  document.getElementById("buckettx-modal-overlay").dataset.type = type;
+  document.getElementById("btx-opt-credit").classList.toggle("active", type === "credit");
+  document.getElementById("btx-opt-debit").classList.toggle("active", type === "debit");
+}
+function saveBucketTxFromModal(){
+  if (!currentBucketTxBucketKey) return;
+  var amount = parseFloat(document.getElementById("btx-amount").value) || 0;
+  if (amount <= 0){ alert("Enter an amount greater than zero."); return; }
+  var data = {
+    bucketRecordKey: currentBucketTxBucketKey,
+    date: document.getElementById("btx-date").value || new Date().toISOString().slice(0, 10),
+    type: document.getElementById("buckettx-modal-overlay").dataset.type === "debit" ? "debit" : "credit",
+    amount: amount,
+    note: document.getElementById("btx-note").value.trim()
+  };
+  state.records["buckettx_" + uid()] = {data: data, updatedAt: new Date().toISOString(), deleted: false};
+  saveState();
+  closeBucketTxModal();
+  renderAll();
 }
 
 // v4.2 — HZN-006: Year by year tracker
@@ -4891,7 +5246,7 @@ function openTrackerModal(recordKey){
   var data = recordKey ? state.records[recordKey].data : {
     age: settings.household.referenceAge,
     year: new Date().getFullYear(),
-    bucketEntries: buckets.map(function(b){ return {bucketRecordKey: b.recordKey, bucketName: b.name, growIndefinitely: b.growIndefinitely, actualValue: num(b.currentBalance, 0), note: ""}; }),
+    bucketEntries: buckets.map(function(b){ return {bucketRecordKey: b.recordKey, bucketName: b.name, growIndefinitely: b.growIndefinitely, actualValue: computeBucketBalance(b.recordKey), note: ""}; }),
     emergencyActual: num(settings.household.emergencyPot, 0),
     generalNote: ""
   };
@@ -4908,7 +5263,7 @@ function openTrackerModal(recordKey){
   // it, so historical entries don't silently lose data.
   var fieldsHtml = buckets.map(function(b){
     var existing = (data.bucketEntries || []).filter(function(e){ return e.bucketRecordKey === b.recordKey; })[0];
-    var val = existing ? existing.actualValue : num(b.currentBalance, 0);
+    var val = existing ? existing.actualValue : computeBucketBalance(b.recordKey);
     var note = existing ? (existing.note || "") : "";
     var tag = b.growIndefinitely ? "grows indefinitely" : "used regularly — no projection to check against";
     return '<div class="field has-prefix" data-tk-bucket="' + b.recordKey + '" data-tk-bucket-name="' + escHtml(b.name) + '" data-tk-bucket-grow="' + (!!b.growIndefinitely) + '" style="margin-bottom:10px;">' +
@@ -5222,7 +5577,7 @@ function snapshotCurrentState(){
     // captured in full (name/allocation/balance/growIndefinitely) so a
     // checkpoint genuinely reflects what existed at that moment, not
     // just a total.
-    buckets: JSON.parse(JSON.stringify(activeBuckets())),
+    buckets: JSON.parse(JSON.stringify(activeBuckets().map(function(b){ return Object.assign({}, b, {currentBalance: computeBucketBalance(b.recordKey)}); }))),
     progress: progress
   };
 }
@@ -5496,6 +5851,7 @@ function importJSON(file){
       state = parsed;
       state = migrateToSinglePotModel(state);
       state = migrateToBucketsIfNeeded(state);
+      state = migrateBucketsToTransactionsIfNeeded(state);
       state.records.settings.data = backfillSettingsDefaults(state.records.settings.data);
       state = migrateIncomeOutgoingsIfNeeded(state);
       state = migrateOneoffScopeIfNeeded(state);
@@ -5718,6 +6074,14 @@ function init(){
   document.getElementById("bk-opt-grow").addEventListener("click", function(){ setBucketGrowOption("true"); });
   document.getElementById("bk-opt-used").addEventListener("click", function(){ setBucketGrowOption("false"); });
 
+  document.getElementById("btn-buckettx-cancel").addEventListener("click", closeBucketTxModal);
+  document.getElementById("btn-buckettx-save").addEventListener("click", saveBucketTxFromModal);
+  document.getElementById("buckettx-modal-overlay").addEventListener("click", function(e){
+    if (e.target.id === "buckettx-modal-overlay") closeBucketTxModal();
+  });
+  document.getElementById("btx-opt-credit").addEventListener("click", function(){ setBucketTxType("credit"); });
+  document.getElementById("btx-opt-debit").addEventListener("click", function(){ setBucketTxType("debit"); });
+
   document.getElementById("btn-add-tracker").addEventListener("click", function(){ openTrackerModal(null); });
   document.getElementById("btn-tracker-cancel").addEventListener("click", closeTrackerModal);
   document.getElementById("btn-tracker-save").addEventListener("click", saveTrackerFromModal);
@@ -5838,6 +6202,12 @@ window.__horizonTestHooks = {
   // v4.2 — HZN-006
   activeTrackerEntries: activeTrackerEntries,
   computeTrackerImpact: computeTrackerImpact,
+  // v4.5 — HZN-008
+  activeBucketTransactions: activeBucketTransactions,
+  computeBucketBalance: computeBucketBalance,
+  migrateBucketsToTransactionsIfNeeded: migrateBucketsToTransactionsIfNeeded,
+  computeHouseReadinessProgress: computeHouseReadinessProgress,
+  simulateDepositReadyAge: simulateDepositReadyAge,
   _setStateForTest: function(s){ state = s; }
 };
 
