@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.62</title>
+<title>Gym Tracker v2.63</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -303,7 +303,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.62</div></span>
+      <span>Gym Tracker<div class="ver">v2.63</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -409,6 +409,15 @@
     <button class="btn btn-secondary btn-block" onclick="openPTModal()">+ Log PT Session</button>
     <div id="ptSessionList" style="margin-top:10px"></div>
 
+    <div class="section-title" style="margin-top:20px">🍽 Nutrition Targets</div>
+    <div id="nutritionTargetsSummary" style="font-size:12px;color:var(--ink2);margin-bottom:8px"></div>
+    <div class="type-row">
+      <div><label>Daily Calories</label><input type="number" id="targetCaloriesInput" min="0" placeholder="e.g. 2200"></div>
+      <div><label>Daily Protein (g)</label><input type="number" id="targetProteinInput" min="0" placeholder="e.g. 150"></div>
+    </div>
+    <button class="btn btn-secondary btn-block" style="margin-top:8px" onclick="saveNutritionTargets()">Save Targets</button>
+    <p style="font-size:11px;color:var(--ink3);margin-top:8px">Log meals against these targets from each day's card in the Calendar/Home view.</p>
+
     <div class="section-title" style="margin-top:20px">🎯 What To Train Next</div>
     <div id="nextUpList"></div>
 
@@ -480,6 +489,7 @@
   </div>
   <div class="session-body">
     <div class="session-body-inner">
+      <div id="sessionPlanNoteBanner" style="display:none"></div>
       <div id="sessionItemsList"></div>
       <label>Session Notes</label>
       <textarea id="sessionNotes" placeholder="How did it feel? Anything to remember for next time…"></textarea>
@@ -490,6 +500,18 @@
     <div class="btn-row" style="margin-top:0">
       <button class="btn btn-secondary" style="flex:1" onclick="cancelActiveSession()">Cancel</button>
       <button class="btn btn-success" id="finishSessionBtn" style="flex:2" onclick="finishActiveSession()">✓ Finish Session</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ UPDATE PLAN TARGETS MODAL (GYM-061) ═══ -->
+<div class="modal-overlay" id="modalUpdateTargets" onclick="if(event.target===this)closeModal('modalUpdateTargets')">
+  <div class="modal">
+    <div class="modal-title"><span>Update plan?</span><button class="modal-close" onclick="closeModal('modalUpdateTargets')">✕</button></div>
+    <p id="updateTargetsMessage" style="font-size:14px;color:var(--ink1);line-height:1.5"></p>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-secondary" style="flex:1" onclick="declineUpdatePlanTargets()">✗ No, just save</button>
+      <button class="btn btn-primary" style="flex:1" onclick="confirmUpdatePlanTargets()">✓ Yes, update plan</button>
     </div>
   </div>
 </div>
@@ -644,6 +666,24 @@
     <div class="btn-row">
       <button class="btn btn-primary" style="flex:1" onclick="savePTSession()">Save</button>
     </div>
+  </div>
+</div>
+
+<!-- ═══ MEALS MODAL (GYM-060) ═══ -->
+<div class="modal-overlay" id="modalMeals" onclick="if(event.target===this)closeModal('modalMeals')">
+  <div class="modal">
+    <div class="modal-title"><span id="mealsModalTitle">Meals</span><button class="modal-close" onclick="closeModal('modalMeals')">✕</button></div>
+    <div id="mealsTotalsBar" style="margin-bottom:10px"></div>
+    <div id="mealsList" style="margin-bottom:14px"></div>
+    <div class="section-title" style="margin-top:0">Add a meal</div>
+    <label>Meal / food</label>
+    <input type="text" id="mealNameInput" placeholder="e.g. Chicken salad wrap" oninput="updateMealSearchLink()">
+    <a id="mealSearchLink" href="#" target="_blank" rel="noopener" style="font-size:12px;color:var(--accent3);display:inline-block;margin:4px 0 10px;opacity:0.4">🔍 Look up calories &amp; protein on Google</a>
+    <div class="type-row">
+      <div><label>Calories</label><input type="number" id="mealCaloriesInput" min="0" placeholder="0"></div>
+      <div><label>Protein (g)</label><input type="number" id="mealProteinInput" min="0" placeholder="0"></div>
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="saveMealEntry()">+ Add Meal</button>
   </div>
 </div>
 
@@ -952,6 +992,45 @@
 // value. PT Companion's target/summary display was updated to match
 // (same optional-time behaviour) for parity as the two apps share
 // programme data.
+// v2.63 (GYM-061, GYM-060, GYM-059-notes): three changes. Note: GYM-059
+// is reused across two unrelated tickets in Test & Issues — the Programs
+// duplicate-import fix (shipped as v2.61/v2.62) and this notes work.
+// Flagging for a Test & Issues renumber; built to the brief either way.
+//
+// GYM-061 — the plan-targets-update decision on finishing a session
+// (previously a native confirm(), OK/Cancel) is now an explicit two-
+// button modal: "No, just save" / "Yes, update plan". The session is
+// always saved first regardless of the choice — this only controls
+// whether the plan's own targets get overwritten to match today's
+// numbers. Confirmed (no change needed): starting a session from a plan
+// already shows each exercise's last-actual performance — that was
+// already working.
+//
+// GYM-060 — new meal/nutrition log. Each calendar day card gets a
+// tappable "🍽 N meals" summary opening a modal to add meals (name +
+// manually-entered calories/protein, with a one-tap Google-search
+// shortcut to look the numbers up — there's no automatic lookup, that
+// would need a paid API this suite doesn't have) and see the day's
+// running total against daily targets, set once in Insights → Nutrition
+// Targets. New data: nutritionEntries (the meal log) and
+// nutritionTargets (a single record, synced the same way as everything
+// else) — two new Supabase tables required (gym_nutrition_entries,
+// gym_nutrition_targets), same generic shape as every other gym_* table;
+// works fully offline until they exist.
+//
+// GYM-059 (notes) — exercise notes and plan notes previously never
+// appeared once a session started, despite both already existing as
+// fields. Exercise notes are now resolved live from the exercise record
+// every time a session starts (not copied into the plan/session), so
+// editing an exercise's notes propagates to every future session
+// automatically. Plan notes now show as a read-only banner at the top of
+// the session view. Programs gained their own notes field (📝 Notes
+// button on the program card). The program-import JSON template gained
+// a programNotes field, applied to newly-created programs on import
+// (existing programs' notes aren't silently overwritten by a re-import).
+// The PDF report gained a new Notes section covering program/plan/
+// exercise notes relevant to that report's sessions, alongside the
+// existing session-notes and Notes-for-Trainer sections.
 // v2.62 (GYM-059): note on versioning — this uploaded file's title/
 // badge/VERSION already read "2.61", but the actual v2.61 code below had
 // never been applied to it (likely an earlier save with its version
@@ -1130,7 +1209,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.62';
+const VERSION = '2.63';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1156,7 +1235,7 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], nutritionEntries: [], nutritionTargets: [], starterDismissed: false }
   };
 }
 
@@ -1178,6 +1257,8 @@ function load() {
       env.data.trainerNoteSets = parsed.data.trainerNoteSets || [];
       env.data.ptSessions = parsed.data.ptSessions || []; // GYM-053: absent in pre-v2.56 backups
       env.data.programs = parsed.data.programs || []; // GYM-055: absent in pre-v2.58 backups
+      env.data.nutritionEntries = parsed.data.nutritionEntries || []; // GYM-060: absent in pre-v2.63 backups
+      env.data.nutritionTargets = parsed.data.nutritionTargets || [];
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
@@ -1246,6 +1327,7 @@ function migratePrograms(env) {
   env.data.programs.forEach(p => {
     if (p.archived === undefined) p.archived = false;
     if (p.isActive === undefined) p.isActive = false;
+    if (p.notes === undefined) p.notes = '';
   });
 }
 function migrateSessions(env) {
@@ -1358,6 +1440,19 @@ const getPrograms      = () => getAllPrograms().filter(p => !p.archived).sort((a
 const getArchivedPrograms = () => getAllPrograms().filter(p => p.archived).sort((a,b)=>a.name.localeCompare(b.name));
 const programById      = (id) => getAllPrograms().find(p => p.id === id) || null;
 const getActiveProgram = () => getPrograms().find(p => p.isActive) || null;
+// GYM-060: meal log — each entry is a single logged food/meal for a
+// date, with manually-entered calories/protein (there's no API lookup
+// here; the Google-search link is just a shortcut to look the numbers up
+// yourself, same spirit as the weight-entry "copy to clipboard" flow).
+// Targets are a single record, same generic per-record sync shape as
+// everything else in the suite rather than a bare scalar on the
+// envelope, so they sync across devices like PT sessions do.
+const getNutritionEntries = () => _env.data.nutritionEntries.filter(e => !e._deleted);
+const getEntriesForDate = (date) => getNutritionEntries().filter(e => e.date === date);
+const getNutritionTargets = () => {
+  const t = _env.data.nutritionTargets.find(x => !x._deleted);
+  return t || { calories: 0, protein: 0 };
+};
 function findOrCreateProgram(rawName) {
   const name = (rawName || '').trim() || fmtDateShort(new Date().toISOString().slice(0,10));
   const existing = getPrograms().find(p => p.name.toLowerCase() === name.toLowerCase());
@@ -1376,6 +1471,19 @@ function renameProgram(id) {
   save(_env); sbUpsert('program', prog, null);
   renderPlanList();
   toast('Program renamed ✓');
+}
+// GYM-059: program-level notes — an overall goal/structure note for the
+// whole program, separate from any individual plan's own notes. Same
+// lightweight prompt() pattern as renameProgram, consistent with how
+// programs are otherwise edited in this suite.
+function editProgramNotes(id) {
+  const prog = programById(id); if (!prog) return;
+  const notes = prompt('Program notes', prog.notes || '');
+  if (notes === null) return;
+  prog.notes = notes.trim(); prog.updatedAt = new Date().toISOString();
+  save(_env); sbUpsert('program', prog, null);
+  renderPlanList();
+  toast('Program notes saved ✓');
 }
 // GYM-057: only one program can be active at a time — tapping the active
 // one again turns it off, tapping another moves the flag across. Drives
@@ -1681,8 +1789,16 @@ const _gymPT = window.PalSync.table('gym_pt_sessions');
 // (e.g. an imported PT programme); a plan's programId is nullable, so
 // existing ungrouped plans are unaffected.
 const _gymPrograms = window.PalSync.table('gym_programs');
-const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms };
-const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs' };
+// GYM-060: two new Supabase tables required — 'gym_nutrition_entries'
+// (the meal log) and 'gym_nutrition_targets' (a single record holding
+// the daily calorie/protein goals), same generic shape/RLS as every
+// other gym_* table. Until they exist, meals and targets save and work
+// fine locally but won't sync across devices — logged to the sync panel
+// as a missing-table error, not thrown.
+const _gymNutritionEntries = window.PalSync.table('gym_nutrition_entries');
+const _gymNutritionTargets = window.PalSync.table('gym_nutrition_targets');
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms, nutritionEntry: _gymNutritionEntries, nutritionTarget: _gymNutritionTargets };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs', nutritionEntry: 'nutritionEntries', nutritionTarget: 'nutritionTargets' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -1769,7 +1885,7 @@ function pullFromCloud(cb) {
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program'];
+  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program','nutritionEntry','nutritionTarget'];
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
@@ -1839,12 +1955,12 @@ function manualPush() {
   // from another device, resurrecting something that was deleted elsewhere.
   pullFromCloud(() => {
     window.PalSync.flushRetryQueue().then(renderSyncPanel);
-    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions','programs'].forEach(k => total += _env.data[k].length);
+    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions','programs','nutritionEntries','nutritionTargets'].forEach(k => total += _env.data[k].length);
     if (!total) { toast('Nothing to push'); return; }
     setSyncStatus('syncing');
     slog('Manual push — '+total+' record(s)');
     let done = 0, errors = 0;
-    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs]].forEach(([kind, arr]) => {
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs],['nutritionEntry',_env.data.nutritionEntries],['nutritionTarget',_env.data.nutritionTargets]].forEach(([kind, arr]) => {
       arr.forEach(rec => sbUpsert(kind, rec, ok => {
         if (!ok) errors++;
         done++;
@@ -2468,9 +2584,11 @@ function renderProgramCard(prog, plans, sessions, forceOpen) {
         <div class="li-meta">${plans.length} plan${plans.length===1?'':'s'}${forceOpen?'':' '+(isOpen?'▾':'▸')}</div>
       </div>
     </div>
+    ${prog.notes ? `<div class="li-meta" style="margin-top:4px">📝 ${escHtml(prog.notes)}</div>` : ''}
     <div class="li-actions">
       <button class="btn btn-secondary btn-sm" onclick="toggleActiveProgram('${prog.id}')">${prog.isActive ? '★ Active' : '☆ Set Active'}</button>
       <button class="btn btn-secondary btn-sm" onclick="renameProgram('${prog.id}')">Rename</button>
+      <button class="btn btn-secondary btn-sm" onclick="editProgramNotes('${prog.id}')">📝 Notes</button>
       <button class="btn btn-secondary btn-sm" onclick="archiveProgram('${prog.id}')">📦 Archive</button>
       <button class="btn btn-danger btn-sm" onclick="removeProgram('${prog.id}')">Remove</button>
     </div>
@@ -2970,6 +3088,7 @@ function renderCalendar() {
     const daySessions = getSessions().filter(s => s.date === date)
       .sort((a,b) => (a.completedAt||'').localeCompare(b.completedAt||''));
     body += daySessions.map(calSessionChip).join('');
+    body += renderDayNutritionSummary(date);
     const done = isCurrentWeek && date < today;
     html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}">
       <div class="cal-day-head">
@@ -3467,7 +3586,14 @@ function startSession(planId) {
         const ref = JSON.parse(JSON.stringify(pi.targetSets));
         const found = lastPerformedItem(pi.exerciseId);
         const contextNote = found ? '📅 Last actual ('+fmtDate(found.date)+'): '+summarizeSets(found.item.actualSets.filter(hasAnyValue), pi.trackType) : null;
-        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote };
+        // GYM-059: exercise notes are resolved live from the exercise
+        // record at the moment a session starts (not copied/snapshotted
+        // into the plan item), so editing an exercise's notes propagates
+        // to every future session for that exercise automatically — no
+        // per-plan or per-instance copy to keep in sync.
+        const ex = exerciseById(pi.exerciseId);
+        const exerciseNote = ex && ex.notes ? ex.notes : null;
+        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote, exerciseNote };
       })
     };
   } else {
@@ -3479,6 +3605,19 @@ function startSession(planId) {
   document.getElementById('sessionSearch').value = '';
   document.getElementById('sessionSearchDropdown').style.display = 'none';
   document.getElementById('finishSessionBtn').textContent = '✓ Finish Session';
+  // GYM-059: the plan's own notes (its overall goal, structure, whatever
+  // was written when building it) shown as a read-only banner — kept
+  // separate from the editable Session Notes textarea below so typing up
+  // today's session notes never overwrites or gets confused with it.
+  const bannerEl = document.getElementById('sessionPlanNoteBanner');
+  const plan = planId ? planById(planId) : null;
+  if (plan && plan.notes) {
+    bannerEl.style.display = '';
+    bannerEl.innerHTML = `<div class="li-meta" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:10px">📋 <strong>Plan notes:</strong> ${escHtml(plan.notes)}</div>`;
+  } else {
+    bannerEl.style.display = 'none';
+    bannerEl.innerHTML = '';
+  }
   renderSessionItems();
   document.getElementById('sessionOverlay').classList.add('open');
   acquireWakeLock();
@@ -3571,7 +3710,7 @@ function addExerciseToSession(exerciseId) {
     referenceSets: sugg.referenceLabel ? JSON.parse(JSON.stringify(sugg.suggestedSets)) : null,
     lastSetsForCompare: sugg.lastSets ? JSON.parse(JSON.stringify(sugg.lastSets)) : null,
     canProgress: !!sugg.canProgress, progressionMode: sugg.progressionMode||null, progressionAmount: sugg.progressionAmount!=null?sugg.progressionAmount:null,
-    actualSets, status:'skipped', contextNote: sugg.note };
+    actualSets, status:'skipped', contextNote: sugg.note, exerciseNote: ex.notes || null };
   _activeSession.items.push(item);
   document.getElementById('sessionSearch').value = '';
   document.getElementById('sessionSearchDropdown').style.display = 'none';
@@ -3795,6 +3934,7 @@ function renderSessionItems() {
         </span>
       </div>
       ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
+      ${item.exerciseNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent3)">📝 ${escHtml(item.exerciseNote)}</div>` : ''}
       ${rows}
       <button class="add-set-mini" onclick="addSessionSet(${ii})">+ Add Extra Set</button>
       ${typeToggle}
@@ -3918,6 +4058,16 @@ function finishActiveSession() {
   offerPlanPrompt(finished);
 }
 
+// GYM-061: the plan-targets-update decision used to be a native
+// confirm() — OK/Cancel, easy to misread on mobile as to which option
+// does what. Replaced with an explicit two-button modal. Either way the
+// session itself is already saved by this point (that happens before
+// this is ever called) — the only thing this decides is whether the
+// plan's own targets get overwritten to match today's actual numbers.
+// "No" leaves the plan completely untouched; the session still counts
+// as that plan being done today (planDoneOnDate just checks a session
+// exists with that planId+date, unaffected by this choice either way).
+let _pendingTargetsUpdate = null; // { planId, session }
 function offerPlanPrompt(finished) {
   if (!finished.planId) {
     if (finished.items.length && confirm('Save this as a reusable Plan for next time?')) {
@@ -3926,10 +4076,21 @@ function offerPlanPrompt(finished) {
     }
   } else {
     const plan = planById(finished.planId);
-    if (plan && confirm(`Update "${plan.name}" targets to match today's actual numbers?`)) {
-      updatePlanFromSession(plan.id, finished);
-    }
+    if (!plan) return;
+    _pendingTargetsUpdate = { planId: plan.id, session: finished };
+    document.getElementById('updateTargetsMessage').textContent = `Update "${plan.name}" targets to match today's actual numbers? This changes the plan (and any repeats of it) going forward.`;
+    openModal('modalUpdateTargets');
   }
+}
+function confirmUpdatePlanTargets() {
+  if (_pendingTargetsUpdate) updatePlanFromSession(_pendingTargetsUpdate.planId, _pendingTargetsUpdate.session);
+  _pendingTargetsUpdate = null;
+  closeModal('modalUpdateTargets');
+  toast('Plan targets updated ✓');
+}
+function declineUpdatePlanTargets() {
+  _pendingTargetsUpdate = null;
+  closeModal('modalUpdateTargets');
 }
 
 function createPlanFromSession(session, name) {
@@ -4161,6 +4322,7 @@ function renderInsights() {
   renderNextUpCard();
   renderWeightSection();
   renderPTSection();
+  renderNutritionTargetsSection();
   const {areaTotals, areaTags} = computeInsights(_insightsWindow);
   const areas = sortAreasSpaLast(Object.keys(areaTotals).filter(a => a!=='Other' || areaTags['Other'].length).sort((a,b)=>areaTotals[b]-areaTotals[a]));
   const el = document.getElementById('insightsList');
@@ -4382,6 +4544,127 @@ function renderPTSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// NUTRITION / MEALS (GYM-060) — a lightweight daily meal log. There's no
+// automatic calorie lookup here (that would need a paid API and a
+// backend this suite doesn't have); the Google-search link is just a
+// one-tap shortcut to look a food up, then the numbers are entered by
+// hand, same "manual entry, app just makes it quick" spirit as the
+// weight-entry flow.
+// ═══════════════════════════════════════════════════════════════════
+let _mealsModalDate = null;
+function openMealsModal(date) {
+  _mealsModalDate = date;
+  document.getElementById('mealsModalTitle').textContent = 'Meals — ' + fmtDate(date);
+  document.getElementById('mealNameInput').value = '';
+  document.getElementById('mealCaloriesInput').value = '';
+  document.getElementById('mealProteinInput').value = '';
+  updateMealSearchLink();
+  renderMealsList();
+  openModal('modalMeals');
+}
+function updateMealSearchLink() {
+  const name = document.getElementById('mealNameInput').value.trim();
+  const link = document.getElementById('mealSearchLink');
+  if (!name) { link.style.opacity = '0.4'; link.removeAttribute('href'); return; }
+  link.style.opacity = '1';
+  link.href = 'https://www.google.com/search?q=' + encodeURIComponent(name + ' calories protein');
+}
+function renderMealsList() {
+  const date = _mealsModalDate;
+  if (!date) return;
+  const entries = getEntriesForDate(date).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
+  const totalProtein = entries.reduce((s,e)=>s+(e.protein||0),0);
+  const targets = getNutritionTargets();
+  const calLine = targets.calories ? `${totalCal} / ${targets.calories} cal` : `${totalCal} cal logged`;
+  const proteinLine = targets.protein ? `${totalProtein} / ${targets.protein}g protein` : `${totalProtein}g protein logged`;
+  const overCal = targets.calories > 0 && totalCal > targets.calories;
+  const totalsEl = document.getElementById('mealsTotalsBar');
+  totalsEl.innerHTML = `<div class="li-meta" style="font-size:13px;font-weight:600;color:${overCal?'var(--accent4)':'var(--ink1)'}">${calLine} · ${proteinLine}</div>`;
+  const listEl = document.getElementById('mealsList');
+  listEl.innerHTML = entries.length ? entries.map(e => `
+    <div class="list-item">
+      <div class="li-top"><div>
+        <div class="li-name">${escHtml(e.mealName)}</div>
+        <div class="li-meta">${e.calories||0} cal · ${e.protein||0}g protein</div>
+      </div></div>
+      <div class="li-actions">
+        <button class="btn btn-danger btn-sm" onclick="deleteMealEntry('${e.id}')">Delete</button>
+      </div>
+    </div>`).join('') : '<div class="empty-state">No meals logged yet</div>';
+}
+function saveMealEntry() {
+  const mealName = document.getElementById('mealNameInput').value.trim();
+  const calories = Number(document.getElementById('mealCaloriesInput').value) || 0;
+  const protein = Number(document.getElementById('mealProteinInput').value) || 0;
+  if (!mealName) { toast('Enter a meal name first'); return; }
+  const now = new Date().toISOString();
+  const record = { id: uid('meal'), date: _mealsModalDate, mealName, calories, protein, createdAt: now, updatedAt: now };
+  _env.data.nutritionEntries.push(record);
+  save(_env);
+  sbUpsert('nutritionEntry', record, null);
+  document.getElementById('mealNameInput').value = '';
+  document.getElementById('mealCaloriesInput').value = '';
+  document.getElementById('mealProteinInput').value = '';
+  updateMealSearchLink();
+  renderMealsList();
+  renderCalendar();
+  toast('Meal added ✓');
+}
+function deleteMealEntry(id) {
+  const e = _env.data.nutritionEntries.find(x=>x.id===id);
+  if (!e) return;
+  if (!confirm('Delete this meal entry?')) return;
+  e._deleted = true; e.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('nutritionEntry', e, null);
+  renderMealsList();
+  renderCalendar();
+  toast('Meal deleted');
+}
+// Compact tappable summary row shown on each calendar day card.
+function renderDayNutritionSummary(date) {
+  const entries = getEntriesForDate(date);
+  const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
+  const totalProtein = entries.reduce((s,e)=>s+(e.protein||0),0);
+  const targets = getNutritionTargets();
+  const calStr = targets.calories ? totalCal+'/'+targets.calories+' cal' : totalCal+' cal';
+  const proteinStr = targets.protein ? totalProtein+'/'+targets.protein+'g protein' : totalProtein+'g protein';
+  return `<div class="cal-session" style="cursor:pointer" onclick="openMealsModal('${date}')">
+    <div class="cal-session-head">
+      <span class="cal-session-name">🍽 ${entries.length} meal${entries.length===1?'':'s'}</span>
+      <span class="cal-session-meta">${entries.length ? calStr+' · '+proteinStr : 'Log meals'}</span>
+    </div>
+  </div>`;
+}
+// GYM-060: daily targets — a single record (not a bare scalar on the
+// envelope) so it syncs across devices the same way everything else
+// does, via gym_nutrition_targets.
+function renderNutritionTargetsSection() {
+  const calEl = document.getElementById('targetCaloriesInput');
+  const proEl = document.getElementById('targetProteinInput');
+  const summaryEl = document.getElementById('nutritionTargetsSummary');
+  if (!calEl || !proEl || !summaryEl) return;
+  const t = getNutritionTargets();
+  calEl.value = t.calories || '';
+  proEl.value = t.protein || '';
+  summaryEl.textContent = (t.calories || t.protein) ? `Current target: ${t.calories||0} cal / ${t.protein||0}g protein per day` : 'No targets set yet';
+}
+function saveNutritionTargets() {
+  const calories = Number(document.getElementById('targetCaloriesInput').value) || 0;
+  const protein = Number(document.getElementById('targetProteinInput').value) || 0;
+  const now = new Date().toISOString();
+  let record = _env.data.nutritionTargets.find(x => !x._deleted);
+  if (record) { record.calories = calories; record.protein = protein; record.updatedAt = now; }
+  else { record = { id: uid('nutrit'), calories, protein, createdAt: now, updatedAt: now }; _env.data.nutritionTargets.push(record); }
+  save(_env);
+  sbUpsert('nutritionTarget', record, null);
+  renderNutritionTargetsSection();
+  renderCalendar();
+  toast('Targets saved ✓');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // PDF REPORT (GYM-027) — builds a print-optimized view and hands off to
 // the browser's native print dialog; "Save as PDF" from there produces a
 // real PDF with no library dependency, consistent with the hand-rolled
@@ -4506,6 +4789,32 @@ function buildReportNotesBlock() {
     ${lines}
   </div>`;
 }
+// GYM-059: separate from the "Notes for Trainer" to-do list above — this
+// is the actual notes attached to programs/plans/exercises that appeared
+// in this report's sessions (e.g. form cues, injury flags, a plan's
+// overall goal). Scoped to the report's sessions rather than every note
+// in the whole library, so it stays relevant to what the report covers.
+function buildEntityNotesBlock(sessions) {
+  const programIds = new Set(), planIds = new Set(), exerciseIds = new Set();
+  sessions.forEach(s => {
+    s.items.forEach(i => exerciseIds.add(i.exerciseId));
+    if (s.planId) {
+      planIds.add(s.planId);
+      const p = planById(s.planId);
+      if (p && p.programId) programIds.add(p.programId);
+    }
+  });
+  const programs = Array.from(programIds).map(id => programById(id)).filter(p => p && p.notes);
+  const plans = Array.from(planIds).map(id => planById(id)).filter(p => p && p.notes);
+  const exercises = Array.from(exerciseIds).map(id => exerciseById(id)).filter(e => e && e.notes);
+  if (!programs.length && !plans.length && !exercises.length) return '';
+  const row = (icon, name, notes) => `<div class="rpt-ex-line"><span class="rpt-ex-name">${icon} ${escHtml(name)}</span></div><p style="font-size:11px;color:#333;margin:2px 0 10px">${escHtml(notes)}</p>`;
+  let html = '<div class="rpt-section-title">Notes</div>';
+  html += programs.map(p => row('🗂', p.name, p.notes)).join('');
+  html += plans.map(p => row('📋', p.name, p.notes)).join('');
+  html += exercises.map(e => row('', e.name, e.notes)).join('');
+  return html;
+}
 function buildReportHtml(start, end, sessions, weights, userName) {
   const totalSessions = sessions.length;
   const completed = sessions.filter(s => s.items.length && s.items.every(i=>i.status==='completed')).length;
@@ -4561,6 +4870,8 @@ function buildReportHtml(start, end, sessions, weights, userName) {
 
     <div class="rpt-section-title">Body Areas Worked</div>
     ${areaRows}
+
+    ${buildEntityNotesBlock(sessions)}
 
     <div class="rpt-section-title">Body Weight</div>
     <p style="font-size:11.5px;color:#333">${weightSummary}</p>
@@ -4661,6 +4972,8 @@ function importJSON(event) {
         _env.data.trainerNoteSets = _env.data.trainerNoteSets || [];
         _env.data.ptSessions = _env.data.ptSessions || []; // GYM-053: absent in pre-v2.56 backups
         _env.data.programs = _env.data.programs || []; // GYM-055: absent in pre-v2.58 backups
+        _env.data.nutritionEntries = _env.data.nutritionEntries || []; // GYM-060: absent in pre-v2.63 backups
+        _env.data.nutritionTargets = _env.data.nutritionTargets || [];
         const importNow = new Date().toISOString();
         _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
         ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
@@ -4741,11 +5054,16 @@ function importProgramFileHandler(event) {
           isDuplicateProgram = true;
           const allProgramNames = new Set(getAllPrograms().map(p => p.name.toLowerCase()));
           const dupName = uniqueName(`${desiredName} (${fmtDateShort(todayISO())})`, allProgramNames);
-          program = { id: uid('prog'), name: dupName, notes: '', archived: false, isActive: false, createdAt: now, updatedAt: now };
+          program = { id: uid('prog'), name: dupName, notes: (bundle.programNotes||'').trim(), archived: false, isActive: false, createdAt: now, updatedAt: now };
           _env.data.programs.push(program);
           newProgramRecords.push(program);
         } else {
           program = findOrCreateProgram(bundle.programName);
+          // findOrCreateProgram always creates fresh here (its own
+          // existing-name check mirrors the one just above, which found
+          // nothing) — safe to set notes without risking overwriting an
+          // existing program's own notes on a routine re-import.
+          if (bundle.programNotes) { program.notes = bundle.programNotes.trim(); program.updatedAt = now; }
         }
         // Collision check scoped to plans already in THIS program only — a
         // plan named "Day 1" in one program never blocks "Day 1" in another.
@@ -4790,6 +5108,7 @@ function downloadProgramTemplate() {
     schemaVersion: 1,
     type: "programImport",
     programName: "Example — replace with your trainer's program name",
+    programNotes: "Optional overall notes for this program, e.g. its goal or phase.",
     exercises: [
       { name: "Example New Exercise", type: "reps", tags: ["Chest"], notes: "Optional setup notes, e.g. handle position." }
     ],
