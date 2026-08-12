@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.56</title>
+<title>P Apps v10.57</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -623,7 +623,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.56</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.57</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -2384,6 +2384,15 @@ function updateStaleBanner() {
 // of this card, schedule data is read from localStorage only — it is as
 // fresh as the last time Gym Tracker ran on this device (GYM_DATA_UPDATED
 // already refreshes the card whenever the app syncs).
+// PET-067 v10.57: the Gym Tracker card's nutrition line was always using
+// a single flat calorie/protein target, even after Gym Tracker itself
+// split targets into separate Active day / Rest day pairs (CLA-013 /
+// v2.68). Card now derives "is today active" the same way — a planned
+// or completed workout today — using the resolvePlansForDate port and
+// todaySessions already computed below, and picks the matching target
+// pair, tagged 🏋️/😴 so which one applied is visible on the card too.
+// Falls back to the old flat fields if a target record predates the
+// active/rest split.
 function statGym() {
   try {
     const raw = localStorage.getItem('gym_tracker_v1');
@@ -2514,6 +2523,22 @@ function statGym() {
       html += `<div style="font-size:10px;color:var(--ink3);margin-top:2px">📋 Next: ${nextPlanned.names.join(', ')} <span style="color:var(--ink2)">${dStr}</span></div>`;
     }
 
+    // PET-067: pick the correct target pair for today — active (a
+    // planned or completed workout today) vs rest — same rule as
+    // gym-tracker.html's isActiveDay(). todayPlanIds/todaySessions are
+    // already computed above for the streak/pending-today logic, so
+    // this is free to derive here. Falls back to the old flat
+    // calories/protein fields if a target record predates CLA-013
+    // (active/rest fields undefined) — matches gym-tracker.html's own
+    // migration default of "both start equal to the old single value".
+    const isActiveDay = todayPlanIds.length > 0 || todaySessions.length > 0;
+    const todayCalTarget = isActiveDay
+      ? (nutritionTargets.activeCalories || nutritionTargets.calories || 0)
+      : (nutritionTargets.restCalories || nutritionTargets.calories || 0);
+    const todayProteinTarget = isActiveDay
+      ? (nutritionTargets.activeProtein || nutritionTargets.protein || 0)
+      : (nutritionTargets.restProtein || nutritionTargets.protein || 0);
+
     // GYM-062: today's meals vs targets, built once here and appended
     // after whichever branch below produces the card's base HTML —
     // deliberately placed after the "nothing to show" early-return check
@@ -2521,17 +2546,18 @@ function statGym() {
     // something on the card instead of a flat "No sessions yet".
     const todayMeals = nutritionEntries.filter(e => e.date === todayStr);
     let nutritionHtml = '';
-    if (todayMeals.length || nutritionTargets.calories || nutritionTargets.protein) {
+    if (todayMeals.length || todayCalTarget || todayProteinTarget) {
       const cal = todayMeals.reduce((s,e)=>s+(e.calories||0),0);
       const pro = todayMeals.reduce((s,e)=>s+(e.protein||0),0);
-      const calPct = nutritionTargets.calories ? Math.min(100, Math.round(cal/nutritionTargets.calories*100)) : 0;
-      const proPct = nutritionTargets.protein ? Math.min(100, Math.round(pro/nutritionTargets.protein*100)) : 0;
-      const overCal = nutritionTargets.calories > 0 && cal > nutritionTargets.calories;
-      const calLabel = nutritionTargets.calories ? `${cal}/${nutritionTargets.calories} cal` : `${cal} cal`;
-      const proLabel = nutritionTargets.protein ? `${pro}/${nutritionTargets.protein}g protein` : `${pro}g protein`;
-      nutritionHtml = `<div style="font-size:10px;color:var(--ink3);margin-top:5px">🍽 ${calLabel} · ${proLabel}</div>`;
-      if (nutritionTargets.calories) nutritionHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${calPct}%;background:${overCal?'#f78166':'#38bdf8'}"></div></div>`;
-      if (nutritionTargets.protein) nutritionHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${proPct}%;background:#3fb950"></div></div>`;
+      const calPct = todayCalTarget ? Math.min(100, Math.round(cal/todayCalTarget*100)) : 0;
+      const proPct = todayProteinTarget ? Math.min(100, Math.round(pro/todayProteinTarget*100)) : 0;
+      const overCal = todayCalTarget > 0 && cal > todayCalTarget;
+      const calLabel = todayCalTarget ? `${cal}/${todayCalTarget} cal` : `${cal} cal`;
+      const proLabel = todayProteinTarget ? `${pro}/${todayProteinTarget}g protein` : `${pro}g protein`;
+      const dayTag = isActiveDay ? '🏋️' : '😴';
+      nutritionHtml = `<div style="font-size:10px;color:var(--ink3);margin-top:5px">🍽 ${dayTag} ${calLabel} · ${proLabel}</div>`;
+      if (todayCalTarget) nutritionHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${calPct}%;background:${overCal?'#f78166':'#38bdf8'}"></div></div>`;
+      if (todayProteinTarget) nutritionHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${proPct}%;background:#3fb950"></div></div>`;
     }
 
     // If nothing at all to show today
