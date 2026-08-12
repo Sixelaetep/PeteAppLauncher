@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.64</title>
+<title>Gym Tracker v2.65</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -310,7 +310,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.64</div></span>
+      <span>Gym Tracker<div class="ver">v2.65</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -705,6 +705,26 @@
   </div>
 </div>
 
+<!-- ═══ EDIT MEAL MODAL (GYM-065) — shared by both a saved-meal
+     template edit and a specific day's logged-entry edit, since the
+     fields are identical; a real modal here (name + calories + protein
+     all visible at once, one Save) replaces what used to be three
+     sequential native prompt() dialogs — easy to lose track of on a
+     phone, which is exactly what "edit only changes the name" reports
+     as if the calories/protein prompts were being missed. ═══ -->
+<div class="modal-overlay" id="modalEditMeal" onclick="if(event.target===this)closeModal('modalEditMeal')">
+  <div class="modal">
+    <div class="modal-title"><span id="editMealModalTitle">Edit Meal</span><button class="modal-close" onclick="closeModal('modalEditMeal')">✕</button></div>
+    <label>Meal / food</label>
+    <input type="text" id="editMealNameInput">
+    <div class="type-row">
+      <div><label>Calories</label><input type="number" id="editMealCaloriesInput" min="0"></div>
+      <div><label>Protein (g)</label><input type="number" id="editMealProteinInput" min="0"></div>
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="saveEditMealModal()">Save Changes</button>
+  </div>
+</div>
+
 <!-- ═══ REPORT CONFIG MODAL ═══ -->
 <div class="modal-overlay" id="modalReport" onclick="if(event.target===this)closeModal('modalReport')">
   <div class="modal">
@@ -1010,6 +1030,15 @@
 // value. PT Companion's target/summary display was updated to match
 // (same optional-time behaviour) for parity as the two apps share
 // programme data.
+// v2.65 (GYM-065): editing a meal (saved template or a specific day's
+// logged entry) used to be three sequential native prompt() dialogs —
+// name, then calories, then protein. Easy to lose track of on a phone,
+// which is exactly what "edit only changes the name" looks like if the
+// second/third prompts get missed. Replaced with a real modal showing
+// all three fields at once with a single Save — shared between both
+// "Edit" on a saved meal (Manage Saved Meals) and the new "Edit" button
+// added to individual logged meal entries in a day's Meals list
+// (previously Delete-only).
 // v2.64 (GYM-062, GYM-063, GYM-064): three changes.
 //
 // GYM-062 — root cause of the "text not visible" report: var(--ink1)
@@ -1265,7 +1294,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.64';
+const VERSION = '2.65';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -4697,6 +4726,7 @@ function renderMealsList() {
         <div class="li-meta">${e.calories||0} cal · ${e.protein||0}g protein</div>
       </div></div>
       <div class="li-actions">
+        <button class="btn btn-secondary btn-sm" onclick="openEditMealEntry('${e.id}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="deleteMealEntry('${e.id}')">Delete</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No meals logged yet</div>';
@@ -4748,28 +4778,63 @@ function renderSavedMealsList() {
         <div class="li-meta">${m.calories||0} cal · ${m.protein||0}g protein</div>
       </div></div>
       <div class="li-actions">
-        <button class="btn btn-secondary btn-sm" onclick="editSavedMeal('${m.id}')">Edit</button>
+        <button class="btn btn-secondary btn-sm" onclick="openEditSavedMeal('${m.id}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="deleteSavedMeal('${m.id}')">Delete</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No saved meals yet — they\'ll appear here as you log meals</div>';
 }
-function editSavedMeal(id) {
+// GYM-065: both edit paths below open the same modalEditMeal, tagged
+// with which record they're editing via _editMealTarget so Save knows
+// where to write back to. Replaces the old 3-sequential-prompt()
+// editSavedMeal, which was easy to lose track of mid-flow on a phone.
+let _editMealTarget = null; // { kind: 'saved' | 'entry', id }
+function openEditSavedMeal(id) {
   const m = _env.data.savedMeals.find(x => x.id === id);
   if (!m) return;
-  const name = prompt('Meal name', m.name);
-  if (name === null || !name.trim()) return;
-  const calStr = prompt('Calories', String(m.calories||0));
-  if (calStr === null) return;
-  const proStr = prompt('Protein (g)', String(m.protein||0));
-  if (proStr === null) return;
-  m.name = name.trim();
-  m.calories = Number(calStr) || 0;
-  m.protein = Number(proStr) || 0;
-  m.updatedAt = new Date().toISOString();
-  save(_env);
-  sbUpsert('savedMeal', m, null);
-  renderSavedMealsList();
-  toast('Saved meal updated ✓');
+  _editMealTarget = { kind: 'saved', id };
+  document.getElementById('editMealModalTitle').textContent = 'Edit Saved Meal';
+  document.getElementById('editMealNameInput').value = m.name;
+  document.getElementById('editMealCaloriesInput').value = m.calories || '';
+  document.getElementById('editMealProteinInput').value = m.protein || '';
+  openModal('modalEditMeal');
+}
+function openEditMealEntry(id) {
+  const e = _env.data.nutritionEntries.find(x => x.id === id);
+  if (!e) return;
+  _editMealTarget = { kind: 'entry', id };
+  document.getElementById('editMealModalTitle').textContent = 'Edit Meal Entry';
+  document.getElementById('editMealNameInput').value = e.mealName;
+  document.getElementById('editMealCaloriesInput').value = e.calories || '';
+  document.getElementById('editMealProteinInput').value = e.protein || '';
+  openModal('modalEditMeal');
+}
+function saveEditMealModal() {
+  if (!_editMealTarget) return;
+  const name = document.getElementById('editMealNameInput').value.trim();
+  const calories = Number(document.getElementById('editMealCaloriesInput').value) || 0;
+  const protein = Number(document.getElementById('editMealProteinInput').value) || 0;
+  if (!name) { toast('Enter a meal name first'); return; }
+  const now = new Date().toISOString();
+  if (_editMealTarget.kind === 'saved') {
+    const m = _env.data.savedMeals.find(x => x.id === _editMealTarget.id);
+    if (!m) return;
+    m.name = name; m.calories = calories; m.protein = protein; m.updatedAt = now;
+    save(_env);
+    sbUpsert('savedMeal', m, null);
+    renderSavedMealsList();
+    toast('Saved meal updated ✓');
+  } else {
+    const e = _env.data.nutritionEntries.find(x => x.id === _editMealTarget.id);
+    if (!e) return;
+    e.mealName = name; e.calories = calories; e.protein = protein; e.updatedAt = now;
+    save(_env);
+    sbUpsert('nutritionEntry', e, null);
+    renderMealsList();
+    renderCalendar();
+    toast('Meal entry updated ✓');
+  }
+  _editMealTarget = null;
+  closeModal('modalEditMeal');
 }
 function deleteSavedMeal(id) {
   const m = _env.data.savedMeals.find(x => x.id === id);
