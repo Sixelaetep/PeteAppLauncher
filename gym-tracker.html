@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.65</title>
+<title>Gym Tracker v2.66</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -310,7 +310,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.65</div></span>
+      <span>Gym Tracker<div class="ver">v2.66</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -746,6 +746,11 @@
     <input type="date" id="reportStart">
     <label>To</label>
     <input type="date" id="reportEnd">
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;text-transform:none;font-weight:600;cursor:pointer">
+      <input type="checkbox" id="reportIncludeFood" style="margin:0">
+      Include food / nutrition data
+    </label>
+    <p style="font-size:11px;color:var(--ink3);margin-top:2px">If included, each logged day's meals plus a calories/protein overview for the period are added to the report.</p>
     <div class="btn-row">
       <button class="btn btn-primary" style="flex:1" onclick="generateReport()">📄 Generate &amp; Print / Save PDF</button>
     </div>
@@ -1030,6 +1035,15 @@
 // value. PT Companion's target/summary display was updated to match
 // (same optional-time behaviour) for parity as the two apps share
 // programme data.
+// v2.66 (GYM-066): Generate Report gained an "Include food / nutrition
+// data" checkbox (defaults checked, remembered on this device like the
+// report name). When on, the report adds a Nutrition section between
+// Body Weight and Session Log — a high-level overview (days logged,
+// average calories/protein per day, compared against targets if set)
+// plus a per-day table listing that day's meals with daily totals.
+// Scoped to the report's own date range, unlike the all-time "Since
+// Last PT Session" stat, since "what did I eat during this period" only
+// makes sense measured against the period being reported.
 // v2.65 (GYM-065): editing a meal (saved template or a specific day's
 // logged entry) used to be three sequential native prompt() dialogs —
 // name, then calories, then protein. Easy to lose track of on a phone,
@@ -1294,7 +1308,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.65';
+const VERSION = '2.66';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -4927,6 +4941,10 @@ function openReportModal() {
   document.getElementById('reportStart').value = isoFromDate(c);
   document.getElementById('reportEnd').value = end;
   document.getElementById('reportUserName').value = localStorage.getItem('gym_report_user_name') || '';
+  // GYM-066: remembered on this device like the report name, defaulting
+  // to checked (included) since it's a useful addition most of the time,
+  // and one tap to leave off if not wanted for a particular report.
+  document.getElementById('reportIncludeFood').checked = localStorage.getItem('gym_report_include_food') !== 'false';
   openModal('modalReport');
 }
 function isoFromDate(d) { return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -4968,11 +4986,13 @@ function generateReport() {
   if (!start || !end || start > end) { toast('Check your date range'); return; }
   const userName = document.getElementById('reportUserName').value.trim();
   localStorage.setItem('gym_report_user_name', userName);
+  const includeFood = document.getElementById('reportIncludeFood').checked;
+  localStorage.setItem('gym_report_include_food', includeFood ? 'true' : 'false');
   const sessions = getSessions().filter(s => s.date && s.date >= start && s.date <= end)
     .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const weights = getWeightEntries().filter(w => w.date >= start && w.date <= end);
   const el = document.getElementById('reportPrintView');
-  el.innerHTML = buildReportHtml(start, end, sessions, weights, userName);
+  el.innerHTML = buildReportHtml(start, end, sessions, weights, userName, includeFood);
   closeModal('modalReport');
   setTimeout(() => window.print(), 150); // let the DOM paint before the print dialog opens
 }
@@ -5066,7 +5086,46 @@ function buildEntityNotesBlock(sessions) {
   html += exercises.map(e => row('', e.name, e.notes)).join('');
   return html;
 }
-function buildReportHtml(start, end, sessions, weights, userName) {
+// GYM-066: optional nutrition section — a high-level overview (days
+// logged, average calories/protein per day, compared against targets if
+// set) plus a per-day breakdown listing that day's meals. Scoped to the
+// report's own date range (unlike the all-time "Since Last PT Session"
+// stat above), since "what did I eat during this period" is inherently
+// about the period being reported on.
+function buildReportFoodBlock(start, end) {
+  const entries = getNutritionEntries().filter(e => e.date >= start && e.date <= end)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||''));
+  if (!entries.length) {
+    return `<div class="rpt-section-title">Nutrition</div><p style="font-size:11px;color:#777">No meals logged in this period.</p>`;
+  }
+  const targets = getNutritionTargets();
+  const byDate = {};
+  entries.forEach(e => { (byDate[e.date] = byDate[e.date]||[]).push(e); });
+  const dateKeys = Object.keys(byDate).sort();
+  const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
+  const totalProtein = entries.reduce((s,e)=>s+(e.protein||0),0);
+  const avgCal = Math.round(totalCal/dateKeys.length);
+  const avgProtein = Math.round(totalProtein/dateKeys.length);
+  const overview = `<div class="rpt-stat-grid">
+    <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div></div>
+    <div class="rpt-stat"><div class="rpt-stat-label">Avg Calories/Day</div><div class="rpt-stat-val">${avgCal}</div>${targets.calories?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${targets.calories}</div>`:''}</div>
+    <div class="rpt-stat"><div class="rpt-stat-label">Avg Protein/Day</div><div class="rpt-stat-val">${avgProtein}g</div>${targets.protein?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${targets.protein}g</div>`:''}</div>
+  </div>`;
+  const dayRows = dateKeys.map(date => {
+    const dayEntries = byDate[date];
+    const dayCal = dayEntries.reduce((s,e)=>s+(e.calories||0),0);
+    const dayProtein = dayEntries.reduce((s,e)=>s+(e.protein||0),0);
+    const mealList = dayEntries.map(e => escHtml(e.mealName)+' ('+(e.calories||0)+' cal, '+(e.protein||0)+'g)').join('; ');
+    return `<tr><td>${fmtDate(date)}</td><td style="font-size:10.5px">${mealList}</td><td>${dayCal}</td><td>${dayProtein}g</td></tr>`;
+  }).join('');
+  return `<div class="rpt-section-title">Nutrition</div>
+    ${overview}
+    <table class="rpt-table">
+      <thead><tr><th>Date</th><th>Meals</th><th>Calories</th><th>Protein</th></tr></thead>
+      <tbody>${dayRows}</tbody>
+    </table>`;
+}
+function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
   const totalSessions = sessions.length;
   const completed = sessions.filter(s => s.items.length && s.items.every(i=>i.status==='completed')).length;
   const totalExercises = sessions.reduce((sum,s)=>sum+s.items.length, 0);
@@ -5127,6 +5186,8 @@ function buildReportHtml(start, end, sessions, weights, userName) {
     <div class="rpt-section-title">Body Weight</div>
     <p style="font-size:11.5px;color:#333">${weightSummary}</p>
     ${weightChart}
+
+    ${includeFood ? buildReportFoodBlock(start, end) : ''}
 
     <div class="rpt-section-title">Session Log</div>
     <table class="rpt-table">
