@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.63</title>
+<title>Gym Tracker v2.64</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -226,6 +226,13 @@
   .repeat-kind-row{display:flex;gap:6px;margin-bottom:4px}
   .cal-repeat-badge{font-size:11px;color:var(--ink3);margin-top:2px}
   .cal-session{border:1px solid var(--border);border-radius:8px;background:var(--surface2);padding:8px 10px;margin-top:7px}
+  /* GYM-062: progress bars for daily nutrition targets — used both on
+     the calendar day card summary and inside the Meals modal totals. */
+  .nutri-bar-track{height:5px;border-radius:3px;background:var(--border);overflow:hidden}
+  .nutri-bar-fill{height:100%;border-radius:3px;transition:width 0.2s}
+  /* GYM-064: search-result pills in the meal-add flow */
+  .meal-pill{padding:5px 10px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);color:var(--ink);font-size:11.5px;font-family:inherit;cursor:pointer;white-space:nowrap}
+  .meal-pill:hover{border-color:var(--accent3)}
   .cal-session-head{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
   .cal-session-name{font-size:12.5px;font-weight:600;color:var(--ink)}
   .cal-session-meta{font-size:11px;color:var(--ink3);white-space:nowrap}
@@ -303,7 +310,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.63</div></span>
+      <span>Gym Tracker<div class="ver">v2.64</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -508,7 +515,7 @@
 <div class="modal-overlay" id="modalUpdateTargets" onclick="if(event.target===this)closeModal('modalUpdateTargets')">
   <div class="modal">
     <div class="modal-title"><span>Update plan?</span><button class="modal-close" onclick="closeModal('modalUpdateTargets')">✕</button></div>
-    <p id="updateTargetsMessage" style="font-size:14px;color:var(--ink1);line-height:1.5"></p>
+    <p id="updateTargetsMessage" style="font-size:14px;color:var(--ink);line-height:1.5"></p>
     <div class="btn-row" style="margin-top:14px">
       <button class="btn btn-secondary" style="flex:1" onclick="declineUpdatePlanTargets()">✗ No, just save</button>
       <button class="btn btn-primary" style="flex:1" onclick="confirmUpdatePlanTargets()">✓ Yes, update plan</button>
@@ -676,14 +683,25 @@
     <div id="mealsTotalsBar" style="margin-bottom:10px"></div>
     <div id="mealsList" style="margin-bottom:14px"></div>
     <div class="section-title" style="margin-top:0">Add a meal</div>
-    <label>Meal / food</label>
-    <input type="text" id="mealNameInput" placeholder="e.g. Chicken salad wrap" oninput="updateMealSearchLink()">
-    <a id="mealSearchLink" href="#" target="_blank" rel="noopener" style="font-size:12px;color:var(--accent3);display:inline-block;margin:4px 0 10px;opacity:0.4">🔍 Look up calories &amp; protein on Google</a>
+    <label>Meal / food <span style="font-weight:400;color:var(--ink3)">— search saved meals or type a new one</span></label>
+    <input type="text" id="mealNameInput" placeholder="Start typing…" oninput="onMealNameInput()" autocomplete="off">
+    <div id="mealSearchResults" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+    <a id="mealSearchLink" href="#" target="_blank" rel="noopener" style="font-size:12px;color:var(--accent3);display:inline-block;margin:6px 0 10px;opacity:0.4">🔍 Look up calories &amp; protein on Google</a>
     <div class="type-row">
       <div><label>Calories</label><input type="number" id="mealCaloriesInput" min="0" placeholder="0"></div>
       <div><label>Protein (g)</label><input type="number" id="mealProteinInput" min="0" placeholder="0"></div>
     </div>
     <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="saveMealEntry()">+ Add Meal</button>
+    <button class="btn btn-secondary btn-block" style="margin-top:8px" onclick="openManageSavedMeals()">📋 Manage Saved Meals</button>
+  </div>
+</div>
+
+<!-- ═══ MANAGE SAVED MEALS MODAL (GYM-064) ═══ -->
+<div class="modal-overlay" id="modalSavedMeals" onclick="if(event.target===this)closeModal('modalSavedMeals')">
+  <div class="modal">
+    <div class="modal-title"><span>Saved Meals</span><button class="modal-close" onclick="closeModal('modalSavedMeals')">✕</button></div>
+    <p style="font-size:11.5px;color:var(--ink2);margin-bottom:10px">Built automatically as you log meals. Edit a saved meal's numbers here if they need correcting — logging a meal again with the same name never overwrites them automatically.</p>
+    <div id="savedMealsList"></div>
   </div>
 </div>
 
@@ -992,6 +1010,44 @@
 // value. PT Companion's target/summary display was updated to match
 // (same optional-time behaviour) for parity as the two apps share
 // programme data.
+// v2.64 (GYM-062, GYM-063, GYM-064): three changes.
+//
+// GYM-062 — root cause of the "text not visible" report: var(--ink1)
+// was used in 5 places (the Update Targets modal message, two "Other
+// plans"/"Other archived plans" headers, picker section headers, and the
+// meals totals bar) but --ink1 was never actually a defined CSS
+// variable — only --ink/--ink2/--ink3 exist. An invalid custom property
+// falls back to the inherited value, which on this dark theme could
+// land on effectively-invisible text. Fixed all 5 to var(--ink). Also
+// added progress bars (calories + protein, each only shown once a
+// target is set) to the day-card meal summary and the Meals modal
+// totals, via a shared nutriBarsHtml() helper — and surfaced the same
+// today-vs-target info + bars on the launcher's Gym Tracker card
+// (index.html), reading straight from localStorage like the rest of
+// that card already does. The full-width launcher change (removing the
+// old #pairGymReading side-by-side wrapper) also shipped this release —
+// see index.html's own changelog.
+//
+// GYM-063 — plan items can now carry their own note, separate from and
+// additive to the exercise's global notes (e.g. "superset with the next
+// one" makes sense for this plan specifically, not the exercise
+// everywhere). Editable per-item in the plan editor, carried into the
+// session item at start time (a copy, unlike the exercise note which
+// stays live — a plan-item note is specific to how that plan was built,
+// not something that should silently change later), and shown alongside
+// the exercise note when a session starts. Also added to the program-
+// import template/handler as a per-item notes field.
+//
+// GYM-064 — meal entry is now search-first: typing in the meal name
+// shows matching saved meals as tappable pills, selecting one fills in
+// its calories/protein. The saved-meals library builds itself
+// automatically — logging a meal with a name that isn't already saved
+// adds it — but logging again with an existing name never overwrites
+// that saved meal's own numbers, so a one-off larger portion can't drift
+// the template; a new "Manage Saved Meals" screen (via the Meals modal)
+// is where you'd deliberately correct one. New Supabase table required:
+// gym_saved_meals, same generic shape as every other gym_* table —
+// works fully offline until it exists.
 // v2.63 (GYM-061, GYM-060, GYM-059-notes): three changes. Note: GYM-059
 // is reused across two unrelated tickets in Test & Issues — the Programs
 // duplicate-import fix (shipped as v2.61/v2.62) and this notes work.
@@ -1209,7 +1265,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.63';
+const VERSION = '2.64';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1235,7 +1291,7 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], nutritionEntries: [], nutritionTargets: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], nutritionEntries: [], nutritionTargets: [], savedMeals: [], starterDismissed: false }
   };
 }
 
@@ -1259,6 +1315,7 @@ function load() {
       env.data.programs = parsed.data.programs || []; // GYM-055: absent in pre-v2.58 backups
       env.data.nutritionEntries = parsed.data.nutritionEntries || []; // GYM-060: absent in pre-v2.63 backups
       env.data.nutritionTargets = parsed.data.nutritionTargets || [];
+      env.data.savedMeals = parsed.data.savedMeals || []; // GYM-064: absent in pre-v2.64 backups
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
@@ -1308,6 +1365,7 @@ function migratePlans(env) {
     (p.items||[]).forEach(item => {
       if (!item.trackType) item.trackType = item.type || (exById[item.exerciseId] ? exById[item.exerciseId].type : 'reps');
       if (item.estimatedMinutes === undefined) item.estimatedMinutes = 0;
+      if (item.notes === undefined) item.notes = ''; // GYM-063: per-plan-item note, separate from the exercise's own global notes
     });
     // GYM-031: explicit order field rather than relying on array position —
     // array order doesn't survive a cloud pull (rows come back sorted by
@@ -1453,6 +1511,13 @@ const getNutritionTargets = () => {
   const t = _env.data.nutritionTargets.find(x => !x._deleted);
   return t || { calories: 0, protein: 0 };
 };
+// GYM-064: a small reusable library of past meals, built up automatically
+// as you log — logging a meal with a name that isn't already saved adds
+// it here, so it's searchable next time. Logging again with a name that
+// IS already saved does NOT overwrite that saved entry's numbers (a
+// one-off larger portion shouldn't silently drift the template) — only
+// the Manage Saved Meals screen edits a saved meal's own values.
+const getSavedMeals = () => _env.data.savedMeals.filter(m => !m._deleted).sort((a,b)=>a.name.localeCompare(b.name));
 function findOrCreateProgram(rawName) {
   const name = (rawName || '').trim() || fmtDateShort(new Date().toISOString().slice(0,10));
   const existing = getPrograms().find(p => p.name.toLowerCase() === name.toLowerCase());
@@ -1797,8 +1862,11 @@ const _gymPrograms = window.PalSync.table('gym_programs');
 // as a missing-table error, not thrown.
 const _gymNutritionEntries = window.PalSync.table('gym_nutrition_entries');
 const _gymNutritionTargets = window.PalSync.table('gym_nutrition_targets');
-const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms, nutritionEntry: _gymNutritionEntries, nutritionTarget: _gymNutritionTargets };
-const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs', nutritionEntry: 'nutritionEntries', nutritionTarget: 'nutritionTargets' };
+// GYM-064: new Supabase table required — 'gym_saved_meals', same generic
+// shape as every other gym_* table. Works fine locally until it exists.
+const _gymSavedMeals = window.PalSync.table('gym_saved_meals');
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms, nutritionEntry: _gymNutritionEntries, nutritionTarget: _gymNutritionTargets, savedMeal: _gymSavedMeals };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs', nutritionEntry: 'nutritionEntries', nutritionTarget: 'nutritionTargets', savedMeal: 'savedMeals' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -1885,7 +1953,7 @@ function pullFromCloud(cb) {
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program','nutritionEntry','nutritionTarget'];
+  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program','nutritionEntry','nutritionTarget','savedMeal'];
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
@@ -1955,12 +2023,12 @@ function manualPush() {
   // from another device, resurrecting something that was deleted elsewhere.
   pullFromCloud(() => {
     window.PalSync.flushRetryQueue().then(renderSyncPanel);
-    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions','programs','nutritionEntries','nutritionTargets'].forEach(k => total += _env.data[k].length);
+    let total = 0; ['exercises','plans','sessions','weightEntries','scheduleEntries','trainerNoteSets','ptSessions','programs','nutritionEntries','nutritionTargets','savedMeals'].forEach(k => total += _env.data[k].length);
     if (!total) { toast('Nothing to push'); return; }
     setSyncStatus('syncing');
     slog('Manual push — '+total+' record(s)');
     let done = 0, errors = 0;
-    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs],['nutritionEntry',_env.data.nutritionEntries],['nutritionTarget',_env.data.nutritionTargets]].forEach(([kind, arr]) => {
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs],['nutritionEntry',_env.data.nutritionEntries],['nutritionTarget',_env.data.nutritionTargets],['savedMeal',_env.data.savedMeals]].forEach(([kind, arr]) => {
       arr.forEach(rec => sbUpsert(kind, rec, ok => {
         if (!ok) errors++;
         done++;
@@ -2639,7 +2707,7 @@ function renderPlanList() {
     let html = '';
     if (otherPrograms.length) html += otherPrograms.map(prog => renderProgramCard(prog, byProgram[prog.id]||[], sessions)).join('');
     if (ungrouped.length) {
-      if (otherPrograms.length) html += `<div class="li-meta" style="margin:14px 0 6px;font-weight:600;color:var(--ink1)">Ungrouped plans</div>`;
+      if (otherPrograms.length) html += `<div class="li-meta" style="margin:14px 0 6px;font-weight:600;color:var(--ink)">Ungrouped plans</div>`;
       html += ungrouped.map((p, idx) => renderPlanCard(p, idx, ungrouped, sessions)).join('');
     }
     otherEl.innerHTML = html;
@@ -2681,7 +2749,7 @@ function renderArchivedSection() {
     }).join('');
   }
   if (archivedUngrouped.length) {
-    if (archivedPrograms.length) html += `<div class="li-meta" style="margin:14px 0 6px;font-weight:600;color:var(--ink1)">Other archived plans</div>`;
+    if (archivedPrograms.length) html += `<div class="li-meta" style="margin:14px 0 6px;font-weight:600;color:var(--ink)">Other archived plans</div>`;
     html += archivedUngrouped.map(p => {
       const prog = p.programId ? programById(p.programId) : null;
       return `<div class="list-item">
@@ -2831,6 +2899,10 @@ function renderPlanItemsList() {
         <select style="max-width:80px" onchange="updatePlanItemEstimate(${idx},this.value)">${estimateMinuteOptions(item.estimatedMinutes||0)}</select>
         <span style="font-size:10.5px;color:var(--ink3)">min — set by you, not auto-filled</span>
       </div>
+      <div style="margin:6px 0">
+        <label style="font-size:10.5px;color:var(--ink3)">Note for this plan <span style="font-weight:400">(optional — just here, not the exercise's own notes)</span></label>
+        <input type="text" placeholder="e.g. superset with next exercise, go to failure here" value="${escHtml(item.notes||'')}" oninput="updatePlanItemNote(${idx}, this.value)" style="margin-top:2px">
+      </div>
       <div class="set-builder">${setsHtml}<button class="add-set-mini" onclick="addPlanSet(${idx})">+ Add Set</button></div>
     </div>`;
   }).join('');
@@ -2892,6 +2964,12 @@ function addPlanSet(idx) {
 }
 function removePlanSet(idx, si) { _planItems[idx].targetSets.splice(si,1); renderPlanItemsList(); }
 function updatePlanSet(idx, si, field, val) { _planItems[idx].targetSets[si][field] = val===''?0:Number(val); }
+// GYM-063: a note scoped to this exercise's use in THIS plan specifically
+// (e.g. "superset with the next exercise", "go to failure on this one")
+// — separate from and additive to the exercise's own global notes tab,
+// which apply everywhere that exercise is used. Both show up together
+// when a session is started.
+function updatePlanItemNote(idx, val) { _planItems[idx].notes = val; }
 function updatePlanSetTime(idx, si, unit, val) {
   const set = _planItems[idx].targetSets[si];
   const ms = secToMinSec(set.seconds);
@@ -2930,7 +3008,7 @@ function addExerciseToPlanItems(exerciseId) {
   // even for time/distance exercises that already have a tracked duration,
   // that's workout data, not a "how long does this realistically take"
   // estimate, and the two shouldn't be conflated.
-  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultTargetSetsForType(type), estimatedMinutes: 0 });
+  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultTargetSetsForType(type), estimatedMinutes: 0, notes: '' });
   closeModal('modalExercisePicker');
   renderPlanItemsList();
 }
@@ -3230,7 +3308,7 @@ function fillPlanPickerList() {
   };
   const section = (key, label, rows, emptyNote) => {
     const isOpen = _pickerSectionOpen[key];
-    return `<div class="li-meta" style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 4px;font-weight:600;color:var(--ink1);cursor:pointer;user-select:none" onclick="togglePickerSection('${key}')">
+    return `<div class="li-meta" style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 4px;font-weight:600;color:var(--ink);cursor:pointer;user-select:none" onclick="togglePickerSection('${key}')">
         <span>${label}${rows.length ? ' ('+rows.length+')' : ''}</span><span>${isOpen?'▾':'▸'}</span>
       </div>
       ${isOpen ? (rows.length ? rows.map(renderRow).join('') : `<div class="empty-state" style="padding:4px 0">${emptyNote}</div>`) : ''}`;
@@ -3593,7 +3671,13 @@ function startSession(planId) {
         // per-plan or per-instance copy to keep in sync.
         const ex = exerciseById(pi.exerciseId);
         const exerciseNote = ex && ex.notes ? ex.notes : null;
-        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote, exerciseNote };
+        // GYM-063: a note scoped to this exercise's use in THIS plan —
+        // additive to, not a replacement for, the exercise's own global
+        // note above. Copied at start time like referenceSets already
+        // are, since it's specific to this plan's build, not something
+        // that needs to stay "live" the way exercise notes do.
+        const planItemNote = pi.notes || null;
+        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote, exerciseNote, planItemNote };
       })
     };
   } else {
@@ -3935,6 +4019,7 @@ function renderSessionItems() {
       </div>
       ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
       ${item.exerciseNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent3)">📝 ${escHtml(item.exerciseNote)}</div>` : ''}
+      ${item.planItemNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent2)">📌 ${escHtml(item.planItemNote)}</div>` : ''}
       ${rows}
       <button class="add-set-mini" onclick="addSessionSet(${ii})">+ Add Extra Set</button>
       ${typeToggle}
@@ -4558,6 +4643,7 @@ function openMealsModal(date) {
   document.getElementById('mealNameInput').value = '';
   document.getElementById('mealCaloriesInput').value = '';
   document.getElementById('mealProteinInput').value = '';
+  document.getElementById('mealSearchResults').innerHTML = '';
   updateMealSearchLink();
   renderMealsList();
   openModal('modalMeals');
@@ -4568,6 +4654,28 @@ function updateMealSearchLink() {
   if (!name) { link.style.opacity = '0.4'; link.removeAttribute('href'); return; }
   link.style.opacity = '1';
   link.href = 'https://www.google.com/search?q=' + encodeURIComponent(name + ' calories protein');
+}
+// GYM-064: search-as-you-type against the saved meals library. Matches
+// are shown as tappable pills; selecting one fills in that saved meal's
+// calories/protein. Typing something with no match just becomes a new
+// meal — nothing blocks that — and logging it adds it to the library
+// automatically (see saveMealEntry).
+function onMealNameInput() {
+  updateMealSearchLink();
+  const q = document.getElementById('mealNameInput').value.trim().toLowerCase();
+  const resultsEl = document.getElementById('mealSearchResults');
+  if (!q) { resultsEl.innerHTML = ''; return; }
+  const matches = getSavedMeals().filter(m => m.name.toLowerCase().includes(q)).slice(0, 6);
+  resultsEl.innerHTML = matches.map(m => `<button type="button" class="meal-pill" onclick="selectSavedMeal('${m.id}')">${escHtml(m.name)} <span style="opacity:0.6">· ${m.calories||0}cal/${m.protein||0}g</span></button>`).join('');
+}
+function selectSavedMeal(id) {
+  const m = getSavedMeals().find(x => x.id === id);
+  if (!m) return;
+  document.getElementById('mealNameInput').value = m.name;
+  document.getElementById('mealCaloriesInput').value = m.calories || '';
+  document.getElementById('mealProteinInput').value = m.protein || '';
+  document.getElementById('mealSearchResults').innerHTML = '';
+  updateMealSearchLink();
 }
 function renderMealsList() {
   const date = _mealsModalDate;
@@ -4580,7 +4688,7 @@ function renderMealsList() {
   const proteinLine = targets.protein ? `${totalProtein} / ${targets.protein}g protein` : `${totalProtein}g protein logged`;
   const overCal = targets.calories > 0 && totalCal > targets.calories;
   const totalsEl = document.getElementById('mealsTotalsBar');
-  totalsEl.innerHTML = `<div class="li-meta" style="font-size:13px;font-weight:600;color:${overCal?'var(--accent4)':'var(--ink1)'}">${calLine} · ${proteinLine}</div>`;
+  totalsEl.innerHTML = `<div class="li-meta" style="font-size:13px;font-weight:600;color:${overCal?'var(--accent4)':'var(--ink)'}">${calLine} · ${proteinLine}</div>${nutriBarsHtml(totalCal, totalProtein, targets)}`;
   const listEl = document.getElementById('mealsList');
   listEl.innerHTML = entries.length ? entries.map(e => `
     <div class="list-item">
@@ -4601,15 +4709,77 @@ function saveMealEntry() {
   const now = new Date().toISOString();
   const record = { id: uid('meal'), date: _mealsModalDate, mealName, calories, protein, createdAt: now, updatedAt: now };
   _env.data.nutritionEntries.push(record);
+  // GYM-064: build the saved-meals library automatically — only creates
+  // a new saved meal if this exact name isn't already saved; never
+  // touches an existing saved meal's numbers (that's what Manage Saved
+  // Meals is for), so a one-off bigger portion doesn't drift the template.
+  const existingSaved = getSavedMeals().find(m => m.name.toLowerCase() === mealName.toLowerCase());
+  let newSavedMeal = null;
+  if (!existingSaved) {
+    newSavedMeal = { id: uid('svmeal'), name: mealName, calories, protein, createdAt: now, updatedAt: now };
+    _env.data.savedMeals.push(newSavedMeal);
+  }
   save(_env);
   sbUpsert('nutritionEntry', record, null);
+  if (newSavedMeal) sbUpsert('savedMeal', newSavedMeal, null);
   document.getElementById('mealNameInput').value = '';
   document.getElementById('mealCaloriesInput').value = '';
   document.getElementById('mealProteinInput').value = '';
+  document.getElementById('mealSearchResults').innerHTML = '';
   updateMealSearchLink();
   renderMealsList();
   renderCalendar();
   toast('Meal added ✓');
+}
+// GYM-064: manage the saved-meals library — rename/correct numbers, or
+// remove one that's no longer needed. Same lightweight prompt() pattern
+// as renameProgram/editProgramNotes, consistent with the rest of the suite.
+function openManageSavedMeals() {
+  renderSavedMealsList();
+  openModal('modalSavedMeals');
+}
+function renderSavedMealsList() {
+  const el = document.getElementById('savedMealsList');
+  const meals = getSavedMeals();
+  el.innerHTML = meals.length ? meals.map(m => `
+    <div class="list-item">
+      <div class="li-top"><div>
+        <div class="li-name">${escHtml(m.name)}</div>
+        <div class="li-meta">${m.calories||0} cal · ${m.protein||0}g protein</div>
+      </div></div>
+      <div class="li-actions">
+        <button class="btn btn-secondary btn-sm" onclick="editSavedMeal('${m.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteSavedMeal('${m.id}')">Delete</button>
+      </div>
+    </div>`).join('') : '<div class="empty-state">No saved meals yet — they\'ll appear here as you log meals</div>';
+}
+function editSavedMeal(id) {
+  const m = _env.data.savedMeals.find(x => x.id === id);
+  if (!m) return;
+  const name = prompt('Meal name', m.name);
+  if (name === null || !name.trim()) return;
+  const calStr = prompt('Calories', String(m.calories||0));
+  if (calStr === null) return;
+  const proStr = prompt('Protein (g)', String(m.protein||0));
+  if (proStr === null) return;
+  m.name = name.trim();
+  m.calories = Number(calStr) || 0;
+  m.protein = Number(proStr) || 0;
+  m.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('savedMeal', m, null);
+  renderSavedMealsList();
+  toast('Saved meal updated ✓');
+}
+function deleteSavedMeal(id) {
+  const m = _env.data.savedMeals.find(x => x.id === id);
+  if (!m) return;
+  if (!confirm(`Delete saved meal "${m.name}"? This only removes it from search — any meals already logged with this name are unaffected.`)) return;
+  m._deleted = true; m.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('savedMeal', m, null);
+  renderSavedMealsList();
+  toast('Saved meal deleted');
 }
 function deleteMealEntry(id) {
   const e = _env.data.nutritionEntries.find(x=>x.id===id);
@@ -4623,6 +4793,21 @@ function deleteMealEntry(id) {
   toast('Meal deleted');
 }
 // Compact tappable summary row shown on each calendar day card.
+// GYM-062: shared bar-pair builder — one bar per target that's actually
+// set (calories, protein), each showing % of target reached, capped at
+// 100% width. No bar renders for a target that hasn't been set, so a day
+// before any targets exist just shows the plain totals, unchanged.
+function nutriBarsHtml(cal, protein, targets) {
+  if (!targets.calories && !targets.protein) return '';
+  const calPct = targets.calories ? Math.min(100, Math.round(cal/targets.calories*100)) : 0;
+  const proteinPct = targets.protein ? Math.min(100, Math.round(protein/targets.protein*100)) : 0;
+  const overCal = targets.calories > 0 && cal > targets.calories;
+  let html = '<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">';
+  if (targets.calories) html += `<div class="nutri-bar-track"><div class="nutri-bar-fill" style="width:${calPct}%;background:${overCal?'var(--accent4)':'var(--accent2)'}"></div></div>`;
+  if (targets.protein) html += `<div class="nutri-bar-track"><div class="nutri-bar-fill" style="width:${proteinPct}%;background:var(--accent3)"></div></div>`;
+  html += '</div>';
+  return html;
+}
 function renderDayNutritionSummary(date) {
   const entries = getEntriesForDate(date);
   const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
@@ -4635,6 +4820,7 @@ function renderDayNutritionSummary(date) {
       <span class="cal-session-name">🍽 ${entries.length} meal${entries.length===1?'':'s'}</span>
       <span class="cal-session-meta">${entries.length ? calStr+' · '+proteinStr : 'Log meals'}</span>
     </div>
+    ${nutriBarsHtml(totalCal, totalProtein, targets)}
   </div>`;
 }
 // GYM-060: daily targets — a single record (not a bare scalar on the
@@ -4974,6 +5160,7 @@ function importJSON(event) {
         _env.data.programs = _env.data.programs || []; // GYM-055: absent in pre-v2.58 backups
         _env.data.nutritionEntries = _env.data.nutritionEntries || []; // GYM-060: absent in pre-v2.63 backups
         _env.data.nutritionTargets = _env.data.nutritionTargets || [];
+        _env.data.savedMeals = _env.data.savedMeals || []; // GYM-064: absent in pre-v2.64 backups
         const importNow = new Date().toISOString();
         _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
         ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
@@ -5080,7 +5267,7 @@ function importProgramFileHandler(event) {
             const exId = itemIn.exerciseName ? nameToId[itemIn.exerciseName.toLowerCase()] : null;
             if (!exId) return null; // exercise couldn't be resolved — dropped, not guessed at
             const trackType = ['reps','time','distance'].includes(itemIn.trackType) ? itemIn.trackType : exerciseType(exId);
-            return { id: uid('pi'), exerciseId: exId, trackType, targetSets: Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [], estimatedMinutes: 0 };
+            return { id: uid('pi'), exerciseId: exId, trackType, targetSets: Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [], estimatedMinutes: 0, notes: (itemIn.notes||'').trim() };
           }).filter(Boolean);
           if (!items.length) return;
           const record = { id: uid('plan'), name: planName, notes: planIn.notes||'', items, programId: program.id, order: nextPlanOrder(), archived: false, createdAt: now, updatedAt: now };
@@ -5117,7 +5304,7 @@ function downloadProgramTemplate() {
         name: "Example — Day 1",
         notes: "Optional plan notes.",
         items: [
-          { exerciseName: "Example New Exercise", trackType: "reps", targetSets: [ {reps:10, weight:20}, {reps:10, weight:20}, {reps:10, weight:20} ] }
+          { exerciseName: "Example New Exercise", trackType: "reps", targetSets: [ {reps:10, weight:20}, {reps:10, weight:20}, {reps:10, weight:20} ], notes: "Optional note just for this exercise within this plan, e.g. 'superset with the next one'." }
         ]
       }
     ]
