@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.71</title>
+<title>Gym Tracker v2.72</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -310,7 +310,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.71</div></span>
+      <span>Gym Tracker<div class="ver">v2.72</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1091,6 +1091,26 @@
 // value. PT Companion's target/summary display was updated to match
 // (same optional-time behaviour) for parity as the two apps share
 // programme data.
+// v2.72 (GYM-071): protein figures were showing raw floating-point noise
+// in places — reduce()-summed totals (day totals, report daily
+// breakdown, saved-meal-search pill) can produce results like
+// 36.85000000000001 from ordinary decimal-gram entries (e.g. 24.5g +
+// 12.35g), and manually-typed decimal targets/entries displayed exactly
+// as typed with no ceiling. New fmtProtein() helper rounds to at most 2
+// decimal places for display — a whole-gram value like 24 is untouched
+// (never padded to "24.00"), it's a ceiling on decimals shown, not a
+// fixed format. Applied at every read-only protein display site: Meals
+// modal totals + per-entry list, day-card nutrition summary, saved-meal
+// search pill and saved-meals library list, nutrition targets summary,
+// and the PT/period report's stat cells and daily nutrition table.
+// Deliberately NOT applied to the editable meal/target input fields
+// (pre-filling an edit form with a rounded value would silently alter
+// what's shown mid-edit) or to the underlying stored records — this is a
+// display-only fix, so the JSON backup format and every stored value are
+// completely unchanged. Note: the brief's issue title said "1 decimal
+// point" but the body said "maximum of 2 decimal point" — implemented
+// per the more detailed body text (2dp); flagging the discrepancy in
+// case 1dp was actually intended, since it's a one-line change to fix.
 // v2.71 (GYM-070): editSession() itself already existed (GYM-005) and
 // fully covers "closed a session in error" — it reopens the exact same
 // session overlay used live, so you can add exercises/sets that got
@@ -1942,6 +1962,20 @@ function stripDone(s) { const c = {...s}; delete c.done; return c; }
 // minutes:seconds presentation layer for entry and display.
 function secToMinSec(total) { const t=total||0; return { min: Math.floor(t/60), sec: t%60 }; }
 function mmss(total) { const t=total||0; return Math.floor(t/60)+':'+String(t%60).padStart(2,'0'); }
+// GYM-071: display-time cap of 2 decimal places on protein figures. Every
+// protein number on screen ultimately traces back to either a raw
+// manually-typed value (which HTML number inputs don't restrict to whole
+// numbers) or a reduce() sum of several such values — the latter is prone
+// to classic floating-point noise (e.g. 24.5 + 12.35 => 36.85000000000001)
+// which is what was actually showing up as "a large number of decimal
+// points". This rounds to at most 2dp AND cleans up that noise in one
+// step; a whole-gram value like 24 is untouched (never padded to
+// "24.00") since this is a ceiling on decimals shown, not a fixed format.
+// Deliberately display-only: the editable meal/target input fields and
+// the underlying stored records are never touched by this, so nothing
+// about the JSON backup format or a value Pete is actively editing
+// changes — only the read-only summary numbers get capped.
+function fmtProtein(n) { n = Number(n) || 0; return Math.round(n * 100) / 100; }
 // GYM-022: minutes/seconds as <select> instead of free-typed numbers — on
 // iOS Safari a <select> opens the native wheel picker, much faster to use
 // mid-session than the keyboard. Minutes step by 1, seconds step by 5.
@@ -4899,7 +4933,7 @@ function onMealNameInput() {
   const resultsEl = document.getElementById('mealSearchResults');
   if (!q) { resultsEl.innerHTML = ''; return; }
   const matches = getSavedMeals().filter(m => m.name.toLowerCase().includes(q)).slice(0, 6);
-  resultsEl.innerHTML = matches.map(m => `<button type="button" class="meal-pill" onclick="selectSavedMeal('${m.id}')">${escHtml(m.name)} <span style="opacity:0.6">· ${m.calories||0}cal/${m.protein||0}g</span></button>`).join('');
+  resultsEl.innerHTML = matches.map(m => `<button type="button" class="meal-pill" onclick="selectSavedMeal('${m.id}')">${escHtml(m.name)} <span style="opacity:0.6">· ${m.calories||0}cal/${fmtProtein(m.protein)}g</span></button>`).join('');
 }
 function selectSavedMeal(id) {
   const m = getSavedMeals().find(x => x.id === id);
@@ -4915,11 +4949,11 @@ function renderMealsList() {
   if (!date) return;
   const entries = getEntriesForDate(date).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
   const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
-  const totalProtein = entries.reduce((s,e)=>s+(e.protein||0),0);
+  const totalProtein = fmtProtein(entries.reduce((s,e)=>s+(e.protein||0),0));
   const targets = getTargetsForDate(date);
   const dayTag = isActiveDay(date) ? '🏋️ Active day' : '😴 Rest day';
   const calLine = targets.calories ? `${totalCal} / ${targets.calories} cal` : `${totalCal} cal logged`;
-  const proteinLine = targets.protein ? `${totalProtein} / ${targets.protein}g protein` : `${totalProtein}g protein logged`;
+  const proteinLine = targets.protein ? `${totalProtein} / ${fmtProtein(targets.protein)}g protein` : `${totalProtein}g protein logged`;
   const overCal = targets.calories > 0 && totalCal > targets.calories;
   const totalsEl = document.getElementById('mealsTotalsBar');
   totalsEl.innerHTML = `${(targets.calories||targets.protein) ? `<div class="li-meta" style="margin-bottom:3px">${dayTag} target</div>` : ''}<div class="li-meta" style="font-size:13px;font-weight:600;color:${overCal?'var(--accent4)':'var(--ink)'}">${calLine} · ${proteinLine}</div>${nutriBarsHtml(totalCal, totalProtein, targets)}`;
@@ -4928,7 +4962,7 @@ function renderMealsList() {
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(e.mealName)}</div>
-        <div class="li-meta">${e.calories||0} cal · ${e.protein||0}g protein</div>
+        <div class="li-meta">${e.calories||0} cal · ${fmtProtein(e.protein)}g protein</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditMealEntry('${e.id}')">Edit</button>
@@ -4980,7 +5014,7 @@ function renderSavedMealsList() {
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(m.name)}</div>
-        <div class="li-meta">${m.calories||0} cal · ${m.protein||0}g protein</div>
+        <div class="li-meta">${m.calories||0} cal · ${fmtProtein(m.protein)}g protein</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditSavedMeal('${m.id}')">Edit</button>
@@ -5081,11 +5115,11 @@ function nutriBarsHtml(cal, protein, targets) {
 function renderDayNutritionSummary(date) {
   const entries = getEntriesForDate(date);
   const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
-  const totalProtein = entries.reduce((s,e)=>s+(e.protein||0),0);
+  const totalProtein = fmtProtein(entries.reduce((s,e)=>s+(e.protein||0),0));
   const targets = getTargetsForDate(date);
   const dayTag = isActiveDay(date) ? '🏋️ active' : '😴 rest';
   const calStr = targets.calories ? totalCal+'/'+targets.calories+' cal' : totalCal+' cal';
-  const proteinStr = targets.protein ? totalProtein+'/'+targets.protein+'g protein' : totalProtein+'g protein';
+  const proteinStr = targets.protein ? totalProtein+'/'+fmtProtein(targets.protein)+'g protein' : totalProtein+'g protein';
   return `<div class="cal-session" style="cursor:pointer" onclick="openMealsModal('${date}')">
     <div class="cal-session-head">
       <span class="cal-session-name">🍽 ${entries.length} meal${entries.length===1?'':'s'}</span>
@@ -5322,7 +5356,7 @@ function renderNutritionTargetsSection() {
   rpEl.value = t.restProtein || '';
   const anySet = t.activeCalories || t.activeProtein || t.restCalories || t.restProtein;
   summaryEl.textContent = anySet
-    ? `Active: ${t.activeCalories||0} cal / ${t.activeProtein||0}g · Rest: ${t.restCalories||0} cal / ${t.restProtein||0}g`
+    ? `Active: ${t.activeCalories||0} cal / ${fmtProtein(t.activeProtein)}g · Rest: ${t.restCalories||0} cal / ${fmtProtein(t.restProtein)}g`
     : 'No targets set yet';
 }
 function saveNutritionTargets() {
@@ -5537,7 +5571,7 @@ function buildReportFoodBlock(start, end) {
   const activeAvg = avgFor(activeDates);
   const restAvg = avgFor(restDates);
   const statCell = (label, avg, targetCal, targetPro) => !avg ? '' : `
-    <div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avg.cal} cal / ${avg.pro}g</div>${(targetCal||targetPro)?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${targetCal||0} cal / ${targetPro||0}g</div>`:''}</div>`;
+    <div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avg.cal} cal / ${avg.pro}g</div>${(targetCal||targetPro)?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${targetCal||0} cal / ${fmtProtein(targetPro)}g</div>`:''}</div>`;
   const overview = `<div class="rpt-stat-grid">
     <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${activeDates.length} active · ${restDates.length} rest</div></div>
     ${statCell('Avg — Active Days', activeAvg, targets.activeCalories, targets.activeProtein)}
@@ -5546,8 +5580,8 @@ function buildReportFoodBlock(start, end) {
   const dayRows = dateKeys.map(date => {
     const dayEntries = byDate[date];
     const dayCal = dayEntries.reduce((s,e)=>s+(e.calories||0),0);
-    const dayProtein = dayEntries.reduce((s,e)=>s+(e.protein||0),0);
-    const mealList = dayEntries.map(e => escHtml(e.mealName)+' ('+(e.calories||0)+' cal, '+(e.protein||0)+'g)').join('; ');
+    const dayProtein = fmtProtein(dayEntries.reduce((s,e)=>s+(e.protein||0),0));
+    const mealList = dayEntries.map(e => escHtml(e.mealName)+' ('+(e.calories||0)+' cal, '+fmtProtein(e.protein)+'g)').join('; ');
     const tag = isActiveDay(date) ? '🏋️' : '😴';
     return `<tr><td>${fmtDate(date)}</td><td>${tag}</td><td style="font-size:10.5px">${mealList}</td><td>${dayCal}</td><td>${dayProtein}g</td></tr>`;
   }).join('');
