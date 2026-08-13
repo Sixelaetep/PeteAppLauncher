@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.48</title>
+<title>9-Day Fortnight Tracker v3.49</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -267,6 +267,13 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .extra-sel.active{border-color:rgba(45,212,191,.5);color:var(--teal);}
 .extra-hint{font-size:.62rem;color:var(--muted);margin-left:auto;}
 
+/* FT-043: Weekend hours card — sits at the top of each week, mirrors the
+   day editor's extra-row/extra-sel picker so it reads as the same kind of
+   input rather than a new pattern. */
+.weekend-card{background:var(--surface);border:1px dashed var(--border);border-radius:9px;padding:.5rem .65rem;margin-bottom:.4rem;display:flex;flex-direction:column;gap:.4rem;}
+.weekend-hd{font-size:.62rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;}
+.weekend-total{font-family:'DM Mono',monospace;color:var(--teal);font-weight:500;margin-left:auto;}
+
 /* Status buttons */
 .status-row{display:flex;gap:.4rem;padding:.55rem .85rem;border-top:1px solid var(--faint);flex-wrap:wrap;}
 .sbtn{flex:1;min-width:0;padding:.42rem .3rem;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.68rem;font-family:'DM Sans',sans-serif;cursor:pointer;text-align:center;transition:all .15s;font-weight:500;white-space:nowrap;}
@@ -494,7 +501,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.48</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.49</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -807,6 +814,30 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.49 (FT-043): Weekend hours. Two new pickers per bundle — "Weekend
+// before Week 1" (the Sat/Sun immediately before the bundle's own start
+// date, e.g. bundle starting Mon 10th captures Sat 8th/Sun 9th) and
+// "Weekend before Week 2" (the Sat/Sun that falls inside the bundle's own
+// span, between week 1 Friday and week 2 Monday) — placed at the top of
+// each week's day list on the Live tab, one row each for Sat/Sun, same
+// H:MM select pickers as the existing daily "extra" field. Both weekends
+// are stored on the bundle itself (weekend1/weekend2, each {satH,satM,
+// sunH,sunM}) rather than as day entries, since neither Saturday nor
+// Sunday has its own row in the 9-day cycle. Per Pete's steer, these
+// hours are counted straight into the same totals bundleStats() already
+// shows against the 70h target (both "Confirmed done" and "Projected"),
+// not added as a separate on-top figure — bundleStats() now folds
+// weekendMins() into doneMins/predMins unconditionally, since there's no
+// "status" toggle for a weekend entry the way there is for a weekday: a
+// number typed in is always real, not provisional. Deliberately NOT fed
+// into the Timesheet tab's code-allocation totals or tsWeekTarget — Pete
+// was explicit that reporting/timesheets don't relate to actual daily
+// hours, so weekend hours are a Live-tab-only tally. Backwards compatible:
+// migrateDays() backfills weekend1/weekend2 as zeroed objects on any
+// bundle that doesn't have them (all pre-3.49 backups), so a legacy
+// import behaves exactly as before until Pete fills the pickers in.
+// Syncs for free — sbUpsert() already sends the whole bundle object, so
+// the new fields ride along with no Supabase schema change needed.
 // v3.48 (FT-042): new bundle days now default to Pete's actual working
 // pattern instead of the old placeholder (08:30 start, end derived from
 // std+lunch). Every day now defaults to start 08:15; the 8 full days
@@ -1526,6 +1557,11 @@ function migrateDays(b) {
     delete d.manualOverride;
   });
   if (b.active === undefined) b.active = false;
+  // FT-043: pre-3.49 backups/bundles have no weekend hours at all —
+  // backfill as zeroed so bundleStats() and the picker can always read
+  // b.weekend1.satH etc without a guard at every call site.
+  if (!b.weekend1 || typeof b.weekend1 !== 'object') b.weekend1 = { satH: 0, satM: 0, sunH: 0, sunM: 0 };
+  if (!b.weekend2 || typeof b.weekend2 !== 'object') b.weekend2 = { satH: 0, satM: 0, sunH: 0, sunM: 0 };
 }
 
 // TIME HELPERS
@@ -1575,6 +1611,10 @@ function stdMins(i){return i===4?360:480;}
 
 // STATS
 var TARGET=4200;
+// FT-043: minutes captured on one weekend picker ({satH,satM,sunH,sunM}).
+// Guards against undefined so a bundle mid-migration (or a brand new one
+// built before createBundle()'s literal ran) never throws here.
+function weekendMins(w){ return w ? ((w.satH||0)*60+(w.satM||0)+(w.sunH||0)*60+(w.sunM||0)) : 0; }
 function bundleStats(bundle){
   var doneMins=0,predMins=0,stdDoneMins=0;
   bundle.days.forEach(function(d,i){
@@ -1582,11 +1622,20 @@ function bundleStats(bundle){
     predMins+=h;
     if(d.status){doneMins+=h;stdDoneMins+=stdMins(i);}
   });
+  // FT-043: weekend hours count straight into the same totals — there's
+  // no "status" toggle for a weekend entry, so anything typed in is
+  // always real (not provisional the way an unmarked weekday's projected
+  // hours are), and it's added to BOTH doneMins and predMins per Pete's
+  // steer that weekend time counts into the total against the 70h target
+  // rather than sitting on top as a separate extra figure.
+  var wkndMins=weekendMins(bundle.weekend1)+weekendMins(bundle.weekend2);
+  doneMins+=wkndMins;
+  predMins+=wkndMins;
   predMins=Math.min(predMins,TARGET*1.5);
   var donePct=Math.min(100,Math.round(doneMins/TARGET*100));
   var predPct=Math.min(100,Math.round(predMins/TARGET*100));
   var paceDiff=stdDoneMins>0?doneMins-stdDoneMins:null;
-  return{doneMins:doneMins,predMins:predMins,donePct:donePct,predPct:predPct,paceDiff:paceDiff,anyDone:stdDoneMins>0};
+  return{doneMins:doneMins,predMins:predMins,donePct:donePct,predPct:predPct,paceDiff:paceDiff,anyDone:stdDoneMins>0,wkndMins:wkndMins};
 }
 function isComplete(b){return b.days.every(function(d){return!!d.status;});}
 
@@ -3067,7 +3116,7 @@ function renderBundle(container,bundle,idx,completed){
           '<div class="bc-done-box">'+
             '<div class="bc-done-lbl">Confirmed done</div>'+
             '<div class="bc-done-val" id="bcdv-'+idx+'">'+m2hm(stats.doneMins)+'</div>'+
-            '<div class="bc-done-sub" id="bcds-'+idx+'">'+stats.donePct+'% of 70h \u00b7 '+daysDone+' of 9 days</div>'+
+            '<div class="bc-done-sub" id="bcds-'+idx+'">'+bcDoneSubText(stats,daysDone)+'</div>'+
           '</div>'+
           '<div class="bc-proj-box '+pjCls+'">'+
             '<div class="bc-proj-lbl">Projected</div>'+
@@ -3090,10 +3139,54 @@ function renderBundle(container,bundle,idx,completed){
     '</div>';
   container.appendChild(card);
   var dlist=card.querySelector('#dlist-'+idx);
+  renderWeekendCard(dlist,idx,'weekend1',bundle);
   var w1=document.createElement('div');w1.className='week-lbl';w1.textContent='Week 1 \u2014 Monday to Friday';dlist.appendChild(w1);
   bundle.days.slice(0,5).forEach(function(day,di){renderDay(dlist,day,idx,di,bundle);});
+  renderWeekendCard(dlist,idx,'weekend2',bundle);
   var w2=document.createElement('div');w2.className='week-lbl';w2.textContent='Week 2 \u2014 Monday to Thursday (Friday off)';dlist.appendChild(w2);
   bundle.days.slice(5).forEach(function(day,di){renderDay(dlist,day,idx,di+5,bundle);});
+}
+
+// FT-043: weekend hours picker — one per week, sitting at the top of that
+// week's day list. weekend1 = Sat/Sun immediately before the bundle's own
+// start date (before Week 1); weekend2 = the Sat/Sun inside the bundle's
+// own span, between Week 1 Friday and Week 2 Monday (before Week 2).
+// Offsets are fixed relative to bundle.startDate, same convention as
+// buildDays()'s own [0,1,2,3,4,7,8,9,10] skip pattern (5/6 are exactly
+// this weekend).
+function weekendDates(weekKey,bundle){
+  var base=parseDate(bundle.startDate);
+  var satOff=weekKey==='weekend1'?-2:5, sunOff=weekKey==='weekend1'?-1:6;
+  return{sat:addDays(base,satOff),sun:addDays(base,sunOff)};
+}
+function weekendCardInner(bi,weekKey,bundle){
+  var w=bundle[weekKey]||{satH:0,satM:0,sunH:0,sunM:0};
+  var d=weekendDates(weekKey,bundle);
+  var label=weekKey==='weekend1'?'Weekend before Week 1':'Weekend before Week 2';
+  var satMins=(w.satH||0)*60+(w.satM||0), sunMins=(w.sunH||0)*60+(w.sunM||0);
+  var totalMins=satMins+sunMins;
+  var hO=function(sel){return[0,1,2,3,4].map(function(i){return'<option value="'+i+'"'+(i===sel?' selected':'')+'>'+(i>0?'+':'')+i+'h</option>';}).join('');};
+  var mO=function(sel){return[0,5,10,15,20,25,30,35,40,45,50,55].map(function(i){return'<option value="'+i+'"'+(i===sel?' selected':'')+'>'+String(i).padStart(2,'0')+'m</option>';}).join('');};
+  function row(dayKey,dayLbl,mins,hVal,mVal){
+    var k=bi+'-'+weekKey+'-'+dayKey;
+    return '<div class="extra-row">'+
+      '<label>'+dayLbl+'</label>'+
+      '<select class="extra-sel'+(mins>0?' active':'')+'" id="wkH-'+k+'" onchange="updWeekend('+bi+',\''+weekKey+'\',\''+dayKey+'\')">'+hO(hVal)+'</select>'+
+      '<select class="extra-sel'+(mins>0?' active':'')+'" id="wkM-'+k+'" onchange="updWeekend('+bi+',\''+weekKey+'\',\''+dayKey+'\')">'+mO(mVal)+'</select>'+
+    '</div>';
+  }
+  return '<div class="weekend-hd">'+label+' &middot; '+shortDate(d.sat)+' \u2013 '+shortDate(d.sun)+
+      '<span class="weekend-total" id="wkndtotal-'+bi+'-'+weekKey+'">'+(totalMins>0?'+'+m2hm(totalMins):'')+'</span>'+
+    '</div>'+
+    row('sat','Sat',satMins,w.satH||0,w.satM||0)+
+    row('sun','Sun',sunMins,w.sunH||0,w.sunM||0);
+}
+function renderWeekendCard(container,bi,weekKey,bundle){
+  var div=document.createElement('div');
+  div.className='weekend-card';
+  div.id='wknd-'+bi+'-'+weekKey;
+  div.innerHTML=weekendCardInner(bi,weekKey,bundle);
+  container.appendChild(div);
 }
 
 function renderDay(container,day,bi,di,bundle){
@@ -3257,6 +3350,64 @@ function toggleDay(bi,di){
 }
 
 // LIVE UPDATE
+// FT-043: sub-label under "Confirmed done" — shared by the initial
+// renderBundle() render and every incremental refresh so the weekend
+// annotation can't drift out of sync between the two.
+function bcDoneSubText(stats,daysDone){
+  return stats.donePct+'% of 70h \u00b7 '+daysDone+' of 9 days'+(stats.wkndMins>0?' \u00b7 +'+m2hm(stats.wkndMins)+' weekend':'');
+}
+// Recomputes bundleStats() and refreshes the bundle card's header row
+// (Confirmed done / Projected) in place. Originally inlined only inside
+// liveUpdate(bi,di) (a per-day edit); pulled out to its own function so
+// updWeekend()'s bundle-level edits (FT-043 — no di, since weekend hours
+// aren't day rows) can trigger the same refresh without duplicating this
+// block a second time.
+function refreshBundleHeader(bi){
+  var bundle=state.bundles[bi];
+  var stats=bundleStats(bundle);
+  var pred=stats.predMins,pjCls,pjVal,pjSub;
+  if(pred>=TARGET+5){   pjCls='proj-purple';pjVal=m2hm(pred);pjSub='+'+m2hm(pred-TARGET)+' over target';}
+  else if(pred>=TARGET-5){pjCls='proj-green'; pjVal=m2hm(pred);pjSub='On target \u2713';}
+  else{                 pjCls='proj-red';   pjVal=m2hm(pred);pjSub=m2hm(TARGET-pred)+' short of 70h';}
+  var rem2=bundle.days.filter(function(d){return!d.status;}).length;
+  if(!stats.anyDone&&stats.doneMins===0){pjCls='proj-muted';pjSub=rem2+' days remaining';}
+  var pb=document.querySelector('#bc-'+bi+' .bc-proj-box');if(pb)pb.className='bc-proj-box '+pjCls;
+  var pv=document.getElementById('bcpv-'+bi);if(pv){pv.textContent=pjVal;pv.className='bc-proj-val '+pjCls;}
+  var ps=document.getElementById('bcps-'+bi);if(ps){ps.textContent=pjSub;ps.className='bc-proj-sub '+pjCls;}
+  var dv=document.getElementById('bcdv-'+bi);if(dv)dv.textContent=m2hm(stats.doneMins);
+  var daysDone=bundle.days.filter(function(d){return!!d.status;}).length;
+  var ds=document.getElementById('bcds-'+bi);if(ds)ds.textContent=bcDoneSubText(stats,daysDone);
+  return stats;
+}
+// FT-043: mirrors liveUpdate(bi,di) but for a weekend picker edit — no
+// day index, just the bundle-level header refresh plus the weekend
+// card's own total badge and select highlight state.
+function liveUpdateWeekend(bi,weekKey){
+  var bundle=state.bundles[bi];
+  var w=bundle[weekKey]||{satH:0,satM:0,sunH:0,sunM:0};
+  var satMins=(w.satH||0)*60+(w.satM||0), sunMins=(w.sunH||0)*60+(w.sunM||0);
+  var totEl=document.getElementById('wkndtotal-'+bi+'-'+weekKey);
+  if(totEl)totEl.textContent=(satMins+sunMins)>0?'+'+m2hm(satMins+sunMins):'';
+  ['sat','sun'].forEach(function(dayKey){
+    var mins=dayKey==='sat'?satMins:sunMins;
+    var hEl=document.getElementById('wkH-'+bi+'-'+weekKey+'-'+dayKey);
+    var mEl=document.getElementById('wkM-'+bi+'-'+weekKey+'-'+dayKey);
+    if(hEl)hEl.className='extra-sel'+(mins>0?' active':'');
+    if(mEl)mEl.className='extra-sel'+(mins>0?' active':'');
+  });
+  refreshBundleHeader(bi);
+}
+function updWeekend(bi,weekKey,dayKey){
+  var hEl=document.getElementById('wkH-'+bi+'-'+weekKey+'-'+dayKey);
+  var mEl=document.getElementById('wkM-'+bi+'-'+weekKey+'-'+dayKey);
+  if(!hEl||!mEl)return;
+  var bundle=state.bundles[bi];
+  if(!bundle[weekKey])bundle[weekKey]={satH:0,satM:0,sunH:0,sunM:0};
+  bundle[weekKey][dayKey+'H']=parseInt(hEl.value)||0;
+  bundle[weekKey][dayKey+'M']=parseInt(mEl.value)||0;
+  save(bundle);
+  liveUpdateWeekend(bi,weekKey);
+}
 function liveUpdate(bi,di){
   var bundle=state.bundles[bi],day=bundle.days[di];
   var total=dayTotal(day),std=stdMins(di),key=bi+'-'+di;
@@ -3298,19 +3449,7 @@ function liveUpdate(bi,di){
   if(exM)exM.className='extra-sel'+(hasEx?' active':'');
   var hint=exH?exH.parentElement.querySelector('.extra-hint'):null;
   if(hint)hint.textContent=hasEx?m2hm(extraMins)+' added':'banked / overtime';
-  var stats=bundleStats(bundle);
-  var pred=stats.predMins,pjCls,pjVal,pjSub;
-  if(pred>=TARGET+5){   pjCls='proj-purple';pjVal=m2hm(pred);pjSub='+'+m2hm(pred-TARGET)+' over target';}
-  else if(pred>=TARGET-5){pjCls='proj-green'; pjVal=m2hm(pred);pjSub='On target \u2713';}
-  else{                 pjCls='proj-red';   pjVal=m2hm(pred);pjSub=m2hm(TARGET-pred)+' short of 70h';}
-  var rem2=bundle.days.filter(function(d){return!d.status;}).length;
-  if(!stats.anyDone&&stats.doneMins===0){pjCls='proj-muted';pjSub=rem2+' days remaining';}
-  var pb=document.querySelector('#bc-'+bi+' .bc-proj-box');if(pb)pb.className='bc-proj-box '+pjCls;
-  var pv=document.getElementById('bcpv-'+bi);if(pv){pv.textContent=pjVal;pv.className='bc-proj-val '+pjCls;}
-  var ps=document.getElementById('bcps-'+bi);if(ps){ps.textContent=pjSub;ps.className='bc-proj-sub '+pjCls;}
-  var dv=document.getElementById('bcdv-'+bi);if(dv)dv.textContent=m2hm(stats.doneMins);
-  var daysDone=bundle.days.filter(function(d){return!!d.status;}).length;
-  var ds=document.getElementById('bcds-'+bi);if(ds)ds.textContent=stats.donePct+'% of 70h \u00b7 '+daysDone+' of 9 days';
+  refreshBundleHeader(bi);
   var SICONS={done:'\u2713',holiday:'\uD83C\uDF34',sick:'\uD83E\uDD12',training:'\uD83D\uDCDA',conference:'\uD83C\uDF64'};
   var sf=document.getElementById('segf-'+bi+'-'+di);
   var sh=document.getElementById('segh-'+bi+'-'+di);
@@ -3642,7 +3781,11 @@ function createBundle(){
   var startD=parseDate(selMonday),endD=addDays(startD,10);
   // FT-030: a tombstoned bundle's stale active:true flag shouldn't count.
   var hasActive=visibleBundles().some(function(b){return b.active&&!isComplete(b);});
-  var nb={id:Date.now(),label:'Fortnight w/c '+fmtDate(startD),startDate:isoDate(startD),endDate:isoDate(endD),days:buildDays(selMonday),active:!hasActive};
+  // FT-043: weekend1 = Sat/Sun immediately before this bundle's own start
+  // (Week 1's "weekend before"); weekend2 = the Sat/Sun inside the
+  // bundle's own span between week 1 Friday and week 2 Monday (Week 2's
+  // "weekend before"). See weekendCardInner() for the date math.
+  var nb={id:Date.now(),label:'Fortnight w/c '+fmtDate(startD),startDate:isoDate(startD),endDate:isoDate(endD),days:buildDays(selMonday),active:!hasActive,weekend1:{satH:0,satM:0,sunH:0,sunM:0},weekend2:{satH:0,satM:0,sunH:0,sunM:0}};
   var filled=prefillHolidaysIntoBundle(nb);
   state.bundles.unshift(nb);
   state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
