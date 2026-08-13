@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.72</title>
+<title>Gym Tracker v2.73</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -310,7 +310,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.72</div></span>
+      <span>Gym Tracker<div class="ver">v2.73</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1111,6 +1111,26 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.73 (PET-068 / GYM-071): note on versioning — this uploaded file's
+// title/badge already read v2.72 but the internal VERSION constant was
+// still '2.71' (same drift pattern as the earlier v2.61/v2.62
+// reconciliation) — fixed alongside this release.
+//
+// Root cause of "launcher dashcard not respecting 2 decimal point max":
+// summing decimal calorie/protein/water values in raw JS arithmetic can
+// produce results like 12.5 + 23.05 === 35.550000000000004, and that
+// was being displayed as-is with no rounding anywhere. fmtProtein()
+// already existed and rounded protein correctly, but only protein —
+// calories and water volume were never wrapped the same way. Generalised
+// fmtProtein into a plain round2 alias (same logic, applicable to any
+// figure) and applied it: (1) at save time in every place that parses a
+// calorie/protein/volumeMl number from an input, so new data can't drift;
+// (2) defensively at every sum/total and individual-value display site,
+// so any already-stored imprecise value still renders cleanly without
+// needing a data migration; (3) ported the same round2() into
+// index.html's statGym() card logic — the actual reported location —
+// since it reads gym-tracker's localStorage independently and has no
+// access to gym-tracker's own functions. See index.html's own changelog.
 // v2.71 (GYM-070): editSession() itself already existed (GYM-005) and
 // fully covers "closed a session in error" — it reopens the exact same
 // session overlay used live, so you can add exercises/sets that got
@@ -1439,7 +1459,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.71';
+const VERSION = '2.73';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1707,7 +1727,10 @@ const getNutritionEntries = () => _env.data.nutritionEntries.filter(e => !e._del
 const getEntriesForDate = (date) => getNutritionEntries().filter(e => e.date === date);
 const getNutritionTargets = () => {
   const t = _env.data.nutritionTargets.find(x => !x._deleted);
-  return t || { calories: 0, protein: 0, activeCalories: 0, activeProtein: 0, restCalories: 0, restProtein: 0 };
+  const raw = t || { calories: 0, protein: 0, activeCalories: 0, activeProtein: 0, restCalories: 0, restProtein: 0 };
+  // PET-068/GYM-071: defensive rounding for any target saved before this
+  // fix (new saves are already rounded at source in saveNutritionTargets).
+  return { ...raw, calories: round2(raw.calories), protein: round2(raw.protein), activeCalories: round2(raw.activeCalories), activeProtein: round2(raw.activeProtein), restCalories: round2(raw.restCalories), restProtein: round2(raw.restProtein) };
 };
 // CLA-013: "active" = a date with a planned OR completed workout — a
 // scheduled plan/repeat occurrence (resolvePlansForDate, which already
@@ -1738,7 +1761,8 @@ const getWaterEntries = () => _env.data.waterEntries.filter(e => !e._deleted);
 const getWaterEntriesForDate = (date) => getWaterEntries().filter(e => e.date === date);
 const getWaterTarget = () => {
   const t = _env.data.waterTargets.find(x => !x._deleted);
-  return t || { dailyMl: 0 };
+  const raw = t || { dailyMl: 0 };
+  return { ...raw, dailyMl: round2(raw.dailyMl) }; // PET-068/GYM-071: defensive rounding, see getNutritionTargets
 };
 const getSavedWaterItems = () => _env.data.savedWaterItems.filter(w => !w._deleted).sort((a,b)=>a.name.localeCompare(b.name));
 function findOrCreateProgram(rawName) {
@@ -1976,6 +2000,14 @@ function mmss(total) { const t=total||0; return Math.floor(t/60)+':'+String(t%60
 // about the JSON backup format or a value Pete is actively editing
 // changes — only the read-only summary numbers get capped.
 function fmtProtein(n) { n = Number(n) || 0; return Math.round(n * 100) / 100; }
+// PET-068/GYM-071: same 2-decimal-max rounding as fmtProtein, but for
+// any numeric value (calories, water ml) — kept as a plain alias rather
+// than renaming fmtProtein itself, so no existing call site needs
+// touching. Applied both at save time (so new data can't accumulate
+// floating-point drift, e.g. 12.5 + 23.05 = 35.550000000000004 in raw
+// JS arithmetic) and defensively at every total/sum display site, so
+// any already-stored imprecise value still renders cleanly.
+const round2 = fmtProtein;
 // GYM-022: minutes/seconds as <select> instead of free-typed numbers — on
 // iOS Safari a <select> opens the native wheel picker, much faster to use
 // mid-session than the keyboard. Minutes step by 1, seconds step by 5.
@@ -4933,7 +4965,7 @@ function onMealNameInput() {
   const resultsEl = document.getElementById('mealSearchResults');
   if (!q) { resultsEl.innerHTML = ''; return; }
   const matches = getSavedMeals().filter(m => m.name.toLowerCase().includes(q)).slice(0, 6);
-  resultsEl.innerHTML = matches.map(m => `<button type="button" class="meal-pill" onclick="selectSavedMeal('${m.id}')">${escHtml(m.name)} <span style="opacity:0.6">· ${m.calories||0}cal/${fmtProtein(m.protein)}g</span></button>`).join('');
+  resultsEl.innerHTML = matches.map(m => `<button type="button" class="meal-pill" onclick="selectSavedMeal('${m.id}')">${escHtml(m.name)} <span style="opacity:0.6">· ${round2(m.calories)}cal/${fmtProtein(m.protein)}g</span></button>`).join('');
 }
 function selectSavedMeal(id) {
   const m = getSavedMeals().find(x => x.id === id);
@@ -4948,7 +4980,7 @@ function renderMealsList() {
   const date = _mealsModalDate;
   if (!date) return;
   const entries = getEntriesForDate(date).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
-  const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
+  const totalCal = round2(entries.reduce((s,e)=>s+(e.calories||0),0));
   const totalProtein = fmtProtein(entries.reduce((s,e)=>s+(e.protein||0),0));
   const targets = getTargetsForDate(date);
   const dayTag = isActiveDay(date) ? '🏋️ Active day' : '😴 Rest day';
@@ -4962,7 +4994,7 @@ function renderMealsList() {
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(e.mealName)}</div>
-        <div class="li-meta">${e.calories||0} cal · ${fmtProtein(e.protein)}g protein</div>
+        <div class="li-meta">${round2(e.calories)} cal · ${fmtProtein(e.protein)}g protein</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditMealEntry('${e.id}')">Edit</button>
@@ -4972,8 +5004,8 @@ function renderMealsList() {
 }
 function saveMealEntry() {
   const mealName = document.getElementById('mealNameInput').value.trim();
-  const calories = Number(document.getElementById('mealCaloriesInput').value) || 0;
-  const protein = Number(document.getElementById('mealProteinInput').value) || 0;
+  const calories = round2(document.getElementById('mealCaloriesInput').value);
+  const protein = round2(document.getElementById('mealProteinInput').value);
   if (!mealName) { toast('Enter a meal name first'); return; }
   const now = new Date().toISOString();
   const record = { id: uid('meal'), date: _mealsModalDate, mealName, calories, protein, createdAt: now, updatedAt: now };
@@ -5014,7 +5046,7 @@ function renderSavedMealsList() {
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(m.name)}</div>
-        <div class="li-meta">${m.calories||0} cal · ${fmtProtein(m.protein)}g protein</div>
+        <div class="li-meta">${round2(m.calories)} cal · ${fmtProtein(m.protein)}g protein</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditSavedMeal('${m.id}')">Edit</button>
@@ -5050,8 +5082,8 @@ function openEditMealEntry(id) {
 function saveEditMealModal() {
   if (!_editMealTarget) return;
   const name = document.getElementById('editMealNameInput').value.trim();
-  const calories = Number(document.getElementById('editMealCaloriesInput').value) || 0;
-  const protein = Number(document.getElementById('editMealProteinInput').value) || 0;
+  const calories = round2(document.getElementById('editMealCaloriesInput').value);
+  const protein = round2(document.getElementById('editMealProteinInput').value);
   if (!name) { toast('Enter a meal name first'); return; }
   const now = new Date().toISOString();
   if (_editMealTarget.kind === 'saved') {
@@ -5114,7 +5146,7 @@ function nutriBarsHtml(cal, protein, targets) {
 }
 function renderDayNutritionSummary(date) {
   const entries = getEntriesForDate(date);
-  const totalCal = entries.reduce((s,e)=>s+(e.calories||0),0);
+  const totalCal = round2(entries.reduce((s,e)=>s+(e.calories||0),0));
   const totalProtein = fmtProtein(entries.reduce((s,e)=>s+(e.protein||0),0));
   const targets = getTargetsForDate(date);
   const dayTag = isActiveDay(date) ? '🏋️ active' : '😴 rest';
@@ -5152,7 +5184,7 @@ function onWaterNameInput() {
   const resultsEl = document.getElementById('waterSearchResults');
   if (!q) { resultsEl.innerHTML = ''; return; }
   const matches = getSavedWaterItems().filter(w => w.name.toLowerCase().includes(q)).slice(0, 6);
-  resultsEl.innerHTML = matches.map(w => `<button type="button" class="meal-pill" onclick="selectSavedWaterItem('${w.id}')">${escHtml(w.name)} <span style="opacity:0.6">· ${w.volumeMl||0}ml</span></button>`).join('');
+  resultsEl.innerHTML = matches.map(w => `<button type="button" class="meal-pill" onclick="selectSavedWaterItem('${w.id}')">${escHtml(w.name)} <span style="opacity:0.6">· ${round2(w.volumeMl)}ml</span></button>`).join('');
 }
 function selectSavedWaterItem(id) {
   const w = getSavedWaterItems().find(x => x.id === id);
@@ -5165,7 +5197,7 @@ function renderWaterList() {
   const date = _waterModalDate;
   if (!date) return;
   const entries = getWaterEntriesForDate(date).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
-  const totalMl = entries.reduce((s,e)=>s+(e.volumeMl||0),0);
+  const totalMl = round2(entries.reduce((s,e)=>s+(e.volumeMl||0),0));
   const target = getWaterTarget();
   const line = target.dailyMl ? `${totalMl} / ${target.dailyMl} ml` : `${totalMl} ml logged`;
   const overTarget = target.dailyMl > 0 && totalMl > target.dailyMl;
@@ -5177,7 +5209,7 @@ function renderWaterList() {
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(e.name)}</div>
-        <div class="li-meta">${e.volumeMl||0} ml</div>
+        <div class="li-meta">${round2(e.volumeMl)} ml</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditWaterEntry('${e.id}')">Edit</button>
@@ -5187,7 +5219,7 @@ function renderWaterList() {
 }
 function saveWaterEntry() {
   const name = document.getElementById('waterNameInput').value.trim();
-  const volumeMl = Number(document.getElementById('waterVolumeInput').value) || 0;
+  const volumeMl = round2(document.getElementById('waterVolumeInput').value);
   if (!name) { toast('Enter a name first'); return; }
   const now = new Date().toISOString();
   const record = { id: uid('water'), date: _waterModalDate, name, volumeMl, createdAt: now, updatedAt: now };
@@ -5232,7 +5264,7 @@ function renderSavedWaterList() {
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(w.name)}</div>
-        <div class="li-meta">${w.volumeMl||0} ml</div>
+        <div class="li-meta">${round2(w.volumeMl)} ml</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditSavedWater('${w.id}')">Edit</button>
@@ -5274,7 +5306,7 @@ function openEditWaterEntry(id) {
 function saveEditWaterModal() {
   if (!_editWaterTarget) return;
   const name = document.getElementById('editWaterNameInput').value.trim();
-  const volumeMl = Number(document.getElementById('editWaterVolumeInput').value) || 0;
+  const volumeMl = round2(document.getElementById('editWaterVolumeInput').value);
   if (!name) { toast('Enter a name first'); return; }
   const now = new Date().toISOString();
   if (_editWaterTarget.kind === 'saved') {
@@ -5302,7 +5334,7 @@ function saveEditWaterModal() {
 // renderDayNutritionSummary.
 function renderDayWaterSummary(date) {
   const entries = getWaterEntriesForDate(date);
-  const totalMl = entries.reduce((s,e)=>s+(e.volumeMl||0),0);
+  const totalMl = round2(entries.reduce((s,e)=>s+(e.volumeMl||0),0));
   const target = getWaterTarget();
   const line = target.dailyMl ? totalMl+'/'+target.dailyMl+' ml' : totalMl+' ml';
   const overTarget = target.dailyMl > 0 && totalMl > target.dailyMl;
@@ -5324,7 +5356,7 @@ function renderWaterTargetSection() {
   summaryEl.textContent = t.dailyMl ? `Current target: ${t.dailyMl} ml per day` : 'No target set yet';
 }
 function saveWaterTarget() {
-  const dailyMl = Number(document.getElementById('targetWaterMlInput').value) || 0;
+  const dailyMl = round2(document.getElementById('targetWaterMlInput').value);
   const now = new Date().toISOString();
   let record = _env.data.waterTargets.find(x => !x._deleted);
   if (record) { record.dailyMl = dailyMl; record.updatedAt = now; }
@@ -5360,10 +5392,10 @@ function renderNutritionTargetsSection() {
     : 'No targets set yet';
 }
 function saveNutritionTargets() {
-  const activeCalories = Number(document.getElementById('targetActiveCaloriesInput').value) || 0;
-  const activeProtein = Number(document.getElementById('targetActiveProteinInput').value) || 0;
-  const restCalories = Number(document.getElementById('targetRestCaloriesInput').value) || 0;
-  const restProtein = Number(document.getElementById('targetRestProteinInput').value) || 0;
+  const activeCalories = round2(document.getElementById('targetActiveCaloriesInput').value);
+  const activeProtein = round2(document.getElementById('targetActiveProteinInput').value);
+  const restCalories = round2(document.getElementById('targetRestCaloriesInput').value);
+  const restProtein = round2(document.getElementById('targetRestProteinInput').value);
   const now = new Date().toISOString();
   let record = _env.data.nutritionTargets.find(x => !x._deleted);
   if (record) {
@@ -5579,9 +5611,9 @@ function buildReportFoodBlock(start, end) {
   </div>`;
   const dayRows = dateKeys.map(date => {
     const dayEntries = byDate[date];
-    const dayCal = dayEntries.reduce((s,e)=>s+(e.calories||0),0);
+    const dayCal = round2(dayEntries.reduce((s,e)=>s+(e.calories||0),0));
     const dayProtein = fmtProtein(dayEntries.reduce((s,e)=>s+(e.protein||0),0));
-    const mealList = dayEntries.map(e => escHtml(e.mealName)+' ('+(e.calories||0)+' cal, '+fmtProtein(e.protein)+'g)').join('; ');
+    const mealList = dayEntries.map(e => escHtml(e.mealName)+' ('+round2(e.calories)+' cal, '+fmtProtein(e.protein)+'g)').join('; ');
     const tag = isActiveDay(date) ? '🏋️' : '😴';
     return `<tr><td>${fmtDate(date)}</td><td>${tag}</td><td style="font-size:10.5px">${mealList}</td><td>${dayCal}</td><td>${dayProtein}g</td></tr>`;
   }).join('');
