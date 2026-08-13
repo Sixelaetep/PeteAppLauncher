@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.13</title>
+<title>Gigs &amp; Trips v7.15</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -194,7 +194,11 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 #searchBar.visible{display:block}
 .search-wrap{position:relative;display:flex;align-items:center}
 .search-icon{position:absolute;left:10px;font-size:14px;color:var(--ink4);pointer-events:none}
-.search-input{width:100%;padding:9px 34px 9px 32px;border:1.5px solid var(--bdr);border-radius:var(--rsm);font-size:15px;font-family:var(--f);color:var(--ink);background:var(--card);outline:none;transition:border-color var(--tr)}
+/* v7.14 (GAT-mobile-audit): was font-size:15px — below iOS Safari's
+   16px auto-zoom threshold, so focusing this field zoomed the whole
+   page in. Every other input in the suite is pinned to 16px; this was
+   the one outlier. */
+.search-input{width:100%;padding:9px 34px 9px 32px;border:1.5px solid var(--bdr);border-radius:var(--rsm);font-size:16px;font-family:var(--f);color:var(--ink);background:var(--card);outline:none;transition:border-color var(--tr)}
 .search-input:focus{border-color:var(--acc)}
 .search-clear{position:absolute;right:8px;background:none;border:none;font-size:16px;color:var(--ink4);cursor:pointer;padding:2px 4px;line-height:1;display:none}
 .search-clear.visible{display:block}
@@ -426,6 +430,12 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .vlib-map{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:var(--rsm);text-decoration:none;font-size:15px;flex-shrink:0;transition:background var(--tr)}
 .vlib-map.has-link{background:var(--ok-dim);color:var(--ok)}
 .vlib-map.no-link{background:var(--surf);color:var(--ink4);cursor:default}
+/* Inline venue/location map link (GIG-039) — used next to venue/location
+   text on gig cards, gig detail, and trip item cards. Always clickable:
+   real map URL when the venue has one, otherwise a Google Maps search
+   pre-filled with the name (see gmapsSearchUrl/venueLinkHtml), so there's
+   never a dead icon the way the old no-link state above could be. */
+.venue-link{display:inline-flex;align-items:center;justify-content:center;font-size:13px;text-decoration:none;color:var(--acc);vertical-align:middle;margin-left:2px}
 .vlib-edit{background:none;border:none;color:var(--ink4);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:var(--rsm);transition:background var(--tr)}
 .vlib-edit:active{background:var(--surf);color:var(--ink2)}
 .vlib-del{background:none;border:none;color:var(--ink4);font-size:13px;cursor:pointer;padding:4px 6px;border-radius:var(--rsm);transition:background var(--tr)}
@@ -476,7 +486,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
     <button class="bk" id="backBtn" style="display:none" onclick="handleBack()">‹</button>
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.13</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.15</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
@@ -484,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
     <button class="ni on" id="tab-upcoming" onclick="switchTab('upcoming',this)">🗓 Upcoming</button>
     <button class="ni" id="tab-past" onclick="switchTab('past',this)">📖 Past</button>
     <button class="ni" id="tab-reviews" onclick="switchTab('reviews',this)">⭐ Reviews</button>
-    <button class="ni" id="tab-venues" onclick="switchTab('venues',this)">📍 Venues</button>
+    <button class="ni" id="tab-venues" onclick="switchTab('venues',this)">📍 Venue/Location</button>
   </div>
 </div>
 
@@ -600,6 +610,18 @@ function itemDisplayName(it){
   if(it._linkedGig) return it.name;
   if(it.type==='food') return it.name?`${it.subtype||'Food'} — ${it.name}`:(it.subtype||'Food');
   return it.name||typeLabel(it.type);
+}
+// v7.15 (GIG-039): the venue/location name for an item, wherever it
+// actually lives per type — Food's venue IS its name field, Accommodation
+// uses address, Attraction/Keystop use location, Travel/Other use the
+// new optional venue field. Centralised so the map-link icon and the
+// auto-add-to-venues-on-save logic (see saveItem) agree on where to look.
+function itemLocationName(it){
+  if(it.type==='food') return it.name||'';
+  if(it.type==='accommodation') return it.address||'';
+  if(it.type==='attraction'||it.type==='keystop') return it.location||'';
+  if(it.type==='travel'||it.type==='other') return it.venue||'';
+  return '';
 }
 // Sorts a day's mixed timeline (ghost stays, real items, linked gigs) so
 // untimed entries (ghost stays, items with no time set) come first as an
@@ -841,9 +863,24 @@ function deleteEvent(id){
 // ═══════════════════════════════════════════════════════════════════
 let _syncQ=Promise.resolve();
 
+// v7.14 (GAT-security-audit): previously fell back to the anon key as
+// the Authorization bearer token whenever _sbAccessToken wasn't set yet
+// (e.g. the 60s background poll firing before PAL_SESSION arrives), so
+// a request could go out authenticated as anon instead of failing
+// outright. Every GigsAndTrips table's RLS policy requires auth.uid()
+// to be Pete or Lex specifically (auth.uid() = ANY(ARRAY[...])), and an
+// anon-role request has auth.uid() = NULL, which never matches — so
+// this was never a live data exposure, confirmed via a full RLS/policy
+// audit. Still worth closing: silently sending a doomed anon request
+// produced a confusing empty-result "success" on GET (RLS just returns
+// zero rows) rather than an honest "not signed in yet," and meant it
+// was possible in principle for a future table to be added without the
+// same explicit allow-list and inherit this fallback's risk by
+// accident. Now fails fast with no network call — same fail-clean
+// behaviour pal-sync.js's sbFetch() already has for every other app.
 async function sbFetch(method,path,body){
-  const token=_sbAccessToken||SB_KEY;
-  const headers={'apikey':SB_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json'};
+  if(!_sbAccessToken) throw new Error('Not signed in yet');
+  const headers={'apikey':SB_KEY,'Authorization':'Bearer '+_sbAccessToken,'Content-Type':'application/json'};
   if(method==='POST') headers['Prefer']='resolution=merge-duplicates,return=minimal';
   const res=await fetch(SB_URL+'/rest/v1/'+path,{method,headers,body:body?JSON.stringify(body):undefined});
   if(!res.ok){
@@ -1302,7 +1339,7 @@ function switchTab(t,btn){
 function showListNav(){
   document.getElementById('backBtn').style.display='none';
   document.getElementById('mainNav').style.display='flex';
-  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.13</span>';
+  document.getElementById('hdrTitle').innerHTML='Gigs &amp; Trips <span class="ver">v7.15</span>';
   document.getElementById('hdrAction').style.display='none';
 }
 
@@ -1810,7 +1847,7 @@ function renderGigCard(g, d){
         </div>
         <div class="card-info">
           <div class="card-name">${esc(g.name)}</div>
-          ${g.venue?`<div class="card-sub">📍 ${esc(g.venue)}</div>`:''}
+          ${g.venue?`<div class="card-sub">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
           <div class="card-meta">
             <span class="type-pill ${g.gigType||'music'}">${ti.label}</span>
             ${g.done?`<span style="color:var(--ok);font-weight:600;font-size:12px">✓ Done</span>`:g.missed?`<span style="color:var(--ink3);font-size:12px">Missed</span>`:countdownPillHtml(countdownLabel(g.date))}
@@ -1951,7 +1988,7 @@ function renderTripCard(t, d){
         </div>
         <div class="card-info">
           <div class="card-name">${esc(t.name)}</div>
-          ${t.destination?`<div class="card-sub">📍 ${esc(t.destination)}</div>`:''}
+          ${t.destination?`<div class="card-sub">📍 ${esc(t.destination)} ${venueLinkHtml(t.destination)}</div>`:''}
           <div class="card-meta">
             <span class="status-pill ${sc}">${esc(t.status||'Planning')}</span>
             ${countdownPillHtml(tripCountdownLabel(t))}
@@ -2171,7 +2208,7 @@ function openGigDetail(id){
         <span style="font-size:36px">${ti.icon}</span>
         <div>
           <div style="font-size:13px;color:var(--ink3)">${fmtDateLong(g.date)}${g.time?' · '+g.time:''}</div>
-          ${g.venue?`<div style="font-size:14px;color:var(--ink2);margin-top:2px">📍 ${esc(g.venue)}</div>`:''}
+          ${g.venue?`<div style="font-size:14px;color:var(--ink2);margin-top:2px">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
           ${linkedTrip?`<div style="margin-top:6px"><span class="trip-pill" style="cursor:pointer" onclick="closeModal();openTripDetail('${esc(linkedTrip.id)}')">✈️ ${esc(linkedTrip.name)}</span></div>`:''}
         </div>
       </div>
@@ -2475,7 +2512,7 @@ function openTripDetail(id, tab){
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
           <div style="font-size:14px;font-weight:600;color:var(--ink2)">${fmtDateLong(trip.startDate)} — ${fmtDateLong(trip.endDate)}</div>
-          ${trip.destination?`<div style="font-size:13px;color:var(--ink3);margin-top:2px">📍 ${esc(trip.destination)}</div>`:''}
+          ${trip.destination?`<div style="font-size:13px;color:var(--ink3);margin-top:2px">📍 ${esc(trip.destination)} ${venueLinkHtml(trip.destination)}</div>`:''}
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
             <span class="status-pill ${sc}">${esc(trip.status||'Planning')}</span>
             <span style="font-size:12px;color:var(--ink3);padding:2px 8px">${nights} nights</span>
@@ -2497,7 +2534,7 @@ function openTripDetail(id, tab){
           <div style="flex:1;min-width:0">
             <div class="linked-gig-label">Gig — ${fmtDateShort(g.date)}</div>
             <div class="linked-gig-name">${esc(g.name)}</div>
-            ${g.venue?`<div class="linked-gig-sub">📍 ${esc(g.venue)}</div>`:''}
+            ${g.venue?`<div class="linked-gig-sub">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
           </div>
           <span style="color:var(--acc);font-size:18px">›</span>
         </div>`;
@@ -2619,7 +2656,7 @@ function openDayView(tripId,dayId,scrollToItems){
         <span style="font-size:24px">${ti.icon}</span>
         <div style="flex:1;min-width:0">
           <div class="linked-gig-name">${esc(g.name)}</div>
-          ${g.venue?`<div class="linked-gig-sub">📍 ${esc(g.venue)}</div>`:''}
+          ${g.venue?`<div class="linked-gig-sub">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
           ${g.time?`<div class="linked-gig-sub">🕐 ${g.time}</div>`:''}
         </div>
         <span style="color:var(--acc);font-size:18px">›</span>
@@ -2704,11 +2741,17 @@ function getAccGhosts(trip,dayId){
 function renderItemCard(it,tripId,dayId,s,trip,day){
   const name=it.type==='food'?(it.subtype||'Food'):it.name||typeLabel(it.type);
   let sub='';
-  if(it.type==='travel') sub=`${it.subtype||''}${it.from||it.to?` · ${it.from||''}→${it.to||''}`:''}`; 
+  if(it.type==='travel') sub=`${it.subtype||''}${it.from||it.to?` · ${it.from||''}→${it.to||''}`:''}${it.venue?` · ${it.venue}`:''}`;
   if(it.type==='food'&&it.name) sub=it.name;
-  if(it.type==='accommodation') sub=`${it.nights||1} night${parseInt(it.nights||1)!==1?'s':''}`;
+  if(it.type==='accommodation') sub=`${it.nights||1} night${parseInt(it.nights||1)!==1?'s':''}${it.address?` · ${it.address}`:''}`;
   if(it.type==='keystop'&&it.location) sub=it.location;
   if(it.type==='attraction'&&it.location) sub=it.location;
+  if(it.type==='other'&&it.venue) sub=it.venue;
+  // v7.15 (GIG-039): map-link icon next to whichever location the sub
+  // line ends up showing — itemLocationName() resolves the right field
+  // per type so this always matches what's actually displayed above.
+  const locName=itemLocationName(it);
+  const locLink=locName?venueLinkHtml(locName):'';
 
   const cost=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
   const hasActual=it.costActual!=null;
@@ -2730,7 +2773,7 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
       <div class="item-type-icon">${typeIcon(it.type)}</div>
       <div class="item-main">
         <div class="item-name">${esc(name)}${it.calendarAdded?` <span class="cal-badge">📅 In Calendar</span>`:''}</div>
-        ${sub?`<div class="item-sub">${esc(sub)}</div>`:''}
+        ${sub?`<div class="item-sub">${esc(sub)} ${locLink}</div>`:''}
       </div>
       <div class="item-right">
         ${pill}
@@ -2838,6 +2881,20 @@ function confirmDeleteDay(tripId,dayId){
 // ═══════════════════════════════════════════════════════════════════
 // ADD / EDIT TRIP ITEMS
 // ═══════════════════════════════════════════════════════════════════
+// v7.15 (GIG-039): shared venue/location picker field for item forms —
+// searches the same venues list gigs use, offers to add if there's no
+// match, and (once saved) resolves to a map link via venueLinkHtml. Only
+// one item form is ever open at a time, so a fixed input/drop id pair is
+// safe to reuse across every type that needs one.
+function venuePickerFieldHtml(label, value, inputId, dropId){
+  return `<div class="fg"><label>${esc(label)}</label>
+    <div class="venue-wrap">
+      <input class="fi" id="${inputId}" placeholder="Search or add a venue…" value="${esc(value||'')}" autocomplete="off">
+      <div class="venue-drop" id="${dropId}" style="display:none"></div>
+    </div>
+  </div>`;
+}
+
 function showAddItemMenu(tripId,dayId){
   const html=`<div class="modal-hdr"><div class="modal-title">Add item</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -2872,6 +2929,7 @@ function showItemForm(tripId,dayId,type,it){
         <div class="fg"><label>From</label><input class="fi" id="ifFrom" placeholder="MAN" value="${esc(it?.from||'')}"></div>
         <div class="fg"><label>To</label><input class="fi" id="ifTo" placeholder="BCN" value="${esc(it?.to||'')}"></div>
       </div>
+      ${venuePickerFieldHtml('Location / venue (optional)', it?.venue, 'ifLocation', 'ifLocationDrop')}
       <div class="fi-row">
         <div class="fg"><label>Departure</label>${timePickerHtml('ifDepTime',it?.depTime)}</div>
         <div class="fg"><label>Cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCost" placeholder="0.00" value="${it?.cost||''}"></div>
@@ -2885,7 +2943,7 @@ function showItemForm(tripId,dayId,type,it){
   } else if(type==='accommodation'){
     const psOpts=['unpaid','deposit','paid'].map(p=>`<option value="${p}" ${(it?.paymentStatus||'unpaid')===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('');
     fields+=`<div class="fg"><label>Name *</label><input class="fi" id="ifName" placeholder="Hotel / Airbnb name" value="${esc(it?.name||'')}"></div>
-      <div class="fg"><label>Address</label><input class="fi" id="ifAddress" value="${esc(it?.address||'')}"></div>
+      ${venuePickerFieldHtml('Address / venue', it?.address, 'ifLocation', 'ifLocationDrop')}
       <div class="fi-row">
         <div class="fg"><label>Check-in</label>${timePickerHtml('ifCheckin',it?.checkin)}</div>
         <div class="fg"><label>Check-out</label>${timePickerHtml('ifCheckout',it?.checkout)}</div>
@@ -2902,7 +2960,7 @@ function showItemForm(tripId,dayId,type,it){
   } else if(type==='food'){
     const mOpts=MEAL_TYPES.map(m=>`<option ${(it?.subtype||'Dinner')===m?'selected':''}>${m}</option>`).join('');
     fields+=`<div class="fg"><label>Meal type</label><select class="fi" id="ifSubtype">${mOpts}</select></div>
-      <div class="fg"><label>Restaurant / place name</label><input class="fi" id="ifName" value="${esc(it?.name||'')}"></div>
+      ${venuePickerFieldHtml('Restaurant / venue', it?.name, 'ifName', 'ifNameDrop')}
       <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>
       <div class="fg"><label>Cuisine</label><input class="fi" id="ifCuisine" placeholder="e.g. Italian, Thai" value="${esc(it?.cuisine||'')}"></div>
       <div class="fg"><label>Estimated cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCost" value="${it?.cost||''}"></div>
@@ -2910,7 +2968,7 @@ function showItemForm(tripId,dayId,type,it){
       <div class="fg"><label>Booked?</label><div class="tgl-row"><div class="tgl${it?.booked?' on':''}" id="ifBooked" onclick="this.classList.toggle('on');document.getElementById('ifBookedLbl').textContent=this.classList.contains('on')?'Booked':'Not booked'"><div class="kn"></div></div><span class="tgl-lbl" id="ifBookedLbl">${it?.booked?'Booked':'Not booked'}</span></div></div>`;
   } else if(type==='attraction'){
     fields+=`<div class="fg"><label>Name *</label><input class="fi" id="ifName" placeholder="Place or attraction name" value="${esc(it?.name||'')}"></div>
-      <div class="fg"><label>Location</label><input class="fi" id="ifLocation" value="${esc(it?.location||'')}"></div>
+      ${venuePickerFieldHtml('Location', it?.location, 'ifLocation', 'ifLocationDrop')}
       <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>
       <div class="fg"><label>Opening hours</label><input class="fi" id="ifOpeningHours" placeholder="e.g. 9am–5pm" value="${esc(it?.openingHours||'')}"></div>
       <div class="fi-row">
@@ -2921,10 +2979,11 @@ function showItemForm(tripId,dayId,type,it){
       <div class="fg"><label>Paid?</label><div class="tgl-row"><div class="tgl${it?.paid?' on':''}" id="ifPaid" onclick="this.classList.toggle('on');document.getElementById('ifPaidLbl').textContent=this.classList.contains('on')?'Paid':'Unpaid'"><div class="kn"></div></div><span class="tgl-lbl" id="ifPaidLbl">${it?.paid?'Paid':'Unpaid'}</span></div></div>`;
   } else if(type==='keystop'){
     fields+=`<div class="fg"><label>Name *</label><input class="fi" id="ifName" placeholder="e.g. Sagrada Família" value="${esc(it?.name||'')}"></div>
-      <div class="fg"><label>Location / address</label><input class="fi" id="ifLocation" value="${esc(it?.location||'')}"></div>
+      ${venuePickerFieldHtml('Location / address', it?.location, 'ifLocation', 'ifLocationDrop')}
       <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>`;
   } else { // other
     fields+=`<div class="fg"><label>Description</label><input class="fi" id="ifName" placeholder="What is this?" value="${esc(it?.desc||it?.name||'')}"></div>
+      ${venuePickerFieldHtml('Location / venue (optional)', it?.venue, 'ifLocation', 'ifLocationDrop')}
       <div class="fg"><label>Time (optional)</label>${timePickerHtml('ifTime',it?.time)}</div>
       <div class="fi-row">
         <div class="fg"><label>Cost (${s})</label><input class="fi" type="number" step="0.01" id="ifCost" value="${it?.cost||''}"></div>
@@ -2940,6 +2999,15 @@ function showItemForm(tripId,dayId,type,it){
       <div id="ifErr" class="form-err"></div>
       <div class="form-actions"><button class="btn btn-pri" onclick="saveItem('${esc(tripId)}','${esc(dayId)}','${esc(type)}',${it?`'${esc(it.id)}'`:'null'})">Save</button></div>
     </div>`);
+  // v7.15 (GIG-039): wire the venue picker for whichever field this type
+  // uses — Food's venue picker lives on the shared 'ifName' id (it IS the
+  // restaurant name), every other type that has one uses 'ifLocation'.
+  // v7.15 (GIG-039): matches showGigForm's own pattern — deferred a tick
+  // so the modal's fresh DOM is fully settled before wiring listeners.
+  setTimeout(()=>{
+    if(type==='food') initVenueAC('ifName','ifNameDrop');
+    else initVenueAC('ifLocation','ifLocationDrop'); // every other type now has this field
+  },0);
 }
 
 function saveItem(tripId,dayId,type,existingId){
@@ -2964,6 +3032,7 @@ function saveItem(tripId,dayId,type,existingId){
     it.subtype=document.getElementById('ifSubtype')?.value||'Flight';
     it.name=name; it.from=document.getElementById('ifFrom')?.value.trim()||'';
     it.to=document.getElementById('ifTo')?.value.trim()||'';
+    it.venue=document.getElementById('ifLocation')?.value.trim()||'';
     it.depTime=getTimePicker('ifDepTime');
     it.cost=parseFloat(document.getElementById('ifCost')?.value||0)||0;
     it.bookingRef=document.getElementById('ifBookingRef')?.value.trim()||'';
@@ -2971,7 +3040,7 @@ function saveItem(tripId,dayId,type,existingId){
     it.seatNo=document.getElementById('ifSeatNo')?.value.trim()||'';
     it.paid=document.getElementById('ifPaid')?.classList.contains('on')||false;
   } else if(type==='accommodation'){
-    it.name=name; it.address=document.getElementById('ifAddress')?.value.trim()||'';
+    it.name=name; it.address=document.getElementById('ifLocation')?.value.trim()||'';
     it.checkin=getTimePicker('ifCheckin');
     it.checkout=getTimePicker('ifCheckout');
     it.nights=parseInt(document.getElementById('ifNights')?.value||1)||1;
@@ -3003,6 +3072,7 @@ function saveItem(tripId,dayId,type,existingId){
     it.time=getTimePicker('ifTime');
   } else {
     it.desc=name; it.name=name;
+    it.venue=document.getElementById('ifLocation')?.value.trim()||'';
     it.time=getTimePicker('ifTime');
     it.cost=parseFloat(document.getElementById('ifCost')?.value||0)||0;
     const ca=document.getElementById('ifCostActual')?.value;
@@ -3010,10 +3080,30 @@ function saveItem(tripId,dayId,type,existingId){
   }
   it.notes=document.getElementById('ifNotes')?.value.trim()||'';
 
+  // v7.15 (GIG-039): auto-add this item's venue/location to the shared
+  // venues list if it's not already there — same behaviour as saving a
+  // gig. The picker's own "+ Add" already handles the common case, but
+  // this catches someone typing a value and hitting Save without ever
+  // opening the dropdown.
+  const locName=itemLocationName(it);
+  let newVenueFromItem=null;
+  if(locName){
+    const d=getData();
+    const venues=normaliseVenues(d.venues);
+    if(!venues.find(x=>x.name.toLowerCase()===locName.toLowerCase())){
+      newVenueFromItem={id:venueId(locName),name:locName,mapUrl:'',updatedAt:new Date().toISOString()};
+      venues.push(newVenueFromItem);
+      venues.sort((a,b)=>a.name.localeCompare(b.name));
+      d.venues=venues;
+      saveData(d);
+    }
+  }
+
   const idx=day.items.findIndex(i=>i.id===it.id);
   if(idx>=0) day.items[idx]=it; else day.items.push(it);
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); closeModal(); showToast(isNew?'Added ✓':'Updated ✓');
+  if(newVenueFromItem) syncVenueNow(newVenueFromItem);
   openDayView(tripId,dayId);
 }
 
@@ -3460,7 +3550,7 @@ function renderVenues(){
   // for why that filtering isn't done there (would risk losing other
   // pending tombstones when a mutation writes the list back).
   const venues=normaliseVenues(d.venues).filter(v=>!v._deleted);
-  let html=`<div class="section-hdr">Venue Library — ${venues.length} venues</div>`;
+  let html=`<div class="section-hdr">Venue / Location Library — ${venues.length} saved</div>`;
   html+=`<div class="vlib-card">`;
   // Add input at the TOP
   html+=`<div class="vlib-add">
@@ -3468,13 +3558,11 @@ function renderVenues(){
     <button class="btn btn-pri" style="padding:8px 14px;font-size:13px" onclick="addVenueFromInput()">Add</button>
   </div>`;
   venues.forEach((v,i)=>{
-    const hasMap=!!(v.mapUrl);
     const idAttr=esc(v.id).replace(/'/g,"\\'");
+    const mapHref=v.mapUrl?v.mapUrl:gmapsSearchUrl(v.name);
     html+=`<div class="vlib-item">
       <span class="vlib-name">${esc(v.name)}</span>
-      ${hasMap
-        ?`<a href="${esc(v.mapUrl)}" target="_blank" rel="noopener" class="vlib-map has-link" title="Open map" onclick="event.stopPropagation()">🗺</a>`
-        :`<span class="vlib-map no-link" title="No map link">🗺</span>`}
+      <a href="${esc(mapHref)}" target="_blank" rel="noopener" class="vlib-map has-link" title="${v.mapUrl?'Open map':'Search on Google Maps'}" onclick="event.stopPropagation()">🗺</a>
       <button class="vlib-edit" onclick="editVenue('${idAttr}')" title="Edit">✏️</button>
       <button class="vlib-del" onclick="deleteVenue('${idAttr}')" title="Remove">✕</button>
     </div>`;
@@ -3625,6 +3713,20 @@ function needsDayOff(dateStr,timeStr){
 // ═══════════════════════════════════════════════════════════════════
 // VENUE AUTOCOMPLETE
 // ═══════════════════════════════════════════════════════════════════
+// v7.15 (GIG-039): venue/location map link, with a Google Maps search
+// fallback when there's no saved map URL — used everywhere a venue or
+// item location is shown (gigs, trip items, the venue library itself).
+function gmapsSearchUrl(name){
+  return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(name);
+}
+function venueLinkHtml(name){
+  if(!name) return '';
+  const venues=normaliseVenues(getData().venues);
+  const v=venues.find(x=>venueId(x.name)===venueId(name));
+  const url=(v&&v.mapUrl)?v.mapUrl:gmapsSearchUrl(name);
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="venue-link" title="Open in Maps" onclick="event.stopPropagation()">🗺</a>`;
+}
+
 let _venueInput=null, _venueDrop=null;
 
 function initVenueAC(inputId,dropId){
@@ -4078,6 +4180,16 @@ function tripNights(t){
 // in the same day/time order as Trip Details (sortDayTimeline, GIG-036)
 // with times displayed where set. All toggles stopPropagation so they
 // don't also trigger the card's own openTripDetail() navigation.
+// v7.15 (GIG-039): all trip item types (Travel, Accommodation, Food,
+// Attraction, Keystop, Other) now use the shared venue/location picker
+// (venuePickerFieldHtml, initVenueAC) instead of free text — searching,
+// adding-if-missing, all backed by the same venues list gigs already
+// used. Every place a venue/location/destination is shown (gigs, trip
+// items, trip destination) now renders a map-link icon (venueLinkHtml):
+// the venue's saved map URL if it has one, otherwise a Google Maps
+// search pre-filled with the name (gmapsSearchUrl) — so nothing is ever
+// a dead icon any more, including the Venue Library itself. Renamed
+// "Venues" to "Venue/Location" throughout since it's no longer gig-only.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
@@ -4296,7 +4408,7 @@ function gcalItemUrl(trip, day, it){
   if(it.bookingRef) detailLines.push('Booking ref: '+it.bookingRef);
   if(it.confirmNo) detailLines.push('Confirm no.: '+it.confirmNo);
   if(detailLines.length) parts.push('details='+encodeURIComponent(detailLines.join('\n')));
-  const loc=it.location||it.address||(it.type==='travel'?(it.to||it.from||''):'');
+  const loc=itemLocationName(it)||it.location||it.address||(it.type==='travel'?(it.to||it.from||''):'');
   if(loc) parts.push('location='+encodeURIComponent(loc));
   return parts.join('&');
 }
