@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.76</title>
+<title>Gym Tracker v2.77</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.76</div></span>
+      <span>Gym Tracker<div class="ver">v2.77</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -531,6 +531,23 @@
     <div class="btn-row" style="margin-top:14px">
       <button class="btn btn-secondary" style="flex:1" onclick="declineUpdatePlanTargets()">✗ No, just save</button>
       <button class="btn btn-primary" style="flex:1" onclick="confirmUpdatePlanTargets()">✓ Yes, update plan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SESSION SUMMARY / SEND TO SHORTCUT MODAL — copies a plain-text
+     summary to clipboard as a fallback and, in the same tap, opens the
+     GymSummary iOS Shortcut with that text as its input, so it can be
+     appended to a Note / shown as a notification and picked up on an
+     Apple Watch. ═══ -->
+<div class="modal-overlay" id="modalSessionSummary" onclick="if(event.target===this)skipSessionSummary()">
+  <div class="modal">
+    <div class="modal-title"><span>Session saved</span><button class="modal-close" onclick="skipSessionSummary()">✕</button></div>
+    <p style="font-size:11.5px;color:var(--ink2);margin-bottom:8px">Send this summary to your GymSummary Shortcut?</p>
+    <pre id="sessionSummaryPreview" style="white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:220px;overflow-y:auto;margin:0 0 12px"></pre>
+    <div class="btn-row">
+      <button class="btn btn-secondary" style="flex:1" onclick="skipSessionSummary()">Skip</button>
+      <button class="btn btn-primary" style="flex:1" onclick="copyAndSendSessionSummary()">📋 Copy &amp; Send</button>
     </div>
   </div>
 </div>
@@ -1112,6 +1129,22 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.77: after saving a session (fresh finish or an edit-save), a new
+// modal shows a plain-text summary (exercise + sets, plus notes) with
+// "Copy & Send" — copies it to clipboard as a fallback and, in the same
+// tap, opens shortcuts://run-shortcut?name=GymSummary with the summary
+// as the shortcut's input. What happens to it from there (append to a
+// Note, show a notification, both) is entirely configured inside the
+// GymSummary Shortcut on the phone — nothing else to build here if that
+// changes later. A previous attempt at this reportedly didn't fire —
+// most likely cause: awaiting the (async) clipboard write before
+// navigating to the shortcuts:// URL can burn through iOS Safari's brief
+// user-activation window, silently breaking the navigation. Fixed by
+// navigating synchronously first and only awaiting the clipboard write
+// for its own toast message afterward, never blocking or delaying the
+// navigation. Also reachable on demand — a "📤 Send to Watch" button
+// added to a completed session's chip in the day view, for resending a
+// past session without needing to have just finished it.
 // v2.76 (GYM-072 — reused: v2.74 already used GYM-072 for the tab-bar
 // text-only rule; flagged for a Test & Issues renumber, built here since
 // this brief's content was unambiguous): Log PT Session gained an
@@ -1508,7 +1541,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.76';
+const VERSION = '2.77';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3560,6 +3593,7 @@ function calSessionChip(s) {
       <div class="li-actions" style="margin-top:7px">
         <button class="btn btn-secondary btn-sm" onclick="editSession('${s.id}')">✏️ Edit Session</button>
         ${plan ? `<button class="btn btn-secondary btn-sm" onclick="openPlanEditor('${plan.id}')">📋 Edit Plan</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="resendSessionSummary('${s.id}')">📤 Send to Watch</button>
         <button class="btn btn-danger btn-sm" onclick="deleteSession('${s.id}')">🗑 Remove</button>
       </div>` : ''}
   </div>`;
@@ -4487,7 +4521,7 @@ function finishActiveSession() {
     document.getElementById('sessionOverlay').classList.remove('open');
     renderAll();
     toast('Session updated ✓');
-    if (updated) offerPlanPrompt(updated);
+    if (updated) promptSessionSummary(updated);
     return;
   }
 
@@ -4502,7 +4536,7 @@ function finishActiveSession() {
   _activeSession = null;
   renderAll();
   toast('Session saved ✓');
-  offerPlanPrompt(finished);
+  promptSessionSummary(finished);
 }
 
 // GYM-061: the plan-targets-update decision used to be a native
@@ -4538,6 +4572,76 @@ function confirmUpdatePlanTargets() {
 function declineUpdatePlanTargets() {
   _pendingTargetsUpdate = null;
   closeModal('modalUpdateTargets');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SEND SESSION SUMMARY TO SHORTCUT — copies a plain-text workout summary
+// to clipboard (fallback) and opens the GymSummary iOS Shortcut with
+// that same text as its input, via shortcuts://run-shortcut. The
+// Shortcut itself decides what to do with the text (append to a Note,
+// show a notification, or both) — that's configured on the phone, not
+// here. Shown right after a session is saved; also reachable on demand
+// from a completed session's chip in the day view for a resend.
+//
+// A previous attempt at this reportedly didn't work — the most likely
+// cause is that iOS Safari only allows a custom-scheme navigation
+// (shortcuts://...) within a brief window of genuine user interaction.
+// If the clipboard write is awaited BEFORE navigating, that gap can burn
+// through the window and the navigation silently fails. Here the
+// navigation fires synchronously in the same click handler, and the
+// clipboard write (which is inherently async) is only awaited for its
+// own toast message afterward — it never blocks or delays the navigation.
+// ═══════════════════════════════════════════════════════════════════
+function buildSessionSummaryText(session) {
+  const lines = [session.name + ' — ' + fmtDate(session.date)];
+  session.items.forEach(item => {
+    const doneSets = (item.actualSets||[]).filter(hasAnyValue);
+    if (!doneSets.length) return;
+    lines.push(item.exerciseName + ': ' + summarizeSets(doneSets, item.trackType));
+  });
+  if (session.notes) lines.push('Notes: ' + session.notes);
+  return lines.join('\n');
+}
+let _pendingFinishedSessionForPrompt = null;
+let _pendingSessionSummaryText = '';
+function promptSessionSummary(session) {
+  _pendingFinishedSessionForPrompt = session;
+  _pendingSessionSummaryText = buildSessionSummaryText(session);
+  document.getElementById('sessionSummaryPreview').textContent = _pendingSessionSummaryText;
+  openModal('modalSessionSummary');
+}
+// On-demand resend from a completed session's chip in the day view —
+// same modal, but doesn't chain into the plan-targets-update prompt
+// afterward, since that's only relevant right after a genuine finish.
+function resendSessionSummary(sessionId) {
+  const session = _env.data.sessions.find(s => s.id === sessionId);
+  if (!session) return;
+  _pendingFinishedSessionForPrompt = null;
+  _pendingSessionSummaryText = buildSessionSummaryText(session);
+  document.getElementById('sessionSummaryPreview').textContent = _pendingSessionSummaryText;
+  openModal('modalSessionSummary');
+}
+function copyAndSendSessionSummary() {
+  const text = _pendingSessionSummaryText;
+  // Navigate first, synchronously — see note above on why order matters.
+  window.location.href = 'shortcuts://run-shortcut?name=' + encodeURIComponent('GymSummary') + '&input=text&text=' + encodeURIComponent(text);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => toast('Copied & sent to GymSummary ✓'))
+      .catch(() => toast('Sent to GymSummary (clipboard copy failed — copy manually if needed)'));
+  } else {
+    toast('Sent to GymSummary (clipboard not available)');
+  }
+  dismissSessionSummary();
+}
+function skipSessionSummary() {
+  dismissSessionSummary();
+}
+function dismissSessionSummary() {
+  closeModal('modalSessionSummary');
+  const finished = _pendingFinishedSessionForPrompt;
+  _pendingFinishedSessionForPrompt = null;
+  if (finished) offerPlanPrompt(finished);
 }
 
 function createPlanFromSession(session, name) {
