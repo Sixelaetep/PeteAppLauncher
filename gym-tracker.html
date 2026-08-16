@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.79</title>
+<title>Gym Tracker v2.80</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.79</div></span>
+      <span>Gym Tracker<div class="ver">v2.80</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -678,15 +678,15 @@
     <div class="modal-title"><span id="weightModalTitle">Log Weight</span><button class="modal-close" onclick="closeModal('modalWeight')">✕</button></div>
     <input type="hidden" id="weightEditId">
     <label>Date</label>
-    <input type="date" id="weightDate">
+    <input type="date" id="weightDate" oninput="updateWeightShortcutHref()">
     <label>Weight (kg)</label>
-    <input type="number" id="weightKg" step="0.1" min="0" placeholder="e.g. 82.4">
+    <input type="number" id="weightKg" step="0.1" min="0" placeholder="e.g. 82.4" oninput="updateWeightShortcutHref()">
     <label>Notes <span style="text-transform:none;font-weight:400;color:var(--ink3)">(optional)</span></label>
     <textarea id="weightNotes" placeholder="Anything worth remembering…"></textarea>
     <div class="btn-row">
-      <button class="btn btn-primary" style="flex:1" onclick="saveWeightEntry()">Save</button>
+      <a id="saveWeightLink" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none" href="#" target="_blank" rel="noopener" onclick="saveWeightEntry(event)">Save</a>
     </div>
-    <p style="font-size:11px;color:var(--ink3);margin-top:10px;text-align:center">Saving copies the weight to your clipboard — paste it into your Shortcut or Health app manually.</p>
+    <p style="font-size:11px;color:var(--ink3);margin-top:10px;text-align:center">Saving copies the weight to your clipboard and opens the Log_Weight Shortcut.</p>
   </div>
 </div>
 
@@ -1129,6 +1129,23 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.80: applied the same fix that got the GymSummary Shortcut launching
+// (real <a href="shortcuts://...">, href set ahead of time, no
+// preventDefault on success) to the Log Weight Save button, launching a
+// second shortcut, Log_Weight. Since Save does real work first (validate,
+// persist, sync) before anything should navigate, the href is kept
+// continuously current via oninput on the date/weight fields (and once
+// more when the modal opens/prefills) rather than being computed inside
+// the click handler — by the time Save is tapped, the link already
+// points at the right shortcuts:// URL. The invalid-weight path calls
+// event.preventDefault() explicitly, since simply returning early from
+// an anchor's onclick does NOT stop its own default navigation the way
+// it would on a plain <button>. Clipboard copy now carries the same
+// "Weight: Xkg — date" text sent to the shortcut, rather than just the
+// bare number, so a manual paste elsewhere is equally useful.
+// shortcutUrlFor() also now takes the shortcut name as a parameter
+// (previously hardcoded to 'GymSummary') so it's shared cleanly between
+// both features.
 // v2.79: two changes. (1) v2.78's real-anchor fix still didn't launch
 // Shortcuts on an actual iPhone (clipboard copy worked, Shortcuts never
 // opened), while the identical page worked fine on a Mac — the next
@@ -1573,7 +1590,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.79';
+const VERSION = '2.80';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -4666,8 +4683,8 @@ function buildSessionSummaryText(session) {
   if (session.notes) lines.push('Notes: ' + session.notes);
   return lines.join('\n');
 }
-function shortcutUrlFor(text) {
-  return 'shortcuts://run-shortcut?name=' + encodeURIComponent('GymSummary') + '&input=text&text=' + encodeURIComponent(text);
+function shortcutUrlFor(name, text) {
+  return 'shortcuts://run-shortcut?name=' + encodeURIComponent(name) + '&input=text&text=' + encodeURIComponent(text);
 }
 let _pendingFinishedSessionForPrompt = null;
 let _pendingSessionSummaryText = '';
@@ -4675,7 +4692,7 @@ function promptSessionSummary(session) {
   _pendingFinishedSessionForPrompt = session;
   _pendingSessionSummaryText = buildSessionSummaryText(session);
   document.getElementById('sessionSummaryPreview').textContent = _pendingSessionSummaryText;
-  document.getElementById('sendToShortcutLink').href = shortcutUrlFor(_pendingSessionSummaryText);
+  document.getElementById('sendToShortcutLink').href = shortcutUrlFor('GymSummary', _pendingSessionSummaryText);
   openModal('modalSessionSummary');
 }
 // On-demand resend from a completed session's chip in the day view —
@@ -4687,7 +4704,7 @@ function resendSessionSummary(sessionId) {
   _pendingFinishedSessionForPrompt = null;
   _pendingSessionSummaryText = buildSessionSummaryText(session);
   document.getElementById('sessionSummaryPreview').textContent = _pendingSessionSummaryText;
-  document.getElementById('sendToShortcutLink').href = shortcutUrlFor(_pendingSessionSummaryText);
+  document.getElementById('sendToShortcutLink').href = shortcutUrlFor('GymSummary', _pendingSessionSummaryText);
   openModal('modalSessionSummary');
 }
 // Deliberately does NOT call event.preventDefault() — the link's own
@@ -4948,11 +4965,29 @@ function openWeightModal(id) {
     document.getElementById('weightNotes').value = '';
   }
   openModal('modalWeight');
+  updateWeightShortcutHref();
 }
-function saveWeightEntry() {
+// Keeps the Save link's href current as the date/weight fields change,
+// same "real anchor, href set ahead of time" pattern that fixed the
+// session-summary Shortcut launch — a script-driven navigation on an
+// iOS standalone home-screen app can be silently swallowed, but a
+// genuine link tap works.
+function updateWeightShortcutHref() {
+  const link = document.getElementById('saveWeightLink');
+  if (!link) return;
+  const date = document.getElementById('weightDate').value || todayISO();
+  const weightKg = document.getElementById('weightKg').value;
+  const text = 'Weight: ' + (weightKg || '0') + 'kg — ' + fmtDate(date);
+  link.href = shortcutUrlFor('Log_Weight', text);
+}
+function saveWeightEntry(event) {
   const date = document.getElementById('weightDate').value || todayISO();
   const weightKg = Number(document.getElementById('weightKg').value);
-  if (!weightKg || weightKg <= 0) { toast('Enter a weight'); return; }
+  if (!weightKg || weightKg <= 0) {
+    if (event) event.preventDefault(); // stop the link's navigation — nothing valid to send yet
+    toast('Enter a weight');
+    return;
+  }
   const notes = document.getElementById('weightNotes').value.trim();
   const id = document.getElementById('weightEditId').value;
   const now = new Date().toISOString();
@@ -4969,11 +5004,15 @@ function saveWeightEntry() {
   closeModal('modalWeight');
   renderInsights();
   renderHomeWeight();
-  // GYM-023: no shortcut-launch attempt — just copy the value so it's ready
-  // to paste manually wherever it's needed (Shortcuts, Health, etc.).
+  // GYM-023/GYM-072-c: copies the same text handed to the Shortcut (not
+  // just the bare number) so a manual paste elsewhere is equally useful.
+  // Deliberately does NOT call event.preventDefault() on this path — the
+  // Save link's own pre-set href is what actually launches Log_Weight;
+  // this only handles persistence and the clipboard copy.
+  const text = 'Weight: ' + weightKg + 'kg — ' + fmtDate(date);
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(String(weightKg)).then(() => {
-      toast('Weight logged & copied to clipboard ✓');
+    navigator.clipboard.writeText(text).then(() => {
+      toast('Weight logged & sent to Log_Weight ✓');
     }).catch(() => {
       toast('Weight logged ✓ (clipboard copy failed — copy manually: '+weightKg+')');
     });
