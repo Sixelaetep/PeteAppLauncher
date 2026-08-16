@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.78</title>
+<title>Gym Tracker v2.79</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.78</div></span>
+      <span>Gym Tracker<div class="ver">v2.79</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -547,7 +547,7 @@
     <pre id="sessionSummaryPreview" style="white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.5;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:220px;overflow-y:auto;margin:0 0 12px"></pre>
     <div class="btn-row">
       <button class="btn btn-secondary" style="flex:1" onclick="skipSessionSummary()">Skip</button>
-      <a id="sendToShortcutLink" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none" href="#" onclick="onCopyAndSendClick(event)">📋 Copy &amp; Send</a>
+      <a id="sendToShortcutLink" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none" href="#" target="_blank" rel="noopener" onclick="onCopyAndSendClick(event)">📋 Copy &amp; Send</a>
     </div>
   </div>
 </div>
@@ -1129,6 +1129,28 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.79: two changes. (1) v2.78's real-anchor fix still didn't launch
+// Shortcuts on an actual iPhone (clipboard copy worked, Shortcuts never
+// opened), while the identical page worked fine on a Mac — the next
+// most likely cause is that a standalone home-screen PWA on iOS runs in
+// a more restricted WKWebView that can struggle to hand off to other
+// apps via custom URL scheme at all, independent of script-vs-tap.
+// Added target="_blank" (+ rel="noopener") to the link as a further
+// workaround, since that sometimes routes through a less-restricted
+// path. Flagging honestly: if this still doesn't fire, it likely means
+// "added to home screen" mode itself is the hard blocker, and the real
+// test is opening this exact page in a normal Safari tab (not the
+// home-screen icon) — if THAT works, it confirms the restriction is
+// PWA-specific and there's no further pure web-code fix available; a
+// different kind of trigger (e.g. a Shortcuts Automation, NFC tag, or
+// Focus-based automation) would be the next avenue, not more code here.
+// (2) The summary sent to the Shortcut is shorter now — new
+// compactSetsSummary() collapses consecutive identical sets to one
+// example + "×N" (e.g. "5×60kg x3"), only showing a set on its own when
+// it actually differs from its neighbour. Deliberately kept separate
+// from summarizeSets(), which still shows the full list everywhere else
+// (in-session "last actual" notes, PDF report) — only the text handed
+// to the Shortcut changed.
 // v2.78 (GYM-072-b follow-up): v2.77's Copy & Send worked testing on a
 // Mac but reportedly did nothing at all on an actual iPhone — clipboard
 // copy succeeded, Shortcuts never opened. Root cause: a script-driven
@@ -1551,7 +1573,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.78';
+const VERSION = '2.79';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -4614,12 +4636,32 @@ function declineUpdatePlanTargets() {
 // click handler only does the clipboard copy and never calls
 // preventDefault(), so the link's own href takes the user to Shortcuts.
 // ═══════════════════════════════════════════════════════════════════
+// Shorter summary format, specific to the Shortcut handoff — one full
+// example of a set, collapsed to "×N" when consecutive sets are
+// identical; a set that differs from its neighbour breaks the run and
+// shows on its own. Deliberately separate from summarizeSets() (used
+// for the in-app "last actual" context notes and the PDF report), which
+// stays as a full comma-separated list — this compact form is only for
+// the shorter text handed to the Shortcut/Watch.
+function compactSetsSummary(sets, type) {
+  const formatOne = s => type==='distance' ? (s.metres||0)+'m'+(s.seconds?'/'+mmss(s.seconds):'')
+    : type==='time' ? mmss(s.seconds)
+    : (s.reps||0)+'×'+(s.weight||0)+'kg';
+  const groups = [];
+  sets.forEach(s => {
+    const label = formatOne(s);
+    const last = groups[groups.length-1];
+    if (last && last.label === label) last.count++;
+    else groups.push({ label, count: 1 });
+  });
+  return groups.map(g => g.count > 1 ? g.label+' x'+g.count : g.label).join(', ');
+}
 function buildSessionSummaryText(session) {
   const lines = [session.name + ' — ' + fmtDate(session.date)];
   session.items.forEach(item => {
     const doneSets = (item.actualSets||[]).filter(hasAnyValue);
     if (!doneSets.length) return;
-    lines.push(item.exerciseName + ': ' + summarizeSets(doneSets, item.trackType));
+    lines.push(item.exerciseName + ': ' + compactSetsSummary(doneSets, item.trackType));
   });
   if (session.notes) lines.push('Notes: ' + session.notes);
   return lines.join('\n');
