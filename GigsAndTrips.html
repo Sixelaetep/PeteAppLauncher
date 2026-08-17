@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.20</title>
+<title>Gigs &amp; Trips v7.22</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.20</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.22</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -3010,18 +3010,20 @@ function openAddItem(tripId,dayId,type){
 // warning on the trip card. Only offers gigs with no tripId set at all —
 // reassigning a gig that's already linked to a *different* trip stays a
 // deliberate action on the gig's own edit form, not a one-tap here.
-function showLinkGigPicker(tripId,dayId){
+// includePast defaults to false — only future/today gigs shown, closest
+// to today at the top. The toggle button re-opens the same picker with
+// past gigs included, sorted the same ascending way (oldest-of-the-past
+// first), rather than mixing past and future in one date-distance sort.
+function showLinkGigPicker(tripId,dayId,includePast){
   const trip=getEvent(tripId); if(!trip) return;
-  const candidates=getGigs().filter(g=>!g.tripId);
-  const tripStart=trip.startDate?new Date(trip.startDate+'T00:00:00').getTime():0;
-  candidates.sort((a,b)=>{
-    const da=Math.abs(new Date(a.date+'T00:00:00').getTime()-tripStart);
-    const db=Math.abs(new Date(b.date+'T00:00:00').getTime()-tripStart);
-    return da-db;
-  });
+  const today=todayISO();
+  let candidates=getGigs().filter(g=>!g.tripId);
+  if(!includePast) candidates=candidates.filter(g=>g.date>=today);
+  candidates.sort((a,b)=>a.date.localeCompare(b.date));
+  const toggleBtn=`<button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="showLinkGigPicker('${esc(tripId)}',${dayId?`'${esc(dayId)}'`:'null'},${includePast?'false':'true'})">${includePast?'Hide past gigs':'Show past gigs too'}</button>`;
   if(!candidates.length){
     showModal(`<div class="modal-hdr"><div class="modal-title">Link an existing gig</div><button class="modal-close" onclick="closeModal()">✕</button></div>
-      <div class="modal-body"><div style="font-size:13px;color:var(--ink3);text-align:center;padding:20px 0">No unlinked gigs to choose from.</div></div>`);
+      <div class="modal-body"><div style="font-size:13px;color:var(--ink3);text-align:center;padding:20px 0">${includePast?'No unlinked gigs to choose from.':'No upcoming unlinked gigs to choose from.'}</div>${toggleBtn}</div>`);
     return;
   }
   const rows=candidates.slice(0,30).map(g=>{
@@ -3032,7 +3034,7 @@ function showLinkGigPicker(tripId,dayId){
     </div>`;
   }).join('');
   showModal(`<div class="modal-hdr"><div class="modal-title">Link an existing gig</div><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">${rows}</div>`);
+    <div class="modal-body">${rows}${toggleBtn}</div>`);
 }
 function linkGigToTrip(gigId,tripId,dayId){
   const g=getEvent(gigId); if(!g) return;
@@ -3131,7 +3133,10 @@ function showItemForm(tripId,dayId,type,it){
     <div class="modal-body">
       ${fields}
       <div id="ifErr" class="form-err"></div>
-      <div class="form-actions"><button class="btn btn-pri" onclick="saveItem('${esc(tripId)}','${esc(dayId)}','${esc(type)}',${it?`'${esc(it.id)}'`:'null'})">Save</button></div>
+      <div class="form-actions">
+        <button class="btn btn-pri" onclick="saveItem('${esc(tripId)}','${esc(dayId)}','${esc(type)}',${it?`'${esc(it.id)}'`:'null'})">Save</button>
+        ${it?`<button class="btn btn-ghost" onclick="convertItemToGig('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🎸 Convert to Gig</button>`:''}
+      </div>
     </div>`);
   // v7.15 (GIG-039): wire the venue picker for whichever field this type
   // uses — Food's venue picker lives on the shared 'ifName' id (it IS the
@@ -3248,6 +3253,49 @@ function deleteItem(tripId,dayId,itemId){
   day.items=day.items.filter(i=>i.id!==itemId);
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); showToast('Deleted'); openDayView(tripId,dayId);
+}
+
+// Converts a trip item into a real gig, linked back to this trip.
+// One direction only (item → gig) — the reverse isn't offered, since a
+// gig carries fields (ticket URL, review, done/missed) that don't have
+// anywhere to go on a plain item, so demoting one would be a lossier,
+// less obviously-reversible operation than promoting one.
+// Field mapping: name → itemDisplayName() (keeps e.g. a food item's
+// "Dinner — Restaurant" combo intact as the gig name), time/venue reuse
+// the same itemTime()/itemLocationName() helpers the rest of the app
+// already uses for these per-type lookups. cost/costActual have nowhere
+// to go on a gig (no numeric price field) — folded into ticketNote as
+// text instead of silently dropped. gigType defaults to music; the gig
+// edit form opens immediately afterward so that (and anything else) can
+// be corrected in the same breath rather than hunting for it later.
+function convertItemToGig(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  if(!confirm(`Convert "${itemDisplayName(it)}" into a gig? This removes it from the trip's item list.`)) return;
+
+  const s=sym(trip.currency||'GBP');
+  const costVal=(it.costActual!=null?it.costActual:it.cost);
+  let ticketNote='';
+  if(costVal){ ticketNote=`${s}${costVal} (converted from item)`; }
+
+  const g={
+    id:uid(), type:'gig', createdAt:new Date().toISOString(), addedBy:_currentUserKey,
+    done:false, missed:false, gigType:'music',
+    name:itemDisplayName(it), date:day.date, time:itemTime(it)||'',
+    venue:itemLocationName(it), ticketUrl:'', ticketNote,
+    tripId:tripId, notes:it.notes||''
+  };
+  saveEvent(g);
+
+  day.items=day.items.filter(i=>i.id!==itemId);
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+
+  closeModal();
+  showToast('Converted to gig ✓');
+  render();
+  openEditGig(g.id);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -4332,6 +4380,20 @@ function tripNights(t){
 // warning banner, which used to just flag the mismatch with no way to
 // fix it. Linked gigs keep their existing highlighted card treatment in
 // trip views, per Pete's call — only how you add/link them changed.
+// v7.21 (GIG-043 follow-up): added convertItemToGig() — a "Convert to
+// Gig" button on the item edit form, one direction only (item → gig).
+// Reuses itemDisplayName()/itemTime()/itemLocationName() so the mapping
+// matches what's already shown on the item's card. cost/costActual have
+// nowhere to go on a gig (no numeric price field) — folded into
+// ticketNote as text rather than dropped. Opens the new gig's edit form
+// immediately after so gigType (defaults to music) and anything else can
+// be corrected right away.
+// v7.22 (GIG-043 follow-up): the "link an existing gig" picker now shows
+// only future/today gigs by default, soonest first — was previously
+// sorted by closeness to the trip's start date regardless of past/future,
+// which could surface an old, long-finished gig above a genuinely
+// upcoming one. A toggle button reveals past gigs too, for the rare case
+// of linking a gig retroactively.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
