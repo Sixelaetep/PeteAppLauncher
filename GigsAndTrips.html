@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.25</title>
+<title>Gigs &amp; Trips v7.27</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -393,6 +393,8 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .kn{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform var(--tr);box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .tgl.on .kn{transform:translateX(18px)}
 .tgl-lbl{font-size:13px;color:var(--ink2)}
+.hide-gigs-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.hide-gigs-toggle-row .tgl-lbl{font-weight:600;color:var(--ink)}
 
 /* ── Auth / pin screen ──────────────────────────────────────────── */
 #pinScreen{position:fixed;inset:0;z-index:500;background:linear-gradient(135deg,#1a0533 0%,#0f1923 100%);display:flex;align-items:center;justify-content:center}
@@ -494,7 +496,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.25</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.27</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -1308,6 +1310,20 @@ function refreshCurrentView(){
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════
 let _tab='upcoming';
+// A display preference, not app data — kept in localStorage only (like
+// theme), not synced across devices. When on: gigs linked to a trip
+// (tripId set) are hidden from the flat Upcoming/Past list (they're
+// still fully visible inside their trip's own breakdown), trip cards
+// auto-expand their day list instead of needing a manual tap, and — in
+// Upcoming only — days that have already passed drop out of that
+// expanded list. Past intentionally skips the day-removal part, since
+// every day in a past trip already qualifies as "gone."
+let _hideTripGigs=localStorage.getItem('gat_hideTripGigs')==='1';
+function toggleHideTripGigs(){
+  _hideTripGigs=!_hideTripGigs;
+  localStorage.setItem('gat_hideTripGigs',_hideTripGigs?'1':'0');
+  render();
+}
 let _view='list'; // 'list' | 'tripDetail' | 'dayView'
 let _curTripId=null;
 let _curDayId=null;
@@ -1744,15 +1760,29 @@ function render(){
     }
   }
 
-  if(!filteredList.length){
-    document.getElementById('appInner').innerHTML=`<div class="empty">
-      <div class="empty-icon">${_searchQuery?'🔍':_tab==='upcoming'?'🗓':'📖'}</div>
-      <p>${_searchQuery?'No events match "'+_searchQuery+'"':_tab==='upcoming'?'No upcoming gigs or trips.<br>Tap ＋ to add one.':'Nothing here yet — your past events will appear here.'}</p>
+  // Hide-trip-gigs toggle row — always shown on Upcoming/Past (search
+  // filter above is independent of this; both can be active at once).
+  const hideToggleRow=`<div class="hide-gigs-toggle-row" onclick="toggleHideTripGigs()">
+    <span class="tgl-lbl">Hide trip gigs</span>
+    <div class="tgl${_hideTripGigs?' on':''}"><div class="kn"></div></div>
+  </div>`;
+
+  // Applied after the search filter/label above so the "N results" count
+  // reflects search matches only — this is a separate, additional cut.
+  const visibleList=_hideTripGigs
+    ? filteredList.filter(ev=>!(ev.type==='gig'&&ev.tripId))
+    : filteredList;
+
+  if(!visibleList.length){
+    const hiddenBySearch=filteredList.length===0;
+    document.getElementById('appInner').innerHTML=hideToggleRow+`<div class="empty">
+      <div class="empty-icon">${_searchQuery?'🔍':hiddenBySearch?(_tab==='upcoming'?'🗓':'📖'):'🎸'}</div>
+      <p>${_searchQuery?'No events match "'+_searchQuery+'"':hiddenBySearch?(_tab==='upcoming'?'No upcoming gigs or trips.<br>Tap ＋ to add one.':'Nothing here yet — your past events will appear here.'):'All '+_tab+' gigs are linked to a trip and hidden.<br>Toggle above to show them, or open the trip.'}</p>
     </div>`;
     return;
   }
 
-  let html='';
+  let html=hideToggleRow;
 
   // Helper: render year-grouped events for both tabs
   // GIG-034: each year now also splits into collapsible month sub-groups,
@@ -1811,19 +1841,19 @@ function render(){
 
   if(_searchQuery){
     // Flat list when searching — year groups add noise when filtering
-    filteredList.forEach(ev=>{
+    visibleList.forEach(ev=>{
       if(ev.type==='gig') html+=renderGigCard(ev,d);
       else html+=renderTripCard(ev,d);
     });
   } else if(_tab==='past'){
     if(!_collapsedYears) _collapsedYears=new Set();
     if(!_collapsedMonths) _collapsedMonths=new Set();
-    html+=renderYearGroups(filteredList,'past',_collapsedYears,_collapsedMonths);
+    html+=renderYearGroups(visibleList,'past',_collapsedYears,_collapsedMonths);
   } else {
     // Upcoming — year grouped, closest year first
     if(!_collapsedYearsUp) _collapsedYearsUp=new Set();
     if(!_collapsedMonthsUp) _collapsedMonthsUp=new Set();
-    html+=renderYearGroups(filteredList,'upcoming',_collapsedYearsUp,_collapsedMonthsUp);
+    html+=renderYearGroups(visibleList,'upcoming',_collapsedYearsUp,_collapsedMonthsUp);
   }
 
   document.getElementById('appInner').innerHTML=html;
@@ -1982,12 +2012,25 @@ function renderTripDaysBreakdown(t){
   const d=getData();
   const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===t.id);
   const itemCount=tripItemCount(t);
-  const isExpanded=_expandedTripCards&&_expandedTripCards.has(t.id);
-  let html=`<div class="trip-days-toggle" onclick="event.stopPropagation();toggleTripCardExpand('${esc(t.id)}')">
-    <span>${isExpanded?'▾':'▸'} ${dayCount} day${dayCount!==1?'s':''} · ${itemCount} item${itemCount!==1?'s':''}</span>
+  // Auto-expand (no manual tap needed) whenever "Hide trip gigs" is on —
+  // that setting removes trip-linked gigs from the flat list, so the
+  // trip's own breakdown needs to carry that visibility instead. Manual
+  // per-trip expand still works independently when the setting is off.
+  const isExpanded=_hideTripGigs||(_expandedTripCards&&_expandedTripCards.has(t.id));
+  const toggleChevron=_hideTripGigs?'▾':(isExpanded?'▾':'▸');
+  const toggleClick=_hideTripGigs?'':` onclick="event.stopPropagation();toggleTripCardExpand('${esc(t.id)}')"`;
+  let html=`<div class="trip-days-toggle"${toggleClick}>
+    <span>${toggleChevron} ${dayCount} day${dayCount!==1?'s':''} · ${itemCount} item${itemCount!==1?'s':''}</span>
   </div>`;
   if(isExpanded){
-    const sortedDays=(t.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    let sortedDays=(t.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    // "Hide trip gigs" also drops days that have already gone — but only
+    // in Upcoming. Past intentionally shows every day, since they're all
+    // "gone" there by definition and filtering would hide everything.
+    if(_hideTripGigs&&_tab==='upcoming'){
+      const today=todayISO();
+      sortedDays=sortedDays.filter(day=>day.date>=today);
+    }
     const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     html+=`<div class="trip-days-mini">`;
     sortedDays.forEach(day=>{
@@ -2179,6 +2222,7 @@ function showGigForm(g){
         </div>
       </div>
       <div class="fg"><label>Ticket URL</label><input class="fi" id="gfTicketUrl" placeholder="https://…" value="${esc(g?.ticketUrl||'')}"></div>
+      <div class="fg"><label>Ticket price</label><input class="fi" type="number" step="0.01" id="gfTicketPrice" placeholder="0.00" value="${g?.ticketPrice||''}"></div>
       <div class="fg"><label>Ticket / seat note</label><input class="fi" id="gfTicketNote" placeholder="e.g. Row F Seat 12" value="${esc(g?.ticketNote||'')}"></div>
       ${trips.length?`<div class="fg"><label>Part of a trip?</label>
         <select class="fi" id="gfTripId" onchange="checkGigFormConflicts()"><option value="">— Not linked —</option>${tripOpts}</select></div>`:''}
@@ -2222,6 +2266,7 @@ function saveGig(){
   g.time=getTimePicker('gfTime');
   g.venue=document.getElementById('gfVenue')?.value.trim()||'';
   g.ticketUrl=document.getElementById('gfTicketUrl')?.value.trim()||'';
+  g.ticketPrice=parseFloat(document.getElementById('gfTicketPrice')?.value||0)||0;
   g.ticketNote=document.getElementById('gfTicketNote')?.value.trim()||'';
   g.tripId=document.getElementById('gfTripId')?.value||null;
   g.notes=document.getElementById('gfNotes')?.value.trim()||'';
@@ -2305,8 +2350,9 @@ function openGigDetail(id){
           ${linkedTrip?`<div style="margin-top:6px"><span class="trip-pill" style="cursor:pointer" onclick="closeModal();openTripDetail('${esc(linkedTrip.id)}')">✈️ ${esc(linkedTrip.name)}</span></div>`:''}
         </div>
       </div>
-      ${g.ticketUrl||g.ticketNote?`<div style="background:var(--acc-dim);border-radius:var(--rsm);padding:10px 12px;margin-bottom:14px">
+      ${g.ticketUrl||g.ticketNote||g.ticketPrice?`<div style="background:var(--acc-dim);border-radius:var(--rsm);padding:10px 12px;margin-bottom:14px">
         <div style="font-size:11px;font-weight:700;color:var(--acc-dk);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">🎟 Ticket</div>
+        ${g.ticketPrice?`<div style="font-size:13px;color:var(--ink2);font-weight:600">${sym(linkedTrip?.currency||'GBP')}${parseFloat(g.ticketPrice).toFixed(2)}</div>`:''}
         ${g.ticketNote?`<div style="font-size:13px;color:var(--ink2)">${esc(g.ticketNote)}</div>`:''}
         ${g.ticketUrl?`<a href="${esc(g.ticketUrl)}" target="_blank" style="font-size:13px;color:var(--acc);font-weight:600">View ticket ↗</a>`:''}
       </div>`:''}
@@ -2653,11 +2699,12 @@ function openTripDetail(id, tab){
       trip.days.forEach(day=>{
         const dayItems=day.items||[];
         const realItems=dayItems.filter(it=>!it._placeholder);
+        const gigCostToday=linkedGigs.filter(g=>g.date===day.date).reduce((sum,g)=>sum+parseFloat(g.ticketPrice||0),0);
         const dayCost=dayItems.reduce((sum,it)=>{
           if(it._placeholder) return sum;
           const cost=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
           return sum+cost;
-        },0);
+        },0)+gigCostToday;
         const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
         const dObj=new Date(day.date+'T00:00:00');
 
@@ -2867,12 +2914,14 @@ function openDayView(tripId,dayId,scrollToItems){
   html+=`<div class="section-hdr" style="margin-top:12px">Day notes</div>
     <textarea class="fi" id="dayNotes" placeholder="Notes for this day…" rows="3" onblur="saveDayNotes('${esc(tripId)}','${esc(dayId)}',this.value)">${esc(day.notes||'')}</textarea>`;
 
-  // Day total — real items + per-night cost from ghost stays (continuing accommodation)
+  // Day total — real items + per-night cost from ghost stays (continuing
+  // accommodation) + ticket price of any gig linked to this day
   const ghostCost=ghosts.reduce((sum,it)=>sum+parseFloat(it.costPerNight||0),0);
+  const gigCostToday=linkedGigs.reduce((sum,g)=>sum+parseFloat(g.ticketPrice||0),0);
   const dayCost=realItems.filter(it=>!it._placeholder).reduce((sum,it)=>{
     const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
     return sum+c;
-  },0)+ghostCost;
+  },0)+ghostCost+gigCostToday;
   if(dayCost>0) html+=`<div style="text-align:right;padding:12px 0;font-size:14px;font-weight:700;color:var(--ink2)">Day total: ${s}${dayCost.toFixed(2)}</div>`;
 
   html+=`</div>`;
@@ -3342,16 +3391,17 @@ function convertItemToGig(tripId,dayId,itemId){
   const it=day.items.find(i=>i.id===itemId); if(!it) return;
   if(!confirm(`Convert "${itemDisplayName(it)}" into a gig? This removes it from the trip's item list.`)) return;
 
-  const s=sym(trip.currency||'GBP');
-  const costVal=(it.costActual!=null?it.costActual:it.cost);
-  let ticketNote='';
-  if(costVal){ ticketNote=`${s}${costVal} (converted from item)`; }
+  // A gig now has a real numeric ticketPrice field (added alongside "can
+  // gig costs contribute to trip costs?"), so an item's cost carries
+  // straight across as a number instead of being folded into ticketNote
+  // as text — the trip's cost totals stay correct after conversion too.
+  const costVal=parseFloat(it.costActual!=null?it.costActual:it.cost)||0;
 
   const g={
     id:uid(), type:'gig', createdAt:new Date().toISOString(), addedBy:_currentUserKey,
     done:false, missed:false, gigType:'music',
     name:itemDisplayName(it), date:day.date, time:itemTime(it)||'',
-    venue:itemLocationName(it), ticketUrl:'', ticketNote,
+    venue:itemLocationName(it), ticketUrl:'', ticketPrice:costVal, ticketNote:'',
     tripId:tripId, notes:it.notes||''
   };
   saveEvent(g);
@@ -3372,27 +3422,38 @@ function convertItemToGig(tripId,dayId,itemId){
 function renderTripCosts(trip,s){
   const days=(trip.days||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
   const tripLevelCosts=trip.tripLevelCosts||[];
+  const linkedGigs=(getData().events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===trip.id);
 
   // ── Day-by-day costs ──────────────────────────────────────────────
   let dayTotal=0;
   let dayRows='';
-  const cats={travel:0,accommodation:0,food:0,attraction:0,other:0};
+  const cats={travel:0,accommodation:0,food:0,attraction:0,gig:0,other:0};
   days.forEach(day=>{
     // Include per-night cost from ghost stays (multi-night accommodation originating on another day)
     const ghostsOnDay=getAccGhosts(trip,day.id);
     const ghostCost=ghostsOnDay.reduce((sum,it)=>sum+parseFloat(it.costPerNight||0),0);
     cats.accommodation=(cats.accommodation||0)+ghostCost;
 
+    // Gigs linked to this trip, on this specific day — their ticket price
+    // counts toward the day's total and the new "Gigs" category, same as
+    // any other item type.
+    const gigsOnDay=linkedGigs.filter(g=>g.date===day.date);
+    const gigCost=gigsOnDay.reduce((sum,g)=>sum+parseFloat(g.ticketPrice||0),0);
+    cats.gig=(cats.gig||0)+gigCost;
+
     const dayCost=(day.items||[]).filter(it=>!it._placeholder).reduce((sum,it)=>{
       const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
       return sum+c;
-    },0)+ghostCost;
+    },0)+ghostCost+gigCost;
     dayTotal+=dayCost;
     if(dayCost>0){
       const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
       const dObj=new Date(day.date+'T00:00:00');
+      const extras=[];
+      if(ghostCost>0) extras.push(`${s}${ghostCost.toFixed(2)} stay`);
+      if(gigCost>0) extras.push(`${s}${gigCost.toFixed(2)} gig`);
       dayRows+=`<div class="cost-day-row" onclick="openDayView('${esc(trip.id)}','${esc(day.id)}')">
-        <span class="cost-day-label">Day ${day.dayNumber} · ${dow[dObj.getDay()]} ${fmtDateShort(day.date)}${ghostCost>0?` <span style="font-size:10px;color:var(--ink3)">(incl. ${s}${ghostCost.toFixed(2)} stay)</span>`:''}</span>
+        <span class="cost-day-label">Day ${day.dayNumber} · ${dow[dObj.getDay()]} ${fmtDateShort(day.date)}${extras.length?` <span style="font-size:10px;color:var(--ink3)">(incl. ${extras.join(', ')})</span>`:''}</span>
         <span class="cost-day-val">${s}${dayCost.toFixed(2)}</span>
       </div>`;
     }
@@ -3479,6 +3540,7 @@ function renderTripCosts(trip,s){
       <div class="cost-tile"><div class="cost-tile-label">🏨 Stays</div><div class="cost-tile-val" style="font-size:16px">${s}${(cats.accommodation||0).toFixed(2)}</div></div>
       <div class="cost-tile"><div class="cost-tile-label">🍽 Food</div><div class="cost-tile-val" style="font-size:16px">${s}${(cats.food||0).toFixed(2)}</div></div>
       <div class="cost-tile"><div class="cost-tile-label">🎡 Attractions</div><div class="cost-tile-val" style="font-size:16px">${s}${(cats.attraction||0).toFixed(2)}</div></div>
+      <div class="cost-tile"><div class="cost-tile-label">🎸 Gigs</div><div class="cost-tile-val" style="font-size:16px">${s}${(cats.gig||0).toFixed(2)}</div></div>
     </div>
 
     <div class="section-hdr">Per day</div>
@@ -4482,6 +4544,25 @@ function tripNights(t){
 // matching the Day View's "Gigs today" treatment from v7.23 — same
 // _expandedGigsToday Set, distinguished with a ':__overview' key so it
 // doesn't collide with a real day id (toggleTripGigsOverview).
+// v7.26: gigs gained a real numeric ticketPrice field (gig form) and now
+// contribute to trip costs — the trip overview's per-day cost badges, the
+// Day View's day total, and the Costs tab (day rows, a new "🎸 Gigs"
+// category tile, and the grand total/budget bar) all sum a linked gig's
+// ticketPrice on its date, same as any other item type. Only counts for
+// gigs actually linked to a trip (tripId set) — unlinked gigs have
+// nothing to contribute to. convertItemToGig() (GIG-043 follow-up) now
+// carries an item's cost across as this real number instead of folding
+// it into ticketNote as text.
+// v7.27: added the "Hide trip gigs" toggle (top of Upcoming/Past,
+// _hideTripGigs, localStorage-only — a display preference, not synced
+// data). When on: trip-linked gigs drop out of the flat list (still
+// fully visible inside their trip), trip cards auto-expand their day
+// breakdown instead of needing a manual tap (and can't be manually
+// collapsed while the setting is on — deliberate, avoids confusing
+// half-states), and in Upcoming specifically, days that have already
+// passed drop out of that expanded list. Past shows every day regardless
+// — they're all "gone" there by definition, so day-filtering would hide
+// everything.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
