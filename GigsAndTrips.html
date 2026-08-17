@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.22</title>
+<title>Gigs &amp; Trips v7.24</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.22</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.24</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -2705,6 +2705,23 @@ function renderTlStrip(items,tripId,dayId){
 // ═══════════════════════════════════════════════════════════════════
 // DAY VIEW
 // ═══════════════════════════════════════════════════════════════════
+// "Gigs today" section (below) is collapsible, collapsed by default —
+// keyed 'tripId:dayId' so state persists correctly across prev/next day
+// navigation without a per-day view needing its own module variable.
+let _expandedGigsToday=null;
+function toggleGigsToday(tripId,dayId){
+  if(!_expandedGigsToday) _expandedGigsToday=new Set();
+  const key=tripId+':'+dayId;
+  if(_expandedGigsToday.has(key)) _expandedGigsToday.delete(key); else _expandedGigsToday.add(key);
+  // openDayView always resets panelDay's scroll via showPanel('day') —
+  // same underlying issue GIG-038 fixed for trip cards. Rather than
+  // change openDayView's broader contract, just capture/restore scroll
+  // locally around this one re-render.
+  const panel=document.getElementById('panelDay');
+  const scrollPos=panel?panel.scrollTop:0;
+  openDayView(tripId,dayId);
+  if(panel) panel.scrollTop=scrollPos;
+}
 function openDayView(tripId,dayId,scrollToItems){
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
@@ -2740,21 +2757,28 @@ function openDayView(tripId,dayId,scrollToItems){
     html+=`<div style="margin-bottom:2px">${renderTlStrip(allTlItems,tripId,dayId)}</div>`;
   }
 
-  // Linked gigs
+  // Linked gigs — collapsible, collapsed by default
   if(linkedGigs.length){
-    html+=`<div class="section-hdr">🎸 Gigs today</div>`;
-    linkedGigs.forEach(g=>{
-      const ti=gigTypeInfo(g.gigType||'music');
-      html+=`<div class="linked-gig-card" onclick="openGigDetail('${esc(g.id)}')">
-        <span style="font-size:24px">${ti.icon}</span>
-        <div style="flex:1;min-width:0">
-          <div class="linked-gig-name">${esc(g.name)}</div>
-          ${g.venue?`<div class="linked-gig-sub">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
-          ${g.time?`<div class="linked-gig-sub">🕐 ${g.time}</div>`:''}
-        </div>
-        <span style="color:var(--acc);font-size:18px">›</span>
-      </div>`;
-    });
+    const gigsKey=tripId+':'+dayId;
+    const gigsExpanded=_expandedGigsToday&&_expandedGigsToday.has(gigsKey);
+    html+=`<div class="section-hdr" style="cursor:pointer;justify-content:space-between;-webkit-tap-highlight-color:transparent" onclick="toggleGigsToday('${esc(tripId)}','${esc(dayId)}')">
+      <span>🎸 Gigs today (${linkedGigs.length})</span>
+      <span style="font-size:11px">${gigsExpanded?'▾':'▸'}</span>
+    </div>`;
+    if(gigsExpanded){
+      linkedGigs.forEach(g=>{
+        const ti=gigTypeInfo(g.gigType||'music');
+        html+=`<div class="linked-gig-card" onclick="openGigDetail('${esc(g.id)}')">
+          <span style="font-size:24px">${ti.icon}</span>
+          <div style="flex:1;min-width:0">
+            <div class="linked-gig-name">${esc(g.name)}</div>
+            ${g.venue?`<div class="linked-gig-sub">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
+            ${g.time?`<div class="linked-gig-sub">🕐 ${g.time}</div>`:''}
+          </div>
+          <span style="color:var(--acc);font-size:18px">›</span>
+        </div>`;
+      });
+    }
   }
 
   // Ghost accommodation — multi-night stays originating from another day
@@ -2775,11 +2799,30 @@ function openDayView(tripId,dayId,scrollToItems){
     });
   }
 
-  // Real items — sorted by time (GIG-036), untimed first, matching the
-  // timeline strip above so the two views never disagree on order
-  if(realItems.length) html+=`<div class="section-hdr">Items</div>`;
-  sortDayTimeline(realItems).forEach(it=>{
-    html+=renderItemCard(it,tripId,dayId,s,trip,day);
+  // Items — sorted by time (GIG-036), untimed first, matching the
+  // timeline strip above so all three views (strip, Gigs today, Items)
+  // never disagree on order. Gigs are now merged into this list too
+  // (using the same highlighted linked-gig-card style, not the neutral
+  // item-card one — Pete's call on GIG-043) so the day's full flow is
+  // visible without expanding the still-separate, still-collapsed-by-
+  // default "Gigs today" summary above.
+  const itemsAndGigs=sortDayTimeline([...realItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
+  if(itemsAndGigs.length) html+=`<div class="section-hdr">Items</div>`;
+  itemsAndGigs.forEach(it=>{
+    if(it._linkedGig){
+      const ti=gigTypeInfo(it.gigType||'music');
+      html+=`<div class="linked-gig-card" onclick="openGigDetail('${esc(it.id)}')">
+        <span style="font-size:24px">${ti.icon}</span>
+        <div style="flex:1;min-width:0">
+          <div class="linked-gig-name">${esc(it.name)}</div>
+          ${it.venue?`<div class="linked-gig-sub">📍 ${esc(it.venue)} ${venueLinkHtml(it.venue)}</div>`:''}
+          ${it.time?`<div class="linked-gig-sub">🕐 ${it.time}</div>`:''}
+        </div>
+        <span style="color:var(--acc);font-size:18px">›</span>
+      </div>`;
+    } else {
+      html+=renderItemCard(it,tripId,dayId,s,trip,day);
+    }
   });
 
   // Meal placeholders
@@ -4394,6 +4437,21 @@ function tripNights(t){
 // which could surface an old, long-finished gig above a genuinely
 // upcoming one. A toggle button reveals past gigs too, for the rare case
 // of linking a gig retroactively.
+// v7.23: the Day View's "Gigs today" section is now collapsible,
+// collapsed by default (toggleGigsToday, _expandedGigsToday, keyed
+// 'tripId:dayId' so state persists across prev/next day navigation).
+// Manually preserves scroll position around the toggle's re-render,
+// since openDayView always resets it via showPanel('day') — same
+// underlying issue GIG-038 fixed for trip cards, fixed locally here
+// rather than changing openDayView's broader contract.
+// v7.24: linked gigs now also appear in the Items section itself, sorted
+// by time alongside every other item type — previously they only showed
+// in the timeline strip preview and the separate (collapsed-by-default)
+// "Gigs today" section, never in the actual Items card list. Note this
+// means a gig can now appear twice on screen if "Gigs today" is expanded
+// — once there, once in Items — which is deliberate per the request but
+// worth a look; easy to drop the separate section entirely later if the
+// duplication isn't wanted.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
