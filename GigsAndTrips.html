@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.19</title>
+<title>Gigs &amp; Trips v7.20</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.19</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.20</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -2033,7 +2033,7 @@ function renderTripCard(t, d){
     if(overlapTrips.length)
       tripConflictHtml+=`<div class="conflict-banner"><span>⚠️</span><span>Overlaps with trip: <strong>${esc(overlapTrips.map(x=>x.name).join(', '))}</strong></span></div>`;
     if(unlinked.length)
-      tripConflictHtml+=`<div class="conflict-banner"><span>⚠️</span><span>Unlinked event${unlinked.length>1?'s':''} during trip: <strong>${esc(unlinked.map(g=>g.name).join(', '))}</strong></span></div>`;
+      tripConflictHtml+=`<div class="conflict-banner"><span>⚠️</span><span>Unlinked event${unlinked.length>1?'s':''} during trip: <strong>${unlinked.map(g=>`<span style="text-decoration:underline;cursor:pointer" onclick="event.stopPropagation();linkGigToTrip('${esc(g.id)}','${esc(t.id)}',null)" title="Tap to link this gig to the trip">${esc(g.name)}</span>`).join(', ')}</strong></span></div>`;
   }
 
   // Date block for trips: show start day/month + nights count
@@ -2079,6 +2079,14 @@ function renderTripCard(t, d){
 // ═══════════════════════════════════════════════════════════════════
 let _editGigId=null;
 let _editGigType='music';
+// GIG-043: when a gig is added from inside a trip's day view (rather than
+// the plain Upcoming "+ New Gig"), the form pre-fills the day's date and
+// this trip — editable, not locked, since the actual date might turn out
+// to be a different day. Also tracks where to navigate back to on save,
+// so saving returns you to the day you were on instead of the plain list.
+let _gigFormPrefillDate=null;
+let _gigFormPrefillTripId=null;
+let _gigFormReturnTo=null; // {view:'dayView',tripId,dayId} | {view:'tripDetail',tripId} | null
 
 function showAddTypeMenu(){
   showModal(`<div class="modal-hdr"><div class="modal-title">What are you adding?</div><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -2098,8 +2106,15 @@ function showAddTypeMenu(){
     </div>`);
 }
 
-function openAddGig(){ _editGigId=null; _editGigType='music'; showGigForm(null); }
-function openEditGig(id){ _editGigId=id; const g=getEvent(id); _editGigType=g?.gigType||'music'; showGigForm(g); }
+function openAddGig(){ _editGigId=null; _editGigType='music'; _gigFormPrefillDate=null; _gigFormPrefillTripId=null; _gigFormReturnTo=null; showGigForm(null); }
+function openEditGig(id){ _editGigId=id; const g=getEvent(id); _editGigType=g?.gigType||'music'; _gigFormPrefillDate=null; _gigFormPrefillTripId=null; _gigFormReturnTo=null; showGigForm(g); }
+// GIG-043: opened from a trip day view's "+ Add" menu.
+function openAddGigForTrip(tripId,dayId,dayDate){
+  _editGigId=null; _editGigType='music';
+  _gigFormPrefillDate=dayDate; _gigFormPrefillTripId=tripId;
+  _gigFormReturnTo={view:'dayView',tripId,dayId};
+  showGigForm(null);
+}
 
 function checkGigFormConflicts(){
   const el=document.getElementById('gfConflict'); if(!el) return;
@@ -2132,7 +2147,12 @@ function checkGigFormConflicts(){
 
 function showGigForm(g){
   const trips=getTrips().filter(t=>t.status!=='Cancelled'&&t.status!=='Completed');
-  const tripOpts=trips.map(t=>`<option value="${esc(t.id)}" ${g?.tripId===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
+  // GIG-043: for a genuinely new gig, prefer the trip-day prefill (if this
+  // form was opened via openAddGigForTrip) over nothing; editing an
+  // existing gig always uses its own saved date/tripId as before.
+  const prefillDate=g?g.date:(_gigFormPrefillDate||'');
+  const prefillTripId=g?g.tripId:(_gigFormPrefillTripId||'');
+  const tripOpts=trips.map(t=>`<option value="${esc(t.id)}" ${prefillTripId===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
   const typeGrid=GIG_TYPES.map(t=>`
     <button type="button" class="type-btn ${_editGigType===t.key?'sel':''}" id="gtb-${t.key}"
       style="${_editGigType===t.key?`color:${t.color};background:${t.bg};border-color:${t.color}`:''}"
@@ -2148,7 +2168,7 @@ function showGigForm(g){
       <div class="fg"><label>Type</label><div class="type-grid">${typeGrid}</div></div>
       <div class="fg"><label>Name *</label><input class="fi" id="gfName" placeholder="Artist, event or show name" value="${esc(g?.name||'')}"></div>
       <div class="fi-row">
-        <div class="fg"><label>Date *</label><input class="fi" type="date" id="gfDate" value="${esc(g?.date||'')}" onchange="checkGigFormConflicts()"></div>
+        <div class="fg"><label>Date *</label><input class="fi" type="date" id="gfDate" value="${esc(prefillDate)}" onchange="checkGigFormConflicts()"></div>
         <div class="fg"><label>Time</label><div onchange="checkGigFormConflicts()">${timePickerHtml('gfTime',g?.time)}</div></div>
       </div>
       <div id="gfConflict" style="margin-bottom:8px"></div>
@@ -2236,7 +2256,14 @@ function saveGig(){
   closeModal();
   showToast(isNew?'Gig added ✓ — Google Calendar opened':'Gig updated ✓');
 
-  if(!isNew){
+  // GIG-043: if this gig was added from inside a trip's day view, return
+  // there instead of the plain list so the new gig is immediately visible
+  // alongside the trip's other items.
+  const returnTo=_gigFormReturnTo;
+  _gigFormPrefillDate=null; _gigFormPrefillTripId=null; _gigFormReturnTo=null;
+  if(returnTo&&returnTo.view==='dayView'&&getEvent(returnTo.tripId)){
+    render(); openDayView(returnTo.tripId,returnTo.dayId);
+  } else if(!isNew){
     // Render the list first so the card is up-to-date when the modal is dismissed,
     // then open the detail modal on top — user sees correct emoji/type immediately.
     render();
@@ -2962,17 +2989,58 @@ function venuePickerFieldHtml(label, value, inputId, dropId){
 }
 
 function showAddItemMenu(tripId,dayId){
+  const trip=getEvent(tripId);
+  const day=trip?.days?.find(d=>d.id===dayId);
   const html=`<div class="modal-hdr"><div class="modal-title">Add item</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="add-menu-grid">
+        <button class="add-menu-btn" onclick="closeModal();openAddGigForTrip('${esc(tripId)}','${esc(dayId)}','${esc(day?.date||'')}')"><span class="ami">🎸</span>Gig / Event</button>
         ${ITEM_TYPES.map(t=>`<button class="add-menu-btn" onclick="closeModal();openAddItem('${esc(tripId)}','${esc(dayId)}','${t.id}')"><span class="ami">${t.icon}</span>${t.label}</button>`).join('')}
       </div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="closeModal();showLinkGigPicker('${esc(tripId)}','${esc(dayId)}')">🔗 Link an existing gig</button>
     </div>`;
   showModal(html);
 }
 
 function openAddItem(tripId,dayId,type){
   showItemForm(tripId,dayId,type,null);
+}
+// GIG-043: link an already-existing (unlinked) gig to this trip, either
+// via the picker below or a one-tap action from the conflict-banner
+// warning on the trip card. Only offers gigs with no tripId set at all —
+// reassigning a gig that's already linked to a *different* trip stays a
+// deliberate action on the gig's own edit form, not a one-tap here.
+function showLinkGigPicker(tripId,dayId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const candidates=getGigs().filter(g=>!g.tripId);
+  const tripStart=trip.startDate?new Date(trip.startDate+'T00:00:00').getTime():0;
+  candidates.sort((a,b)=>{
+    const da=Math.abs(new Date(a.date+'T00:00:00').getTime()-tripStart);
+    const db=Math.abs(new Date(b.date+'T00:00:00').getTime()-tripStart);
+    return da-db;
+  });
+  if(!candidates.length){
+    showModal(`<div class="modal-hdr"><div class="modal-title">Link an existing gig</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+      <div class="modal-body"><div style="font-size:13px;color:var(--ink3);text-align:center;padding:20px 0">No unlinked gigs to choose from.</div></div>`);
+    return;
+  }
+  const rows=candidates.slice(0,30).map(g=>{
+    const inRange=trip.startDate&&trip.endDate&&g.date>=trip.startDate&&g.date<=trip.endDate;
+    return `<div class="vlib-item" style="cursor:pointer" onclick="linkGigToTrip('${esc(g.id)}','${esc(tripId)}',${dayId?`'${esc(dayId)}'`:'null'})">
+      <span class="vlib-name">${esc(g.name)} <span style="color:var(--ink3);font-weight:400">— ${fmtDateShort(g.date)}${inRange?' · in trip range':''}</span></span>
+      <span style="color:var(--acc);font-size:13px;font-weight:600">Link</span>
+    </div>`;
+  }).join('');
+  showModal(`<div class="modal-hdr"><div class="modal-title">Link an existing gig</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${rows}</div>`);
+}
+function linkGigToTrip(gigId,tripId,dayId){
+  const g=getEvent(gigId); if(!g) return;
+  g.tripId=tripId; g.updatedAt=new Date().toISOString();
+  saveEvent(g);
+  showToast('Gig linked to trip ✓');
+  closeModal();
+  if(dayId) openDayView(tripId,dayId); else openTripDetail(tripId,'itinerary');
 }
 function openEditItem(tripId,dayId,itemId){
   const trip=getEvent(tripId); if(!trip) return;
@@ -4256,6 +4324,14 @@ function tripNights(t){
 // search pre-filled with the name (gmapsSearchUrl) — so nothing is ever
 // a dead icon any more, including the Venue Library itself. Renamed
 // "Venues" to "Venue/Location" throughout since it's no longer gig-only.
+// v7.20 (GIG-043): a gig can now be added directly from a trip's day
+// view "+ Add" menu (openAddGigForTrip), pre-filling that day's date and
+// this trip on the real gig form — editable, not locked. An existing,
+// not-yet-linked gig can also be attached via a picker (showLinkGigPicker/
+// linkGigToTrip) or a one-tap action on the "Unlinked event during trip"
+// warning banner, which used to just flag the mismatch with no way to
+// fix it. Linked gigs keep their existing highlighted card treatment in
+// trip views, per Pete's call — only how you add/link them changed.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
