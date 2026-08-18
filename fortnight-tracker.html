@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.50</title>
+<title>9-Day Fortnight Tracker v3.51</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -203,8 +203,17 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .day-panel{display:none;}
 .day-panel.open{display:block;}
 .day-list{padding:.65rem;display:flex;flex-direction:column;gap:.45rem;border-radius:0 0 var(--radius) var(--radius);}
-.week-lbl{font-size:.62rem;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);padding:.3rem .2rem .05rem;border-top:1px solid var(--faint);margin-top:.2rem;}
+.week-lbl{font-size:.62rem;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);padding:.3rem .2rem .05rem;border-top:1px solid var(--faint);margin-top:.2rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;user-select:none;}
 .week-lbl:first-child{border-top:none;margin-top:0;padding-top:0;}
+/* FT-045: collapsible week header — chevron rotates, "Complete" badge
+   only shows once every day in that week has a status. .week-days is the
+   day-row wrapper it toggles; kept as its own flex column (matching
+   .day-list's own flex/gap) so collapsing one week's rows doesn't disturb
+   spacing around the other week or the weekend cards. */
+.week-lbl-done{color:var(--green);font-weight:600;letter-spacing:normal;text-transform:none;font-size:.68rem;}
+.week-lbl-chev{margin-left:auto;font-size:.6rem;opacity:.55;transition:transform .15s;}
+.week-lbl.collapsed .week-lbl-chev{transform:rotate(-90deg);}
+.week-days{display:flex;flex-direction:column;gap:.45rem;}
 
 /* DAY ROW */
 .day-row{background:var(--bg);border:1px solid var(--border);border-radius:9px;overflow:hidden;scroll-margin-top:200px;}
@@ -508,7 +517,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.50</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.51</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -821,6 +830,24 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.51 (FT-045): Collapsible weeks. Once every day in a week has a
+// status set (weekComplete() — same "every day done" definition
+// isComplete() already used for the whole bundle), that week's day rows
+// auto-collapse behind a clickable "Week N ... ✓ Complete" header with a
+// chevron, so a finished Week 1 doesn't push Week 2 below the fold. Pure
+// render-time derivation, not an event-driven "just turned complete"
+// check — marking a day Done/Conference/Training actually jumps straight
+// to the Timesheet tab (setStat()'s existing behaviour, unchanged), so
+// the moment collapse-state visibly needs to catch up is always a
+// re-render anyway (returning to Live, or reopening the bundle's
+// details), which this naturally covers. A manual click on the header
+// (toggleWeekCollapse()) overrides the auto state for the rest of the
+// session via a new weekCollapseOverride map — plain in-memory UI state
+// like openPanel/openDay already were, not persisted anywhere, so
+// nothing about the JSON backup format changed. Weekend cards
+// (weekend1/weekend2) are untouched — they have no per-day status to
+// auto-complete on, so they were deliberately left outside the new
+// .week-days wrapper and always stay visible.
 // v3.50 (FT-044): Sat/Sun weekend pickers now sit side by side instead of
 // stacked — new .weekend-days grid wrapper (2 equal columns) around the
 // same two .extra-row day rows from FT-043; only the layout changed, no
@@ -1649,6 +1676,24 @@ function bundleStats(bundle){
   return{doneMins:doneMins,predMins:predMins,donePct:donePct,predPct:predPct,paceDiff:paceDiff,anyDone:stdDoneMins>0,wkndMins:wkndMins};
 }
 function isComplete(b){return b.days.every(function(d){return!!d.status;});}
+// FT-045: same "every day has a status" definition as isComplete() above,
+// just scoped to one week's 5 or 4 days instead of all 9 — wk=1 is
+// Mon-Fri (indices 0-4), wk=2 is Mon-Thu (indices 5-8).
+function weekComplete(bundle,wk){
+  var days=wk===1?bundle.days.slice(0,5):bundle.days.slice(5);
+  return days.length>0&&days.every(function(d){return!!d.status;});
+}
+// Manual toggle (weekCollapseOverride) wins if the user has touched this
+// week's chevron this session; otherwise collapse state is just "is the
+// week complete" — the actual auto-collapse behaviour Pete asked for.
+// Since this re-derives fresh every render(), returning from the
+// Timesheet tab (where marking a day Done actually happens — see
+// setStat()) or reopening a bundle's details later both pick it up
+// automatically with no event-driven "just became complete" logic needed.
+function isWeekCollapsed(bi,wk,bundle){
+  var key=bi+'-'+wk;
+  return weekCollapseOverride.hasOwnProperty(key)?weekCollapseOverride[key]:weekComplete(bundle,wk);
+}
 
 // BUILD DAYS
 function buildDays(startStr){
@@ -1666,6 +1711,15 @@ function buildDays(startStr){
 
 // RENDER STATE
 var openPanel=null,openDay=null,currentTab='live';
+// FT-045: session-only manual overrides for per-week collapse (Sat/Sun
+// weekend cards aren't part of this — they have no "status" concept to
+// auto-complete on). Keyed 'bi-wk' (wk=1|2). Absent key = no manual
+// override yet, so isWeekCollapsed() falls back to auto-deriving from
+// weekComplete() below. Deliberately a plain session variable like
+// openPanel/openDay above, not persisted to bundle data or localStorage
+// — reopening the app always re-derives fresh from each week's actual
+// completion state, exactly like every other piece of UI-only state here.
+var weekCollapseOverride={};
 
 function switchTab(tab){
   currentTab=tab;
@@ -3151,11 +3205,47 @@ function renderBundle(container,bundle,idx,completed){
   container.appendChild(card);
   var dlist=card.querySelector('#dlist-'+idx);
   renderWeekendCard(dlist,idx,'weekend1',bundle);
-  var w1=document.createElement('div');w1.className='week-lbl';w1.textContent='Week 1 \u2014 Monday to Friday';dlist.appendChild(w1);
-  bundle.days.slice(0,5).forEach(function(day,di){renderDay(dlist,day,idx,di,bundle);});
+  renderWeekSection(dlist,idx,1,bundle,'Week 1 \u2014 Monday to Friday',[0,1,2,3,4]);
   renderWeekendCard(dlist,idx,'weekend2',bundle);
-  var w2=document.createElement('div');w2.className='week-lbl';w2.textContent='Week 2 \u2014 Monday to Thursday (Friday off)';dlist.appendChild(w2);
-  bundle.days.slice(5).forEach(function(day,di){renderDay(dlist,day,idx,di+5,bundle);});
+  renderWeekSection(dlist,idx,2,bundle,'Week 2 \u2014 Monday to Thursday (Friday off)',[5,6,7,8]);
+}
+
+// FT-045: header + day-row wrapper for one collapsible week. dayIndices
+// are indices into bundle.days (0-4 for week 1, 5-8 for week 2) — passed
+// explicitly rather than derived here since renderDay() needs the day's
+// real bundle-wide index (di) for its own ids/std-hours lookup, the same
+// di it always received before this ticket.
+function renderWeekSection(dlist,bi,wk,bundle,label,dayIndices){
+  var complete=weekComplete(bundle,wk);
+  var collapsed=isWeekCollapsed(bi,wk,bundle);
+  var hd=document.createElement('div');
+  hd.className='week-lbl'+(collapsed?' collapsed':'');
+  hd.id='weeklbl-'+bi+'-'+wk;
+  hd.setAttribute('onclick','toggleWeekCollapse('+bi+','+wk+')');
+  hd.innerHTML='<span class="week-lbl-text">'+label+'</span>'+
+    (complete?'<span class="week-lbl-done">&#10003; Complete</span>':'')+
+    '<span class="week-lbl-chev" id="weekchev-'+bi+'-'+wk+'">'+(collapsed?'&#9656;':'&#9662;')+'</span>';
+  dlist.appendChild(hd);
+  var wrap=document.createElement('div');
+  wrap.className='week-days';
+  wrap.id='weekdays-'+bi+'-'+wk;
+  if(collapsed)wrap.style.display='none';
+  dayIndices.forEach(function(di){renderDay(wrap,bundle.days[di],bi,di,bundle);});
+  dlist.appendChild(wrap);
+}
+// Manual toggle: flips the session-only override and updates just the
+// three affected nodes directly (no full render()) — same snappy pattern
+// as togglePanel()/liveUpdate() elsewhere in this file.
+function toggleWeekCollapse(bi,wk){
+  var bundle=state.bundles[bi];
+  var next=!isWeekCollapsed(bi,wk,bundle);
+  weekCollapseOverride[bi+'-'+wk]=next;
+  var wrap=document.getElementById('weekdays-'+bi+'-'+wk);
+  var hd=document.getElementById('weeklbl-'+bi+'-'+wk);
+  var chev=document.getElementById('weekchev-'+bi+'-'+wk);
+  if(wrap)wrap.style.display=next?'none':'';
+  if(hd)hd.className='week-lbl'+(next?' collapsed':'');
+  if(chev)chev.innerHTML=next?'&#9656;':'&#9662;';
 }
 
 // FT-043: weekend hours picker — one per week, sitting at the top of that
