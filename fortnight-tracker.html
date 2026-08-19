@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.52</title>
+<title>9-Day Fortnight Tracker v3.53</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -280,8 +280,12 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
    day editor's extra-row/extra-sel picker so it reads as the same kind of
    input rather than a new pattern. */
 .weekend-card{background:var(--surface);border:1px dashed var(--border);border-radius:9px;padding:.5rem .65rem;margin-bottom:.4rem;display:flex;flex-direction:column;gap:.4rem;}
-.weekend-hd{font-size:.62rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;}
+/* FT-046: header is now its own collapse toggle, same chevron-rotation
+   pattern as .week-lbl (see toggleWeekendCollapse()). */
+.weekend-hd{font-size:.62rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;cursor:pointer;user-select:none;}
 .weekend-total{font-family:'DM Mono',monospace;color:var(--teal);font-weight:500;margin-left:auto;}
+.weekend-chev{font-size:.6rem;opacity:.55;transition:transform .15s;}
+.weekend-hd.collapsed .weekend-chev{transform:rotate(-90deg);}
 /* FT-044: Sat/Sun side by side instead of stacked — two equal columns.
    Tighter padding/gap than the day editor's full-width .extra-row since
    each one is now half the card's width; selects keep their own
@@ -517,7 +521,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.52</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.53</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -830,6 +834,23 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.53 (FT-046): Weekend cards get their own collapse chevron, separate
+// from the week collapse added in FT-045 — a weekend has no "status" to
+// be complete, so the natural equivalent of "nothing left to check" is
+// "no hours logged": weekendMins()===0. Collapsed by default in that
+// case (the common case — most fortnights have no weekend work), but
+// defaults to expanded the moment either Sat or Sun has any time on it,
+// so reopening the app never hides data Pete already entered. New
+// isWeekendCollapsed()/weekendCollapseOverride mirror isWeekCollapsed()/
+// weekCollapseOverride exactly — same session-only, non-persisted
+// pattern, re-derived fresh every render(). The total badge ("+2h" etc.)
+// stays visible in the header even when collapsed, so there's always an
+// at-a-glance signal that hours exist without needing to expand. Note:
+// the brief said weekends "should auto to collapsed" with no mention of
+// existing data — I read that as "collapsed by default", and chose to
+// still auto-expand when hours are already logged so nothing gets
+// silently hidden; flagging this interpretation in case the intent was
+// unconditional collapse regardless of data (a one-line change if so).
 // v3.52 (FT-045 follow-up): the week header + chevron were sitting BELOW
 // their own "weekend before" card instead of above it, so the divider
 // line (.week-lbl's border-top) landed between "Weekend before Week 1"
@@ -1707,6 +1728,13 @@ function isWeekCollapsed(bi,wk,bundle){
   var key=bi+'-'+wk;
   return weekCollapseOverride.hasOwnProperty(key)?weekCollapseOverride[key]:weekComplete(bundle,wk);
 }
+// FT-046: weekend equivalent of isWeekCollapsed() above — manual override
+// wins if set, else auto-collapse when weekendMins() is 0 (nothing
+// logged), expand when it's not (something worth seeing).
+function isWeekendCollapsed(bi,weekKey,bundle){
+  var key=bi+'-'+weekKey;
+  return weekendCollapseOverride.hasOwnProperty(key)?weekendCollapseOverride[key]:weekendMins(bundle[weekKey])===0;
+}
 
 // BUILD DAYS
 function buildDays(startStr){
@@ -1733,6 +1761,15 @@ var openPanel=null,openDay=null,currentTab='live';
 // — reopening the app always re-derives fresh from each week's actual
 // completion state, exactly like every other piece of UI-only state here.
 var weekCollapseOverride={};
+// FT-046: same session-only override pattern, for the weekend cards.
+// Unlike weeks (which auto-collapse when COMPLETE), a weekend has no
+// status to be "complete" — the natural equivalent is "has anything been
+// logged at all". Collapsed by default when both Sat and Sun are still
+// 0h0m (the common case — most fortnights have no weekend work), but
+// defaults to expanded the moment any hours exist, so reopening the app
+// never hides data Pete already entered. Keyed 'bi-weekKey' (weekKey =
+// 'weekend1'|'weekend2', matching bundle's own field names).
+var weekendCollapseOverride={};
 
 function switchTab(tab){
   currentTab=tab;
@@ -3268,6 +3305,19 @@ function toggleWeekCollapse(bi,wk){
   if(hd)hd.className='week-lbl'+(next?' collapsed':'');
   if(chev)chev.innerHTML=next?'&#9656;':'&#9662;';
 }
+// FT-046: weekend equivalent — same three-node direct-update pattern,
+// no full render() needed for a manual click.
+function toggleWeekendCollapse(bi,weekKey){
+  var bundle=state.bundles[bi];
+  var next=!isWeekendCollapsed(bi,weekKey,bundle);
+  weekendCollapseOverride[bi+'-'+weekKey]=next;
+  var wrap=document.getElementById('wknddays-'+bi+'-'+weekKey);
+  var hd=document.getElementById('wkndhd-'+bi+'-'+weekKey);
+  var chev=document.getElementById('wkndchev-'+bi+'-'+weekKey);
+  if(wrap)wrap.style.display=next?'none':'';
+  if(hd)hd.className='weekend-hd'+(next?' collapsed':'');
+  if(chev)chev.innerHTML=next?'&#9656;':'&#9662;';
+}
 
 // FT-043: weekend hours picker — one per week, sitting at the top of that
 // week's day list. weekend1 = Sat/Sun immediately before the bundle's own
@@ -3287,6 +3337,7 @@ function weekendCardInner(bi,weekKey,bundle){
   var label=weekKey==='weekend1'?'Weekend before Week 1':'Weekend before Week 2';
   var satMins=(w.satH||0)*60+(w.satM||0), sunMins=(w.sunH||0)*60+(w.sunM||0);
   var totalMins=satMins+sunMins;
+  var collapsed=isWeekendCollapsed(bi,weekKey,bundle);
   var hO=function(sel){return[0,1,2,3,4].map(function(i){return'<option value="'+i+'"'+(i===sel?' selected':'')+'>'+(i>0?'+':'')+i+'h</option>';}).join('');};
   var mO=function(sel){return[0,5,10,15,20,25,30,35,40,45,50,55].map(function(i){return'<option value="'+i+'"'+(i===sel?' selected':'')+'>'+String(i).padStart(2,'0')+'m</option>';}).join('');};
   function row(dayKey,dayLbl,mins,hVal,mVal){
@@ -3297,10 +3348,11 @@ function weekendCardInner(bi,weekKey,bundle){
       '<select class="extra-sel'+(mins>0?' active':'')+'" id="wkM-'+k+'" onchange="updWeekend('+bi+',\''+weekKey+'\',\''+dayKey+'\')">'+mO(mVal)+'</select>'+
     '</div>';
   }
-  return '<div class="weekend-hd">'+label+' &middot; '+shortDate(d.sat)+' \u2013 '+shortDate(d.sun)+
+  return '<div class="weekend-hd'+(collapsed?' collapsed':'')+'" id="wkndhd-'+bi+'-'+weekKey+'" onclick="toggleWeekendCollapse('+bi+',\''+weekKey+'\')">'+label+' &middot; '+shortDate(d.sat)+' \u2013 '+shortDate(d.sun)+
       '<span class="weekend-total" id="wkndtotal-'+bi+'-'+weekKey+'">'+(totalMins>0?'+'+m2hm(totalMins):'')+'</span>'+
+      '<span class="weekend-chev" id="wkndchev-'+bi+'-'+weekKey+'">'+(collapsed?'&#9656;':'&#9662;')+'</span>'+
     '</div>'+
-    '<div class="weekend-days">'+
+    '<div class="weekend-days" id="wknddays-'+bi+'-'+weekKey+'"'+(collapsed?' style="display:none"':'')+'>'+
       row('sat','Sat',satMins,w.satH||0,w.satM||0)+
       row('sun','Sun',sunMins,w.sunH||0,w.sunM||0)+
     '</div>';
