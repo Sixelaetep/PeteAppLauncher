@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.35</title>
+<title>Gigs &amp; Trips v7.36</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -538,7 +538,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.35</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.36</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -2279,6 +2279,17 @@ function showGigForm(g){
         <div class="fg"><label>Time</label><div onchange="checkGigFormConflicts()">${timePickerHtml('gfTime',g?.time)}</div></div>
       </div>
       <div id="gfConflict" style="margin-bottom:8px"></div>
+      ${!g?`<div class="fg"><label>Repeat</label>
+        <select class="fi" id="gfRepeatFreq" onchange="document.getElementById('gfRepeatCountRow').style.display=this.value==='none'?'none':'flex'">
+          <option value="none">Does not repeat</option>
+          <option value="weekly">Weekly</option>
+          <option value="biweekly">Every 2 weeks</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="fi-row" id="gfRepeatCountRow" style="display:none">
+        <div class="fg"><label>Number of events</label><input class="fi" type="number" id="gfRepeatCount" min="2" max="52" value="6"></div>
+      </div>`:g.seriesId?`<div class="fg" style="margin-bottom:12px"><div style="font-size:12px;color:var(--ink3);background:var(--surf);border-radius:var(--rsm);padding:8px 10px">🔁 Part of a repeating series — event ${(g.seriesIndex||0)+1}</div></div>`:''}
       <div class="fg"><label>Venue</label>
         <div class="venue-wrap">
           <input class="fi" id="gfVenue" placeholder="Venue name" value="${esc(g?.venue||'')}" autocomplete="off">
@@ -2312,6 +2323,24 @@ function selectGigType(key){
     if(bk===key){ b.classList.add('sel'); b.style.color=ti.color; b.style.background=ti.bg; b.style.borderColor=ti.color; }
     else{ b.classList.remove('sel'); b.style.color=''; b.style.background=''; b.style.borderColor=''; }
   });
+}
+
+// GIG-048: generates `count` dates starting from startDate at the given
+// frequency (the first date IS startDate itself, matching how the gig
+// form's own date field becomes occurrence #1). Monthly uses setMonth,
+// which correctly rolls a 31st into whatever the next month's last valid
+// day is via JS's own date normalisation — acceptable for this use case
+// rather than a bespoke "same weekday of month" rule.
+function generateRecurrenceDates(startDate,freq,count){
+  const dates=[];
+  const d=new Date(startDate+'T00:00:00');
+  for(let i=0;i<count;i++){
+    dates.push(localDateStr(d));
+    if(freq==='weekly') d.setDate(d.getDate()+7);
+    else if(freq==='biweekly') d.setDate(d.getDate()+14);
+    else if(freq==='monthly') d.setMonth(d.getMonth()+1);
+  }
+  return dates;
 }
 
 function saveGig(){
@@ -2362,8 +2391,36 @@ function saveGig(){
     saveEvent(g);
     window.open(gcalGigUrl(g),'_blank','noopener');
   }
+
+  // GIG-048: generate the rest of a recurring series, if requested. Only
+  // ever runs for a brand-new gig — editing an existing occurrence never
+  // re-triggers this, so there's no risk of accidentally duplicating a
+  // series on a routine edit. The first occurrence (g, above) already
+  // has its own calendarAdded/Google Calendar tab; the rest start with
+  // calendarAdded:false like any normal gig, addable individually from
+  // their own detail view — opening a browser tab per occurrence would
+  // be blocked as a popup storm anyway.
+  let seriesCount=0;
+  if(isNew){
+    const freq=document.getElementById('gfRepeatFreq')?.value||'none';
+    if(freq!=='none'){
+      const countRaw=parseInt(document.getElementById('gfRepeatCount')?.value||'6',10);
+      const count=Math.min(52,Math.max(2,countRaw||6));
+      const seriesId=uid();
+      const dates=generateRecurrenceDates(date,freq,count);
+      g.seriesId=seriesId; g.seriesIndex=0;
+      saveEvent(g);
+      dates.slice(1).forEach((occDate,idx)=>{
+        const occ={...g,id:uid(),date:occDate,seriesIndex:idx+1,calendarAdded:false,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+        delete occ.review; // a review belongs to one specific occurrence, not the whole series
+        saveEvent(occ);
+      });
+      seriesCount=count;
+    }
+  }
+
   closeModal();
-  showToast(isNew?'Gig added ✓ — Google Calendar opened':'Gig updated ✓');
+  showToast(isNew?(seriesCount>1?`${seriesCount} events added ✓ (first one's Google Calendar opened)`:'Gig added ✓ — Google Calendar opened'):'Gig updated ✓');
 
   // GIG-043: if this gig was added from inside a trip's day view, return
   // there instead of the plain list so the new gig is immediately visible
@@ -2387,10 +2444,47 @@ function saveGig(){
   }
 }
 
+// GIG-048: lists every occurrence in a recurring series, tap one to open
+// its own detail view (which itself links back here) — a lightweight way
+// to browse a series without needing a dedicated "series" data screen.
+function showSeriesList(seriesId){
+  const occurrences=getGigs().filter(g=>g.seriesId===seriesId).sort((a,b)=>(a.seriesIndex||0)-(b.seriesIndex||0));
+  const rows=occurrences.map(g=>`<div class="vlib-item" style="cursor:pointer" onclick="closeModal();openGigDetail('${esc(g.id)}')">
+    <span class="vlib-name">Event ${(g.seriesIndex||0)+1} — ${fmtDateShort(g.date)}${g.done?' · Done':g.missed?' · Missed':''}</span>
+  </div>`).join('');
+  showModal(`<div class="modal-hdr"><div class="modal-title">Repeating series</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${rows}</div>`);
+}
 function confirmDeleteGig(id){
   const g=getEvent(id); if(!g) return;
+  // GIG-048: a recurring series gig gets a 3-way choice instead of the
+  // plain confirm() below — deleting "all future" only touches this
+  // occurrence and later ones (by seriesIndex), never earlier ones, so
+  // history stays intact regardless of which occurrence you delete from.
+  if(g.seriesId){
+    showModal(`<div class="modal-hdr"><div class="modal-title">Delete "${esc(g.name)}"</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--ink2);margin-bottom:14px">This event is part of a repeating series.</p>
+        <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="deleteGigSeries('${esc(id)}',false)">Delete just this one</button>
+        <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="deleteGigSeries('${esc(id)}',true)">Delete this and all future in the series</button>
+        <button class="btn btn-ghost" style="width:100%" onclick="closeModal()">Cancel</button>
+      </div>`);
+    return;
+  }
   if(!confirm(`Delete "${g.name}"?`)) return;
   deleteEvent(id); closeModal(); showToast('Gig deleted'); render();
+}
+function deleteGigSeries(id,includeFuture){
+  const g=getEvent(id); if(!g) return;
+  if(includeFuture&&g.seriesId){
+    const toDelete=getGigs().filter(x=>x.seriesId===g.seriesId&&(x.seriesIndex||0)>=(g.seriesIndex||0));
+    toDelete.forEach(x=>deleteEvent(x.id));
+    showToast(`${toDelete.length} event${toDelete.length!==1?'s':''} deleted`);
+  } else {
+    deleteEvent(id);
+    showToast('Gig deleted');
+  }
+  closeModal(); render();
 }
 
 function openGigDetail(id){
@@ -2412,6 +2506,7 @@ function openGigDetail(id){
           <div style="font-size:13px;color:var(--ink3)">${fmtDateLong(g.date)}${g.time?' · '+g.time:''}</div>
           ${g.venue?`<div style="font-size:14px;color:var(--ink2);margin-top:2px">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
           ${linkedTrip?`<div style="margin-top:6px"><span class="trip-pill" style="cursor:pointer" onclick="closeModal();openTripDetail('${esc(linkedTrip.id)}')">✈️ ${esc(linkedTrip.name)}</span></div>`:''}
+          ${g.seriesId?`<div style="margin-top:6px"><span class="trip-pill" style="cursor:pointer" onclick="closeModal();showSeriesList('${esc(g.seriesId)}')">🔁 Event ${(g.seriesIndex||0)+1} of ${getGigs().filter(x=>x.seriesId===g.seriesId).length} in series</span></div>`:''}
         </div>
       </div>
       ${g.ticketUrl||g.ticketNote||g.ticketPrice?`<div style="background:var(--acc-dim);border-radius:var(--rsm);padding:10px 12px;margin-bottom:14px">
@@ -4985,6 +5080,20 @@ function tripNights(t){
 // every date continuously from the start date, capped at 60 days, so a
 // blank stretch with no trip anywhere near it still shows every date in
 // order rather than being skipped.
+// v7.36 (GIG-048): repeating gigs/events. Scoped to gigs only (not trip
+// items, which are inherently one-off within a specific trip). New-gig
+// form gains a Repeat control (Weekly/Every 2 weeks/Monthly + a count,
+// capped 2-52) — occurrences are materialised as real, individual gig
+// records sharing a seriesId, not computed virtually at render time, so
+// every existing view (Upcoming, Calendar, conflict checks, etc.) needed
+// zero changes to understand them. Only the first occurrence auto-opens
+// Google Calendar on save (avoids a popup storm); the rest can be added
+// individually like any gig. Editing a single occurrence is unchanged —
+// no series-wide edit propagation, deliberately, to keep this shippable.
+// Deleting a series-member gig now offers "just this one" or "this and
+// all future in the series" instead of the plain confirm(). Gig detail
+// and the series list (showSeriesList) let you browse/jump between
+// occurrences.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
