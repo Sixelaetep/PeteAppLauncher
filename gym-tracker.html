@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.81</title>
+<title>Gym Tracker v2.82</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.81</div></span>
+      <span>Gym Tracker<div class="ver">v2.82</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -744,6 +744,7 @@
   <div class="modal">
     <div class="modal-title"><span id="waterModalTitle">Water</span><button class="modal-close" onclick="closeModal('modalWater')">✕</button></div>
     <div id="waterTotalsBar" style="margin-bottom:10px"></div>
+    <div id="waterQuickAddSection" style="margin-bottom:10px"></div>
     <div id="waterList" style="margin-bottom:14px"></div>
     <div class="section-title" style="margin-top:0">Add water</div>
     <label>Name <span style="font-weight:400;color:var(--ink3)">— search saved items or type a new one</span></label>
@@ -1129,6 +1130,22 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.82 (GYM-073): saved water items can now be flagged ⚡ Quick Add
+// (toggled in Manage Saved Water Items). Flagged items get their own
+// section at the top of the Water modal — a name and a −/+ stepper, no
+// searching or typing. Repeated taps on the same item aggregate into
+// one entry per item per day (count × its volume), rather than piling
+// up separate identical rows, so the day's list stays readable.
+// Linked back to the saved item by id (savedItemId), not by name, so
+// renaming a saved item later doesn't orphan an already-logged entry.
+// Manually editing a quick-add-sourced entry via the existing Edit Water
+// modal clears that linkage, so it becomes a plain one-off entry and a
+// later +/- tap starts a fresh count rather than overwriting your
+// correction. One-off items are unchanged — still search-and-select as
+// before; a stepper there was left as a possible future addition rather
+// than built now, since the two flows (search-first vs always-visible
+// quick items) serve different moments and blending them risked making
+// neither one clean.
 // v2.81 (GYM-072-d): v2.80 sent Log_Weight a formatted sentence ("Weight:
 // 82.4kg — 16 Aug 2026"), matching the GymSummary style — but Log_Weight
 // expects a plain number (it feeds something like a Health-sample or
@@ -1597,7 +1614,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.81';
+const VERSION = '2.82';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -5464,18 +5481,84 @@ function renderWaterList() {
   const pct = target.dailyMl ? Math.min(100, Math.round(totalMl/target.dailyMl*100)) : 0;
   const totalsEl = document.getElementById('waterTotalsBar');
   totalsEl.innerHTML = `<div class="li-meta" style="font-size:13px;font-weight:600;color:${overTarget?'var(--accent2)':'var(--ink)'}">💧 ${line}</div>${target.dailyMl ? `<div class="nutri-bar-track" style="margin-top:6px"><div class="nutri-bar-fill" style="width:${pct}%;background:${overTarget?'var(--accent2)':'#38bdf8'}"></div></div>` : ''}`;
+  renderWaterQuickAddSection();
   const listEl = document.getElementById('waterList');
   listEl.innerHTML = entries.length ? entries.map(e => `
     <div class="list-item">
       <div class="li-top"><div>
         <div class="li-name">${escHtml(e.name)}</div>
-        <div class="li-meta">${round2(e.volumeMl)} ml</div>
+        <div class="li-meta">${e.count>1 ? e.count+' × '+round2(e.perUnitMl)+'ml = ' : ''}${round2(e.volumeMl)} ml</div>
       </div></div>
       <div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openEditWaterEntry('${e.id}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="deleteWaterEntry('${e.id}')">Delete</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No water logged yet</div>';
+}
+// GYM-073: quick-add items get a stepper instead of the search flow —
+// one tap logs (or adds another of) that item for the modal's current
+// date. Repeated taps aggregate into a single entry per item per day
+// (count × its volume), rather than piling up N separate identical
+// rows, so the day's list stays readable even after several taps.
+// Linked back to the saved item via savedItemId (not by name), so
+// renaming a saved item later doesn't orphan an already-logged entry.
+function renderWaterQuickAddSection() {
+  const el = document.getElementById('waterQuickAddSection');
+  if (!el) return;
+  const quickItems = getSavedWaterItems().filter(w => w.quickAdd);
+  if (!quickItems.length) { el.innerHTML = ''; return; }
+  const entries = getWaterEntriesForDate(_waterModalDate);
+  el.innerHTML = '<div class="section-title" style="margin-top:0">⚡ Quick Add</div>' + quickItems.map(item => {
+    const existing = entries.find(e => e.savedItemId === item.id);
+    const count = existing ? (existing.count||1) : 0;
+    return `<div class="list-item">
+      <div class="li-top"><div>
+        <div class="li-name">${escHtml(item.name)}</div>
+        <div class="li-meta">${round2(item.volumeMl)} ml each${count?' · '+round2((item.volumeMl||0)*count)+' ml so far':''}</div>
+      </div>
+      <span style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+        <button class="pib-reorder" onclick="quickAddWaterDecrement('${item.id}')" ${count===0?'disabled':''} title="Remove one" style="width:28px;height:28px;font-size:16px">−</button>
+        <span style="font-weight:700;min-width:16px;text-align:center">${count}</span>
+        <button class="pib-reorder" onclick="quickAddWaterIncrement('${item.id}')" title="Add one" style="width:28px;height:28px;font-size:16px">+</button>
+      </span>
+      </div>
+    </div>`;
+  }).join('');
+}
+function quickAddWaterIncrement(savedItemId) {
+  const item = _env.data.savedWaterItems.find(w => w.id === savedItemId && !w._deleted);
+  if (!item) return;
+  const now = new Date().toISOString();
+  let entry = getWaterEntriesForDate(_waterModalDate).find(e => e.savedItemId === savedItemId);
+  if (entry) {
+    entry.count = (entry.count||1) + 1;
+    entry.perUnitMl = item.volumeMl||0;
+    entry.volumeMl = round2(entry.perUnitMl * entry.count);
+    entry.updatedAt = now;
+  } else {
+    entry = { id: uid('water'), date: _waterModalDate, name: item.name, savedItemId: item.id, count: 1, perUnitMl: item.volumeMl||0, volumeMl: round2(item.volumeMl||0), createdAt: now, updatedAt: now };
+    _env.data.waterEntries.push(entry);
+  }
+  save(_env);
+  sbUpsert('waterEntry', entry, null);
+  renderWaterList();
+  renderCalendar();
+}
+function quickAddWaterDecrement(savedItemId) {
+  const entry = getWaterEntriesForDate(_waterModalDate).find(e => e.savedItemId === savedItemId);
+  if (!entry) return;
+  const now = new Date().toISOString();
+  if ((entry.count||1) <= 1) {
+    entry._deleted = true; entry.updatedAt = now;
+  } else {
+    entry.count -= 1;
+    entry.volumeMl = round2((entry.perUnitMl||0) * entry.count);
+    entry.updatedAt = now;
+  }
+  save(_env);
+  sbUpsert('waterEntry', entry, null);
+  renderWaterList();
+  renderCalendar();
 }
 function saveWaterEntry() {
   const name = document.getElementById('waterNameInput').value.trim();
@@ -5523,14 +5606,31 @@ function renderSavedWaterList() {
   el.innerHTML = items.length ? items.map(w => `
     <div class="list-item">
       <div class="li-top"><div>
-        <div class="li-name">${escHtml(w.name)}</div>
+        <div class="li-name">${w.quickAdd?'⚡ ':''}${escHtml(w.name)}</div>
         <div class="li-meta">${round2(w.volumeMl)} ml</div>
       </div></div>
       <div class="li-actions">
+        <button class="btn btn-secondary btn-sm" onclick="toggleSavedWaterQuickAdd('${w.id}')">${w.quickAdd?'⚡ Quick Add':'☆ Quick Add'}</button>
         <button class="btn btn-secondary btn-sm" onclick="openEditSavedWater('${w.id}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="deleteSavedWaterItem('${w.id}')">Delete</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No saved water items yet — they\'ll appear here as you log water</div>';
+}
+// GYM-073: flags a saved water item to appear in the modal's Quick Add
+// section — a name + a stepper, no searching/typing needed. Toggled
+// here rather than auto-detected from usage frequency, since "which
+// ones I drink often enough to want one-tap" is a judgement call only
+// you can make.
+function toggleSavedWaterQuickAdd(id) {
+  const w = _env.data.savedWaterItems.find(x => x.id === id);
+  if (!w) return;
+  w.quickAdd = !w.quickAdd;
+  w.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('savedWaterItem', w, null);
+  renderSavedWaterList();
+  renderWaterList(); // in case the Water modal is open behind this one
+  toast(w.quickAdd ? 'Marked as Quick Add ⚡' : 'Removed from Quick Add');
 }
 function deleteSavedWaterItem(id) {
   const w = _env.data.savedWaterItems.find(x => x.id === id);
@@ -5581,6 +5681,10 @@ function saveEditWaterModal() {
     const e = _env.data.waterEntries.find(x => x.id === _editWaterTarget.id);
     if (!e) return;
     e.name = name; e.volumeMl = volumeMl; e.updatedAt = now;
+    // GYM-073: a manual edit means this is now a plain one-off entry —
+    // clear the quick-add linkage so a later +/- tap on that saved item
+    // starts a fresh count instead of recomputing over your correction.
+    delete e.savedItemId; delete e.count; delete e.perUnitMl;
     save(_env);
     sbUpsert('waterEntry', e, null);
     renderWaterList();
