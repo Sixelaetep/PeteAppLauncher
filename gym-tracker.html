@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.82</title>
+<title>Gym Tracker v2.83</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.82</div></span>
+      <span>Gym Tracker<div class="ver">v2.83</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -744,15 +744,14 @@
   <div class="modal">
     <div class="modal-title"><span id="waterModalTitle">Water</span><button class="modal-close" onclick="closeModal('modalWater')">✕</button></div>
     <div id="waterTotalsBar" style="margin-bottom:10px"></div>
-    <div id="waterQuickAddSection" style="margin-bottom:10px"></div>
-    <div id="waterList" style="margin-bottom:14px"></div>
-    <div class="section-title" style="margin-top:0">Add water</div>
-    <label>Name <span style="font-weight:400;color:var(--ink3)">— search saved items or type a new one</span></label>
+    <div id="waterQuickAddSection" style="margin-bottom:14px"></div>
+    <div class="section-title" style="margin-top:0">Find or add an item</div>
+    <label>Name <span style="font-weight:400;color:var(--ink3)">— search saved items, or type a new one</span></label>
     <input type="text" id="waterNameInput" placeholder="e.g. Water bottle" oninput="onWaterNameInput()" autocomplete="off">
     <div id="waterSearchResults" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
-    <label style="margin-top:10px">Volume (ml)</label>
+    <label style="margin-top:10px">Volume (ml) <span style="font-weight:400;color:var(--ink3)">— only needed for a brand-new item</span></label>
     <input type="number" id="waterVolumeInput" min="0" placeholder="e.g. 500">
-    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="saveWaterEntry()">+ Add Water</button>
+    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="saveWaterEntry()">+ Add New Item</button>
     <button class="btn btn-secondary btn-block" style="margin-top:8px" onclick="openManageSavedWater()">📋 Manage Saved Water Items</button>
   </div>
 </div>
@@ -1130,6 +1129,32 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.83 (GYM-074): merged the two water views v2.82 introduced (a Quick
+// Add stepper section sitting above a separate flat list of the day's
+// entries, which duplicated the same items) into ONE unified card list.
+// A card shows for every ⚡ Quick Add item (always, even at zero) and
+// for any other saved item with something logged today. Selecting a
+// search pill no longer fills in a form and waits for a separate Add
+// tap — it logs one instance immediately and the item folds straight
+// into this same card view, gaining its own −/+ stepper from that point
+// on; there's no more "search flow" vs "quick-add flow" distinction
+// once an item has been used once today. Each card also gained a 🗑 to
+// clear that item's count for the day in one tap, rather than tapping −
+// repeatedly. The old separate day list is gone — the cards are the log
+// now, so there's nothing to keep in sync between two views.
+// The manual name+volume form only matters for a genuinely new item
+// (no existing match); typing a name that DOES match an existing saved
+// item routes through the same one-tap-log path a pill would, using
+// that item's own canonical volume rather than whatever's sitting in
+// the volume field, so it can never create a confusing near-duplicate.
+// Data-side: added migrateWaterEntries(), additive-only — backfills the
+// savedItemId link (creating a matching saved item if one doesn't exist)
+// on any entry logged before this release, but never rewrites, merges,
+// or deletes historical volumeMl/date/count. If a couple of old entries
+// for the same item/day happen to exist from before this update, both
+// still count toward the day's total exactly as before; the card's +/-
+// naturally converges them to one the next time it's used, and 🗑 always
+// clears the whole group regardless of how many there are underneath.
 // v2.82 (GYM-073): saved water items can now be flagged ⚡ Quick Add
 // (toggled in Manage Saved Water Items). Flagged items get their own
 // section at the top of the Water modal — a name and a −/+ stepper, no
@@ -1614,7 +1639,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.82';
+const VERSION = '2.83';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1675,6 +1700,7 @@ function load() {
     migrateSessions(env);
     migratePrograms(env);
     migrateNutritionTargets(env);
+    migrateWaterEntries(env);
     const hadNoteSets = env.data.trainerNoteSets.length;
     ensureActiveNoteSet(env);
     if (exChanged.length || env.data.trainerNoteSets.length !== hadNoteSets) {
@@ -1760,6 +1786,38 @@ function migrateNutritionTargets(env) {
     if (t.restCalories === undefined) t.restCalories = t.calories || 0;
     if (t.restProtein === undefined) t.restProtein = t.protein || 0;
   });
+}
+// GYM-074: the unified water card view groups entries by savedItemId, so
+// any entry logged before this release (which only ever had a plain
+// name/volumeMl, no link back to a saved item) needs that id backfilled
+// to take part. Deliberately additive-only — finds-or-creates a matching
+// saved item by name and links the entry to it, but never rewrites,
+// merges, or deletes an existing entry's own volumeMl/date/count. If two
+// old entries for the same item on the same day exist, they'll both
+// still be there and both count toward the day's total exactly as
+// before; the card's +/- just naturally converges them to one as you use
+// it, and 🗑 always removes the full group regardless.
+function migrateWaterEntries(env) {
+  const items = env.data.savedWaterItems;
+  const changed = [];
+  env.data.waterEntries.forEach(e => {
+    if (e._deleted || e.savedItemId) return;
+    let item = items.find(w => !w._deleted && w.name.toLowerCase() === (e.name||'').toLowerCase());
+    let itemIsNew = false;
+    if (!item) {
+      const now = e.createdAt || new Date().toISOString();
+      item = { id: uid('svwater'), name: e.name||'Water', volumeMl: e.volumeMl||0, quickAdd: false, createdAt: now, updatedAt: now };
+      items.push(item);
+      itemIsNew = true;
+    }
+    e.savedItemId = item.id;
+    if (e.count === undefined) e.count = 1;
+    if (e.perUnitMl === undefined) e.perUnitMl = e.volumeMl;
+    e.updatedAt = new Date().toISOString();
+    if (itemIsNew) changed.push({ kind: 'savedWaterItem', record: item });
+    changed.push({ kind: 'waterEntry', record: e });
+  });
+  return changed;
 }
 function migrateSessions(env) {
   env.data.sessions.forEach(s => {
@@ -2429,11 +2487,16 @@ function pullFromCloud(cb) {
       }
     });
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
+    const waterChanged = migrateWaterEntries(_env);
     ensureActiveNoteSet(_env); // GYM-043: a first-ever pull with zero rows shouldn't leave no active set
     save(_env);
     if (exChanged.length) {
       slog('Pushing '+exChanged.length+' exercise(s) with corrected Spa tags','ok');
       exChanged.forEach(ex => sbUpsert('exercise', ex, null));
+    }
+    if (waterChanged.length) {
+      slog('Pushing '+waterChanged.length+' water record(s) linked to a saved item','ok');
+      waterChanged.forEach(c => sbUpsert(c.kind, c.record, null));
     }
     setSyncStatus(anyError ? 'error' : 'synced');
     slog(anyError ? 'Pull finished with errors on some tables — see above' : 'Pull complete', 'ok');
@@ -5463,17 +5526,30 @@ function onWaterNameInput() {
   const matches = getSavedWaterItems().filter(w => w.name.toLowerCase().includes(q)).slice(0, 6);
   resultsEl.innerHTML = matches.map(w => `<button type="button" class="meal-pill" onclick="selectSavedWaterItem('${w.id}')">${escHtml(w.name)} <span style="opacity:0.6">· ${round2(w.volumeMl)}ml</span></button>`).join('');
 }
+// GYM-074: selecting a pill logs one instance immediately and the item
+// folds straight into the unified card view above — no separate
+// "populate the form, then tap Add" step for something that already
+// exists as a saved item. It always uses that item's own canonical
+// volume (not whatever's sitting in the volume field); if the volume
+// itself is wrong, that's fixed once in Manage Saved Water Items rather
+// than per log entry.
 function selectSavedWaterItem(id) {
-  const w = getSavedWaterItems().find(x => x.id === id);
-  if (!w) return;
-  document.getElementById('waterNameInput').value = w.name;
-  document.getElementById('waterVolumeInput').value = w.volumeMl || '';
+  document.getElementById('waterNameInput').value = '';
+  document.getElementById('waterVolumeInput').value = '';
   document.getElementById('waterSearchResults').innerHTML = '';
+  quickWaterIncrement(id);
 }
+// GYM-074: one unified card list replaces the old split view (a
+// Quick Add stepper section plus a separate flat list of the day's
+// entries that duplicated the same items underneath it). A card shows
+// for every ⚡ Quick Add item (always, even at zero) and for any other
+// saved item that has something logged today — selecting a search pill
+// or adding a brand-new item both land here the same way. Cards ARE the
+// log now; there's no separate per-entry list to keep in sync with them.
 function renderWaterList() {
   const date = _waterModalDate;
   if (!date) return;
-  const entries = getWaterEntriesForDate(date).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  const entries = getWaterEntriesForDate(date);
   const totalMl = round2(entries.reduce((s,e)=>s+(e.volumeMl||0),0));
   const target = getWaterTarget();
   const line = target.dailyMl ? `${totalMl} / ${target.dailyMl} ml` : `${totalMl} ml logged`;
@@ -5481,55 +5557,49 @@ function renderWaterList() {
   const pct = target.dailyMl ? Math.min(100, Math.round(totalMl/target.dailyMl*100)) : 0;
   const totalsEl = document.getElementById('waterTotalsBar');
   totalsEl.innerHTML = `<div class="li-meta" style="font-size:13px;font-weight:600;color:${overTarget?'var(--accent2)':'var(--ink)'}">💧 ${line}</div>${target.dailyMl ? `<div class="nutri-bar-track" style="margin-top:6px"><div class="nutri-bar-fill" style="width:${pct}%;background:${overTarget?'var(--accent2)':'#38bdf8'}"></div></div>` : ''}`;
-  renderWaterQuickAddSection();
-  const listEl = document.getElementById('waterList');
-  listEl.innerHTML = entries.length ? entries.map(e => `
-    <div class="list-item">
-      <div class="li-top"><div>
-        <div class="li-name">${escHtml(e.name)}</div>
-        <div class="li-meta">${e.count>1 ? e.count+' × '+round2(e.perUnitMl)+'ml = ' : ''}${round2(e.volumeMl)} ml</div>
-      </div></div>
-      <div class="li-actions">
-        <button class="btn btn-secondary btn-sm" onclick="openEditWaterEntry('${e.id}')">Edit</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteWaterEntry('${e.id}')">Delete</button>
-      </div>
-    </div>`).join('') : '<div class="empty-state">No water logged yet</div>';
+  renderWaterCards(entries);
 }
-// GYM-073: quick-add items get a stepper instead of the search flow —
-// one tap logs (or adds another of) that item for the modal's current
-// date. Repeated taps aggregate into a single entry per item per day
-// (count × its volume), rather than piling up N separate identical
-// rows, so the day's list stays readable even after several taps.
-// Linked back to the saved item via savedItemId (not by name), so
-// renaming a saved item later doesn't orphan an already-logged entry.
-function renderWaterQuickAddSection() {
+function renderWaterCards(entries) {
   const el = document.getElementById('waterQuickAddSection');
   if (!el) return;
-  const quickItems = getSavedWaterItems().filter(w => w.quickAdd);
-  if (!quickItems.length) { el.innerHTML = ''; return; }
-  const entries = getWaterEntriesForDate(_waterModalDate);
-  el.innerHTML = '<div class="section-title" style="margin-top:0">⚡ Quick Add</div>' + quickItems.map(item => {
-    const existing = entries.find(e => e.savedItemId === item.id);
-    const count = existing ? (existing.count||1) : 0;
+  const savedItems = getSavedWaterItems();
+  const byItem = {};
+  entries.forEach(e => { if (e.savedItemId) (byItem[e.savedItemId] = byItem[e.savedItemId]||[]).push(e); });
+  const cardIds = new Set(savedItems.filter(w => w.quickAdd).map(w => w.id));
+  Object.keys(byItem).forEach(id => cardIds.add(id));
+  const cards = Array.from(cardIds).map(id => savedItems.find(w => w.id === id)).filter(Boolean);
+  if (!cards.length) { el.innerHTML = ''; return; }
+  cards.sort((a,b) => (b.quickAdd - a.quickAdd) || a.name.localeCompare(b.name));
+  el.innerHTML = '<div class="section-title" style="margin-top:0">💧 Today</div>' + cards.map(item => {
+    const group = byItem[item.id] || [];
+    const count = group.reduce((s,e) => s+(e.count||1), 0);
+    const totalVolume = round2(group.reduce((s,e) => s+(e.volumeMl||0), 0));
     return `<div class="list-item">
       <div class="li-top"><div>
-        <div class="li-name">${escHtml(item.name)}</div>
-        <div class="li-meta">${round2(item.volumeMl)} ml each${count?' · '+round2((item.volumeMl||0)*count)+' ml so far':''}</div>
+        <div class="li-name">${item.quickAdd?'⚡ ':''}${escHtml(item.name)}</div>
+        <div class="li-meta">${round2(item.volumeMl)} ml each${count?' · '+totalVolume+' ml so far':''}</div>
       </div>
-      <span style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-        <button class="pib-reorder" onclick="quickAddWaterDecrement('${item.id}')" ${count===0?'disabled':''} title="Remove one" style="width:28px;height:28px;font-size:16px">−</button>
+      <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        ${count>0 ? `<button class="pib-reorder" onclick="quickWaterDeleteAll('${item.id}')" title="Remove all today">🗑</button>` : ''}
+        <button class="pib-reorder" onclick="quickWaterDecrement('${item.id}')" ${count===0?'disabled':''} title="Remove one" style="width:28px;height:28px;font-size:16px">−</button>
         <span style="font-weight:700;min-width:16px;text-align:center">${count}</span>
-        <button class="pib-reorder" onclick="quickAddWaterIncrement('${item.id}')" title="Add one" style="width:28px;height:28px;font-size:16px">+</button>
+        <button class="pib-reorder" onclick="quickWaterIncrement('${item.id}')" title="Add one" style="width:28px;height:28px;font-size:16px">+</button>
       </span>
       </div>
     </div>`;
   }).join('');
 }
-function quickAddWaterIncrement(savedItemId) {
+// Operates on the most-recently-touched entry for this item today (there
+// should only ever be one going forward — everything now logs through
+// this same path). If a handful of older pre-GYM-074 entries for the
+// same item/day still exist, +/- naturally converge them down to one as
+// they're used; 🗑 always removes the whole group regardless.
+function quickWaterIncrement(savedItemId) {
   const item = _env.data.savedWaterItems.find(w => w.id === savedItemId && !w._deleted);
   if (!item) return;
   const now = new Date().toISOString();
-  let entry = getWaterEntriesForDate(_waterModalDate).find(e => e.savedItemId === savedItemId);
+  const todays = getWaterEntriesForDate(_waterModalDate).filter(e => e.savedItemId === savedItemId).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  let entry = todays[0];
   if (entry) {
     entry.count = (entry.count||1) + 1;
     entry.perUnitMl = item.volumeMl||0;
@@ -5544,8 +5614,9 @@ function quickAddWaterIncrement(savedItemId) {
   renderWaterList();
   renderCalendar();
 }
-function quickAddWaterDecrement(savedItemId) {
-  const entry = getWaterEntriesForDate(_waterModalDate).find(e => e.savedItemId === savedItemId);
+function quickWaterDecrement(savedItemId) {
+  const todays = getWaterEntriesForDate(_waterModalDate).filter(e => e.savedItemId === savedItemId).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  const entry = todays[0];
   if (!entry) return;
   const now = new Date().toISOString();
   if ((entry.count||1) <= 1) {
@@ -5560,41 +5631,40 @@ function quickAddWaterDecrement(savedItemId) {
   renderWaterList();
   renderCalendar();
 }
+function quickWaterDeleteAll(savedItemId) {
+  const todays = getWaterEntriesForDate(_waterModalDate).filter(e => e.savedItemId === savedItemId);
+  if (!todays.length) return;
+  const now = new Date().toISOString();
+  todays.forEach(e => { e._deleted = true; e.updatedAt = now; sbUpsert('waterEntry', e, null); });
+  save(_env);
+  renderWaterList();
+  renderCalendar();
+}
+// Only reached for a genuinely new item (no existing saved match) — if
+// the typed name DOES match one, this just routes to the same increment
+// path selecting a pill would use, ignoring whatever's in the volume
+// field, rather than creating a confusing second near-duplicate item.
 function saveWaterEntry() {
   const name = document.getElementById('waterNameInput').value.trim();
-  const volumeMl = round2(document.getElementById('waterVolumeInput').value);
   if (!name) { toast('Enter a name first'); return; }
-  const now = new Date().toISOString();
-  const record = { id: uid('water'), date: _waterModalDate, name, volumeMl, createdAt: now, updatedAt: now };
-  _env.data.waterEntries.push(record);
-  // Same auto-build-the-library behaviour as saved meals: only creates a
-  // new saved item if this exact name isn't already saved.
-  const existingSaved = getSavedWaterItems().find(w => w.name.toLowerCase() === name.toLowerCase());
-  let newSavedItem = null;
-  if (!existingSaved) {
-    newSavedItem = { id: uid('svwater'), name, volumeMl, createdAt: now, updatedAt: now };
-    _env.data.savedWaterItems.push(newSavedItem);
+  const existing = getSavedWaterItems().find(w => w.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    document.getElementById('waterNameInput').value = '';
+    document.getElementById('waterVolumeInput').value = '';
+    document.getElementById('waterSearchResults').innerHTML = '';
+    quickWaterIncrement(existing.id);
+    return;
   }
+  const volumeMl = round2(document.getElementById('waterVolumeInput').value);
+  const now = new Date().toISOString();
+  const newItem = { id: uid('svwater'), name, volumeMl, quickAdd: false, createdAt: now, updatedAt: now };
+  _env.data.savedWaterItems.push(newItem);
   save(_env);
-  sbUpsert('waterEntry', record, null);
-  if (newSavedItem) sbUpsert('savedWaterItem', newSavedItem, null);
+  sbUpsert('savedWaterItem', newItem, null);
   document.getElementById('waterNameInput').value = '';
   document.getElementById('waterVolumeInput').value = '';
   document.getElementById('waterSearchResults').innerHTML = '';
-  renderWaterList();
-  renderCalendar();
-  toast('Water added ✓');
-}
-function deleteWaterEntry(id) {
-  const e = _env.data.waterEntries.find(x=>x.id===id);
-  if (!e) return;
-  if (!confirm('Delete this water entry?')) return;
-  e._deleted = true; e.updatedAt = new Date().toISOString();
-  save(_env);
-  sbUpsert('waterEntry', e, null);
-  renderWaterList();
-  renderCalendar();
-  toast('Water entry deleted');
+  quickWaterIncrement(newItem.id);
 }
 function openManageSavedWater() {
   renderSavedWaterList();
@@ -6157,7 +6227,9 @@ function importJSON(event) {
         _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
         ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
         const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env); migratePrograms(_env); migrateNutritionTargets(_env);
+        const waterChanged = migrateWaterEntries(_env);
         if (exChanged.length && window.PalSync.hasSession()) exChanged.forEach(ex => sbUpsert('exercise', ex, null));
+        if (waterChanged.length && window.PalSync.hasSession()) waterChanged.forEach(c => sbUpsert(c.kind, c.record, null));
       } else { throw new Error('Unrecognised backup format'); }
       save(_env);
       closeDataDrawer();
