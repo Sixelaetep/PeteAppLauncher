@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.63</title>
+<title>On Budget v3.64</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -365,7 +365,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.63</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.64</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -823,7 +823,7 @@
 <script src="pal-sync.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.63
+// On Budget v3.64
 // localStorage key: on_budget_v1
 // Backwards compatible with v1.0–v3.3 JSON backups. v1.9 added a Bills
 // account. v2.0 added till-style penny entry and forecast modes. v2.1
@@ -1311,6 +1311,18 @@
 // entirely unrelated to and predating this release's other two fixes.
 // Switched all three to inline colour instead.
 // ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// v3.64 (ON--063): Bills transactions on the same date now always order
+// income before outgoings — previously same-day items just kept whatever
+// order they happened to be generated/inserted in (recurring occurrences
+// before ad-hoc entries, with no income/outgoing distinction), so a
+// salary and a bill due the same day could show either way round.
+// Applied consistently across all three Bills sort sites: the forward
+// forecast list (uncleared recurring + ad-hoc), the ascending cleared
+// history feeding the merged "All" timeline, and the standalone
+// newest-first Cleared filter — the last of these now sorts
+// independently rather than reversing the ascending list, since a plain
+// reverse would have flipped the tie-break to outgoing-first.
 // ══════════════════════════════════════════════════════════════
 // v3.63 (ON--062): the PAD launcher's On Budget card was colouring Pot,
 // Headroom, and the Bills forecast figure with a flat green/red split —
@@ -2502,7 +2514,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.63', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.64', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2511,7 +2523,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.63', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.64', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -4155,6 +4167,13 @@ function consumeOverride(recurringId, schedDate) {
   return tombstoneOverrideRecord(bills.overrides[idx]);
 }
 
+// v3.64 (ON--063): tie-break for same-day bills items — income always
+// sorts before outgoings on a shared date, both in the forward forecast
+// and in the cleared history. Kept as a single shared helper so all
+// three sort sites (forecast items, cleared-ascending, cleared-newest-
+// first) apply the exact same rule rather than drifting apart.
+function billsTypeRank(type) { return type==='income' ? 0 : 1; }
+
 function billsForecastData() {
   const today = new Date(); today.setHours(0,0,0,0);
   const mode = bills.settings.forecastMode || '90d';
@@ -4200,7 +4219,10 @@ function billsForecastData() {
   bills.tx.filter(t=>!t._deleted && t.cleared===false).forEach(t => {
     items.push({ kind:'adhoc', txId:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount, overdue: new Date(t.date+'T00:00:00') < today });
   });
-  items.sort((a,b)=>a.date.localeCompare(b.date));
+  // v3.64 (ON--063): date first, then income before outgoings on a
+  // shared date — recurring occurrences and ad-hoc entries are both
+  // covered since they're merged into one `items` array above.
+  items.sort((a,b)=>a.date.localeCompare(b.date) || billsTypeRank(a.type)-billsTypeRank(b.type));
 
   let running = bills.settings.clearedBalance||0, lowest = running, lowestDate = null;
   const cutoffIso = iso(cutoff);
@@ -4317,13 +4339,18 @@ function renderBillsLedger() {
   // after it. Capped to the most recent N so the list doesn't grow
   // unbounded (slice(-CAP) on an ascending array = the most recent N,
   // still oldest-first among themselves).
+  // v3.64 (ON--063): income-before-outgoings tie-break applied here too,
+  // so the merged "All" timeline stays consistent with the forecast list.
   const clearedAll = bills.tx.filter(t=>!t._deleted && t.cleared!==false)
-    .sort((a,b)=>a.date.localeCompare(b.date)||a._ts-b._ts);
+    .sort((a,b)=>a.date.localeCompare(b.date)||billsTypeRank(a.type)-billsTypeRank(b.type)||a._ts-b._ts);
   const clearedShown = clearedAll.length>BILLS_CLEARED_CAP ? clearedAll.slice(-BILLS_CLEARED_CAP) : clearedAll;
   const wasCapped = clearedAll.length>BILLS_CLEARED_CAP;
   // The Cleared filter on its own is a simple list, not part of a
-  // combined timeline — shown newest-first (ON--040).
-  const clearedNewestFirst = clearedShown.slice().reverse();
+  // combined timeline — shown newest-first (ON--040). Sorted independently
+  // rather than reversing clearedShown, since a plain reverse would also
+  // flip the income/outgoing tie-break to outgoing-first (ON--063).
+  const clearedNewestFirst = clearedShown.slice()
+    .sort((a,b)=>b.date.localeCompare(a.date)||billsTypeRank(a.type)-billsTypeRank(b.type)||b._ts-a._ts);
 
   let rows;
   if (_billsFilter==='uncleared')    rows = fc.items;
