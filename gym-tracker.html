@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.84</title>
+<title>Gym Tracker v2.85</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.84</div></span>
+      <span>Gym Tracker<div class="ver">v2.85</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1129,6 +1129,35 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.85 (GYM-075, GYM-076): two related changes to how finishing a
+// session behaves.
+// GYM-075: finishing a session used to auto-launch the "Send this summary
+// to your GymSummary Shortcut?" modal every time, before the save/update-
+// plan question. Removed — finishing now goes straight to offerPlanPrompt()
+// (the existing save-as-plan / update-plan-targets question), nothing in
+// between. The summary/Shortcut modal itself is untouched and still fully
+// working — it's manual-only now, via a chip button in the day view,
+// renamed from "📤 Send to Watch" to "📤 Send to Notes" (the button always
+// drove the same GymSummary Shortcut handoff; the old label just implied
+// a narrower destination than what it's actually for). Removed the now-
+// dead promptSessionSummary()/_pendingFinishedSessionForPrompt chain that
+// only existed to auto-open-then-chain-into-offerPlanPrompt — resendSummary()
+// already handled the manual path independently and didn't need it.
+// GYM-076: saving/updating a session now checks first for any exercise
+// left partially logged (some sets ticked, not all). If found, asks once
+// whether the session was actually completed in full — "yes" ticks every
+// remaining set and marks every exercise Completed, including any left
+// completely untouched, since the question itself is a whole-session
+// question, not a per-exercise one (flagged and confirmed as the intended
+// behaviour before building, since the alternative — only rounding up
+// exercises already partway there — silently leaves deliberately-skipped
+// exercises alone, which is the more surprising choice either way this
+// goes). The day view's session chip now also shows a Completed/Partial/
+// Skipped tag on the collapsed header (sessionStatus(), already used by
+// the PDF report — reused as-is, no new status logic) and, alongside the
+// existing Edit Session/Edit Plan/Remove row, a "✓ Complete All" button
+// for topping up any already-saved session the same way — past or
+// present, hidden once a session already reads Completed.
 // v2.84 (GYM-074): first-open sync errors — the app only ever listened
 // passively for the launcher's PAL_SESSION postMessage. If that one-shot
 // message and this iframe's own load timing didn't line up (network/script
@@ -1653,7 +1682,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.84';
+const VERSION = '2.85';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3746,16 +3775,21 @@ function calSessionChip(s) {
   const spaIcon = isSpaOnlyItemSet(s.items) ? '🧖 ' : '';
   const n = s.items.length;
   const plan = s.planId ? planById(s.planId) : null;
+  // GYM-076: same {label, cls} helper the PDF report already uses
+  // (sessionStatus()) — cls maps directly onto the existing
+  // badge-completed/badge-partial/badge-skipped CSS, so no new styling.
+  const status = sessionStatus(s);
   return `<div class="cal-session">
     <div class="cal-session-head" onclick="toggleSessionCardDetail('${s.id}')">
-      <span class="cal-session-name">✓ ${spaIcon}${escHtml(s.name)}</span>
+      <span class="cal-session-name">✓ ${spaIcon}${escHtml(s.name)} <span class="li-badge badge-${status.cls}">${status.label}</span></span>
       <span class="cal-session-meta">${n} exercise${n===1?'':'s'} ${expanded?'▲':'▾'}</span>
     </div>
     ${expanded ? `<div style="margin-top:6px">${sessionExerciseRows(s)}</div>
       <div class="li-actions" style="margin-top:7px">
         <button class="btn btn-secondary btn-sm" onclick="editSession('${s.id}')">✏️ Edit Session</button>
         ${plan ? `<button class="btn btn-secondary btn-sm" onclick="openPlanEditor('${plan.id}')">📋 Edit Plan</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="resendSessionSummary('${s.id}')">📤 Send to Watch</button>
+        ${status.cls!=='completed' ? `<button class="btn btn-secondary btn-sm" onclick="completeAllSessionItems('${s.id}')">✓ Complete All</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="resendSessionSummary('${s.id}')">📤 Send to Notes</button>
         <button class="btn btn-danger btn-sm" onclick="deleteSession('${s.id}')">🗑 Remove</button>
       </div>` : ''}
   </div>`;
@@ -4650,6 +4684,30 @@ function cancelActiveSession() {
   document.getElementById('sessionOverlay').classList.remove('open');
 }
 
+// GYM-076: if any exercise was left partially logged (some sets ticked,
+// not all), ask once whether the whole session was actually completed in
+// full — saves fixing up every set by hand for a session that really was
+// finished. "Yes" marks EVERY exercise as done, including any left
+// completely untouched (0 sets logged) — a deliberate choice: the
+// question itself is a global "was this session fully completed", so a
+// "yes" answer commits to the whole session, not just the exercises that
+// were already partway there. Mutates `session` in place, before it's
+// saved — nothing here does its own save/sync, callers still own that.
+function checkAndOfferCompleteAll(session) {
+  if (!session.items.some(i => i.status === 'partial')) return;
+  if (!confirm('Some exercises were only partially logged. Were all exercises actually completed?')) return;
+  markAllItemsCompleted(session);
+}
+// Shared by checkAndOfferCompleteAll() (at save time) and
+// completeAllSessionItems() (on-demand, from a saved session's chip) —
+// same "tick every set, mark every item completed" logic either way.
+function markAllItemsCompleted(session) {
+  session.items.forEach(item => {
+    (item.actualSets||[]).forEach(a => { a.done = true; });
+    item.status = 'completed';
+  });
+}
+
 function finishActiveSession() {
   stopSetTimer(false); // a running timer would otherwise reference a session that no longer exists
   _activeSession.name = document.getElementById('sessionNameInput').value.trim() || _activeSession.name;
@@ -4672,6 +4730,7 @@ function finishActiveSession() {
       updated = Object.assign({}, _activeSession, {
         completedAt: original.completedAt, createdAt: original.createdAt, startedAt: original.startedAt, updatedAt: now
       });
+      checkAndOfferCompleteAll(updated); // GYM-076
       _env.data.sessions[idx] = updated;
       save(_env);
       sbUpsert('session', updated, null);
@@ -4683,12 +4742,16 @@ function finishActiveSession() {
     document.getElementById('sessionOverlay').classList.remove('open');
     renderAll();
     toast('Session updated ✓');
-    if (updated) promptSessionSummary(updated);
+    // GYM-075: used to also auto-launch the Send-to-Notes prompt here —
+    // removed. Straight to the save/update-plan question now; Send to
+    // Notes is manual-only (day view chip) going forward.
+    if (updated) offerPlanPrompt(updated);
     return;
   }
 
   _activeSession.completedAt = now;
   const finished = Object.assign({createdAt:now, updatedAt:now}, _activeSession);
+  checkAndOfferCompleteAll(finished); // GYM-076
   _env.data.sessions.push(finished);
   save(_env);
   sbUpsert('session', finished, null);
@@ -4698,7 +4761,9 @@ function finishActiveSession() {
   _activeSession = null;
   renderAll();
   toast('Session saved ✓');
-  promptSessionSummary(finished);
+  // GYM-075: no more auto Send-to-Notes prompt — just the save/update-plan
+  // question below (offerPlanPrompt already existed for this).
+  offerPlanPrompt(finished);
 }
 
 // GYM-061: the plan-targets-update decision used to be a native
@@ -4742,8 +4807,10 @@ function declineUpdatePlanTargets() {
 // that same text as its input, via shortcuts://run-shortcut. The
 // Shortcut itself decides what to do with the text (append to a Note,
 // show a notification, or both) — that's configured on the phone, not
-// here. Shown right after a session is saved; also reachable on demand
-// from a completed session's chip in the day view for a resend.
+// here.
+// v2.85 (GYM-075): used to auto-open right after every session save —
+// removed. Manual-only now, reached via "📤 Send to Notes" (renamed from
+// "Send to Watch") on a completed session's chip in the day view.
 //
 // A previous attempt at this reportedly didn't work — the most likely
 // cause is that iOS Safari only allows a custom-scheme navigation
@@ -4799,22 +4866,15 @@ function buildSessionSummaryText(session) {
 function shortcutUrlFor(name, text) {
   return 'shortcuts://run-shortcut?name=' + encodeURIComponent(name) + '&input=text&text=' + encodeURIComponent(text);
 }
-let _pendingFinishedSessionForPrompt = null;
 let _pendingSessionSummaryText = '';
-function promptSessionSummary(session) {
-  _pendingFinishedSessionForPrompt = session;
-  _pendingSessionSummaryText = buildSessionSummaryText(session);
-  document.getElementById('sessionSummaryPreview').textContent = _pendingSessionSummaryText;
-  document.getElementById('sendToShortcutLink').href = shortcutUrlFor('GymSummary', _pendingSessionSummaryText);
-  openModal('modalSessionSummary');
-}
-// On-demand resend from a completed session's chip in the day view —
-// same modal, but doesn't chain into the plan-targets-update prompt
-// afterward, since that's only relevant right after a genuine finish.
+// GYM-075: the only way into this modal now — always manual, always from
+// a completed session's chip. The old auto-launch-then-chain-into-
+// offerPlanPrompt path (promptSessionSummary(), _pendingFinishedSessionForPrompt)
+// is gone; offerPlanPrompt() is called directly from finishActiveSession()
+// instead, right after save, with no summary modal in between.
 function resendSessionSummary(sessionId) {
   const session = _env.data.sessions.find(s => s.id === sessionId);
   if (!session) return;
-  _pendingFinishedSessionForPrompt = null;
   _pendingSessionSummaryText = buildSessionSummaryText(session);
   document.getElementById('sessionSummaryPreview').textContent = _pendingSessionSummaryText;
   document.getElementById('sendToShortcutLink').href = shortcutUrlFor('GymSummary', _pendingSessionSummaryText);
@@ -4832,16 +4892,10 @@ function onCopyAndSendClick(event) {
   } else {
     toast('Sent to GymSummary (clipboard not available)');
   }
-  dismissSessionSummary();
+  closeModal('modalSessionSummary');
 }
 function skipSessionSummary() {
-  dismissSessionSummary();
-}
-function dismissSessionSummary() {
   closeModal('modalSessionSummary');
-  const finished = _pendingFinishedSessionForPrompt;
-  _pendingFinishedSessionForPrompt = null;
-  if (finished) offerPlanPrompt(finished);
 }
 
 function createPlanFromSession(session, name) {
@@ -4887,6 +4941,24 @@ function deleteSession(id) {
   sbUpsert('session', s, null);
   renderAll();
   toast('Session deleted');
+}
+// GYM-076: on-demand version of the same "mark everything done" the save
+// flow offers automatically for a partial session — works on any already-
+// saved session (today's or a past one), reached from the day view chip
+// next to Edit Session / Remove. Hidden once a session already reads
+// Completed (nothing left to do). Same markAllItemsCompleted() helper as
+// the save-time prompt, same save()+sbUpsert() pattern as deleteSession()
+// just above.
+function completeAllSessionItems(id) {
+  const s = _env.data.sessions.find(x=>x.id===id);
+  if (!s) return;
+  if (!confirm('Mark every exercise in this session as fully completed?')) return;
+  markAllItemsCompleted(s);
+  s.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('session', s, null);
+  renderAll();
+  toast('Session marked fully completed ✓');
 }
 function renderHistoryExerciseSelect() {
   const sel = document.getElementById('historyExerciseSelect');
