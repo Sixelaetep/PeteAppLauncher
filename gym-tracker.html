@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.85</title>
+<title>Gym Tracker v2.86</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.85</div></span>
+      <span>Gym Tracker<div class="ver">v2.86</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -439,18 +439,34 @@
     <div class="section-title" style="margin-top:20px">🎯 What To Train Next</div>
     <div id="nextUpList"></div>
 
-    <div class="section-title" style="margin-top:20px">Body Areas Worked</div>
+    <div class="section-title" style="margin-top:20px">📊 Period Overview</div>
     <div class="type-row" style="grid-template-columns:1fr 1fr 1fr">
       <button class="type-btn sm active" id="insWin7" onclick="setInsightsWindow(7)">7 Days</button>
       <button class="type-btn sm" id="insWin30" onclick="setInsightsWindow(30)">30 Days</button>
       <button class="type-btn sm" id="insWinAll" onclick="setInsightsWindow(null)">All Time</button>
     </div>
+    <div id="periodSummaryWrap" style="margin-top:12px"></div>
+    <div id="nutritionAveragesWrap" style="margin-top:10px"></div>
+
+    <div class="section-title" style="margin-top:20px">Body Areas Worked</div>
     <div id="insightsList" style="margin-top:12px"></div>
 
     <div class="section-title" style="margin-top:20px">⚖️ Body Weight</div>
     <div id="weightChartWrap"></div>
     <button class="btn btn-secondary btn-block" style="margin-top:10px" onclick="openWeightModal()">+ Log Weight</button>
     <div id="weightEntryList" style="margin-top:10px"></div>
+
+    <!-- GYM-077: automatic version of the manual picker just below — every
+         exercise trained ≥2x in the Period Overview window above, with a
+         completion ratio, a trend read (Improving/Steady/Declining/Mixed),
+         and a small trend line. Tap a card to expand its session-by-session
+         detail. Same collapsed-by-default convention as Exercise Progress
+         and the Trainer Notes archive. -->
+    <div class="section-title" style="margin-top:20px;cursor:pointer;display:flex;align-items:center;justify-content:space-between" onclick="toggleProgressionSummary()">
+      <span>📈 Progression Summary</span>
+      <span id="progressionSummaryChevron" style="font-size:11px;color:var(--ink3)">▸</span>
+    </div>
+    <div id="progressionSummaryWrap" style="display:none"></div>
 
     <!-- GYM-073: folded in from the old standalone History tab — the
          flat session list was dropped (calendar-day editing already
@@ -1129,6 +1145,46 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.86 (GYM-077): "have a good summary section" — open-ended brief,
+// scoped after checking in on two design forks (both confirmed before
+// building): whether to add auto-computed exercise progression at all
+// (yes), and, once yes, what "progression" should actually show per
+// exercise — not a single first→last arrow, but: was every occurrence
+// actually completed, did the numbers move consistently in one
+// direction or sit flat (Steady/Improving/Declining — every consecutive
+// pair has to agree on direction), or bounce around with no clear read
+// (Mixed) — shown visually via a small trend line + a coloured badge,
+// not just text.
+// New: "📈 Progression Summary" — for every exercise trained ≥2 times in
+// a window, a completion ratio, a trend read, and a sparkline. Fully
+// automatic, no per-exercise picking — the existing "📈 Exercise
+// Progress" manual picker right below it is untouched, still there for
+// a genuine single-exercise deep-dive. Lives in both places this kind
+// of thing already lives: a new collapsible Insights section (same
+// convention as Exercise Progress/Trainer Notes, windowed by the
+// existing 7/30/All-time toggle) and a new PDF report section (windowed
+// to the report's date range instead, since a static report can't
+// offer a click-to-expand).
+// Also: session-count/completion/avg-duration and avg-cal/avg-protein
+// numbers — previously computed only inside the PDF generator — are now
+// visible in Insights too, in a new "📊 Period Overview" section (the
+// old "Body Areas Worked" 7/30/All-time toggle moved up to head this
+// wider section, since all three now share it; Body Areas Worked itself
+// is unchanged, just no longer duplicating its own copy of the toggle).
+// The PDF's own top-level Summary grid also gains the avg-cal/protein
+// cells when food is included — previously that average only appeared
+// further down inside the optional Nutrition section.
+// Shared plumbing (both PDF and Insights call the same code, no
+// duplicated math): buildExerciseProgressionData()/classifyProgressionTrend()
+// for the trend logic, sparklineSvg() for the trend line (same scaling
+// approach as the existing body-weight chart, just generic over any
+// series), and computeNutritionAverages() — extracted from GYM-066's PDF
+// food block with no change in behaviour, buildReportFoodBlock() now
+// calls it instead of its own copy.
+// Not to be confused with GYM-049's "auto-progression" (removed) — that
+// was about auto-*suggesting* next session's target numbers; this is
+// read-only historical trend display, a different feature that happens
+// to share the word "progression".
 // v2.85 (GYM-075, GYM-076): two related changes to how finishing a
 // session behaves.
 // GYM-075: finishing a session used to auto-launch the "Send this summary
@@ -1682,7 +1738,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.85';
+const VERSION = '2.86';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -5027,10 +5083,139 @@ function computeInsightsFromSessions(sessions) {
   return {areaTotals, areaTags};
 }
 function computeInsights(days) {
-  let cutoffStr = null;
-  if (days !== null) { const c = new Date(); c.setDate(c.getDate()-days); cutoffStr = c.getFullYear()+'-'+String(c.getMonth()+1).padStart(2,'0')+'-'+String(c.getDate()).padStart(2,'0'); }
+  const cutoffStr = insightsCutoffDate(days);
   const sessions = getSessions().filter(s => !cutoffStr || (s.date && s.date >= cutoffStr));
   return computeInsightsFromSessions(sessions);
+}
+// GYM-077: cutoff-date calc used to live inline inside computeInsights()
+// only — pulled out so the new Period Summary / Nutrition Averages /
+// Progression Summary cards can all filter to the same 7/30/All-time
+// window (_insightsWindow) without duplicating the date math three more
+// times. Same isoFromDate() the report's date presets already use.
+function insightsCutoffDate(days) {
+  if (days === null) return null;
+  const c = new Date(); c.setDate(c.getDate()-days);
+  return isoFromDate(c);
+}
+function sessionsInInsightsWindow() {
+  const cutoffStr = insightsCutoffDate(_insightsWindow);
+  return getSessions().filter(s => !cutoffStr || (s.date && s.date >= cutoffStr));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EXERCISE PROGRESSION SUMMARY (GYM-077) — automatic, no manual picking
+// (the existing per-exercise picker just below is untouched and still
+// there for a deliberate deep-dive). Not to be confused with GYM-049's
+// "auto-progression" (which was about auto-*suggesting* next session's
+// numbers, removed) — this is read-only: for every exercise trained ≥2
+// times in a window, was it actually completed each time, and does its
+// "best" value (same metric the picker already uses — max weight for
+// reps-type, max seconds for time-type, max metres for distance-type)
+// move consistently in one direction, sit flat, or bounce around with
+// no clear direction. A plain first→last comparison can hide a
+// mid-window dip or spike, so every consecutive pair has to agree on
+// direction before this calls it Improving/Declining — anything that
+// disagrees is Mixed rather than forced into a misleading single arrow.
+function bestSetValue(sets, type) {
+  const done = (sets||[]).filter(a=>a.done);
+  if (!done.length) return null;
+  return Math.max(...done.map(s => type==='distance' ? (s.metres||0) : type==='time' ? (s.seconds||0) : (s.weight||0)));
+}
+function classifyProgressionTrend(values) {
+  if (values.length < 2) return 'insufficient';
+  let nonDecreasing = true, nonIncreasing = true;
+  for (let i=1;i<values.length;i++) {
+    if (values[i] > values[i-1]) nonIncreasing = false;
+    else if (values[i] < values[i-1]) nonDecreasing = false;
+  }
+  if (nonDecreasing && nonIncreasing) return 'steady';
+  if (nonDecreasing) return 'improving';
+  if (nonIncreasing) return 'declining';
+  return 'mixed';
+}
+function buildExerciseProgressionData(sessions) {
+  const byExercise = {};
+  sessions.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(s => {
+    s.items.forEach(item => {
+      const key = item.exerciseId;
+      if (!byExercise[key]) byExercise[key] = { exerciseId:key, exerciseName:item.exerciseName, trackType:item.trackType, rows:[] };
+      const done = (item.actualSets||[]).filter(a=>a.done);
+      byExercise[key].rows.push({
+        date: s.date, status: item.status,
+        setsStr: done.length ? summarizeSets(done, item.trackType) : 'not logged',
+        best: bestSetValue(item.actualSets, item.trackType)
+      });
+    });
+  });
+  return Object.values(byExercise)
+    .filter(ex => ex.rows.length >= 2)
+    .map(ex => {
+      const loggedValues = ex.rows.filter(r=>r.best!==null).map(r=>r.best);
+      return Object.assign(ex, {
+        completedCount: ex.rows.filter(r=>r.status==='completed').length,
+        totalCount: ex.rows.length,
+        trend: classifyProgressionTrend(loggedValues)
+      });
+    })
+    .sort((a,b) => b.rows.length - a.rows.length || a.exerciseName.localeCompare(b.exerciseName));
+}
+// Trend → {label, icon, badge class (app theme), rpt class (print theme)}.
+// Reuses the exact same three badge colours the app already has meaning
+// for (green=completed, orange=partial/needs-attention, gray=neutral) —
+// Improving gets the "completed" green, Mixed gets the "partial" orange
+// (an inconsistent signal is exactly the "needs a look" case that colour
+// already means elsewhere), Steady/Declining both stay neutral gray,
+// matching trendArrow()'s own long-standing convention (only "up" is
+// ever colour-flagged; down and flat both render the same neutral tone).
+function progressionTrendMeta(trend) {
+  return {
+    improving:    { label:'Improving',       icon:'▲', badge:'badge-completed', rpt:'rpt-badge-completed' },
+    declining:    { label:'Declining',       icon:'▼', badge:'badge-skipped',   rpt:'rpt-badge-skipped' },
+    steady:       { label:'Steady',          icon:'=', badge:'badge-skipped',   rpt:'rpt-badge-skipped' },
+    mixed:        { label:'Mixed',           icon:'↕', badge:'badge-partial',   rpt:'rpt-badge-partial' },
+    insufficient: { label:'Not enough data', icon:'',  badge:'badge-skipped',   rpt:'rpt-badge-skipped' }
+  }[trend];
+}
+// Compact trend line — same scaling math as the existing body-weight
+// chart (renderWeightChartSvg/renderReportWeightChart), just smaller and
+// generic over any numeric series rather than weight specifically.
+// strokeColor is passed in so the same function serves both the
+// app-themed card (var(--accent)) and the fixed-colour print version
+// (#0d1117), same split the weight chart already uses for the same
+// reason (print shouldn't shift with the device's live theme).
+function sparklineSvg(values, strokeColor, w, h) {
+  if (values.length < 2) return '';
+  const pad = 4;
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = (max-min) || 1;
+  const stepX = (w - pad*2) / (values.length-1);
+  const pt = (v,i) => { const x = pad+i*stepX; const y = h-pad-((v-min)/range)*(h-pad*2); return {x,y}; };
+  const points = values.map((v,i)=>{const p=pt(v,i); return p.x+','+p.y;}).join(' ');
+  const dots = values.map((v,i)=>{const p=pt(v,i); return `<circle cx="${p.x}" cy="${p.y}" r="2" fill="${strokeColor}"/>`;}).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-width:${w}px;height:${h}px" preserveAspectRatio="none">
+    <polyline points="${points}" fill="none" stroke="${strokeColor}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    ${dots}
+  </svg>`;
+}
+// GYM-066/GYM-077 shared — the "average calories/protein per day, split
+// active vs rest, each against its own target" calc GYM-066 built for
+// the PDF's Nutrition section. GYM-077 needed the same numbers visible
+// without generating a report, so this is now the one place that logic
+// lives; buildReportFoodBlock() below calls it too instead of its own
+// copy.
+function computeNutritionAverages(entries) {
+  const byDate = {};
+  entries.forEach(e => { (byDate[e.date] = byDate[e.date]||[]).push(e); });
+  const dateKeys = Object.keys(byDate).sort();
+  const activeDates = dateKeys.filter(d => isActiveDay(d));
+  const restDates = dateKeys.filter(d => !isActiveDay(d));
+  const avgFor = (dates) => {
+    if (!dates.length) return null;
+    let cal=0, pro=0;
+    dates.forEach(d => { byDate[d].forEach(e => { cal += e.calories||0; pro += e.protein||0; }); });
+    return { cal: Math.round(cal/dates.length), pro: Math.round(pro/dates.length) };
+  };
+  return { dateKeys, byDate, activeDates, restDates, activeAvg: avgFor(activeDates), restAvg: avgFor(restDates) };
 }
 
 // ── "What to train next" — all-time recency per area, independent of the
@@ -5104,18 +5289,116 @@ function sortAreasSpaLast(areas) {
   return areas;
 }
 
+// GYM-077: "how much did I actually do" at a glance — sessions in the
+// current window, how many were fully completed vs partial, and average
+// duration. Same numbers the PDF's Summary stat grid has always had,
+// just also visible without generating a report. Uses the existing
+// .hero-stat card (Home tab's Total Sessions/Streak row) rather than
+// inventing new styling.
+function renderPeriodSummaryCard() {
+  const wrap = document.getElementById('periodSummaryWrap');
+  if (!wrap) return;
+  const sessions = sessionsInInsightsWindow();
+  if (!sessions.length) { wrap.innerHTML = '<div class="empty-state" style="padding:10px 0">No sessions logged in this window</div>'; return; }
+  const completed = sessions.filter(s => sessionStatus(s).cls==='completed').length;
+  const partial = sessions.filter(s => sessionStatus(s).cls==='partial').length;
+  const durations = sessions.map(sessionDurationMinutes).filter(m=>m!=null);
+  const avgDuration = durations.length ? Math.round(durations.reduce((a,b)=>a+b,0)/durations.length) : null;
+  wrap.innerHTML = `<div class="hero-row" style="margin-top:0">
+    <div class="hero-stat"><div class="hero-stat-label">Sessions</div><div class="hero-stat-val">${sessions.length}</div></div>
+    <div class="hero-stat"><div class="hero-stat-label">Completed</div><div class="hero-stat-val green">${completed}${partial?' + '+partial+' partial':''}</div></div>
+    <div class="hero-stat"><div class="hero-stat-label">Avg Duration</div><div class="hero-stat-val">${avgDuration?avgDuration+'m':'—'}</div></div>
+  </div>`;
+}
+// GYM-077: same average-cal/protein-vs-target numbers the PDF's optional
+// Nutrition section already computes (via computeNutritionAverages(),
+// shared with buildReportFoodBlock() below) — surfaced here too so
+// they're visible day-to-day, not just inside a generated report.
+function renderNutritionAveragesCard() {
+  const wrap = document.getElementById('nutritionAveragesWrap');
+  if (!wrap) return;
+  const cutoffStr = insightsCutoffDate(_insightsWindow);
+  const entries = getNutritionEntries().filter(e => !cutoffStr || e.date >= cutoffStr);
+  if (!entries.length) { wrap.innerHTML = '<div class="empty-state" style="padding:10px 0">No meals logged in this window</div>'; return; }
+  const { activeAvg, restAvg } = computeNutritionAverages(entries);
+  const targets = getNutritionTargets();
+  const cell = (label, avg, targetCal, targetPro) => !avg ? '' : `<div class="hero-stat">
+    <div class="hero-stat-label">${label}</div>
+    <div class="hero-stat-val" style="font-size:14px">${avg.cal} cal / ${fmtProtein(avg.pro)}g</div>
+    ${(targetCal||targetPro) ? `<div style="font-size:9.5px;color:var(--ink2);margin-top:2px">target ${targetCal||0} cal / ${fmtProtein(targetPro)}g</div>` : ''}
+  </div>`;
+  const cells = cell('Avg — Active Days', activeAvg, targets.activeCalories, targets.activeProtein) + cell('Avg — Rest Days', restAvg, targets.restCalories, targets.restProtein);
+  wrap.innerHTML = cells ? `<div class="hero-row" style="margin-top:0">${cells}</div>` : '';
+}
+// GYM-077: automatic multi-exercise trend view — see the fuller
+// explanation above buildExerciseProgressionData(). Same collapsed-by-
+// default, localStorage-persisted convention as Exercise Progress and
+// the Trainer Notes archive just below/above it.
+let _progressionSummaryCollapsed = localStorage.getItem('gym_progression_summary_collapsed') !== 'false';
+let _expandedProgressionCards = new Set();
+function toggleProgressionSummary() {
+  _progressionSummaryCollapsed = !_progressionSummaryCollapsed;
+  localStorage.setItem('gym_progression_summary_collapsed', _progressionSummaryCollapsed ? 'true' : 'false');
+  applyProgressionSummaryCollapse();
+  if (!_progressionSummaryCollapsed) renderProgressionSummarySection();
+}
+function applyProgressionSummaryCollapse() {
+  const body = document.getElementById('progressionSummaryWrap');
+  const chevron = document.getElementById('progressionSummaryChevron');
+  if (body) body.style.display = _progressionSummaryCollapsed ? 'none' : '';
+  if (chevron) chevron.textContent = _progressionSummaryCollapsed ? '▸' : '▾';
+}
+function toggleProgressionCard(exerciseId) {
+  if (_expandedProgressionCards.has(exerciseId)) _expandedProgressionCards.delete(exerciseId); else _expandedProgressionCards.add(exerciseId);
+  renderProgressionSummarySection();
+}
+function progressionCardHtml(ex) {
+  const meta = progressionTrendMeta(ex.trend);
+  const expanded = _expandedProgressionCards.has(ex.exerciseId);
+  const loggedValues = ex.rows.filter(r=>r.best!==null).map(r=>r.best);
+  const spark = ex.trend!=='insufficient' ? sparklineSvg(loggedValues, 'var(--accent)', 160, 36) : '';
+  const rowsHtml = ex.rows.map(r => {
+    const statusBadge = r.status==='completed' ? '<span class="li-badge badge-completed">Done</span>'
+      : r.status==='partial' ? '<span class="li-badge badge-partial">Partial</span>' : '<span class="li-badge badge-skipped">Skipped</span>';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);font-size:11.5px">
+      <span style="color:var(--ink2)">${fmtDate(r.date)}</span><span style="flex:1;text-align:right">${escHtml(r.setsStr)}</span>${statusBadge}
+    </div>`;
+  }).join('');
+  return `<div class="area-card" style="cursor:pointer" onclick="toggleProgressionCard('${ex.exerciseId}')">
+    <div class="area-top">
+      <span class="area-name">${escHtml(ex.exerciseName)}</span>
+      <span class="li-badge ${meta.badge}">${meta.icon} ${meta.label}</span>
+    </div>
+    <div class="area-tags">${ex.completedCount}/${ex.totalCount} sessions fully completed</div>
+    ${spark ? `<div style="margin-top:8px">${spark}</div>` : ''}
+    ${expanded ? `<div style="margin-top:8px">${rowsHtml}</div>` : ''}
+  </div>`;
+}
+function renderProgressionSummarySection() {
+  const wrap = document.getElementById('progressionSummaryWrap');
+  if (!wrap) return;
+  const data = buildExerciseProgressionData(sessionsInInsightsWindow());
+  wrap.innerHTML = data.length
+    ? data.map(progressionCardHtml).join('')
+    : '<div class="empty-state" style="padding:10px 0">Train the same exercise at least twice in this window to see a trend here</div>';
+}
 function renderInsights() {
   renderNextUpCard();
   renderWeightSection();
   renderPTSection();
   renderNutritionTargetsSection();
   renderWaterTargetSection();
+  renderPeriodSummaryCard();      // GYM-077
+  renderNutritionAveragesCard();  // GYM-077
   // GYM-073: folded in from the old History tab — always sync the
   // chevron/collapse state, but only do the (slightly heavier) select+
   // list population when actually expanded, same lazy-render principle
   // the old setHistoryMode() used.
   applyExerciseProgressCollapse();
   if (!_exerciseProgressCollapsed) { renderHistoryExerciseSelect(); renderExerciseProgress(); }
+  // GYM-077: same lazy-render convention as Exercise Progress just above.
+  applyProgressionSummaryCollapse();
+  if (!_progressionSummaryCollapsed) renderProgressionSummarySection();
   const {areaTotals, areaTags} = computeInsights(_insightsWindow);
   const areas = sortAreasSpaLast(Object.keys(areaTotals).filter(a => a!=='Other' || areaTags['Other'].length).sort((a,b)=>areaTotals[b]-areaTotals[a]));
   const el = document.getElementById('insightsList');
@@ -6111,29 +6394,23 @@ function buildEntityNotesBlock(sessions) {
 // report's own date range (unlike the all-time "Since Last PT Session"
 // stat above), since "what did I eat during this period" is inherently
 // about the period being reported on.
-function buildReportFoodBlock(start, end) {
-  const entries = getNutritionEntries().filter(e => e.date >= start && e.date <= end)
+// GYM-077: now takes pre-filtered entries (buildReportHtml fetches them
+// once via nutritionEntriesInRange() and reuses the same
+// computeNutritionAverages() call for the top Summary stat grid, instead
+// of each place computing its own copy).
+function nutritionEntriesInRange(start, end) {
+  return getNutritionEntries().filter(e => e.date >= start && e.date <= end)
     .sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||''));
+}
+function buildReportFoodBlock(entries) {
   if (!entries.length) {
     return `<div class="rpt-section-title">Nutrition</div><p style="font-size:11px;color:#777">No meals logged in this period.</p>`;
   }
   const targets = getNutritionTargets();
-  const byDate = {};
-  entries.forEach(e => { (byDate[e.date] = byDate[e.date]||[]).push(e); });
-  const dateKeys = Object.keys(byDate).sort();
   // CLA-013: mixed active/rest days in the same period made a single
   // flat "average vs one target" misleading, so the overview now splits
   // by day type — each compared against its own target.
-  const activeDates = dateKeys.filter(d => isActiveDay(d));
-  const restDates = dateKeys.filter(d => !isActiveDay(d));
-  const avgFor = (dates) => {
-    if (!dates.length) return null;
-    let cal=0, pro=0;
-    dates.forEach(d => { byDate[d].forEach(e => { cal += e.calories||0; pro += e.protein||0; }); });
-    return { cal: Math.round(cal/dates.length), pro: Math.round(pro/dates.length) };
-  };
-  const activeAvg = avgFor(activeDates);
-  const restAvg = avgFor(restDates);
+  const { dateKeys, byDate, activeDates, restDates, activeAvg, restAvg } = computeNutritionAverages(entries);
   const statCell = (label, avg, targetCal, targetPro) => !avg ? '' : `
     <div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avg.cal} cal / ${avg.pro}g</div>${(targetCal||targetPro)?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${targetCal||0} cal / ${fmtProtein(targetPro)}g</div>`:''}</div>`;
   const overview = `<div class="rpt-stat-grid">
@@ -6155,6 +6432,30 @@ function buildReportFoodBlock(start, end) {
       <thead><tr><th>Date</th><th>Day</th><th>Meals</th><th>Calories</th><th>Protein</th></tr></thead>
       <tbody>${dayRows}</tbody>
     </table>`;
+}
+// GYM-077: same automatic multi-exercise trend view as the Insights
+// card (buildExerciseProgressionData(), progressionTrendMeta(),
+// sparklineSvg() — all shared) — print version just prints every row
+// inline instead of expand-on-tap, since a static report can't offer a
+// click.
+function buildReportProgressionBlock(sessions) {
+  const data = buildExerciseProgressionData(sessions);
+  if (!data.length) {
+    return `<div class="rpt-section-title">Progression Summary</div><p style="font-size:11px;color:#777">No exercise was trained more than once in this period.</p>`;
+  }
+  const cards = data.map(ex => {
+    const meta = progressionTrendMeta(ex.trend);
+    const loggedValues = ex.rows.filter(r=>r.best!==null).map(r=>r.best);
+    const spark = ex.trend!=='insufficient' ? sparklineSvg(loggedValues, '#0d1117', 160, 34) : '';
+    const rowsStr = ex.rows.map(r => escHtml(fmtDate(r.date))+': '+escHtml(r.setsStr)+(r.status!=='completed'?' ('+r.status+')':'')).join(' · ');
+    return `<div class="rpt-session-block">
+      <div class="rpt-session-head"><span>${escHtml(ex.exerciseName)}</span><span class="rpt-badge ${meta.rpt}">${meta.icon} ${meta.label}</span></div>
+      <p style="font-size:10.5px;color:#555;margin:2px 0">${ex.completedCount}/${ex.totalCount} sessions fully completed</p>
+      ${spark}
+      <p style="font-size:10px;color:#555;margin-top:4px">${rowsStr}</p>
+    </div>`;
+  }).join('');
+  return `<div class="rpt-section-title">Progression Summary</div>${cards}`;
 }
 function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
   const totalSessions = sessions.length;
@@ -6182,6 +6483,14 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
   const weightChart = weights.length >= 2 ? renderReportWeightChart(weights) : '';
   const weightSummary = weights.length ? (weights[0].weightKg+'kg → '+weights[weights.length-1].weightKg+'kg over the period') : 'No weight entries logged in this period.';
 
+  // GYM-077: computed once here (not just buried inside the Nutrition
+  // section further down) so the top Summary grid can show avg cal/
+  // protein too when food is included — the whole point of putting a
+  // "good summary section" at the top of the report.
+  const foodEntries = includeFood ? nutritionEntriesInRange(start, end) : [];
+  const foodAverages = foodEntries.length ? computeNutritionAverages(foodEntries) : null;
+  const nutritionSummaryCell = (label, avg) => !avg ? '' : `<div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avg.cal} cal / ${avg.pro}g</div></div>`;
+
   const sessionRows = sessions.map(s => {
     const dur = sessionDurationMinutes(s);
     const status = sessionStatus(s);
@@ -6207,10 +6516,14 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
       <div class="rpt-stat"><div class="rpt-stat-label">Avg Duration</div><div class="rpt-stat-val">${avgDuration?avgDuration+' min':'—'}</div></div>
       <div class="rpt-stat"><div class="rpt-stat-label">Spa Sessions</div><div class="rpt-stat-val">${spaCount}</div></div>
       <div class="rpt-stat"><div class="rpt-stat-label">Since Last PT Session</div><div class="rpt-stat-val">${ptStatVal}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${ptStatNote}</div></div>
+      ${foodAverages ? nutritionSummaryCell('Avg — Active Days', foodAverages.activeAvg) : ''}
+      ${foodAverages ? nutritionSummaryCell('Avg — Rest Days', foodAverages.restAvg) : ''}
     </div>
 
     <div class="rpt-section-title">Body Areas Worked</div>
     ${areaRows}
+
+    ${buildReportProgressionBlock(sessions)}
 
     ${buildEntityNotesBlock(sessions)}
 
@@ -6218,7 +6531,7 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
     <p style="font-size:11.5px;color:#333">${weightSummary}</p>
     ${weightChart}
 
-    ${includeFood ? buildReportFoodBlock(start, end) : ''}
+    ${includeFood ? buildReportFoodBlock(foodEntries) : ''}
 
     <div class="rpt-section-title">Session Log</div>
     <table class="rpt-table">
