@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.35</title>
+<title>Reading Tracker v3.36</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -376,6 +376,9 @@
   .collapsible-btn:hover { color: var(--text); }
   .collapsible-btn .caret { font-size: 9px; transition: transform .2s; display: inline-block; }
   .collapsible-btn.open .caret { transform: rotate(90deg); }
+  /* v3.36 (MR-020): wishlist item edit toggle — was a bare caret (▶) with
+     no visible "edit" affordance; same collapsible mechanism, clearer label. */
+  .wl-edit-btn { width:auto; padding:2px 4px 0; flex-shrink:0; font-size:11px; white-space:nowrap; }
   .collapsible-body {
     display: none; padding-top: 8px;
   }
@@ -696,6 +699,11 @@
 
 
   /* ── Wishlist sort + sections ── */
+  /* v3.36 (MR-020): wishlist search row */
+  .wl-search-row { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
+  .wl-search-row input[type=text] { flex:1; margin:0; }
+  .wl-search-clear { background:none; border:none; color:var(--muted); font-size:18px; line-height:1; cursor:pointer; padding:0 4px; flex-shrink:0; transition:color .2s; }
+  .wl-search-clear:hover { color:var(--accent); }
   .wl-controls { display:flex; align-items:center; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
   .wl-sort-lbl { font-size:11px; color:var(--muted); font-weight:500; white-space:nowrap; }
   .wl-sort-sel { background:var(--surface); border:1px solid var(--border); border-radius:8px; color:var(--text); font-family:'Inter',sans-serif; font-size:12px; padding:5px 10px; outline:none; color-scheme:dark; cursor:pointer; transition:border-color .2s; }
@@ -710,7 +718,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.35</span></div>
+    <div class="rt-logo">My Reading <span>v3.36</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1213,6 +1221,14 @@
       <button class="btn btn-primary btn-sm btn-wide" onclick="addToWishlistFromView()">Add to wishlist</button>
     </div>
     <div class="book-section-divider" style="margin-top:12px"></div>
+    <!-- v3.36 (MR-020): live search across title/author/tags, narrows the
+         list below as you type. Its own row above the sort controls so it
+         reads as a primary filter, not buried among the sort dropdown. -->
+    <div class="wl-search-row">
+      <input type="text" id="wlSearchInput" placeholder="🔍 Search title, author or tag…"
+        oninput="onWlSearchInput(this.value)">
+      <button id="wlSearchClear" class="wl-search-clear" onclick="clearWlSearch()" style="display:none" title="Clear search">×</button>
+    </div>
     <!-- Sort controls -->
     <div class="wl-controls">
       <span class="wl-sort-lbl">Sort by</span>
@@ -5206,6 +5222,35 @@ function toggleTagFilter(tag) {
   renderWishlistView();
 }
 
+// v3.36 (MR-020): free-text search across title/author/tags, same
+// module-level-persists-across-renders pattern as _wlActiveTagFilter.
+// Combines with the tag filter and sort (including Group by tag, where
+// it narrows each tag's members rather than being ignored the way the
+// standalone tag filter is).
+let _wlSearchQuery = "";
+function onWlSearchInput(val) {
+  _wlSearchQuery = (val || "").trim().toLowerCase();
+  const clearBtn = document.getElementById("wlSearchClear");
+  if (clearBtn) clearBtn.style.display = _wlSearchQuery ? "" : "none";
+  renderWishlistView();
+}
+function clearWlSearch() {
+  _wlSearchQuery = "";
+  const input = document.getElementById("wlSearchInput");
+  if (input) input.value = "";
+  const clearBtn = document.getElementById("wlSearchClear");
+  if (clearBtn) clearBtn.style.display = "none";
+  renderWishlistView();
+}
+function wlMatchesSearch(w) {
+  if (!_wlSearchQuery) return true;
+  const q = _wlSearchQuery;
+  if ((w.title||"").toLowerCase().includes(q)) return true;
+  if ((w.author||"").toLowerCase().includes(q)) return true;
+  if ((w.tags||[]).some(tag => tag.toLowerCase().includes(q))) return true;
+  return false;
+}
+
 // v3.23 (MR-014): tag filter bar now lives in its own container
 // (#wlTagFilterBar, separate from #wlBody) and its own render function,
 // so adding/removing a tag on one item (addTagToWishlistItem/
@@ -5267,6 +5312,14 @@ function renderWishlistView() {
   // filter — narrowing to one tag here before grouping would leave only
   // one group populated, defeating the point of seeing every tag at once.
   if (_wlActiveTagFilter && sort !== "tag_group") sorted = sorted.filter(w => (w.tags||[]).includes(_wlActiveTagFilter));
+  // v3.36 (MR-020): search narrows regardless of sort mode, including
+  // tag_group (each tag's section only shows matching items; empty
+  // sections are skipped further down since itemsForTag would be []).
+  if (_wlSearchQuery) sorted = sorted.filter(wlMatchesSearch);
+  if (_wlSearchQuery && sorted.length === 0) {
+    body.innerHTML = `<div class="empty">No wishlist items match "${esc(_wlSearchQuery)}".</div>`;
+    return;
+  }
   if      (sort === "title_az")    sorted.sort((a,b) => a.title.localeCompare(b.title));
   else if (sort === "title_za")    sorted.sort((a,b) => b.title.localeCompare(a.title));
   else if (sort === "author")      sorted.sort((a,b) => (a.author||"").localeCompare(b.author||""));
@@ -5341,8 +5394,8 @@ function renderWishlistView() {
             </div>
             <div class="wi-tags-display" style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">${(w.tags||[]).map(tag=>`<span class="wl-tag-chip">${esc(tag)}</span>`).join("")}</div>
           </div>
-          <button class="collapsible-btn" style="padding:0;width:auto;flex-shrink:0" onclick="toggleSection('wle-${w.id}')">
-            <span class="caret" style="font-size:11px">▶</span>
+          <button class="collapsible-btn wl-edit-btn" onclick="toggleSection('wle-${w.id}')" title="Edit">
+            <span class="caret" style="font-size:11px">▶</span> ✎ Edit
           </button>
           <button class="wi-del" onclick="deleteWishlistItem('${w.id}')">×</button>
         </div>
