@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.34</title>
+<title>Reading Tracker v3.35</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -710,7 +710,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.34</span></div>
+    <div class="rt-logo">My Reading <span>v3.35</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2403,14 +2403,30 @@ function stopCloudPoll() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
 }
 
+// v3.35 (MR-020): renderAll() rebuilds the active view's DOM wholesale
+// (innerHTML replace), which yanks focus out of whatever the user is
+// mid-typing into. The review/notes textareas save on every keystroke via
+// a DIRECT push (pushBookNow etc.) rather than the debounced syncToCloud
+// path, so they never set _pendingSync — the poll's existing guard had no
+// idea a review was being written and would happily pull-and-render every
+// 60s, kicking the user out of the textarea and losing whatever they'd
+// typed since the last keystroke's save. Same root cause the suite
+// already treats as a "skip quietly rather than fight the user" case;
+// this just extends that check to cover live typing, not only queued
+// pushes. Re-checked after the pull too, in case typing started mid-flight.
+function _userIsTyping() {
+  const el = document.activeElement;
+  return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+}
+
 async function backgroundPullFromCloud() {
   // Skip quietly rather than fight the user: a local edit is queued
-  // (about to push), or the tab isn't visible so there's no point
-  // spending the request.
-  if (!_currentUser || _pendingSync || document.hidden) return;
+  // (about to push), the user is actively typing into a field (MR-020),
+  // or the tab isn't visible so there's no point spending the request.
+  if (!_currentUser || _pendingSync || document.hidden || _userIsTyping()) return;
   try {
     const result = await pullAllFromCloud();
-    if (result && !_pendingSync) { save(); renderAll(); }
+    if (result && !_pendingSync && !_userIsTyping()) { save(); renderAll(); }
   } catch(e) {
     // Silent by design — this runs unattended. A real, persistent problem
     // will still surface through the manual pull/push or a failed save.
