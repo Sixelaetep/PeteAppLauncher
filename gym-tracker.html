@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.92</title>
+<title>Gym Tracker v2.93</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.92</div></span>
+      <span>Gym Tracker<div class="ver">v2.93</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -882,9 +882,9 @@
     <input type="date" id="reportEnd">
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;text-transform:none;font-weight:600;cursor:pointer">
       <input type="checkbox" id="reportIncludeFood" style="margin:0">
-      Include food / nutrition data
+      Include food / water data
     </label>
-    <p style="font-size:11px;color:var(--ink3);margin-top:2px">If included, each logged day's meals plus a calories/protein overview for the period are added to the report.</p>
+    <p style="font-size:11px;color:var(--ink3);margin-top:2px">If included, each logged day's meals plus a calories/protein overview for the period are added to the report, along with a matching water/hydration overview.</p>
     <div class="btn-row">
       <button class="btn btn-primary" style="flex:1" onclick="generateReport()">📄 Generate &amp; Print / Save PDF</button>
     </div>
@@ -1189,6 +1189,35 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.93 (GYM-083 — PDF half, following the structure conversation).
+// Also caught and fixed a real gap along the way: buildReportWaterBlock()
+// never actually made it into this report generator — an earlier
+// water-in-PDF build (GYM-079) didn't survive being carried forward
+// (flagged at the time in the GYM-080 release notes), so the "Hydration"
+// section simply didn't exist despite computeWaterAverageSplit() being
+// live and used in Insights since GYM-080. Restored here.
+// New order, per the discussion: Notes for Trainer (unchanged position,
+// already first) → Summary → Overall Progress (NEW) → Body Areas Worked
+// (now with a dominant-trend badge per area) → Progression Summary →
+// entity Notes → Body Weight → Nutrition → Hydration (restored) →
+// Session Log. Full per-set Session Details removed entirely — not a
+// toggle, gone — along with the now-dead groupConsecutiveSets()/
+// formatSetGroup()/buildSessionDetailBlock() that only existed to build
+// it.
+// New buildReportOverallProgressBlock(): the PDF's first-ever mirror of
+// Insights' Overall Progress — net score, a print-safe segmented bar
+// (reportProgressBarAndLegend(), fixed hex colours instead of CSS vars,
+// same reasoning as the weight chart's print variant), and a trend-
+// history sparkline via computeProgressHistory(), now accepting an
+// optional asOfDate so a report for a past date range anchors its
+// history to the report's own end date instead of always "today".
+// Body Areas Worked rows gain a dominant-trend badge, reusing the exact
+// segments computeProgressBreakdown() already gives the app — one
+// scoring method, shown in both places, not two.
+// Excluded-from-stats transparency, as requested: buildReportOverallProgressBlock()
+// notes the total count of excluded occurrences in the period, and
+// buildReportProgressionBlock()'s per-exercise row text now tags
+// individual excluded rows with "[excluded]".
 // v2.92 (GYM-083 — PARTIAL: this release covers the Insights cards half
 // only. The brief's other half — "talk through and wireframe a new PDF
 // report" — was an explicit request to discuss structure before
@@ -1963,7 +1992,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.92';
+const VERSION = '2.93';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -5526,10 +5555,15 @@ function computeProgressBreakdown(sessions) {
 // any one exercise to judge a trend from, so narrow disjoint buckets
 // would be mostly gaps. Points where nothing had enough data to judge
 // (null) are skipped rather than plotted as a false zero.
-function computeProgressHistory(weeks) {
+// GYM-083: asOfDate lets the PDF anchor history to the report's own end
+// date rather than always "now" — a report generated for a past date
+// range shouldn't show a trend line that runs past the period being
+// reported on. Insights' own call site omits it and gets today, same
+// as before.
+function computeProgressHistory(weeks, asOfDate) {
   weeks = weeks || 8;
   const points = [];
-  const today = new Date();
+  const today = asOfDate ? new Date(asOfDate) : new Date();
   for (let i = weeks-1; i >= 0; i--) {
     const end = new Date(today); end.setDate(end.getDate() - i*7);
     const endStr = isoFromDate(end);
@@ -6934,51 +6968,11 @@ function generateReport() {
   closeModal('modalReport');
   setTimeout(() => window.print(), 150); // let the DOM paint before the print dialog opens
 }
-// GYM-028: collapse consecutive identical sets into "×N" so a session with
-// straight sets (e.g. 3×10@20kg all matching) prints as one line instead
-// of three — keeps the detailed per-session breakdown compact. Only
-// consecutive duplicates are grouped (not sorted-then-grouped), so the
-// original set order is still visible when it varies (e.g. a drop set).
-function groupConsecutiveSets(sets, type) {
-  const groups = [];
-  sets.forEach(s => {
-    const key = type==='distance' ? (s.metres||0)+'|'+(s.seconds||0)+'|'+(s.weight||0)
-      : type==='time' ? String(s.seconds||0)
-      : (s.reps||0)+'|'+(s.weight||0);
-    const last = groups[groups.length-1];
-    if (last && last.key===key) last.count++;
-    else groups.push({key, count:1, set:s});
-  });
-  return groups;
-}
-function formatSetGroup(g, type) {
-  const s = g.set;
-  const base = type==='distance' ? (s.metres||0)+'m'+(s.seconds?'/'+mmss(s.seconds):'')
-    : type==='time' ? mmss(s.seconds)
-    : (s.reps||0)+' reps × '+(s.weight||0)+'kg';
-  return g.count>1 ? base+' ×'+g.count : base;
-}
 function sessionStatus(s) {
   if (!s.items.length) return {label:'Skipped', cls:'skipped'};
   if (s.items.every(i=>i.status==='completed')) return {label:'Completed', cls:'completed'};
   if (s.items.some(i=>i.status==='completed'||i.status==='partial')) return {label:'Partial', cls:'partial'};
   return {label:'Skipped', cls:'skipped'};
-}
-function buildSessionDetailBlock(s) {
-  const status = sessionStatus(s);
-  const spaFlag = isSpaOnlyItemSet(s.items) ? ' 🧖' : '';
-  const itemLines = s.items.map(i => {
-    const loggedSets = i.actualSets.filter(hasAnyValue);
-    if (!loggedSets.length) return `<div class="rpt-ex-line"><span class="rpt-ex-name">${escHtml(i.exerciseName)}</span><span class="rpt-ex-sets">not logged</span></div>`;
-    const groups = groupConsecutiveSets(loggedSets, i.trackType);
-    const setsStr = groups.map(g=>formatSetGroup(g, i.trackType)).join(', ');
-    return `<div class="rpt-ex-line"><span class="rpt-ex-name">${escHtml(i.exerciseName)}</span><span class="rpt-ex-sets">${setsStr}</span></div>`;
-  }).join('');
-  return `<div class="rpt-session-block">
-    <div class="rpt-session-head"><span>${fmtDate(s.date)} — ${escHtml(s.name)}${spaFlag}</span><span class="rpt-badge rpt-badge-${status.cls}">${status.label}</span></div>
-    ${itemLines}
-    ${s.notes ? '<div class="rpt-session-notes">Notes: '+escHtml(s.notes)+'</div>' : ''}
-  </div>`;
 }
 // GYM-043: the report is one continuously flowing document (no fixed page
 // breaks — the browser paginates it), so "first page" isn't something we
@@ -7074,6 +7068,9 @@ function buildReportFoodBlock(entries) {
 // sparklineSvg() — all shared) — print version just prints every row
 // inline instead of expand-on-tap, since a static report can't offer a
 // click.
+// GYM-083: rows now flag [excluded] when that occurrence was marked
+// excluded from stats — the same transparency note in Overall Progress
+// covers the aggregate count, this covers exactly which rows.
 function buildReportProgressionBlock(sessions) {
   const data = buildExerciseProgressionData(sessions);
   if (!data.length) {
@@ -7083,7 +7080,7 @@ function buildReportProgressionBlock(sessions) {
     const meta = progressionTrendMeta(ex.trend);
     const loggedValues = ex.rows.filter(r=>r.best!==null).map(r=>r.best);
     const spark = ex.trend!=='insufficient' ? sparklineSvg(loggedValues, '#0d1117', 160, 34) : '';
-    const rowsStr = ex.rows.map(r => escHtml(fmtDate(r.date))+': '+escHtml(r.setsStr)+(r.status!=='completed'?' ('+r.status+')':'')).join(' · ');
+    const rowsStr = ex.rows.map(r => escHtml(fmtDate(r.date))+': '+escHtml(r.setsStr)+(r.status!=='completed'?' ('+r.status+')':'')+(r.excluded?' [excluded]':'')).join(' · ');
     return `<div class="rpt-session-block">
       <div class="rpt-session-head"><span>${escHtml(ex.exerciseName)}</span><span class="rpt-badge ${meta.rpt}">${meta.icon} ${meta.label}</span></div>
       <p style="font-size:10.5px;color:#555;margin:2px 0">${ex.completedCount}/${ex.totalCount} sessions fully completed</p>
@@ -7092,6 +7089,93 @@ function buildReportProgressionBlock(sessions) {
     </div>`;
   }).join('');
   return `<div class="rpt-section-title">Progression Summary</div>${cards}`;
+}
+// GYM-083: print-safe segmented bar + legend, same shape as the app's
+// progressBarAndLegend() but fixed hex colours instead of CSS vars
+// (same reasoning as the weight chart's print variant — a printed page
+// shouldn't shift with the device's live theme) and no click-through
+// legend links (a static page can't offer one). Improving/steady/mixed
+// reuse the exact rpt-badge colours already used everywhere else in the
+// report; declining gets its own colour here (matching the app's
+// Progress Breakdown bar) since a bar's whole job is distinguishing
+// four segments at once — the same reasoning that kept per-exercise
+// badges neutral-gray for declining doesn't apply to an aggregate bar.
+function reportProgressBarAndLegend(score) {
+  const seg = (color, n) => n>0 ? `<div style="background:${color};width:${Math.round((n/score.judgedCount)*100)}%"></div>` : '';
+  const dot = (color) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${color};margin-right:4px"></span>`;
+  return `<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:6px 0;background:#eee">
+      ${seg('#1a7f37', score.improving)}${seg('#666', score.steady)}${seg('#b35900', score.mixed)}${seg('#c0392b', score.declining)}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:#555">
+      <span>${dot('#1a7f37')}${score.improving} improving</span>
+      <span>${dot('#666')}${score.steady} steady</span>
+      <span>${dot('#b35900')}${score.mixed} mixed</span>
+      <span>${dot('#c0392b')}${score.declining} declining</span>
+    </div>`;
+}
+// GYM-083: new — the PDF had no equivalent of Insights' Overall Progress
+// at all before this. Same computeOverallProgressScore() and
+// computeProgressHistory() the app uses, scoped to the report's own
+// sessions/date range (history anchored to the report's end date, not
+// "today" — see computeProgressHistory()'s asOfDate). Also the one place
+// in the report that surfaces the excluded-from-stats count, since this
+// is the section explaining what the trend numbers mean.
+function buildReportOverallProgressBlock(sessions, end) {
+  const excludedCount = sessions.reduce((sum, s) => sum + s.items.filter(i => i.excludedFromStats).length, 0);
+  const excludedNote = excludedCount
+    ? `<p style="font-size:10px;color:#5b7386;margin-top:6px">ℹ️ ${excludedCount} occurrence${excludedCount===1?'':'s'} excluded from trend analysis this period (flagged as data issues, not real declines) — the underlying session records are unaffected.</p>`
+    : '';
+  const overall = computeOverallProgressScore(sessions);
+  if (!overall) {
+    return `<div class="rpt-section-title">Overall Progress</div><p style="font-size:11px;color:#777">Not enough exercises trained more than once in this period to score overall progress.</p>${excludedNote}`;
+  }
+  const history = computeProgressHistory(8, end);
+  const spark = history.length>=2 ? sparklineSvg(history.map(p=>p.netScore), '#1a7f37', 280, 40) : '';
+  return `<div class="rpt-section-title">Overall Progress</div>
+    <div class="rpt-stat-grid">
+      <div class="rpt-stat"><div class="rpt-stat-label">Net Score</div><div class="rpt-stat-val">${overall.netScore>0?'+':''}${overall.netScore}%</div></div>
+    </div>
+    ${reportProgressBarAndLegend(overall)}
+    ${spark ? `<p style="font-size:9.5px;color:#5b7386;margin:8px 0 2px">trend, last ${history.length} weeks (rolling 30-day)</p>${spark}` : ''}
+    ${excludedNote}`;
+}
+// GYM-083: restores a Hydration report section — computeWaterAverageSplit()
+// (GYM-080) exists and is used in Insights, but this print block was
+// lost along the way (an earlier PDF-Hydration build never made it into
+// the version this report generator was actually built from). Same
+// shape as the Nutrition block: days logged, average vs target, per-day
+// table. No active/rest split needed for the target itself (one target
+// every day, GYM-068) — only the average intake is split.
+function waterEntriesInRange(start, end) {
+  return getWaterEntries().filter(e => e.date >= start && e.date <= end)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||''));
+}
+function buildReportWaterBlock(entries) {
+  if (!entries.length) {
+    return `<div class="rpt-section-title">Hydration</div><p style="font-size:11px;color:#777">No water logged in this period.</p>`;
+  }
+  const target = getWaterTarget();
+  const { dateKeys, activeDates, restDates, activeAvgMl, restAvgMl } = computeWaterAverageSplit(entries);
+  const byDate = {};
+  entries.forEach(e => { (byDate[e.date] = byDate[e.date]||[]).push(e); });
+  const statCell = (label, avgMl) => avgMl==null ? '' : `
+    <div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avgMl}ml</div>${target.dailyMl?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${target.dailyMl}ml</div>`:''}</div>`;
+  const overview = `<div class="rpt-stat-grid">
+    <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${activeDates.length} active · ${restDates.length} rest</div></div>
+    ${statCell('Avg — Active Days', activeAvgMl)}
+    ${statCell('Avg — Rest Days', restAvgMl)}
+  </div>`;
+  const dayRows = dateKeys.map(date => {
+    const dayTotal = round2(byDate[date].reduce((s,e)=>s+(e.volumeMl||0),0));
+    const tag = isActiveDay(date) ? '🏋️' : '😴';
+    return `<tr><td>${fmtDate(date)}</td><td>${tag}</td><td>${dayTotal}ml</td></tr>`;
+  }).join('');
+  return `<div class="rpt-section-title">Hydration</div>
+    ${overview}
+    <table class="rpt-table">
+      <thead><tr><th>Date</th><th>Day</th><th>Total</th></tr></thead>
+      <tbody>${dayRows}</tbody>
+    </table>`;
 }
 function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
   const totalSessions = sessions.length;
@@ -7110,10 +7194,19 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
 
   const {areaTotals, areaTags} = computeInsightsFromSessions(sessions);
   const areas = sortAreasSpaLast(Object.keys(areaTotals).filter(a => areaTotals[a] > 0 || (a!=='Other')).sort((a,b)=>areaTotals[b]-areaTotals[a]));
+  // GYM-083: each area row now also carries a dominant-trend badge —
+  // same segments computeProgressBreakdown() already gives Insights'
+  // Body Areas cards, so the PDF and the app agree on what "how's this
+  // area doing" means without a second scoring method.
+  const { segments: areaSegments } = computeProgressBreakdown(sessions);
+  const segmentsByArea = {}; areaSegments.forEach(seg => segmentsByArea[seg.area] = seg);
   const areaRows = areas.map(a => {
     const tagsSorted = areaTags[a].slice().sort((x,y)=>y.count-x.count);
     const tagStr = tagsSorted.map(t=>t.tag+' ('+t.count+')').join(', ');
-    return `<div class="rpt-area-row"><span>${a}</span><span>${areaTotals[a]} hit${areaTotals[a]===1?'':'s'}${tagStr?' — '+tagStr:''}</span></div>`;
+    const dominant = dominantAreaTrend(segmentsByArea[a]);
+    const dominantMeta = dominant ? progressionTrendMeta(dominant) : null;
+    const badge = dominantMeta ? ` <span class="rpt-badge ${dominantMeta.rpt}">${dominantMeta.icon} ${dominantMeta.label}</span>` : '';
+    return `<div class="rpt-area-row"><span>${a}${badge}</span><span>${areaTotals[a]} hit${areaTotals[a]===1?'':'s'}${tagStr?' — '+tagStr:''}</span></div>`;
   }).join('') || '<p style="font-size:11px;color:#777">No completed exercises in this period.</p>';
 
   const weightChart = weights.length >= 2 ? renderReportWeightChart(weights) : '';
@@ -7126,6 +7219,8 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
   const foodEntries = includeFood ? nutritionEntriesInRange(start, end) : [];
   const foodAverages = foodEntries.length ? computeNutritionAverages(foodEntries) : null;
   const nutritionSummaryCell = (label, avg) => !avg ? '' : `<div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avg.cal} cal / ${avg.pro}g protein</div></div>`;
+  // GYM-083: restored — see buildReportWaterBlock()'s comment.
+  const waterEntries = includeFood ? waterEntriesInRange(start, end) : [];
 
   const sessionRows = sessions.map(s => {
     const dur = sessionDurationMinutes(s);
@@ -7134,8 +7229,12 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
     return `<tr><td>${fmtDate(s.date)}</td><td>${escHtml(s.name)}${spaFlag}</td><td>${s.items.length}</td><td>${dur?dur+' min':'—'}</td><td><span class="rpt-badge rpt-badge-${status.cls}">${status.label}</span></td></tr>`;
   }).join('') || '<tr><td colspan="5" style="color:#777">No sessions logged in this period.</td></tr>';
 
-  const sessionDetails = sessions.map(buildSessionDetailBlock).join('') || '<p style="font-size:11px;color:#777">No sessions logged in this period.</p>';
-
+  // GYM-083: reordered for a PT-facing document — notes to raise stay
+  // first, then Summary, then the two new progress sections (Overall,
+  // then per-area), then the existing per-exercise Progression Summary,
+  // then weight/nutrition/hydration, then a compact session log. Full
+  // per-set Session Details dropped entirely — not needed for this
+  // audience; the progress sections above are what matters here.
   return `
     <div class="rpt-header">
       <div class="rpt-title">${userName ? escHtml(userName)+"'s " : ''}Gym Tracker Report</div>
@@ -7156,6 +7255,8 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
       ${foodAverages ? nutritionSummaryCell('Avg — Rest Days', foodAverages.restAvg) : ''}
     </div>
 
+    ${buildReportOverallProgressBlock(sessions, end)}
+
     <div class="rpt-section-title">Body Areas Worked</div>
     ${areaRows}
 
@@ -7168,15 +7269,13 @@ function buildReportHtml(start, end, sessions, weights, userName, includeFood) {
     ${weightChart}
 
     ${includeFood ? buildReportFoodBlock(foodEntries) : ''}
+    ${includeFood ? buildReportWaterBlock(waterEntries) : ''}
 
     <div class="rpt-section-title">Session Log</div>
     <table class="rpt-table">
       <thead><tr><th>Date</th><th>Session</th><th>Exercises</th><th>Duration</th><th>Status</th></tr></thead>
       <tbody>${sessionRows}</tbody>
     </table>
-
-    <div class="rpt-section-title">Session Details</div>
-    ${sessionDetails}
 
     <div class="rpt-footer">Generated by Gym Tracker</div>
   `;
