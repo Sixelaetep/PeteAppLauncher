@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.88</title>
+<title>Gym Tracker v2.89</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.88</div></span>
+      <span>Gym Tracker<div class="ver">v2.89</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -590,6 +590,26 @@
       <button class="type-btn active" id="exTypeReps" onclick="setExerciseType('reps')">Reps &amp; Weight</button>
       <button class="type-btn" id="exTypeTime" onclick="setExerciseType('time')">Time</button>
       <button class="type-btn" id="exTypeDistance" onclick="setExerciseType('distance')">Distance</button>
+    </div>
+
+    <!-- GYM-081: which direction counts as "progress" isn't the same for
+         every timed or distance exercise — a plank getting longer is
+         progress (endurance), a 5k getting shorter is progress (speed).
+         Only one of these two groups is visible at a time, matching
+         whichever type is selected above. -->
+    <div id="exProgressDirectionGroup" style="display:none">
+      <label>Progress Direction <span style="text-transform:none;font-weight:400;color:var(--ink3)">— which way is better for this exercise?</span></label>
+      <div class="type-row">
+        <button class="type-btn active" id="exProgDirLonger" onclick="setExProgressDirection('longer')">⬆️ Longer (Endurance)</button>
+        <button class="type-btn" id="exProgDirShorter" onclick="setExProgressDirection('shorter')">⬇️ Shorter (Speed)</button>
+      </div>
+    </div>
+    <div id="exProgressBasisGroup" style="display:none">
+      <label>Progress Basis <span style="text-transform:none;font-weight:400;color:var(--ink3)">— what counts as better for this exercise?</span></label>
+      <div class="type-row">
+        <button class="type-btn active" id="exProgBasisDistance" onclick="setExProgressBasis('distance')">📏 More Distance</button>
+        <button class="type-btn" id="exProgBasisPace" onclick="setExProgressBasis('pace')">⚡ Faster Pace</button>
+      </div>
     </div>
     <button class="btn btn-secondary btn-block" style="margin-top:12px" onclick="openGoogleMuscleSearch()">🔍 Search Google: what muscles does this work?</button>
 
@@ -1155,6 +1175,34 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.89 (GYM-081): reworked what "progress" means per exercise — this
+// touched bestSetValue(), the one function every trend read in the app
+// (Exercise List cards, the PDF's Progression Summary, the new Overall
+// Progress score below) ultimately comes from.
+// Reps/weight: was tracking weight alone, so a static weight with
+// climbing reps never registered as progress. Now uses an estimated
+// 1-rep-max on the best set (Epley: weight × (1 + reps/30)) — this one
+// number rises for either weight going up (reps held) or reps going up
+// (weight held), matching both cases described in the brief.
+// Time/distance: which direction actually counts as progress isn't the
+// same for every exercise (a plank getting longer is progress; a 5k
+// getting shorter is). New per-exercise settings in the exercise editor
+// — Progress Direction (time: Longer/Endurance vs Shorter/Speed) and
+// Progress Basis (distance: More Distance vs Faster Pace) — default to
+// the behaviour that already existed (longer, distance), so nothing
+// changes for exercises nobody touches. Stored on the exercise record
+// (not the session item), so changing the setting later re-reads every
+// past session under the new choice rather than locking history to
+// whatever was picked at logging time.
+// "Overall progress across everything" — explicitly an open question in
+// the brief, so the methodology is spelled out in the code comment
+// above computeOverallProgressScore(): among exercises with ≥2
+// occurrences in the current window (enough to call a trend at all),
+// (#improving − #declining) / #judged as a ±100% reading, shown as a
+// new "Overall Progress" stat in Insights' Period Overview. This is a
+// judgement call on how to blend individual trend reads into one
+// number, not an industry-standard formula — flagged as such rather
+// than presented as more authoritative than it is.
 // v2.88 (GYM-080): built from the uploaded v2.87 baseline — this
 // version number was previously used for a different GYM-079 build
 // (water averaging as its own separate section/row) that doesn't appear
@@ -1819,7 +1867,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.88';
+const VERSION = '2.89';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2339,6 +2387,13 @@ function repeatLabel(rule) {
 const exerciseById  = id => _env.data.exercises.find(e => e.id === id);
 
 let _exType = 'reps';
+// GYM-081: per-exercise choice of what "progress" means for time/distance
+// exercises — see bestSetValue() for how these feed into trend tracking.
+// Defaults match the behaviour that already existed before this setting
+// was added (longer=better for time, distance=better for distance), so
+// nothing changes for exercises nobody's touched.
+let _exProgressDirection = 'longer';
+let _exProgressBasis = 'distance';
 let _exTags = [];
 let _exAfterSave = null; // null | 'plan' -> where to route a newly-created exercise
 let _planItems = [];
@@ -3053,6 +3108,19 @@ function setExerciseType(type) {
   document.getElementById('exTypeReps').classList.toggle('active', type==='reps');
   document.getElementById('exTypeTime').classList.toggle('active', type==='time');
   document.getElementById('exTypeDistance').classList.toggle('active', type==='distance');
+  // GYM-081: only the group matching the selected type is relevant.
+  document.getElementById('exProgressDirectionGroup').style.display = type==='time' ? '' : 'none';
+  document.getElementById('exProgressBasisGroup').style.display = type==='distance' ? '' : 'none';
+}
+function setExProgressDirection(dir) {
+  _exProgressDirection = dir;
+  document.getElementById('exProgDirLonger').classList.toggle('active', dir==='longer');
+  document.getElementById('exProgDirShorter').classList.toggle('active', dir==='shorter');
+}
+function setExProgressBasis(basis) {
+  _exProgressBasis = basis;
+  document.getElementById('exProgBasisDistance').classList.toggle('active', basis==='distance');
+  document.getElementById('exProgBasisPace').classList.toggle('active', basis==='pace');
 }
 
 function openGoogleMuscleSearch() {
@@ -3096,12 +3164,16 @@ function openExerciseEditor(id, afterSaveTarget) {
     document.getElementById('exNotes').value = e.notes||'';
     _exTags = (e.tags||[]).slice();
     setExerciseType(e.type||'reps');
+    setExProgressDirection(e.progressDirection||'longer'); // GYM-081
+    setExProgressBasis(e.progressBasis||'distance');        // GYM-081
   } else {
     document.getElementById('exModalTitle').textContent = 'New Exercise';
     document.getElementById('exName').value = '';
     document.getElementById('exNotes').value = '';
     _exTags = [];
     setExerciseType('reps');
+    setExProgressDirection('longer'); // GYM-081
+    setExProgressBasis('distance');   // GYM-081
   }
   document.getElementById('exCustomTag').value = '';
   renderExTagPicker();
@@ -3125,6 +3197,8 @@ function saveExercise() {
     if (!e) { toast('This exercise was deleted on another device'); closeModal('modalExercise'); renderExerciseList(); return; }
     const prevType = e.type;
     e.name = name; e.type = _exType; e.tags = _exTags.slice(); e.notes = notes; e.updatedAt = now;
+    e.progressDirection = _exProgressDirection; // GYM-081
+    e.progressBasis = _exProgressBasis;         // GYM-081
     record = e;
     // GYM-042: type used to silently drift out of sync with plans already
     // using this exercise (each plan item stores its own trackType at
@@ -3140,7 +3214,7 @@ function saveExercise() {
     }
   } else {
     newId = uid('ex');
-    record = { id:newId, name, type:_exType, tags:_exTags.slice(), notes, createdAt:now, updatedAt:now };
+    record = { id:newId, name, type:_exType, tags:_exTags.slice(), notes, progressDirection:_exProgressDirection, progressBasis:_exProgressBasis, createdAt:now, updatedAt:now };
     _env.data.exercises.push(record);
   }
   save(_env);
@@ -5140,17 +5214,70 @@ function sessionsInInsightsWindow() {
 // "auto-progression" (which was about auto-*suggesting* next session's
 // numbers, removed) — this is read-only: for every exercise trained ≥2
 // times in a window, was it actually completed each time, and does its
-// "best" value (same metric the picker already uses — max weight for
-// reps-type, max seconds for time-type, max metres for distance-type)
-// move consistently in one direction, sit flat, or bounce around with
-// no clear direction. A plain first→last comparison can hide a
-// mid-window dip or spike, so every consecutive pair has to agree on
-// direction before this calls it Improving/Declining — anything that
-// disagrees is Mixed rather than forced into a misleading single arrow.
-function bestSetValue(sets, type) {
+// "best" value move consistently in one direction, sit flat, or bounce
+// around with no clear direction. A plain first→last comparison can
+// hide a mid-window dip or spike, so every consecutive pair has to
+// agree on direction before this calls it Improving/Declining —
+// anything that disagrees is Mixed rather than forced into a
+// misleading single arrow.
+// GYM-081: "best" per trackType, reworked so a single higher number
+// always means "more progress", whatever that means for this specific
+// exercise:
+// - reps/weight: was just the heaviest weight, ignoring reps entirely —
+//   missed the case Pete described, static weight with rising reps.
+//   Now an estimated 1-rep-max on the best single set (Epley formula:
+//   weight × (1 + reps/30)) — this one number rises whether weight goes
+//   up at the same reps, OR reps go up at the same weight, which is
+//   exactly the two cases described. It's a standard strength-training
+//   estimate, not a precise 1RM (nothing here has you actually testing
+//   a true 1-rep max), but it's a reasonable single proxy for "how much
+//   work capacity did this set represent".
+// - distance: which now means "distance" (more metres = better,
+//   unchanged default) or "pace" (less time for the same trip = faster
+//   = better) — a per-exercise choice (progressBasis on the exercise
+//   record, set in the exercise editor). Pace sets with no timed data
+//   are skipped (can't judge speed without a time).
+// - time: "longer" (endurance, unchanged default) or "shorter" (speed)
+//   — also a per-exercise choice (progressDirection).
+// For "shorter is better" cases (pace, and time's "shorter" direction),
+// the value is negated so a bigger bestSetValue still always means
+// "more progress" everywhere else that reads it (trend classification,
+// sparklines) without needing to know which direction this particular
+// exercise runs in.
+function bestSetValue(sets, type, settings) {
   const done = (sets||[]).filter(a=>a.done);
   if (!done.length) return null;
-  return Math.max(...done.map(s => type==='distance' ? (s.metres||0) : type==='time' ? (s.seconds||0) : (s.weight||0)));
+  settings = settings || {};
+  if (type === 'distance') {
+    if (settings.progressBasis === 'pace') {
+      const timed = done.filter(s => (s.seconds||0) > 0 && (s.metres||0) > 0);
+      if (!timed.length) return null;
+      return Math.max(...timed.map(s => -(s.seconds / s.metres))); // less time/metre = faster = higher (negated) value
+    }
+    return Math.max(...done.map(s => s.metres||0));
+  }
+  if (type === 'time') {
+    if (settings.progressDirection === 'shorter') {
+      return Math.max(...done.map(s => -(s.seconds||0))); // less time = higher (negated) value
+    }
+    return Math.max(...done.map(s => s.seconds||0));
+  }
+  return Math.max(...done.map(s => (s.weight||0) * (1 + (s.reps||0)/30))); // estimated 1RM, Epley formula
+}
+// GYM-081: progressBasis/progressDirection live on the exercise record,
+// not the session item — so if these are changed later, every past
+// session's trend re-reads under the new choice rather than staying
+// stuck with whatever was picked at logging time. Looked up against the
+// FULL exercise list (including soft-deleted) since old sessions can
+// still reference an exercise that's since been removed from the
+// library; falls back to the same defaults the editor itself defaults
+// to when the exercise can't be found at all.
+function exerciseProgressSettings(exerciseId) {
+  const ex = (_env.data.exercises||[]).find(e => e.id === exerciseId);
+  return {
+    progressBasis: (ex && ex.progressBasis) || 'distance',
+    progressDirection: (ex && ex.progressDirection) || 'longer'
+  };
 }
 function classifyProgressionTrend(values) {
   if (values.length < 2) return 'insufficient';
@@ -5175,10 +5302,11 @@ function groupItemsByExercise(sessions) {
       const key = item.exerciseId;
       if (!byExercise[key]) byExercise[key] = { exerciseId:key, exerciseName:item.exerciseName, trackType:item.trackType, rows:[] };
       const done = (item.actualSets||[]).filter(a=>a.done);
+      const settings = exerciseProgressSettings(item.exerciseId); // GYM-081
       byExercise[key].rows.push({
         date: s.date, status: item.status,
         setsStr: done.length ? summarizeSets(done, item.trackType) : 'not logged',
-        best: bestSetValue(item.actualSets, item.trackType)
+        best: bestSetValue(item.actualSets, item.trackType, settings)
       });
     });
   });
@@ -5206,6 +5334,32 @@ function exerciseHistoryEntries(byExercise, minOccurrences) {
 function buildExerciseProgressionData(sessions) {
   return exerciseHistoryEntries(groupItemsByExercise(sessions), 2)
     .sort((a,b) => b.rows.length - a.rows.length || a.exerciseName.localeCompare(b.exerciseName));
+}
+// GYM-081: "is there a way to calculate an overall progress score
+// across everything" — proposed approach, explained here since it's the
+// one part of this brief without an explicit rule to follow: take every
+// exercise with ENOUGH data in this window to call a trend at all (≥2
+// occurrences — same threshold the PDF's Progression Summary already
+// uses), and blend the individual Improving/Declining/Steady/Mixed
+// reads into one number: (#improving − #declining) / #judged, as a
+// ±100% "net progress" reading. A single exercise's trend is still
+// exactly what classifyProgressionTrend() already says (see the
+// bestSetValue() comment above for how that per-exercise "better" is
+// now defined per trackType) — this only combines the READS, not the
+// raw numbers, which sidesteps the problem of comparing a kg increase
+// on a squat against a second shaved off a 5k. Exercises with only one
+// occurrence in the window don't count either way — one data point
+// isn't progress or regress, it's just a data point. This is a
+// judgement call, not a industry-standard formula — flagged as such
+// rather than presented as more authoritative than it is.
+function computeOverallProgressScore(sessions) {
+  const judged = buildExerciseProgressionData(sessions).filter(ex => ex.trend !== 'insufficient');
+  if (!judged.length) return null;
+  const improving = judged.filter(ex => ex.trend === 'improving').length;
+  const declining = judged.filter(ex => ex.trend === 'declining').length;
+  const steady = judged.filter(ex => ex.trend === 'steady').length;
+  const mixed = judged.filter(ex => ex.trend === 'mixed').length;
+  return { judgedCount: judged.length, improving, declining, steady, mixed, netScore: Math.round(((improving - declining) / judged.length) * 100) };
 }
 // GYM-078: everything you've ever actually done, all-time (not windowed
 // — "total times done" and "full list" are both whole-history
@@ -5366,11 +5520,19 @@ function renderPeriodSummaryCard() {
   const partial = sessions.filter(s => sessionStatus(s).cls==='partial').length;
   const durations = sessions.map(sessionDurationMinutes).filter(m=>m!=null);
   const avgDuration = durations.length ? Math.round(durations.reduce((a,b)=>a+b,0)/durations.length) : null;
+  const overall = computeOverallProgressScore(sessions); // GYM-081
   wrap.innerHTML = `<div class="hero-row" style="margin-top:0">
     <div class="hero-stat"><div class="hero-stat-label">Sessions</div><div class="hero-stat-val">${sessions.length}</div></div>
     <div class="hero-stat"><div class="hero-stat-label">Completed</div><div class="hero-stat-val green">${completed}${partial?' + '+partial+' partial':''}</div></div>
     <div class="hero-stat"><div class="hero-stat-label">Avg Duration</div><div class="hero-stat-val">${avgDuration?avgDuration+'m':'—'}</div></div>
-  </div>`;
+  </div>
+  ${overall ? `<div class="hero-row" style="margin-top:8px">
+    <div class="hero-stat">
+      <div class="hero-stat-label">Overall Progress</div>
+      <div class="hero-stat-val ${overall.netScore>0?'green':''}">${overall.netScore>0?'+':''}${overall.netScore}%</div>
+      <div style="font-size:9.5px;color:var(--ink2);margin-top:2px">${overall.improving} improving · ${overall.steady} steady · ${overall.declining} declining · ${overall.mixed} mixed</div>
+    </div>
+  </div>` : ''}`;
 }
 // GYM-077: same average-cal/protein-vs-target numbers the PDF's optional
 // Nutrition section already computes (via computeNutritionAverages(),
