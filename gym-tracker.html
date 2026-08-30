@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.93</title>
+<title>Gym Tracker v2.94</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.93</div></span>
+      <span>Gym Tracker<div class="ver">v2.94</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1189,6 +1189,24 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.94 (GYM-084 — filed as FT-047, Fortnight Tracker's prefix, almost
+// certainly a copy-paste mix-up from a template; content is unmistakably
+// Gym Tracker Plans/Programs. Used GYM-084 here so this app's own
+// numbering stays correct — worth checking whether FT-047 needs to
+// exist separately in Fortnight Tracker's own tracker).
+// Plan cards in Programs & Plans are now expandable — tap the card
+// header (name/meta line, same tap-to-expand convention as calendar
+// session chips) to reveal a read-only breakdown of every exercise in
+// that plan: name, type badge, target sets (summarizeSets() — same
+// formatting the session-logging "target was X" text already uses,
+// applied here to a plan item's targetSets instead of a session item's
+// actualSets, no new formatting logic needed), estimated time, and any
+// plan-specific note. An "Edit" button sits at the bottom of the
+// expanded detail too, alongside the existing one in the action row —
+// the ask was specifically for one to be reachable from the expanded
+// view itself, not just the row above it. Reorder buttons (▲▼) sit in
+// their own stopPropagation'd span so tapping them doesn't also trigger
+// the expand toggle.
 // v2.93 (GYM-083 — PDF half, following the structure conversation).
 // Also caught and fixed a real gap along the way: buildReportWaterBlock()
 // never actually made it into this report generator — an earlier
@@ -1992,7 +2010,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.93';
+const VERSION = '2.94';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3495,23 +3513,56 @@ function planById(id) { return _env.data.plans.find(p=>p.id===id); }
 // variable: renderPlanCard" the moment the Plans tab (or anything that
 // refreshes it, including a program import) tried to render. Restored
 // here unchanged from before that restructure.
+// FT-047 — GYM-084 in this app's own numbering (issue was filed with
+// Fortnight Tracker's FT- prefix by mistake; flagged for correction in
+// Test & Issues, content is unmistakably Gym Tracker). Read-only
+// per-exercise line for a plan's expanded detail — same summarizeSets()
+// formatting the session-logging "target was X" text already uses, just
+// applied to a plan item's targetSets instead of a session item's
+// actualSets (same {reps,weight,seconds,metres} shape either way, no
+// new formatting logic needed).
+function planExerciseDetailsHtml(item) {
+  const type = item.trackType || exerciseType(item.exerciseId);
+  const setsStr = (item.targetSets||[]).length ? summarizeSets(item.targetSets, type) : 'no sets set';
+  return `<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:11.5px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>${escHtml(exerciseName(item.exerciseId))}</span>
+      ${typeBadge(type)}
+    </div>
+    <div style="color:var(--ink2);margin-top:2px">${escHtml(setsStr)}${item.estimatedMinutes?' · ~'+item.estimatedMinutes+' min':''}</div>
+    ${item.notes ? `<div style="color:var(--ink3);margin-top:2px;font-style:italic">${escHtml(item.notes)}</div>` : ''}
+  </div>`;
+}
+let _expandedPlanCards = new Set();
+function togglePlanCard(planId) {
+  if (_expandedPlanCards.has(planId)) _expandedPlanCards.delete(planId); else _expandedPlanCards.add(planId);
+  renderPlanList();
+}
 function renderPlanCard(p, idx, list, sessions) {
   const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const last = done[0];
   const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
   const timeTotal = planTimeTotal(p.items);
   const timeStr = timeTotal>0 ? ' · ⏱ ~'+timeTotal+' min' : '';
+  // FT-047: tap the card header (name/meta) to expand a read-only
+  // breakdown of its exercises — the reorder buttons sit in their own
+  // stopPropagation'd span so tapping ▲▼ doesn't also toggle the expand.
+  const expanded = _expandedPlanCards.has(p.id);
   return `<div class="list-item">
-    <div class="li-top">
+    <div class="li-top" style="cursor:pointer" onclick="togglePlanCard('${p.id}')">
       <div>
         <div class="li-name">${spaIcon}${escHtml(p.name)}</div>
-        <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''}</div>
+        <div class="li-meta">${p.items.length} exercise${p.items.length===1?'':'s'}${timeStr} · done ${done.length} time${done.length===1?'':'s'}${last?' · last '+fmtDate(last.date):''} ${expanded?'▾':'▸'}</div>
       </div>
-      <span style="display:flex;align-items:center;gap:2px;flex-shrink:0">
+      <span style="display:flex;align-items:center;gap:2px;flex-shrink:0" onclick="event.stopPropagation()">
         <button class="pib-reorder" onclick="movePlanOrder('${p.id}',-1)" ${idx===0?'disabled':''} title="Move up">▲</button>
         <button class="pib-reorder" onclick="movePlanOrder('${p.id}',1)" ${idx===list.length-1?'disabled':''} title="Move down">▼</button>
       </span>
     </div>
+    ${expanded ? `<div style="margin-top:8px">
+      ${p.items.length ? p.items.map(planExerciseDetailsHtml).join('') : '<div class="empty-state" style="padding:6px 0">No exercises in this plan yet</div>'}
+      <button class="btn btn-secondary btn-sm btn-block" style="margin-top:8px" onclick="openPlanEditor('${p.id}')">Edit</button>
+    </div>` : ''}
     <div class="li-actions">
       <button class="btn btn-primary btn-sm" onclick="startSession('${p.id}')">▶ Start</button>
       <button class="btn btn-secondary btn-sm" onclick="openPlanEditor('${p.id}')">Edit</button>
