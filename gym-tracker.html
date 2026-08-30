@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.90</title>
+<title>Gym Tracker v2.91</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.90</div></span>
+      <span>Gym Tracker<div class="ver">v2.91</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1189,6 +1189,28 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.91 (GYM-082 — reused: v2.90 already used GYM-082 for the Progress
+// Breakdown build; flagged for renumbering in Test & Issues, same as
+// GYM-074/CLA-012/GIG-042). Two changes to the Exercise List:
+// 1. Jump to where it was recorded — tapping a row in an expanded
+//    exercise's history (date+setsStr, not the exclude icon) now
+//    switches to the calendar, navigates to that date's week, and
+//    expands that session's chip (jumpToSession()). New calDay-{date}
+//    id on each day card for the scrollIntoView target.
+// 2. Exclude from stats — "some of these I have seen are mainly data
+//    issue not an actual decline". A small toggle per row
+//    (toggleExcludeFromStats()) sets a new item.excludedFromStats flag
+//    on that ONE occurrence of that ONE exercise; the session itself,
+//    its other exercises, and this exercise's completed/partial status
+//    are untouched — deliberately scoped to trend math only, not a
+//    general "hide from everything" flag. groupItemsByExercise() now
+//    forces best:null for an excluded row (invisible to
+//    classifyProgressionTrend()/the sparkline/the Overall Progress
+//    score, all of which read this shared data), while keeping its real
+//    setsStr and status — visible in the list, marked "(excluded)",
+//    just not counted toward the trend read. Applies wherever that
+//    trend math is read: Exercise List, PDF Progression Summary,
+//    Overall Progress score/segments — all share groupItemsByExercise().
 // v2.90 (GYM-082): follow-up to GYM-081's Overall Progress score — not
 // from a written brief, from talking through what it looked like and
 // how to improve it. Three changes, all from that conversation:
@@ -1916,7 +1938,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.90';
+const VERSION = '2.91';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3870,6 +3892,17 @@ function addDaysIso(dateStr, days) {
 }
 function shiftCalendarWeek(days) { _calWeekStart = addDaysIso(_calWeekStart, days); renderCalendar(); }
 function jumpToThisWeek() { _calWeekStart = mondayOf(todayISO()); renderCalendar(); }
+// GYM-082: from an Exercise List row (Insights) — jump to the calendar
+// day it was actually logged on, expanded, instead of hunting through
+// the calendar by hand to find it.
+function jumpToSession(sessionId, date) {
+  _calWeekStart = mondayOf(date);
+  _expandedSessionCards.add(sessionId);
+  switchTab('calendar');
+  renderCalendar();
+  const el = document.getElementById('calDay-'+date);
+  if (el) el.scrollIntoView({ behavior:'smooth', block:'start' });
+}
 
 // GYM-051: lets you peek at what's actually in a scheduled plan straight
 // from the calendar/day view, without opening the plan editor or
@@ -3978,7 +4011,7 @@ function renderCalendar() {
     body += renderDayWaterSummary(date);
     body += dayPTSummary(date); // GYM-078: PT logging moved here from Insights
     const done = isCurrentWeek && date < today;
-    html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}">
+    html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}" id="calDay-${date}">
       <div class="cal-day-head">
         <span class="cal-day-label">${DAY_NAMES[weekdayIdx(date)]}${isToday?' · Today':''}</span>
         <span class="cal-day-date">${fmtDate(date)}</span>
@@ -5344,6 +5377,16 @@ function classifyProgressionTrend(values) {
 // Insights Exercise List (every exercise done ≥1x) and the PDF's
 // Progression Summary (≥2x only, unchanged) can share the exact same
 // per-exercise row-building instead of two copies drifting apart.
+// GYM-082: rows now also carry sessionId/itemId (for the "jump to
+// where it was recorded" link and the exclude-from-stats toggle) and
+// an excluded flag. An excluded row keeps its real setsStr — the
+// record itself is untouched, per the brief ("keep the record but
+// remove from stats") — but its best is forced to null so it's
+// invisible to classifyProgressionTrend() and the sparkline, same as a
+// row with nothing logged. completedCount/doneCount/totalCount
+// (exerciseHistoryEntries below) are all read from status, not best,
+// so an excluded-but-completed occurrence still counts as done — only
+// the trend math ignores it.
 function groupItemsByExercise(sessions) {
   const byExercise = {};
   sessions.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(s => {
@@ -5352,10 +5395,11 @@ function groupItemsByExercise(sessions) {
       if (!byExercise[key]) byExercise[key] = { exerciseId:key, exerciseName:item.exerciseName, trackType:item.trackType, rows:[] };
       const done = (item.actualSets||[]).filter(a=>a.done);
       const settings = exerciseProgressSettings(item.exerciseId); // GYM-081
+      const excluded = !!item.excludedFromStats;
       byExercise[key].rows.push({
-        date: s.date, status: item.status,
+        date: s.date, sessionId: s.id, itemId: item.id, status: item.status, excluded,
         setsStr: done.length ? summarizeSets(done, item.trackType) : 'not logged',
-        best: bestSetValue(item.actualSets, item.trackType, settings)
+        best: excluded ? null : bestSetValue(item.actualSets, item.trackType, settings)
       });
     });
   });
@@ -5754,6 +5798,27 @@ function toggleProgressionCard(exerciseId) {
   renderExerciseListInsights();
 }
 let _expandedProgressionCards = new Set();
+// GYM-082: "some of these I have seen are mainly data issue not an
+// actual decline" — this doesn't delete or edit the session, it just
+// flags this ONE occurrence of this ONE exercise as excluded from
+// trend/progress math, so a mis-logged set doesn't drag the trend
+// classification down without erasing what's actually in the record.
+// The session itself, its other exercises, and this exercise's
+// completed/partial status are all untouched — re-open the session
+// (jumpToSession) if the record itself needs correcting instead.
+function toggleExcludeFromStats(sessionId, itemId) {
+  const s = _env.data.sessions.find(x => x.id === sessionId);
+  if (!s) return;
+  const item = s.items.find(i => i.id === itemId);
+  if (!item) return;
+  item.excludedFromStats = !item.excludedFromStats;
+  s.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('session', s, null);
+  toast(item.excludedFromStats ? 'Excluded from stats — record kept' : 'Included in stats again');
+  renderExerciseListInsights();
+  renderProgressBreakdown(); // trend/score may have shifted
+}
 function exerciseListCardHtml(ex) {
   const meta = progressionTrendMeta(ex.trend);
   const expanded = _expandedProgressionCards.has(ex.exerciseId);
@@ -5763,11 +5828,20 @@ function exerciseListCardHtml(ex) {
   // trailing fully-skipped entry has no reps/weight/time to show.
   const doneRows = ex.rows.filter(r => r.status!=='skipped');
   const last = doneRows[doneRows.length-1];
+  // GYM-082: each row now navigates to where it was recorded
+  // (jumpToSession) and carries its own exclude/include toggle
+  // (toggleExcludeFromStats) — both stop propagation so tapping either
+  // doesn't also collapse the card via the outer onclick.
   const rowsHtml = ex.rows.slice().reverse().map(r => {
     const statusBadge = r.status==='completed' ? '<span class="li-badge badge-completed">Done</span>'
       : r.status==='partial' ? '<span class="li-badge badge-partial">Partial</span>' : '<span class="li-badge badge-skipped">Skipped</span>';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);font-size:11.5px">
-      <span style="color:var(--ink2)">${fmtDate(r.date)}</span><span style="flex:1;text-align:right">${escHtml(r.setsStr)}</span>${statusBadge}
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);font-size:11.5px;${r.excluded?'opacity:0.55':''}">
+      <span style="cursor:pointer" onclick="event.stopPropagation();jumpToSession('${r.sessionId}','${r.date}')">
+        <span style="color:var(--ink2)">${fmtDate(r.date)}</span>${r.excluded?' <span style="color:var(--ink3)">(excluded)</span>':''}
+      </span>
+      <span style="flex:1;text-align:right;cursor:pointer" onclick="event.stopPropagation();jumpToSession('${r.sessionId}','${r.date}')">${escHtml(r.setsStr)}</span>
+      ${statusBadge}
+      <span onclick="event.stopPropagation();toggleExcludeFromStats('${r.sessionId}','${r.itemId}')" style="cursor:pointer;color:var(--ink3);padding:0 2px;font-size:13px" title="${r.excluded?'Include in stats again':'Exclude from stats — data issue, not a real decline'}">${r.excluded?'↺':'🚫'}</span>
     </div>`;
   }).join('');
   return `<div class="area-card" style="cursor:pointer" onclick="toggleProgressionCard('${ex.exerciseId}')">
