@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.91</title>
+<title>Gym Tracker v2.92</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.91</div></span>
+      <span>Gym Tracker<div class="ver">v2.92</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1189,6 +1189,31 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.92 (GYM-083 — PARTIAL: this release covers the Insights cards half
+// only. The brief's other half — "talk through and wireframe a new PDF
+// report" — was an explicit request to discuss structure before
+// building, not a spec to build from; that conversation happens in
+// chat, not in code, and nothing about the PDF report changed here.
+// Two card changes, both about surfacing progress status without
+// having to dig for it:
+// 1. Exercise List cards: the trend badge (Improving/Steady/Mixed/
+//    Declining/Not enough data) used to be hidden until you tapped the
+//    card open — now always visible on the collapsed card, right under
+//    the "last performed" line.
+// 2. Body Areas Worked cards: previously just a name, a hit count, and
+//    a flat list of raw tags — now also show a one-badge dominant trend
+//    (dominantAreaTrend() — ties prefer flagging Declining/Mixed over
+//    reading as clean progress) reusing the exact same per-area score
+//    Progress Breakdown already computes (computeProgressBreakdown()),
+//    not a second scoring method. Cards with any judged exercises are
+//    now expandable (toggleAreaCard()) to list every exercise feeding
+//    that area's count (primary-tag membership, same basis the segment
+//    score uses — buildExerciseListData() filtered by
+//    primaryAreaForExercise()), each with its own trend badge and
+//    count. Tapping one of those exercises (jumpToExerciseCard())
+//    doesn't duplicate exclude/jump-to-session UI here — it jumps up to
+//    that exercise's own Exercise List card, where both already live
+//    (GYM-082), so occurrence-level actions have exactly one home.
 // v2.91 (GYM-082 — reused: v2.90 already used GYM-082 for the Progress
 // Breakdown build; flagged for renumbering in Test & Issues, same as
 // GYM-074/CLA-012/GIG-042). Two changes to the Exercise List:
@@ -1938,7 +1963,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.91';
+const VERSION = '2.92';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -5850,11 +5875,14 @@ function exerciseListCardHtml(ex) {
       <span class="area-count">${ex.doneCount}×</span>
     </div>
     <div class="area-tags">Last: ${fmtDate(last.date)} — ${escHtml(last.setsStr)}</div>
+    <!-- GYM-083: trend badge moved out of the expanded-only block — was
+         previously hidden until you tapped the card, now always visible
+         so "how's this exercise trending" doesn't require a tap. -->
+    <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="li-badge ${meta.badge}">${meta.icon} ${meta.label}</span>
+      <span style="font-size:11px;color:var(--ink2)">${ex.completedCount}/${ex.totalCount} fully completed</span>
+    </div>
     ${expanded ? `
-      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span class="li-badge ${meta.badge}">${meta.icon} ${meta.label}</span>
-        <span style="font-size:11px;color:var(--ink2)">${ex.completedCount}/${ex.totalCount} fully completed</span>
-      </div>
       ${spark ? `<div style="margin-top:8px">${spark}</div>` : ''}
       <div style="margin-top:8px">${rowsHtml}</div>
     ` : ''}
@@ -5923,19 +5951,82 @@ function setBodyAreasWindow(days) {
   document.getElementById('baWinAll').classList.toggle('active', days===null);
   renderBodyAreasWorked();
 }
+// GYM-083: dominant trend across an area's judged exercises, for a
+// compact one-badge summary on the (collapsed) card — ties prefer
+// flagging attention (declining, then mixed) over reading as clean
+// progress, so a genuine issue doesn't get buried by a tie. Reuses the
+// same per-area segment Progress Breakdown already computes
+// (computeProgressBreakdown) rather than a second scoring method — one
+// definition of "how's this area doing", shown two ways (the full bar
+// up in Progress Breakdown, this compact badge down here).
+function dominantAreaTrend(segment) {
+  if (!segment || !segment.judgedCount) return null;
+  const counts = { declining: segment.declining, mixed: segment.mixed, improving: segment.improving, steady: segment.steady };
+  const max = Math.max(segment.declining, segment.mixed, segment.improving, segment.steady);
+  return ['declining','mixed','improving','steady'].find(k => counts[k] === max);
+}
+// GYM-083: each expanded area card lists the exercises actually feeding
+// its count — primary-tag membership (same basis primaryAreaForExercise()
+// already uses for the segment score), so the list always matches
+// what's behind the badge above it. Clicking a row doesn't duplicate
+// exclude/jump-to-session here — it jumps to that exercise's own
+// Exercise List card, where both already live (GYM-082).
+function areaExerciseRowHtml(ex) {
+  const meta = progressionTrendMeta(ex.trend);
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11.5px;cursor:pointer" onclick="event.stopPropagation();jumpToExerciseCard('${ex.exerciseId}')">
+    <span>${escHtml(ex.exerciseName)}</span>
+    <span style="display:flex;align-items:center;gap:6px">
+      <span class="li-badge ${meta.badge}" style="font-size:10px">${meta.icon} ${meta.label}</span>
+      <span style="color:var(--ink2)">${ex.doneCount}×</span>
+    </span>
+  </div>`;
+}
+let _expandedAreaCards = new Set();
+function toggleAreaCard(area) {
+  if (_expandedAreaCards.has(area)) _expandedAreaCards.delete(area); else _expandedAreaCards.add(area);
+  renderBodyAreasWorked();
+}
+// GYM-083: from an area card's expanded exercise list into that
+// exercise's own card in the Exercise List above — clears any leftover
+// search/filter that would otherwise hide it, then scrolls up to it.
+function jumpToExerciseCard(exerciseId) {
+  _expandedProgressionCards.add(exerciseId);
+  document.getElementById('exerciseListSearch').value = '';
+  setExerciseListTrendFilter('all');
+  document.getElementById('exerciseListSearch').scrollIntoView({ behavior:'smooth', block:'start' });
+}
 function renderBodyAreasWorked() {
   const el = document.getElementById('insightsList');
   if (!el) return;
   if (!getSessions().length) { el.innerHTML = '<div class="empty-state"><div class="big">📊</div>Log a session to see insights here</div>'; return; }
-  const {areaTotals, areaTags} = computeInsights(_bodyAreasWindow);
+  const cutoffStr = insightsCutoffDate(_bodyAreasWindow);
+  const sessions = getSessions().filter(s => !cutoffStr || (s.date && s.date >= cutoffStr));
+  const {areaTotals, areaTags} = computeInsightsFromSessions(sessions);
+  const { segments } = computeProgressBreakdown(sessions); // GYM-083
+  const segmentsByArea = {}; segments.forEach(seg => segmentsByArea[seg.area] = seg);
+  // GYM-083: which exercises feed each area's count — primary tag only,
+  // matching the segment score's own basis (see primaryAreaForExercise()).
+  const exercisesByArea = {};
+  buildExerciseListData(sessions).forEach(ex => {
+    const record = (_env.data.exercises||[]).find(e=>e.id===ex.exerciseId);
+    const area = primaryAreaForExercise(record);
+    (exercisesByArea[area] = exercisesByArea[area]||[]).push(ex);
+  });
   const areas = sortAreasSpaLast(Object.keys(areaTotals).filter(a => a!=='Other' || areaTags['Other'].length).sort((a,b)=>areaTotals[b]-areaTotals[a]));
   el.innerHTML = areas.map(area => {
     const zero = areaTotals[area]===0;
     const tagsSorted = areaTags[area].slice().sort((a,b)=>b.count-a.count);
     const tagsStr = tagsSorted.map(t=>`${escHtml(t.tag)} (${t.count}${t.last?', last '+fmtDate(t.last):''})`).join(' · ');
-    return `<div class="area-card ${zero&&area!=='Spa'?'zero':''}">
+    const dominant = dominantAreaTrend(segmentsByArea[area]);
+    const dominantMeta = dominant ? progressionTrendMeta(dominant) : null;
+    const areaExercises = (exercisesByArea[area]||[]).slice().sort((a,b)=>b.doneCount-a.doneCount);
+    const expandable = areaExercises.length > 0;
+    const expanded = expandable && _expandedAreaCards.has(area);
+    return `<div class="area-card ${zero&&area!=='Spa'?'zero':''}" ${expandable?`style="cursor:pointer" onclick="toggleAreaCard('${area}')"`:''}>
       <div class="area-top"><span class="area-name">${area}</span><span class="area-count">${areaTotals[area]}</span></div>
       ${zero&&area!=='Spa' ? '<div class="area-flag">⚠ Not worked in this window</div>' : `<div class="area-tags">${tagsStr||'No entries logged yet'}</div>`}
+      ${dominantMeta ? `<div style="margin-top:6px"><span class="li-badge ${dominantMeta.badge}">${dominantMeta.icon} ${dominantMeta.label}</span></div>` : ''}
+      ${expanded ? `<div style="margin-top:8px">${areaExercises.map(areaExerciseRowHtml).join('')}</div>` : ''}
     </div>`;
   }).join('');
 }
