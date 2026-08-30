@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.36</title>
+<title>Gigs &amp; Trips v7.37</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -538,7 +538,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.36</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.37</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -619,6 +619,13 @@ const GIG_TYPES = [
   {key:'sport',   icon:'⚽', label:'Sport',    color:'#065f46', bg:'#ecfdf5'},
   {key:'festival',icon:'🎪', label:'Festival', color:'#6d28d9', bg:'#faf5ff'},
   {key:'cinema',  icon:'🎬', label:'Cinema',   color:'#1e40af', bg:'#eff6ff'},
+  // GIG-049: merged in from ITEM_TYPES (trip item categories) — same
+  // keys/icons as their ITEM_TYPES counterparts so anything already
+  // reading typeIcon()/typeLabel() elsewhere stays visually consistent.
+  {key:'travel',       icon:'🚌', label:'Travel',       color:'#0e7490', bg:'#ecfeff'},
+  {key:'accommodation',icon:'🏨', label:'Stay',         color:'#4338ca', bg:'#eef2ff'},
+  {key:'attraction',   icon:'🎡', label:'Attraction',   color:'#e11d48', bg:'#fff1f2'},
+  {key:'keystop',      icon:'📍', label:'Key Stop',     color:'#334155', bg:'#f1f5f9'},
   {key:'gym',          icon:'🏋️', label:'Gym',         color:'#15803d', bg:'#f0fdf4'},
   {key:'appointment',  icon:'📅', label:'Appointment', color:'#0369a1', bg:'#f0f9ff'},
   {key:'pets',         icon:'🐶', label:'Pets',        color:'#92400e', bg:'#fef9f0'},
@@ -1463,7 +1470,14 @@ function handleBack(){
 }
 
 function handleFab(){
-  if(_view==='list') showAddTypeMenu();
+  // GIG-049: used to show a Gig-vs-Trip choice menu (showAddTypeMenu)
+  // first. Simplified — the FAB now always launches the gig/event form
+  // directly; creating a brand-new trip happens via "+ Create new trip"
+  // inside that form's own trip picker instead (quickCreateTrip below),
+  // so there's one add mechanism instead of two parallel ones.
+  // showAddTypeMenu()/openAddTrip() are left in place, unreachable from
+  // the UI now, rather than deleted outright.
+  if(_view==='list') openAddGig();
   else if(_view==='tripDetail') addDay(_curTripId);
   else if(_view==='dayView') showAddItemMenu(_curTripId,_curDayId);
 }
@@ -2223,6 +2237,53 @@ function openAddGigForTrip(tripId,dayId,dayDate){
   showGigForm(null);
 }
 
+// GIG-049: "+ Create new trip…" in the gig form's trip picker. Selecting
+// it reveals a small inline name/dates panel rather than opening a
+// second modal — showModal() replaces the current modal's whole
+// innerHTML, which would wipe out anything already typed into the gig
+// form itself. quickCreateTrip() saves the trip immediately (independent
+// of whether the gig form itself ends up being saved or cancelled), so
+// this doubles as the only way to create a trip at all now that the FAB
+// goes straight to the gig form — cancel out of the gig afterward and
+// the trip you just created is still there.
+function handleGfTripChange(){
+  const sel=document.getElementById('gfTripId');
+  const panel=document.getElementById('gfNewTripPanel');
+  if(!sel||!panel) return;
+  if(sel.value==='__new__'){ panel.style.display='block'; }
+  else { panel.style.display='none'; checkGigFormConflicts(); }
+}
+function quickCreateTrip(){
+  const name=document.getElementById('gfNewTripName')?.value.trim();
+  const sd=document.getElementById('gfNewTripStart')?.value;
+  const ed=document.getElementById('gfNewTripEnd')?.value;
+  const err=document.getElementById('gfNewTripErr');
+  if(!name||!sd||!ed){ if(err) err.textContent='Name and both dates are required'; return; }
+  if(ed<sd){ if(err) err.textContent='End date must be on or after start date'; return; }
+  if(err) err.textContent='';
+
+  const t={id:uid(),type:'trip',createdAt:new Date().toISOString(),
+    name,destination:'',startDate:sd,endDate:ed,status:'Planning',currency:'GBP',
+    notes:'',tripType:'holiday',budget:null,tripLevelCosts:[],reviews:[],days:[],
+    updatedAt:new Date().toISOString()};
+  generateDays(t); // safe standalone — a fresh trip with days:[] never hits the "removed days" confirm() path
+  saveEvent(t);
+
+  // Insert into the still-open gig form's trip select without rebuilding
+  // the rest of the form (which would lose whatever's already typed in).
+  const sel=document.getElementById('gfTripId');
+  if(sel){
+    const opt=document.createElement('option');
+    opt.value=t.id; opt.textContent=t.name;
+    sel.insertBefore(opt,sel.querySelector('option[value="__new__"]'));
+    sel.value=t.id;
+  }
+  document.getElementById('gfNewTripPanel').style.display='none';
+  ['gfNewTripName','gfNewTripStart','gfNewTripEnd'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  showToast('Trip created ✓ — linked to this event');
+  checkGigFormConflicts();
+}
+
 function checkGigFormConflicts(){
   const el=document.getElementById('gfConflict'); if(!el) return;
   const date=document.getElementById('gfDate')?.value;
@@ -2299,8 +2360,18 @@ function showGigForm(g){
       <div class="fg"><label>Ticket URL</label><input class="fi" id="gfTicketUrl" placeholder="https://…" value="${esc(g?.ticketUrl||'')}"></div>
       <div class="fg"><label>Ticket price</label><input class="fi" type="number" step="0.01" id="gfTicketPrice" placeholder="0.00" value="${g?.ticketPrice||''}"></div>
       <div class="fg"><label>Ticket / seat note</label><input class="fi" id="gfTicketNote" placeholder="e.g. Row F Seat 12" value="${esc(g?.ticketNote||'')}"></div>
-      ${trips.length?`<div class="fg"><label>Part of a trip?</label>
-        <select class="fi" id="gfTripId" onchange="checkGigFormConflicts()"><option value="">— Not linked —</option>${tripOpts}</select></div>`:''}
+      <div class="fg"><label>Part of a trip?</label>
+        <select class="fi" id="gfTripId" onchange="handleGfTripChange()"><option value="">— Not linked —</option>${tripOpts}<option value="__new__">+ Create new trip…</option></select>
+      </div>
+      <div id="gfNewTripPanel" style="display:none;background:var(--surf);border-radius:var(--rsm);padding:10px;margin:-6px 0 12px">
+        <div class="fg"><label>Trip name</label><input class="fi" id="gfNewTripName" placeholder="e.g. Barcelona trip"></div>
+        <div class="fi-row">
+          <div class="fg"><label>Start date</label><input class="fi" type="date" id="gfNewTripStart"></div>
+          <div class="fg"><label>End date</label><input class="fi" type="date" id="gfNewTripEnd"></div>
+        </div>
+        <div id="gfNewTripErr" class="form-err"></div>
+        <button type="button" class="btn btn-pri" style="width:100%" onclick="quickCreateTrip()">Create trip</button>
+      </div>
       <div class="fg"><label>Notes</label><textarea class="fi" id="gfNotes" placeholder="Any other notes…">${esc(g?.notes||'')}</textarea></div>
       <div id="gfErr" class="form-err"></div>
       <div class="form-actions">
@@ -2361,7 +2432,12 @@ function saveGig(){
   g.ticketUrl=document.getElementById('gfTicketUrl')?.value.trim()||'';
   g.ticketPrice=parseFloat(document.getElementById('gfTicketPrice')?.value||0)||0;
   g.ticketNote=document.getElementById('gfTicketNote')?.value.trim()||'';
-  g.tripId=document.getElementById('gfTripId')?.value||null;
+  // GIG-049: '__new__' is the "+ Create new trip…" sentinel — if someone
+  // selects it but saves the gig without actually finishing the inline
+  // create-trip panel (quickCreateTrip), treat it as not-linked rather
+  // than saving a tripId that doesn't point at a real trip.
+  const rawTripId=document.getElementById('gfTripId')?.value||null;
+  g.tripId=(rawTripId&&rawTripId!=='__new__')?rawTripId:null;
   g.notes=document.getElementById('gfNotes')?.value.trim()||'';
   g.updatedAt=new Date().toISOString();
 
@@ -5094,6 +5170,19 @@ function tripNights(t){
 // all future in the series" instead of the plain confirm(). Gig detail
 // and the series list (showSeriesList) let you browse/jump between
 // occurrences.
+// v7.37 (GIG-049, narrow reading): merged trip-item categories (Travel,
+// Stay, Attraction, Key Stop) into GIG_TYPES, so gigs/events can now use
+// the same category set trip items already had — ITEM_TYPES itself is
+// untouched, items keep their own type-specific fields (from/to,
+// check-in, etc). Also simplified creation: the FAB now launches
+// straight into the gig/event form instead of a Gig-vs-Trip choice menu
+// (showAddTypeMenu/openAddTrip left in place, just unreachable from the
+// UI now). Creating a brand-new trip happens via "+ Create new trip…" in
+// that same form's trip picker — an inline panel, not a second modal
+// (which would wipe out anything already typed into the gig form),
+// saving the trip immediately so it exists even if you cancel the gig
+// afterward. saveGig() guards against the '__new__' sentinel being saved
+// as a real tripId if that panel's never completed.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
