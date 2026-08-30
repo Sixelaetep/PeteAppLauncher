@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.94</title>
+<title>Gym Tracker v2.95</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.94</div></span>
+      <span>Gym Tracker<div class="ver">v2.95</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -625,6 +625,15 @@
         <button class="type-btn" id="exProgBasisPace" onclick="setExProgressBasis('pace')">⚡ Faster Pace</button>
       </div>
     </div>
+    <!-- GYM-084: not type-conditional — applies whatever the exercise
+         type is. For exercises that aren't meant to show progress at
+         all (warmups, mobility work, technique drills) rather than
+         being tracked under the wrong direction/basis. -->
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;text-transform:none;font-weight:600;cursor:pointer">
+      <input type="checkbox" id="exExcludeFromTrending" style="margin:0">
+      🚫 Exclude from progress trending
+    </label>
+    <p style="font-size:11px;color:var(--ink3);margin-top:2px">Sessions using this exercise are still logged and browsable as normal — it just won't get a trend badge, and won't count toward Overall Progress, Body Areas trend, or the PDF's Progression Summary.</p>
     <button class="btn btn-secondary btn-block" style="margin-top:12px" onclick="openGoogleMuscleSearch()">🔍 Search Google: what muscles does this work?</button>
 
     <label>Tags <span style="text-transform:none;font-weight:400;color:var(--ink3)">(first one added = primary muscle)</span></label>
@@ -1189,6 +1198,42 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.95 (GYM-084 — reused: v2.94 already used GYM-084 for the plan-card
+// expand work, itself a corrected FT-047; flagged for renumbering in
+// Test & Issues, same pattern as the other known collisions).
+// Extends GYM-082's per-occurrence "exclude from stats" with a whole-
+// exercise version — some exercises (warmups, mobility drills,
+// technique work) were never meant to show a trend at all, not just
+// having one bad data point.
+// New excludeFromTrending flag on the exercise record (distinct from
+// per-item excludedFromStats — different scope, different name on
+// purpose so it's unambiguous which one a piece of code is touching).
+// Two entry points, one setting: a checkbox in the exercise editor
+// (type-independent, unlike progressDirection/progressBasis) and a
+// quick toggle link on the Exercise List card itself, next to the trend
+// badge — same "don't make them dig into the editor for something this
+// common" reasoning as GYM-082's row-level toggle.
+// groupItemsByExercise() now looks this flag up once per exercise (not
+// per row) and exerciseHistoryEntries() turns it into trend:'excluded'
+// — a new state distinct from 'insufficient' (not enough data yet, an
+// accident of history) since this is deliberate. Row-level best values
+// are left untouched, unlike excludedFromStats — un-excluding an
+// exercise immediately shows its full real history rather than data
+// that was silently discarded while excluded.
+// 'excluded' is now filtered out of computeOverallProgressScore()/
+// computeProgressBreakdown() alongside 'insufficient' (for different
+// reasons — one has nothing to judge, one was told not to be judged),
+// and out of the sparkline gates in both the Exercise List card and the
+// PDF's Progression Summary. Everywhere else that already reads
+// progressionTrendMeta() (badges, PDF rpt-classes) picks up the new
+// 'excluded' state for free via its lookup table — reuses the existing
+// neutral-gray "Excluded" badge, no new colour.
+// PDF's Overall Progress exclusion note now covers both scopes in one
+// sentence — "N occurrences excluded... ; M exercises excluded
+// entirely" — computed from groupItemsByExercise() directly (not
+// gated by the ≥2-occurrence threshold Progression Summary uses), so
+// every excluded exercise in the report is counted even if it only
+// appears once.
 // v2.94 (GYM-084 — filed as FT-047, Fortnight Tracker's prefix, almost
 // certainly a copy-paste mix-up from a template; content is unmistakably
 // Gym Tracker Plans/Programs. Used GYM-084 here so this app's own
@@ -2010,7 +2055,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.94';
+const VERSION = '2.95';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3309,6 +3354,7 @@ function openExerciseEditor(id, afterSaveTarget) {
     setExerciseType(e.type||'reps');
     setExProgressDirection(e.progressDirection||'longer'); // GYM-081
     setExProgressBasis(e.progressBasis||'distance');        // GYM-081
+    document.getElementById('exExcludeFromTrending').checked = !!e.excludeFromTrending; // GYM-084
   } else {
     document.getElementById('exModalTitle').textContent = 'New Exercise';
     document.getElementById('exName').value = '';
@@ -3317,6 +3363,7 @@ function openExerciseEditor(id, afterSaveTarget) {
     setExerciseType('reps');
     setExProgressDirection('longer'); // GYM-081
     setExProgressBasis('distance');   // GYM-081
+    document.getElementById('exExcludeFromTrending').checked = false; // GYM-084
   }
   document.getElementById('exCustomTag').value = '';
   renderExTagPicker();
@@ -3329,6 +3376,7 @@ function saveExercise() {
   const id = document.getElementById('exEditId').value;
   const now = new Date().toISOString();
   const notes = document.getElementById('exNotes').value.trim();
+  const excludeFromTrending = document.getElementById('exExcludeFromTrending').checked; // GYM-084
   let newId = null;
   let record;
   if (id) {
@@ -3342,6 +3390,7 @@ function saveExercise() {
     e.name = name; e.type = _exType; e.tags = _exTags.slice(); e.notes = notes; e.updatedAt = now;
     e.progressDirection = _exProgressDirection; // GYM-081
     e.progressBasis = _exProgressBasis;         // GYM-081
+    e.excludeFromTrending = excludeFromTrending; // GYM-084
     record = e;
     // GYM-042: type used to silently drift out of sync with plans already
     // using this exercise (each plan item stores its own trackType at
@@ -3357,7 +3406,7 @@ function saveExercise() {
     }
   } else {
     newId = uid('ex');
-    record = { id:newId, name, type:_exType, tags:_exTags.slice(), notes, progressDirection:_exProgressDirection, progressBasis:_exProgressBasis, createdAt:now, updatedAt:now };
+    record = { id:newId, name, type:_exType, tags:_exTags.slice(), notes, progressDirection:_exProgressDirection, progressBasis:_exProgressBasis, excludeFromTrending, createdAt:now, updatedAt:now };
     _env.data.exercises.push(record);
   }
   save(_env);
@@ -5492,12 +5541,22 @@ function classifyProgressionTrend(values) {
 // (exerciseHistoryEntries below) are all read from status, not best,
 // so an excluded-but-completed occurrence still counts as done — only
 // the trend math ignores it.
+// GYM-084: rows now also carry the exercise's own excludeFromTrending
+// flag (looked up once per exercise, not per row — see
+// exerciseHistoryEntries() below for how it turns into a distinct
+// 'excluded' trend rather than reusing 'insufficient'). Looked up
+// against the full exercise list (including soft-deleted), same
+// reasoning as exerciseProgressSettings() — an old session can still
+// reference an exercise since removed from the library.
 function groupItemsByExercise(sessions) {
   const byExercise = {};
   sessions.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(s => {
     s.items.forEach(item => {
       const key = item.exerciseId;
-      if (!byExercise[key]) byExercise[key] = { exerciseId:key, exerciseName:item.exerciseName, trackType:item.trackType, rows:[] };
+      if (!byExercise[key]) {
+        const exRecord = (_env.data.exercises||[]).find(e=>e.id===key);
+        byExercise[key] = { exerciseId:key, exerciseName:item.exerciseName, trackType:item.trackType, rows:[], excludedFromTrending: !!(exRecord && exRecord.excludeFromTrending) };
+      }
       const done = (item.actualSets||[]).filter(a=>a.done);
       const settings = exerciseProgressSettings(item.exerciseId); // GYM-081
       const excluded = !!item.excludedFromStats;
@@ -5510,6 +5569,14 @@ function groupItemsByExercise(sessions) {
   });
   return byExercise;
 }
+// GYM-084: an exercise flagged excludeFromTrending gets trend:'excluded'
+// regardless of its actual data — distinct from 'insufficient' (which
+// means "not enough data yet", an accident of history) since this is
+// deliberate. Row-level best values are left untouched (not nulled,
+// unlike the per-occurrence excludedFromStats flag above) — if the
+// exercise is later un-excluded, its full real history is immediately
+// available again rather than having been silently discarded while
+// excluded.
 function exerciseHistoryEntries(byExercise, minOccurrences) {
   return Object.values(byExercise)
     .filter(ex => ex.rows.length >= minOccurrences)
@@ -5525,7 +5592,7 @@ function exerciseHistoryEntries(byExercise, minOccurrences) {
         // since that's an existing, out-of-scope-for-this-brief behaviour.
         doneCount: ex.rows.filter(r=>r.status!=='skipped').length,
         totalCount: ex.rows.length,
-        trend: classifyProgressionTrend(loggedValues)
+        trend: ex.excludedFromTrending ? 'excluded' : classifyProgressionTrend(loggedValues)
       });
     });
 }
@@ -5584,12 +5651,17 @@ function scoreFor(list) {
   const mixed = list.filter(e=>e.trend==='mixed').length;
   return { judgedCount: list.length, improving, declining, steady, mixed, netScore: Math.round(((improving - declining) / list.length) * 100) };
 }
+// GYM-084: 'excluded' exercises (whole-exercise, deliberate — see
+// exerciseHistoryEntries()) are filtered out here alongside
+// 'insufficient' (not-enough-data-yet) — neither should count toward or
+// against the score, but for different reasons: one has nothing to
+// judge, the other was told not to be judged.
 function computeOverallProgressScore(sessions) {
-  const judged = buildExerciseProgressionData(sessions).filter(ex => ex.trend !== 'insufficient');
+  const judged = buildExerciseProgressionData(sessions).filter(ex => ex.trend !== 'insufficient' && ex.trend !== 'excluded');
   return scoreFor(judged);
 }
 function computeProgressBreakdown(sessions) {
-  const judged = buildExerciseProgressionData(sessions).filter(ex => ex.trend !== 'insufficient');
+  const judged = buildExerciseProgressionData(sessions).filter(ex => ex.trend !== 'insufficient' && ex.trend !== 'excluded');
   const withArea = judged.map(ex => Object.assign({}, ex, { area: primaryAreaForExercise((_env.data.exercises||[]).find(e=>e.id===ex.exerciseId)) }));
   const byArea = {};
   withArea.forEach(e => { (byArea[e.area] = byArea[e.area]||[]).push(e); });
@@ -5654,7 +5726,11 @@ function progressionTrendMeta(trend) {
     declining:    { label:'Declining',       icon:'▼', badge:'badge-skipped',   rpt:'rpt-badge-skipped' },
     steady:       { label:'Steady',          icon:'=', badge:'badge-skipped',   rpt:'rpt-badge-skipped' },
     mixed:        { label:'Mixed',           icon:'↕', badge:'badge-partial',   rpt:'rpt-badge-partial' },
-    insufficient: { label:'Not enough data', icon:'',  badge:'badge-skipped',   rpt:'rpt-badge-skipped' }
+    insufficient: { label:'Not enough data', icon:'',  badge:'badge-skipped',   rpt:'rpt-badge-skipped' },
+    // GYM-084: deliberately excluded whole-exercise (not just missing
+    // data) — same neutral gray as Steady/Declining, since this isn't a
+    // "needs attention" signal, it's a "not being judged at all" one.
+    excluded:     { label:'Excluded',        icon:'🚫', badge:'badge-skipped',   rpt:'rpt-badge-skipped' }
   }[trend];
 }
 // Compact trend line — same scaling math as the existing body-weight
@@ -5929,11 +6005,30 @@ function toggleExcludeFromStats(sessionId, itemId) {
   renderExerciseListInsights();
   renderProgressBreakdown(); // trend/score may have shifted
 }
+// GYM-084: whole-exercise exclusion, distinct from toggleExcludeFromStats()
+// above (which excludes one occurrence). Lives on the exercise record
+// itself (also editable from the exercise editor, saveExercise()) so
+// it's one setting with two entry points, not two separate flags to
+// keep in sync. Affects every downstream trend read that already goes
+// through groupItemsByExercise() — Exercise List, PDF Progression
+// Summary, Overall Progress, Body Areas dominant trend — for free.
+function toggleExerciseExcludedFromTrending(exerciseId) {
+  const ex = (_env.data.exercises||[]).find(e => e.id === exerciseId);
+  if (!ex) return;
+  ex.excludeFromTrending = !ex.excludeFromTrending;
+  ex.updatedAt = new Date().toISOString();
+  save(_env);
+  sbUpsert('exercise', ex, null);
+  toast(ex.excludeFromTrending ? 'Exercise excluded from trending — still logged and browsable' : 'Exercise included in trending again');
+  renderExerciseListInsights();
+  renderProgressBreakdown();
+  renderBodyAreasWorked(); // dominant-trend badges may shift too
+}
 function exerciseListCardHtml(ex) {
   const meta = progressionTrendMeta(ex.trend);
   const expanded = _expandedProgressionCards.has(ex.exerciseId);
   const loggedValues = ex.rows.filter(r=>r.best!==null).map(r=>r.best);
-  const spark = ex.trend!=='insufficient' ? sparklineSvg(loggedValues, 'var(--accent)', 160, 36) : '';
+  const spark = (ex.trend!=='insufficient' && ex.trend!=='excluded') ? sparklineSvg(loggedValues, 'var(--accent)', 160, 36) : ''; // GYM-084
   // GYM-078: last *performed* row, not just the last occurrence — a
   // trailing fully-skipped entry has no reps/weight/time to show.
   const doneRows = ex.rows.filter(r => r.status!=='skipped');
@@ -5966,6 +6061,10 @@ function exerciseListCardHtml(ex) {
     <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <span class="li-badge ${meta.badge}">${meta.icon} ${meta.label}</span>
       <span style="font-size:11px;color:var(--ink2)">${ex.completedCount}/${ex.totalCount} fully completed</span>
+      <!-- GYM-084: whole-exercise trending toggle, always reachable
+           without opening the editor — same convenience as the
+           per-occurrence 🚫 already living in each row below. -->
+      <span onclick="event.stopPropagation();toggleExerciseExcludedFromTrending('${ex.exerciseId}')" style="cursor:pointer;font-size:10.5px;color:var(--ink3);text-decoration:underline;margin-left:auto" title="Exclude/include this whole exercise from progress trending">${ex.excludedFromTrending?'Include in trending':'Exclude from trending'}</span>
     </div>
     ${expanded ? `
       ${spark ? `<div style="margin-top:8px">${spark}</div>` : ''}
@@ -7130,7 +7229,7 @@ function buildReportProgressionBlock(sessions) {
   const cards = data.map(ex => {
     const meta = progressionTrendMeta(ex.trend);
     const loggedValues = ex.rows.filter(r=>r.best!==null).map(r=>r.best);
-    const spark = ex.trend!=='insufficient' ? sparklineSvg(loggedValues, '#0d1117', 160, 34) : '';
+    const spark = (ex.trend!=='insufficient' && ex.trend!=='excluded') ? sparklineSvg(loggedValues, '#0d1117', 160, 34) : ''; // GYM-084
     const rowsStr = ex.rows.map(r => escHtml(fmtDate(r.date))+': '+escHtml(r.setsStr)+(r.status!=='completed'?' ('+r.status+')':'')+(r.excluded?' [excluded]':'')).join(' · ');
     return `<div class="rpt-session-block">
       <div class="rpt-session-head"><span>${escHtml(ex.exerciseName)}</span><span class="rpt-badge ${meta.rpt}">${meta.icon} ${meta.label}</span></div>
@@ -7169,12 +7268,18 @@ function reportProgressBarAndLegend(score) {
 // computeProgressHistory() the app uses, scoped to the report's own
 // sessions/date range (history anchored to the report's end date, not
 // "today" — see computeProgressHistory()'s asOfDate). Also the one place
-// in the report that surfaces the excluded-from-stats count, since this
-// is the section explaining what the trend numbers mean.
+// in the report that surfaces both exclusion transparency notes —
+// per-occurrence (excludedFromStats) and, since GYM-084, whole-exercise
+// (excludeFromTrending) — since this is the section explaining what the
+// trend numbers mean.
 function buildReportOverallProgressBlock(sessions, end) {
-  const excludedCount = sessions.reduce((sum, s) => sum + s.items.filter(i => i.excludedFromStats).length, 0);
-  const excludedNote = excludedCount
-    ? `<p style="font-size:10px;color:#5b7386;margin-top:6px">ℹ️ ${excludedCount} occurrence${excludedCount===1?'':'s'} excluded from trend analysis this period (flagged as data issues, not real declines) — the underlying session records are unaffected.</p>`
+  const occExcludedCount = sessions.reduce((sum, s) => sum + s.items.filter(i => i.excludedFromStats).length, 0);
+  const exExcludedCount = Object.values(groupItemsByExercise(sessions)).filter(ex => ex.excludedFromTrending).length; // GYM-084
+  const noteParts = [];
+  if (occExcludedCount) noteParts.push(`${occExcludedCount} occurrence${occExcludedCount===1?'':'s'} excluded from trend analysis this period (flagged as data issues, not real declines)`);
+  if (exExcludedCount) noteParts.push(`${exExcludedCount} exercise${exExcludedCount===1?'':'s'} excluded from trending entirely`);
+  const excludedNote = noteParts.length
+    ? `<p style="font-size:10px;color:#5b7386;margin-top:6px">ℹ️ ${noteParts.join('; ')} — the underlying session records are unaffected.</p>`
     : '';
   const overall = computeOverallProgressScore(sessions);
   if (!overall) {
