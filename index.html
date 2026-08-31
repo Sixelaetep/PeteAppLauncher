@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.62</title>
+<title>P Apps v10.63</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -465,6 +465,15 @@
   .card-stat.amber span.val { color: #f59e0b; }
   .card-stat.muted { opacity: 0.5; font-style: italic; }
   .card-stat.muted .card-stat-dot { background: var(--ink3); }
+  /* PET-071: Fortnight Tracker card — active extra-hours timer readout.
+     Own pulsing dot rather than the block-level warn/ok/amber modifiers
+     above, since the timer is an independent live signal that can be
+     true regardless of the rest of the card's state. */
+  .card-stat-dot.timer-run { background: #2dd4bf; animation: ftTimerPulse 1.6s ease-in-out infinite; }
+  @keyframes ftTimerPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .card-stat-row.timer-run span.val { color: #2dd4bf; font-family: monospace; }
+  .card-stat-row.timer-run.timer-warn span.val { color: #f59e0b; }
+  .card-stat-row.timer-run.timer-warn .card-stat-dot { background: #f59e0b; }
 
   /* GYM-062: small inline progress bars for the Gym Tracker card's
      today-vs-target nutrition line. Same visual language used inside
@@ -614,7 +623,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.62</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.63</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -1140,6 +1149,13 @@ async function refreshLauncherSession() {
 
 setInterval(() => { if (sbSession) refreshLauncherSession(); }, SESSION_REFRESH_INTERVAL_MS);
 
+// PET-071: ticks the Fortnight Tracker card's running-timer readout once/
+// sec. No-ops via the getElementById guard in tickFortnightTimer() itself
+// whenever the card isn't on screen or nothing's running, so this is safe
+// to leave running for the life of the tab rather than starting/stopping
+// it around navigation.
+setInterval(tickFortnightTimer, 1000);
+
 // Catch up immediately if the dashboard was backgrounded (mobile tab
 // suspension, laptop sleep) long enough that the timer above may have
 // been throttled or simply never got a chance to fire.
@@ -1486,6 +1502,26 @@ function statReading() {
   }
 }
 
+// PET-071: cache of the currently-running Fortnight Tracker timer (or
+// null), refreshed by statFortnight() and ticked once/sec by
+// tickFortnightTimer() below — mirrors fortnight-tracker.html's own
+// tickTimers()/timerElapsedMs() pattern so the card stays live without
+// re-reading and re-parsing localStorage every second.
+let _ftRunningTimer = null;
+function ftFmtHMS(ms) {
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+function tickFortnightTimer() {
+  if (!_ftRunningTimer) return;
+  const el = document.getElementById('stat-fortnight-timer-val');
+  if (!el) return; // card not on screen / not yet rendered — no-op, not an error
+  const elapsed = _ftRunningTimer.accumMs + (Date.now() - _ftRunningTimer.startedAt);
+  el.textContent = ftFmtHMS(elapsed);
+  const row = document.getElementById('stat-fortnight-timer-row');
+  if (row) row.classList.toggle('timer-warn', elapsed > 6 * 3600 * 1000);
+}
+
 function statFortnight() {
   try {
     const raw = localStorage.getItem('fn_tracker_v5')
@@ -1504,6 +1540,28 @@ function statFortnight() {
       bundles = [];
     }
     if (!bundles.length) { setCardStat('stat-fortnight', 'No bundles yet', 'muted'); return; }
+
+    // ── PET-071: active extra-hours timer ─────────────────────────────
+    // Scans ALL non-deleted bundles' days (not just the "current" bundle
+    // below) for a running day.timer — mirrors the app's own
+    // timerElapsedMs(): elapsed is accumMs + (Date.now()-startedAt), a
+    // wall-clock derivation, not a ticked-down countdown, so it's correct
+    // here even though the launcher never ran the app's own tick loop.
+    // If more than one is somehow running at once, the most recently
+    // started one is shown — an edge case the app UI doesn't prevent,
+    // but not worth surfacing more than one line for on a summary card.
+    let runningTimer = null;
+    bundles.filter(b => !b._deleted).forEach(b => {
+      (b.days || []).forEach(d => {
+        if (d.timer && d.timer.running && d.timer.startedAt) {
+          if (!runningTimer || d.timer.startedAt > runningTimer.startedAt) {
+            runningTimer = { date: d.date, startedAt: d.timer.startedAt, accumMs: d.timer.accumMs || 0 };
+          }
+        }
+      });
+    });
+    _ftRunningTimer = runningTimer; // cached for tickFortnightTimer()
+
 
     const TARGET_MINS = 4200; // 70h — matches app's TARGET constant
     const todayStr    = todayISO();
@@ -1603,6 +1661,26 @@ function statFortnight() {
       todayLine = `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--ink3)"></span><span style="color:var(--ink3)">No work today</span></div>`;
     }
 
+    // Timer line — only rendered when a timer is actually running; the
+    // element gets its own id so tickFortnightTimer() can update just
+    // this text every second without re-running the rest of this
+    // function (which also re-derives holiday allowance etc.).
+    let timerLine = '';
+    if (runningTimer) {
+      const elapsed = runningTimer.accumMs + (Date.now() - runningTimer.startedAt);
+      const dLabel = (() => {
+        try {
+          const [y, m, dd] = runningTimer.date.split('-').map(Number);
+          return new Date(y, m - 1, dd).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+        } catch(_) { return runningTimer.date; }
+      })();
+      const warn = elapsed > 6 * 3600 * 1000;
+      timerLine = `<div class="card-stat-row timer-run${warn ? ' timer-warn' : ''}" id="stat-fortnight-timer-row">` +
+        `<span class="card-stat-dot timer-run"></span>` +
+        `<span>Timer running (${dLabel}) — <span class="val" id="stat-fortnight-timer-val">${ftFmtHMS(elapsed)}</span></span>` +
+      `</div>`;
+    }
+
     // Hours progress bar + projection badge in a flex row
     const hBar = `<div style="margin-top:6px;display:flex;align-items:stretch;gap:8px">
       <div style="flex:1;min-width:0">
@@ -1688,7 +1766,7 @@ function statFortnight() {
     if (statEl) {
       const mode = hOver ? 'warn' : doneCount === totalDays ? 'ok' : '';
       statEl.className = 'card-stat' + (mode ? ' ' + mode : '');
-      statEl.innerHTML = todayLine + hBar + holLine;
+      statEl.innerHTML = todayLine + timerLine + hBar + holLine;
     }
   } catch(e) {
     setCardStat('stat-fortnight', 'Open app to load', 'muted');
