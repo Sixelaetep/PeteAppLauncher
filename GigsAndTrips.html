@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.39</title>
+<title>Gigs &amp; Trips v7.40</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -539,7 +539,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.39</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.40</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -599,7 +599,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-config.js?v=7.39"></script>
+<script src="pal-config.js?v=7.40"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONFIG
@@ -1054,9 +1054,24 @@ async function pushAllEvents(){
     setSyncDot('ok');
     setTimeout(()=>setSyncDot('idle'),2000);
     showToast('Synced '+events.length+' events to cloud ✓');
-    // Push venues separately after events are done
+    // v7.40 (GIG-052): was a sequential for-loop, one network round trip
+    // per venue. Events (right above) already batch every row into one
+    // array POST — venues live in the same table via the same
+    // on_conflict=id upsert, so the exact same pattern applies. Neither
+    // this function nor pushAllEventsLogged ever checked per-venue
+    // success (no ok tracking, no per-item catch) — a single event
+    // failure already aborted the whole function before venues were
+    // even attempted, via the outer try/catch — so batching loses no
+    // fault isolation that existed before. pushResetVenues (separate
+    // function, used by the Reset Venues button) is deliberately left
+    // untouched: it logs per-venue progress to the sync log during a
+    // rare, user-triggered action, and that live feedback is worth
+    // more there than the speed.
     const venues=normaliseVenues(getData().venues).filter(v=>!v._deleted);
-    for(const v of venues) await pushVenueRecord(v);
+    if(venues.length){
+      const venueRows=venues.map(v=>({id:'venue_'+v.id,user_id,type:'gig',start_date:null,end_date:null,data:v,updated_at:new Date().toISOString()}));
+      await sbFetch('POST','events?on_conflict=id',venueRows);
+    }
   } catch(e){
     console.error('pushAllEvents failed:',e);
     setSyncDot('err');
@@ -1080,7 +1095,13 @@ async function pushAllEventsLogged(){
     syncLog('Events OK — '+events.length+' pushed','ok');
     syncLog('Pushing venues…','working');
     const venues=normaliseVenues(getData().venues).filter(v=>!v._deleted);
-    for(const v of venues) await pushVenueRecord(v);
+    // v7.40 (GIG-052): same batching as pushAllEvents above — one array
+    // POST instead of one request per venue. See that function's comment
+    // for the full reasoning.
+    if(venues.length){
+      const venueRows=venues.map(v=>({id:'venue_'+v.id,user_id,type:'gig',start_date:null,end_date:null,data:v,updated_at:new Date().toISOString()}));
+      await sbFetch('POST','events?on_conflict=id',venueRows);
+    }
     syncLog('Venues OK — '+venues.length+' pushed','ok');
   } catch(e){
     syncLog('Push failed: '+String(e).slice(0,150),'err');
@@ -1288,26 +1309,31 @@ async function pullFromSupabase(silent){
       rows.filter(r=>r.id!=='_venues'&&(typeof r.id!=='string'||r.id.indexOf('venue_')!==0)&&r.data&&r.data.id&&r.data._deleted).map(r=>r.data.id)
     );
     const localTombstones=Object.values(localMap).filter(ev=>ev._deleted);
+    // v7.40 (GIG-052): was a sequential for-loop, one confirmation push
+    // waiting on the previous before starting the next. Each push is
+    // fully independent (its own event, its own try/catch inside
+    // pushTombstoneConfirmed, no shared state beyond the harmless
+    // setSyncDot indicator) and each needs its OWN ok/fail result — a
+    // single batched request wouldn't work here, unlike the plain venue
+    // push above, since a batch failure can't tell you which specific
+    // record didn't make it. Promise.all keeps that per-item tracking
+    // while letting every pending tombstone confirm concurrently.
     const stillPending=new Set();
-    for(const ev of localTombstones){
-      if(!cloudDeletedIds.has(ev.id)){
-        const ok=await pushTombstoneConfirmed(ev);
-        if(!ok) stillPending.add(ev.id);
-      }
-    }
+    const toConfirm=localTombstones.filter(ev=>!cloudDeletedIds.has(ev.id));
+    const confirmResults=await Promise.all(toConfirm.map(ev=>pushTombstoneConfirmed(ev).then(ok=>({id:ev.id,ok}))));
+    confirmResults.forEach(r=>{ if(!r.ok) stillPending.add(r.id); });
 
     // Same confirm-then-strip treatment for venue tombstones (GT-003).
     const cloudDeletedVenueIds=new Set(
       rows.filter(r=>typeof r.id==='string'&&r.id.indexOf('venue_')===0&&r.data&&r.data.id&&r.data._deleted).map(r=>r.data.id)
     );
     const localVenueTombstones=Object.values(venueMap).filter(v=>v._deleted);
+    // v7.40 (GIG-052): same concurrency change as the event tombstones
+    // above, same reasoning.
     const venueStillPending=new Set();
-    for(const v of localVenueTombstones){
-      if(!cloudDeletedVenueIds.has(v.id)){
-        const ok=await pushVenueTombstoneConfirmed(v);
-        if(!ok) venueStillPending.add(v.id);
-      }
-    }
+    const venuesToConfirm=localVenueTombstones.filter(v=>!cloudDeletedVenueIds.has(v.id));
+    const venueConfirmResults=await Promise.all(venuesToConfirm.map(v=>pushVenueTombstoneConfirmed(v).then(ok=>({id:v.id,ok}))));
+    venueConfirmResults.forEach(r=>{ if(!r.ok) venueStillPending.add(r.id); });
 
     // Persist live events/venues, plus any tombstone not yet confirmed synced
     d.events=Object.values(localMap).filter(ev=>!ev._deleted||stillPending.has(ev.id));
@@ -5200,6 +5226,26 @@ function tripNights(t){
 // font files load from gstatic, not googleapis, so its absence meant
 // paying for an extra DNS+TLS handshake on every cold load. Matches
 // the pattern Horizon already used correctly. No other changes.
+// v7.40 (GIG-052): audited this file's ~21 awaits for the same
+// load-speed pass already done to On Budget. Two real, safe wins
+// found (see inline comments at each site for full reasoning):
+// (1) pushAllEvents/pushAllEventsLogged pushed venues one at a time
+// in a sequential loop despite events (right above, same functions)
+// already batching into a single array POST — neither loop tracked
+// per-venue success anyway, so batching venues the same way loses no
+// fault isolation that existed before. (2) the tombstone-confirmation
+// loops in pullFromSupabase (both events and venues) pushed
+// confirmations one at a time despite each being fully independent —
+// converted to Promise.all while preserving each item's individual
+// ok/fail result, since a batched request can't tell you which
+// specific tombstone failed and that per-item outcome is what decides
+// whether a record survives locally as still-pending. Left
+// pushResetVenues (the Reset Venues button) untouched, deliberately —
+// it logs per-venue progress to the sync log during a rare, user-
+// triggered action, and that live feedback matters more there than
+// the speed. No merge or tombstone-reconciliation logic changed —
+// verified via node --check plus a manual test of a multi-tombstone
+// pull and a multi-venue reset.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
