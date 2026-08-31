@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.57</title>
+<title>9-Day Fortnight Tracker v3.58</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -507,6 +507,8 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 /* FT-050: Opex/Capex group headers in the timesheet-codes manager. */
 .cm-group-hdr{font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 2px;}
 .cm-group-hdr.capex{color:var(--blue);}
+/* FT-051: project sub-header, nested under the Opex/Capex group header. */
+.cm-subgroup-hdr{font-size:.6rem;color:var(--muted);opacity:.75;margin:6px 0 2px 6px;padding-left:6px;border-left:2px solid var(--border);}
 .cm-btn{background:none;border:1px solid var(--border);border-radius:6px;color:inherit;font-size:.66rem;padding:3px 9px;cursor:pointer;}
 .cm-form{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
 /* v3.46: was font-size:.72rem (~11.5px) — below iOS Safari's 16px
@@ -540,7 +542,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.57</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.58</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -879,6 +881,19 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.58 (FT-051, supersedes v3.57/FT-050): Codes manager grouping
+// refined per Pete's feedback — the flat Opex/Capex-then-description
+// sort from FT-050 wasn't quite right. Now three levels: Opex/Capex
+// (unchanged, still isCapexCode/FT-040), then a project sub-header
+// within each group, then alphabetical by TASK (not description) within
+// each project — task is what actually varies between codes sharing a
+// project/description, e.g. the four "Team Meetings" rows. The project
+// field's inconsistent formatting (readable names vs raw project
+// numbers) was the reason FT-050 avoided sorting BY it — but that
+// concern doesn't apply to using it as a GROUP key, since codes that
+// share a project belong together regardless of what the string looks
+// like. Applies to both the active and archived lists, same as before.
+//
 // v3.57 (FT-050): Timesheet codes manager grouped and ordered. Looked at
 // the actual code data (SEED_CODES + whatever Pete's added since) — the
 // one categorisation already meaningful in the data, rather than an
@@ -2090,20 +2105,23 @@ function activeCodes(){ return codes.list.filter(function(c){ return !c.archived
 // deleted/missing code, or a code with no value set, defaults to opex —
 // safer than silently counting unclassified time toward the capex %.
 function isCapexCode(c){ return !!(c && c.code && c.code!=='0001'); }
-// FT-050: groups the code manager by the same Opex/Capex distinction
-// already used for capex-target tracking (isCapexCode, FT-040) — that's
-// the one categorisation baked into the data that actually means
-// something to Pete already, rather than inventing a new taxonomy on
-// top of inconsistent project-code formats (some are readable strings
-// like "TRAINING", others are raw project numbers like "5462060000").
-// Opex first (the majority/default category), then alphabetical by
-// description within each group so duplicates are easy to spot when
-// adding a new code.
+// FT-051 (supersedes FT-050's alphabetical-by-description approach, per
+// Pete's feedback): groups the code manager by Opex/Capex (isCapexCode,
+// FT-040) as before, then by `project` within each — this is the level
+// FT-050 originally rejected sorting by (inconsistent string/number
+// formats), but as a GROUP key rather than a sort key that's fine: codes
+// that share a project naturally belong together regardless of what the
+// project string looks like. Within each project, sorted alphabetically
+// by `task` (not `desc` — Pete specifically asked for task-alphabetical,
+// and task is what actually varies between rows sharing the same
+// project/desc, e.g. the four "Team Meetings" entries).
 function sortCodesForDisplay(list){
   return list.slice().sort(function(a,b){
     var ca=isCapexCode(a)?1:0, cb=isCapexCode(b)?1:0;
     if(ca!==cb) return ca-cb;
-    return (a.desc||'').localeCompare(b.desc||'', undefined, {sensitivity:'base'});
+    var pc=(a.project||'').localeCompare(b.project||'', undefined, {sensitivity:'base'});
+    if(pc!==0) return pc;
+    return (a.task||'').localeCompare(b.task||'', undefined, {sensitivity:'base'});
   });
 }
 function capexOpexMins(days){
@@ -3222,13 +3240,14 @@ function renderTimesheet(root){
   });
 
   // ── code manager ──
-  // FT-050: Opex/Capex group headers (sortCodesForDisplay) replace the
-  // previous unsorted list-insertion order.
+  // FT-051: Opex/Capex group headers, then project sub-headers within
+  // each (sortCodesForDisplay) — supersedes FT-050's flatter grouping.
   h+='<div class="cm-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="ts-week-title">Timesheet codes</span><button class="cm-btn" onclick="cmStartNew(\'\')">\uFF0B Add code</button></div>';
-  var lastActiveGrp=null;
+  var lastActiveGrp=null, lastActiveProj=null;
   sortCodesForDisplay(activeCodes()).forEach(function(c){
     var grp=isCapexCode(c)?'capex':'opex';
-    if(grp!==lastActiveGrp){ h+='<div class="cm-group-hdr'+(grp==='capex'?' capex':'')+'">'+(grp==='capex'?'Capex':'Opex')+'</div>'; lastActiveGrp=grp; }
+    if(grp!==lastActiveGrp){ h+='<div class="cm-group-hdr'+(grp==='capex'?' capex':'')+'">'+(grp==='capex'?'Capex':'Opex')+'</div>'; lastActiveGrp=grp; lastActiveProj=null; }
+    if((c.project||'')!==lastActiveProj){ h+='<div class="cm-subgroup-hdr">'+esc(c.project||'(no project)')+'</div>'; lastActiveProj=c.project||''; }
     if(tsEditCodeId===c.id){ h+=cmFormHtml(c); return; }
     h+='<div class="cm-row"><span style="flex:1;min-width:0">'+esc(c.desc)+(c.autoHoliday||c.autoSick?' <span class="alloc-task">(auto '+(c.autoHoliday?'holiday':'')+(c.autoHoliday&&c.autoSick?'+':'')+(c.autoSick?'sick':'')+')</span>':'')+'<br><span class="cm-meta">'+esc(c.project)+' \u00b7 '+esc(c.task)+' \u00b7 '+esc(c.code)+'</span></span>'
       +'<span style="display:flex;gap:6px;flex-shrink:0"><button class="cm-btn" onclick="cmEdit(\''+c.id+'\')">Edit</button><button class="cm-btn" onclick="cmArchive(\''+c.id+'\',true)">Archive</button></span></div>';
@@ -3238,10 +3257,11 @@ function renderTimesheet(root){
   if(arch.length){
     h+='<div style="margin-top:9px"><button class="cm-btn" onclick="cmToggleArchived()">'+(tsShowArchived?'Hide':'Show')+' archived ('+arch.length+')</button></div>';
     if(tsShowArchived){
-      var lastArchGrp=null;
+      var lastArchGrp=null, lastArchProj=null;
       arch.forEach(function(c){
         var grp=isCapexCode(c)?'capex':'opex';
-        if(grp!==lastArchGrp){ h+='<div class="cm-group-hdr'+(grp==='capex'?' capex':'')+'" style="opacity:.55">'+(grp==='capex'?'Capex':'Opex')+'</div>'; lastArchGrp=grp; }
+        if(grp!==lastArchGrp){ h+='<div class="cm-group-hdr'+(grp==='capex'?' capex':'')+'" style="opacity:.55">'+(grp==='capex'?'Capex':'Opex')+'</div>'; lastArchGrp=grp; lastArchProj=null; }
+        if((c.project||'')!==lastArchProj){ h+='<div class="cm-subgroup-hdr" style="opacity:.55">'+esc(c.project||'(no project)')+'</div>'; lastArchProj=c.project||''; }
         h+='<div class="cm-row" style="opacity:.55"><span style="flex:1;min-width:0">'+esc(c.desc)+'<br><span class="cm-meta">'+esc(c.project)+' \u00b7 '+esc(c.task)+' \u00b7 '+esc(c.code)+'</span></span>'
           +'<button class="cm-btn" onclick="cmArchive(\''+c.id+'\',false)">Restore</button></div>';
       });
