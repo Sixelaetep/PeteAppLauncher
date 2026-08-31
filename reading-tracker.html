@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.38</title>
+<title>Reading Tracker v3.39</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -719,7 +719,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.38</span></div>
+    <div class="rt-logo">My Reading <span>v3.39</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1325,8 +1325,16 @@
      googleapis, so its absence meant paying for an extra DNS+TLS
      handshake on every cold load. Matches the pattern Horizon already
      used correctly. No other changes. -->
-<script src="pal-config.js?v=3.38"></script>
-<script src="pal-sync.js?v=3.38"></script>
+<!-- v3.39 (MR-023): parallelized the four independent collection pulls
+     in pullAllFromCloud() (trackers/books/entries/wishlist) via
+     Promise.all — see the inline comment right above that call for
+     full reasoning. Audited the same way as On Budget and GigsAndTrips
+     before it; this file's flat-merge-then-reassemble shape made it a
+     cleaner, lower-risk case than either of those. No merge, tombstone,
+     or reassembly logic changed — verified via node --check and an
+     automated integration test against the real extracted code. -->
+<script src="pal-config.js?v=3.39"></script>
+<script src="pal-sync.js?v=3.39"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -2143,10 +2151,25 @@ async function pullAllFromCloud() {
     const wlLocalOwned  = flat.wishlist.filter(w => w.ownership === "owned").length;
     logSyncDiag(`Wishlist before pull: ${flat.wishlist.length} local (${wlLocalTagged} tagged, ${wlLocalOwned} owned) · cloud has ${wlRows.length} wishlist rows (${wlCloudTagged} tagged, ${wlCloudOwned} owned)`, "info");
 
-    const trackersResult = await _rtTrackers.pull(flat.trackers, 'id', 'updatedAt', rows);
-    const booksResult    = await _rtBooks.pull(flat.books, 'id', 'updatedAt', rows);
-    const entriesResult  = await _rtEntries.pull(flat.entries, 'id', 'updatedAt', rows);
-    const wishlistResult = await _rtWishlist.pull(flat.wishlist, 'id', 'updatedAt', rows);
+    // v3.39 (MR-023): these four were sequential awaits with no
+    // dependency on each other or on one another's results — flat.*
+    // is fully computed above, before any of them run, and none of
+    // trackers/books/entries/wishlist feed into another's pull() call
+    // (unlike a chain where one collection's merge output would need
+    // to exist before the next reads it). reassembleFromSync() below
+    // only runs once, after all four are done, so there's nothing
+    // interleaved between the pulls the way On Budget's per-collection
+    // tombstone sweeps are — this file's simpler flat-merge-then-
+    // reassemble shape made it a genuinely safe target, unlike most of
+    // On Budget's pull chain. Result variables and reassembleFromSync
+    // call are unchanged; only how the four network operations are
+    // scheduled changed.
+    const [trackersResult, booksResult, entriesResult, wishlistResult] = await Promise.all([
+      _rtTrackers.pull(flat.trackers, 'id', 'updatedAt', rows),
+      _rtBooks.pull(flat.books, 'id', 'updatedAt', rows),
+      _rtEntries.pull(flat.entries, 'id', 'updatedAt', rows),
+      _rtWishlist.pull(flat.wishlist, 'id', 'updatedAt', rows)
+    ]);
 
     // v3.29 (MR-016): same check, after the merge — if tagged/owned counts
     // drop here relative to what the cloud actually had (logged just
