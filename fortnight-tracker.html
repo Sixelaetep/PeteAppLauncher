@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.60</title>
+<title>9-Day Fortnight Tracker v3.61</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
@@ -504,6 +504,13 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .cm-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:.75rem;}
 .cm-row:last-child{border-bottom:none;}
 .cm-meta{font-size:.64rem;color:var(--muted);}
+/* FT-053: definition line + up/down reorder stepper in the codes manager. */
+.cm-def{display:block;font-size:.62rem;color:var(--muted);font-style:italic;margin-top:2px;}
+.cm-order-btns{display:flex;flex-direction:column;gap:2px;flex-shrink:0;}
+.cm-order-btn{background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.55rem;line-height:1;padding:2px 5px;cursor:pointer;}
+.cm-order-btn:hover{border-color:var(--amber);color:var(--amber);}
+.cm-order-btn:disabled{opacity:.25;cursor:default;}
+.cm-order-btn:disabled:hover{border-color:var(--border);color:var(--muted);}
 /* FT-050: Opex/Capex group headers in the timesheet-codes manager. */
 /* FT-052: bolder, clearer section/subsection headings in the codes
    manager — group header gets a full-width underline to read as a hard
@@ -547,7 +554,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.60</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.61</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -714,8 +721,8 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <div class="toast" id="toast"></div>
 
 
-<script src="pal-config.js?v=3.60"></script>
-<script src="pal-sync.js?v=3.60"></script>
+<script src="pal-config.js?v=3.61"></script>
+<script src="pal-sync.js?v=3.61"></script>
 <script>
 'use strict';
 // PWA
@@ -886,6 +893,31 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.61 (FT-054 — NOTE: the build brief that requested this labelled it
+// FT-053, but that id was already used by the v3.60 cache-busting entry
+// below, applied in a separate session before this brief arrived.
+// Renumbered to FT-054; flag the collision in Test & Issues): codes
+// manager now shows each code's Definition (if set) as a small italic
+// line under the project/task/code meta, so the purpose of a code is
+// visible without opening Edit. Also adds manual reordering: an up/down
+// stepper on each row lets a code be moved against its immediate
+// neighbour, but ONLY within the same subgroup (opex/capex + project) —
+// it's disabled at the top/bottom of a subgroup rather than letting a
+// move cross into a different project or Opex/Capex, matching "within
+// each section" from the brief. This meant retiring the FT-051
+// alphabetical-by-task tiebreak (a fixed sort and manual reordering
+// can't coexist) in favour of a persisted `order` field. Every existing
+// code gets `order` backfilled once via migrateCodeOrder(), using the
+// OLD alphabetical order as the starting point — so nothing visually
+// jumps the first time this loads; from then on it's whatever Pete's
+// arranged. New codes get order:Date.now(), which always sorts after
+// any migrated index, so they land at the bottom of their subgroup by
+// default. order rides along in the existing jsonb code blob (table
+// fortnight_bundles, code_ prefix) — no Supabase migration needed, and
+// it syncs/merges with the same per-record LWW semantics as every other
+// code field (a losing device's reorder can be overwritten on next sync,
+// same as any other edit — not a new risk this introduces).
+//
 // v3.60 (FT-053): suite-wide load-speed pass, app 2 of the rollout
 // (Claim Tracker was app 1, CLA-014). pal-config.js and pal-sync.js
 // were loaded with no cache-busting query string, so a returning
@@ -1537,6 +1569,7 @@ function pullFromCloud(cb) {
         .then(function(codeResult) {
           codes.list = codeResult.merged.filter(function(c){ return !c._deleted; });
           seedCodesIfEmpty();
+          migrateCodeOrder(); // FT-053: backfill order for any pre-upgrade/other-device codes just pulled in
           // FT-026: same prefetched rows feed the leave-records merge too.
           return _ftLeave.pull(leaveRecs.list, 'id', 'updatedAt', rows);
         })
@@ -2136,24 +2169,46 @@ function activeCodes(){ return codes.list.filter(function(c){ return !c.archived
 // deleted/missing code, or a code with no value set, defaults to opex —
 // safer than silently counting unclassified time toward the capex %.
 function isCapexCode(c){ return !!(c && c.code && c.code!=='0001'); }
-// FT-051 (supersedes FT-050's alphabetical-by-description approach, per
-// Pete's feedback): groups the code manager by Opex/Capex (isCapexCode,
-// FT-040) as before, then by `project` within each — this is the level
-// FT-050 originally rejected sorting by (inconsistent string/number
-// formats), but as a GROUP key rather than a sort key that's fine: codes
-// that share a project naturally belong together regardless of what the
-// project string looks like. Within each project, sorted alphabetically
-// by `task` (not `desc` — Pete specifically asked for task-alphabetical,
-// and task is what actually varies between rows sharing the same
-// project/desc, e.g. the four "Team Meetings" entries).
+// FT-053 (supersedes FT-051's alphabetical-by-task tiebreaker): Opex/
+// Capex then project grouping is unchanged, but within a project, codes
+// are now ordered by a manual, user-set `order` field (via cmMoveCode's
+// up/down buttons) instead of forced alphabetical — Pete asked to be
+// able to reorder within a section, and a fixed alphabetical order would
+// have fought that. Falls back to task-alpha only as a defensive
+// tiebreak for a code that's somehow missing `order` (shouldn't happen
+// post-migrateCodeOrder(), but never sort on `undefined - undefined`).
 function sortCodesForDisplay(list){
   return list.slice().sort(function(a,b){
     var ca=isCapexCode(a)?1:0, cb=isCapexCode(b)?1:0;
     if(ca!==cb) return ca-cb;
     var pc=(a.project||'').localeCompare(b.project||'', undefined, {sensitivity:'base'});
     if(pc!==0) return pc;
+    var oa=typeof a.order==='number'?a.order:Infinity, ob=typeof b.order==='number'?b.order:Infinity;
+    if(oa!==ob) return oa-ob;
     return (a.task||'').localeCompare(b.task||'', undefined, {sensitivity:'base'});
   });
+}
+// FT-053: backfills the `order` field for any code that doesn't have one
+// yet (every code created before this release, plus anything pulled
+// from a device/cloud copy that predates it), using the OLD fixed sort
+// (opex/capex \u2192 project \u2192 task-alpha, hardcoded here rather than
+// reusing sortCodesForDisplay above, since that function now depends on
+// `order` \u2014 this is what establishes it) so nothing visually jumps the
+// first time someone opens the updated app. Idempotent: only touches
+// codes missing a numeric order, safe to call on every load/pull.
+function migrateCodeOrder(){
+  var legacySorted=codes.list.slice().sort(function(a,b){
+    var ca=isCapexCode(a)?1:0, cb=isCapexCode(b)?1:0;
+    if(ca!==cb) return ca-cb;
+    var pc=(a.project||'').localeCompare(b.project||'', undefined, {sensitivity:'base'});
+    if(pc!==0) return pc;
+    return (a.task||'').localeCompare(b.task||'', undefined, {sensitivity:'base'});
+  });
+  var changed=[];
+  legacySorted.forEach(function(c,i){
+    if(typeof c.order!=='number'){ c.order=i; changed.push(c); }
+  });
+  if(changed.length){ saveLocal(); changed.forEach(function(c){ sbUpsertCode(c); }); }
 }
 function capexOpexMins(days){
   var capex=0, opex=0;
@@ -2711,7 +2766,7 @@ function cmSave(){
   var hol=document.getElementById('cm-hol').checked, sick=document.getElementById('cm-sick').checked;
   var c;
   if(tsEditCodeId==='__new__'){
-    c={ id:'c'+Date.now().toString(36), desc:desc, project:g('cm-project'), task:g('cm-task'), code:g('cm-code'), definition:g('cm-def'), archived:false, autoHoliday:hol, autoSick:sick, updatedAt:'' };
+    c={ id:'c'+Date.now().toString(36), desc:desc, project:g('cm-project'), task:g('cm-task'), code:g('cm-code'), definition:g('cm-def'), archived:false, autoHoliday:hol, autoSick:sick, updatedAt:'', order:Date.now() };
     codes.list.push(c);
   } else {
     c=codeById(tsEditCodeId); if(!c) return;
@@ -2732,6 +2787,26 @@ function cmArchive(id,val){
   c.archived=val;
   saveCode(c);
   toast(val?'Code archived — hidden from pickers, history intact':'Code restored','ok');
+  render();
+}
+// FT-053: swaps the `order` value between a code and its immediate
+// neighbour, scoped to the SAME subgroup (opex/capex status + project)
+// within whichever list (active or archived) the code belongs to —
+// reordering can never cross a section boundary, matching the brief's
+// "within each section" wording. A no-op at the top/bottom of a
+// subgroup (the render-time canUp/canDown check already hides the
+// button there, but this guards direct calls too).
+function cmMoveCode(id,dir){
+  var c=codeById(id); if(!c) return;
+  var pool=c.archived?codes.list.filter(function(o){return o.archived;}):activeCodes();
+  var sorted=sortCodesForDisplay(pool);
+  var idx=sorted.findIndex(function(o){return o.id===id;});
+  if(idx<0) return;
+  var neighbor=sorted[idx+dir];
+  if(!neighbor) return;
+  if(isCapexCode(neighbor)!==isCapexCode(c) || (neighbor.project||'')!==(c.project||'')) return;
+  var tmp=c.order; c.order=neighbor.order; neighbor.order=tmp;
+  saveCode(c); saveCode(neighbor);
   render();
 }
 
@@ -3271,17 +3346,25 @@ function renderTimesheet(root){
   });
 
   // ── code manager ──
-  // FT-052: group headers are bold with an underline, subgroup headers
-  // bold with a colour-matched left border, so both read as clear
-  // headings rather than the previous quiet/regular-weight labels.
+  // FT-053: definition line shown per row; up/down stepper reorders a
+  // code against its immediate neighbour within the same subgroup only
+  // (cmMoveCode) — canUp/canDown look at the already-sorted array's
+  // adjacent entries rather than re-deriving boundaries separately, so
+  // the buttons can never disagree with what cmMoveCode will actually do.
   h+='<div class="cm-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="ts-week-title">Timesheet codes</span><button class="cm-btn" onclick="cmStartNew(\'\')">\uFF0B Add code</button></div>';
   var lastActiveGrp=null, lastActiveProj=null;
-  sortCodesForDisplay(activeCodes()).forEach(function(c){
+  var activeSorted=sortCodesForDisplay(activeCodes());
+  activeSorted.forEach(function(c,idx){
     var grp=isCapexCode(c)?'capex':'opex';
     if(grp!==lastActiveGrp){ h+='<div class="cm-group-hdr'+(grp==='capex'?' capex':'')+'">'+(grp==='capex'?'Capex':'Opex')+'</div>'; lastActiveGrp=grp; lastActiveProj=null; }
     if((c.project||'')!==lastActiveProj){ h+='<div class="cm-subgroup-hdr'+(grp==='capex'?' capex':'')+'">'+esc(c.project||'(no project)')+'</div>'; lastActiveProj=c.project||''; }
     if(tsEditCodeId===c.id){ h+=cmFormHtml(c); return; }
-    h+='<div class="cm-row"><span style="flex:1;min-width:0">'+esc(c.desc)+(c.autoHoliday||c.autoSick?' <span class="alloc-task">(auto '+(c.autoHoliday?'holiday':'')+(c.autoHoliday&&c.autoSick?'+':'')+(c.autoSick?'sick':'')+')</span>':'')+'<br><span class="cm-meta">'+esc(c.project)+' \u00b7 '+esc(c.task)+' \u00b7 '+esc(c.code)+'</span></span>'
+    var prevC=activeSorted[idx-1], nextC=activeSorted[idx+1];
+    var canUp=prevC && isCapexCode(prevC)===isCapexCode(c) && (prevC.project||'')===(c.project||'');
+    var canDown=nextC && isCapexCode(nextC)===isCapexCode(c) && (nextC.project||'')===(c.project||'');
+    h+='<div class="cm-row">'
+      +'<span class="cm-order-btns"><button class="cm-order-btn"'+(canUp?'':' disabled')+' onclick="cmMoveCode(\''+c.id+'\',-1)" title="Move up">\u25B2</button><button class="cm-order-btn"'+(canDown?'':' disabled')+' onclick="cmMoveCode(\''+c.id+'\',1)" title="Move down">\u25BC</button></span>'
+      +'<span style="flex:1;min-width:0">'+esc(c.desc)+(c.autoHoliday||c.autoSick?' <span class="alloc-task">(auto '+(c.autoHoliday?'holiday':'')+(c.autoHoliday&&c.autoSick?'+':'')+(c.autoSick?'sick':'')+')</span>':'')+'<br><span class="cm-meta">'+esc(c.project)+' \u00b7 '+esc(c.task)+' \u00b7 '+esc(c.code)+'</span>'+(c.definition?'<span class="cm-def">'+esc(c.definition)+'</span>':'')+'</span>'
       +'<span style="display:flex;gap:6px;flex-shrink:0"><button class="cm-btn" onclick="cmEdit(\''+c.id+'\')">Edit</button><button class="cm-btn" onclick="cmArchive(\''+c.id+'\',true)">Archive</button></span></div>';
   });
   if(tsEditCodeId==='__new__') h+=cmFormHtml(null);
@@ -3290,11 +3373,16 @@ function renderTimesheet(root){
     h+='<div style="margin-top:9px"><button class="cm-btn" onclick="cmToggleArchived()">'+(tsShowArchived?'Hide':'Show')+' archived ('+arch.length+')</button></div>';
     if(tsShowArchived){
       var lastArchGrp=null, lastArchProj=null;
-      arch.forEach(function(c){
+      arch.forEach(function(c,idx){
         var grp=isCapexCode(c)?'capex':'opex';
         if(grp!==lastArchGrp){ h+='<div class="cm-group-hdr'+(grp==='capex'?' capex':'')+'" style="opacity:.55">'+(grp==='capex'?'Capex':'Opex')+'</div>'; lastArchGrp=grp; lastArchProj=null; }
         if((c.project||'')!==lastArchProj){ h+='<div class="cm-subgroup-hdr'+(grp==='capex'?' capex':'')+'" style="opacity:.55">'+esc(c.project||'(no project)')+'</div>'; lastArchProj=c.project||''; }
-        h+='<div class="cm-row" style="opacity:.55"><span style="flex:1;min-width:0">'+esc(c.desc)+'<br><span class="cm-meta">'+esc(c.project)+' \u00b7 '+esc(c.task)+' \u00b7 '+esc(c.code)+'</span></span>'
+        var prevC=arch[idx-1], nextC=arch[idx+1];
+        var canUp=prevC && isCapexCode(prevC)===isCapexCode(c) && (prevC.project||'')===(c.project||'');
+        var canDown=nextC && isCapexCode(nextC)===isCapexCode(c) && (nextC.project||'')===(c.project||'');
+        h+='<div class="cm-row" style="opacity:.55">'
+          +'<span class="cm-order-btns"><button class="cm-order-btn"'+(canUp?'':' disabled')+' onclick="cmMoveCode(\''+c.id+'\',-1)" title="Move up">\u25B2</button><button class="cm-order-btn"'+(canDown?'':' disabled')+' onclick="cmMoveCode(\''+c.id+'\',1)" title="Move down">\u25BC</button></span>'
+          +'<span style="flex:1;min-width:0">'+esc(c.desc)+'<br><span class="cm-meta">'+esc(c.project)+' \u00b7 '+esc(c.task)+' \u00b7 '+esc(c.code)+'</span>'+(c.definition?'<span class="cm-def">'+esc(c.definition)+'</span>':'')+'</span>'
           +'<button class="cm-btn" onclick="cmArchive(\''+c.id+'\',false)">Restore</button></div>';
       });
     }
@@ -4390,6 +4478,7 @@ window.PalSync.initSession({
 // BOOT
 load();
 seedCodesIfEmpty(); // FT-020: starter code set on first run (fixed ids — multi-device safe)
+migrateCodeOrder(); // FT-053: backfill order for any code saved before this release
 seedBankHolidaysIfEmpty(); // FT-030: starter bank holiday set on first run
 setSyncStatus('connecting');
 render();
