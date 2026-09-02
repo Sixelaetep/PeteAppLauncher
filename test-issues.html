@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.61</title>
+<title>Test &amp; Issues v1.62</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -474,7 +474,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.61</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.62</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -598,7 +598,8 @@
       <button class="action-btn" id="btn-select-all" onclick="selectAllVisible()">Select All</button>
       <button class="action-btn" id="btn-clear-sel" onclick="clearSelection()" style="display:none">Clear</button>
       <button class="action-btn green" id="btn-create-brief" onclick="generateInlineBrief()" style="display:none">📋 Create Brief</button>
-      <button class="action-btn" onclick="openArchiveIssuesModal()" style="margin-left:auto;font-size:11px;padding:4px 10px">📦 Archive</button>
+      <button class="action-btn" onclick="openIssueImportModal()" style="margin-left:auto;font-size:11px;padding:4px 10px">⬆ Import</button>
+      <button class="action-btn" onclick="openArchiveIssuesModal()" style="font-size:11px;padding:4px 10px">📦 Archive</button>
     </div>
     <div id="issues-list"></div>
     <div id="issues-empty" class="empty-state" style="display:none">
@@ -761,6 +762,56 @@
   </div>
 </div>
 
+<!-- ── Import Issues modal (TI-074) — paste step ── -->
+<div class="modal-overlay hidden" id="modal-issue-import" onclick="if(event.target===this)closeIssueImportModal()">
+  <div class="modal">
+    <h3>⬆ Import Issues</h3>
+    <label>Paste issues JSON</label>
+    <textarea id="issue-import-paste" style="width:100%;height:140px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--ink);font-size:16px;font-family:monospace;outline:none;resize:vertical" placeholder='{"schemaVersion":1,"type":"issues","issues":[...]}'></textarea>
+    <details style="margin:12px 0 4px">
+      <summary style="cursor:pointer;font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Expected format &amp; app prefixes</summary>
+      <div class="brief-box" style="margin-top:8px">{
+  "schemaVersion": 1,
+  "type": "issues",
+  "issues": [
+    {
+      "app": "fortnight-tracker",
+      "title": "Short issue title",
+      "desc": "Longer description / steps to reproduce (optional)",
+      "priority": "medium",
+      "status": "open"
+    }
+  ]
+}</div>
+      <p style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.7">
+        <b>app</b> — any of: slug, full name, or prefix shown below.<br>
+        <b>priority</b> — high / medium / low (default medium).<br>
+        <b>status</b> — open / build / deployed / wontfix (default open).<br>
+        Add more objects to the <b>issues</b> array to import several at once — one is fine too.
+      </p>
+      <div id="issue-import-prefix-list" style="font-size:11px;color:var(--ink2);margin-top:8px;line-height:1.9"></div>
+    </details>
+    <div class="modal-row" style="margin-top:12px">
+      <button class="modal-btn" onclick="closeIssueImportModal()">Cancel</button>
+      <button class="modal-btn" onclick="pasteFromClipboard('issue-import-paste')">📋 Paste</button>
+      <button class="modal-btn primary" onclick="issueImportFromPaste()">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Import Issues modal (TI-074) — confirm/preview step ── -->
+<div class="modal-overlay hidden" id="modal-issue-import-confirm" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal">
+    <h3>⬆ Confirm Import</h3>
+    <p style="font-size:12px;color:var(--ink2);margin-bottom:14px" id="issue-import-summary"></p>
+    <div id="issue-import-body" style="max-height:280px;overflow-y:auto"></div>
+    <div class="modal-row">
+      <button class="modal-btn" onclick="document.getElementById('modal-issue-import-confirm').classList.add('hidden')">Cancel</button>
+      <button class="modal-btn primary" id="issue-import-confirm-btn" onclick="confirmIssueImport()">Import</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Fail Note Modal ── -->
 <div class="modal-overlay hidden" id="modal-fail" onclick="if(event.target===this)this.classList.add('hidden')">
   <div class="modal">
@@ -840,6 +891,33 @@
      itself carries no version data (id/name/emoji/prefix/aliases only),
      so nothing there needed touching. No manifest-schema, sync, or UI
      logic touched — verified via node --check. -->
+<!-- v1.62 (TI-074): new Import Issues feature — a second, distinct import
+     path alongside the existing release-manifest import. Adds a new
+     schemaVersion:1 manifest type "issues" (an array of 1-many issue
+     objects) so issues drafted in a Claude chat can be pasted straight
+     in, individually or in bulk, instead of logged one at a time via
+     the Log Issue form. Lives entirely on the Issues tab: new "⬆ Import"
+     button opens a paste modal, which hands off to a confirm-preview
+     modal showing each issue's resolved app (or a flagged unresolved
+     app) before anything is written. App resolution reuses the existing
+     resolveCanonicalAppId() (slug/alias/id) with two new fallbacks —
+     match by registry prefix (FT, ON-, GYM, etc., case/dash-tolerant)
+     and match by full app name — so a manifest can reference an app by
+     whichever of slug/prefix/name is most natural. Unresolved apps are
+     skipped (not guessed) and listed in the post-import toast. Created
+     issues go through the exact same state.issues[id] shape and
+     nextIssueId() sequencing as the Log Issue form, so they're
+     indistinguishable from manually logged issues and fully backwards
+     compatible with existing JSON backups (no schema change to the
+     backup format — only ordinary new issue records). Kept as its own
+     function set (processIssuesManifestText / confirmIssueImport etc.)
+     rather than extended onto the release importer, since the two
+     manifest types resolve to completely different state writes and
+     conflating them risked the release path silently accepting a
+     malformed issues payload or vice versa. No changes to release
+     import, sync engine, or launcher card fields. Verified via
+     node --check, duplicate ID scan, dangling handler scan, and a
+     functional test importing a 3-issue / 1-unresolved-app manifest. -->
 <!-- v1.61 (TI-073): fixes the exact class of bug this ticket reported.
      Root cause found in migrateAppRegistry's nextSeq safety net: it only
      scanned state.issues keys for the highest id in use, so an id
@@ -877,9 +955,9 @@
      manifest-schema, sync, or data logic touched — verified via
      node --check, duplicate ID scan, dangling handler scan, and a
      functional test of the shared functions. -->
-<script src="pal-config.js?v=1.61"></script>
-<script src="pal-sync.js?v=1.61"></script>
-<script src="pal-utils.js?v=1.61"></script>
+<script src="pal-config.js?v=1.62"></script>
+<script src="pal-sync.js?v=1.62"></script>
+<script src="pal-utils.js?v=1.62"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // STORAGE ABSTRACTION
@@ -2708,6 +2786,138 @@ async function confirmImport() {
       _syncLock = false;
     }
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// IMPORT ISSUES (TI-074)
+// ══════════════════════════════════════════════════════════════════
+// A second, distinct import path from the release-manifest importer
+// above. Manifest shape: { schemaVersion:1, type:"issues", issues:[...] }
+// — always an array, whether it holds one issue or many. Kept separate
+// from processManifestText/confirmImport rather than merged in: the two
+// manifest types write completely different state, and a shared path
+// risked one accepting the other's malformed payload silently.
+let _pendingIssueImport = null;
+
+function openIssueImportModal() {
+  document.getElementById('issue-import-paste').value = '';
+  const list = document.getElementById('issue-import-prefix-list');
+  list.innerHTML = APP_REGISTRY.map(r => `${r.emoji} <b>${esc(r.name)}</b> — <code>${esc(r.prefix)}</code> / <code>${esc(r.id)}</code>`).join('<br>');
+  document.getElementById('modal-issue-import').classList.remove('hidden');
+  setTimeout(() => document.getElementById('issue-import-paste').focus(), 100);
+}
+
+function closeIssueImportModal() {
+  document.getElementById('modal-issue-import').classList.add('hidden');
+}
+
+function issueImportFromPaste() {
+  const txt = document.getElementById('issue-import-paste').value.trim();
+  if (!txt) { toast('Paste issues JSON first'); return; }
+  closeIssueImportModal();
+  processIssuesManifestText(txt);
+}
+
+// Resolves an "app" field from an issues-import manifest to a canonical
+// APP_REGISTRY id. Tries, in order: the existing slug/alias/id resolver
+// (resolveCanonicalAppId), then registry prefix (case- and trailing-
+// dash-tolerant, so "FT", "ft", "ON", "on-" all work), then full
+// registry name. Returns null — never a guess — if nothing matches, so
+// the confirm screen can flag it rather than silently mis-filing it.
+function resolveAppForImport(raw) {
+  if (!raw) return null;
+  const direct = resolveCanonicalAppId(raw);
+  if (direct) return direct;
+  const norm = String(raw).trim().toLowerCase().replace(/-+$/, '');
+  for (const r of APP_REGISTRY) {
+    if (r.prefix.toLowerCase().replace(/-+$/, '') === norm) return r.id;
+    if (r.name.toLowerCase() === String(raw).trim().toLowerCase()) return r.id;
+  }
+  return null;
+}
+
+function processIssuesManifestText(txt) {
+  try {
+    const manifest = JSON.parse(txt);
+    if (manifest.schemaVersion !== 1) throw new Error('Unknown schema version');
+    if (manifest.type !== 'issues') throw new Error('Only "issues" manifests are supported here — release manifests still go in the Tests tab');
+    const list = Array.isArray(manifest.issues) ? manifest.issues : [];
+    if (!list.length) throw new Error('No entries found in "issues" array');
+    _pendingIssueImport = list;
+    showIssueImportConfirm(list);
+  } catch(e) {
+    toast('Import failed: ' + e.message);
+  }
+}
+
+function showIssueImportConfirm(list) {
+  const rows = list.map(item => {
+    const canonicalId = resolveAppForImport(item.app);
+    const reg = canonicalId ? APP_REGISTRY.find(r => r.id === canonicalId) : null;
+    const title = String(item.title||'').trim();
+    const appLabel = reg ? `${reg.emoji} ${esc(reg.name)}` : `⚠️ Unknown app: ${esc(item.app||'(none)')}`;
+    const problem = !title ? ' <span style="color:var(--red)">— missing title, will be skipped</span>' : (!reg ? ' <span style="color:var(--red)">— will be skipped</span>' : '');
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;color:var(--ink)">${esc(title||'(untitled)')}</div>
+      <div style="font-size:11px;color:var(--ink2);margin-top:2px">${appLabel} · ${esc(item.priority||'medium')} · ${esc(item.status||'open')}${problem}</div>
+    </div>`;
+  }).join('');
+  const importable = list.filter(item => resolveAppForImport(item.app) && String(item.title||'').trim()).length;
+  const skipped = list.length - importable;
+  document.getElementById('issue-import-summary').textContent =
+    `${list.length} issue${list.length!==1?'s':''} found — ${importable} ready to import` + (skipped ? `, ${skipped} will be skipped` : '');
+  document.getElementById('issue-import-body').innerHTML = rows;
+  document.getElementById('issue-import-confirm-btn').disabled = importable === 0;
+  document.getElementById('modal-issue-import-confirm').classList.remove('hidden');
+}
+
+async function confirmIssueImport() {
+  const list = _pendingIssueImport;
+  if (!list) return;
+  document.getElementById('modal-issue-import-confirm').classList.add('hidden');
+
+  const createdIds  = [];
+  const touchedApps = new Set();
+  let skipped = 0;
+
+  list.forEach(item => {
+    const title = String(item.title||'').trim();
+    const canonicalId = resolveAppForImport(item.app);
+    if (!title || !canonicalId) { skipped++; return; }
+
+    const reg = APP_REGISTRY.find(r => r.id === canonicalId);
+    if (!state.apps[canonicalId] && reg) {
+      state.apps[canonicalId] = { id: reg.id, name: reg.name, emoji: reg.emoji, prefix: reg.prefix, versions: [] };
+      if (!state.nextSeq[reg.prefix]) state.nextSeq[reg.prefix] = 1;
+    }
+    const app = state.apps[canonicalId];
+    if (!app) { skipped++; return; } // app known to registry but not locally resolvable — shouldn't happen, belt & braces
+
+    const priority = ['high','medium','low'].includes(item.priority) ? item.priority : 'medium';
+    const status   = ['open','build','deployed','wontfix'].includes(item.status) ? item.status : 'open';
+    const id = nextIssueId(app.prefix);
+    state.issues[id] = {
+      id, appId: canonicalId, title,
+      desc: String(item.desc || item.description || '').trim(),
+      priority, status,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    createdIds.push(id);
+    touchedApps.add(canonicalId);
+  });
+
+  saveState();
+  _pendingIssueImport = null;
+  renderTab(currentTab);
+  refreshStats();
+
+  const skipNote = skipped ? ` · ${skipped} skipped` : '';
+  toast(createdIds.length ? `✓ Imported ${createdIds.length} issue${createdIds.length!==1?'s':''}${skipNote}` : `No issues imported${skipNote}`);
+
+  createdIds.forEach(id => { if (state.issues[id]) syncIssue(state.issues[id]); });
+  touchedApps.forEach(id => { if (state.apps[id]) syncApp(state.apps[id]); });
+  if (createdIds.length) syncMeta();
 }
 
 // ══════════════════════════════════════════════════════════════════
