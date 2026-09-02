@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.64</title>
+<title>P Apps v10.65</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -623,7 +623,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.64</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.65</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -737,7 +737,7 @@
       <div class="card-stat muted" id="stat-reading"><span class="card-stat-dot"></span><span id="stat-reading-val">—</span></div>
     </div>
 
-    <!-- Work section — Fortnight, then Claim. Label carries pete-only too,
+    <!-- Work section — Fortnight only now. Label carries pete-only too,
          since every card underneath it is pete-only — otherwise Lex would
          see an orphaned "WORK" heading over an empty section.
          PET-068 v10.53: Vault card (previously last here) removed — see
@@ -747,7 +747,16 @@
          Budget: PET-060/GIG-032; Gym/Reading: GYM-062). Wrapper removed
          entirely rather than just forcing display:contents, matching the
          GYM-062 precedent of leaving no dead id/JS behind — the now-unused
-         .card-pair CSS rule was removed too. -->
+         .card-pair CSS rule was removed too.
+         PET-070 v10.65: standalone Claim Tracker card removed. Its stat
+         line now folds into the Fortnight card itself (statFortnight()
+         appends a claims summary sourced from statClaims(), same
+         precedent as the holiday-remaining line at PET-054). The
+         "View claims" quick-action button below reuses the existing
+         launchFortnightClaims() deep-link (FT-041) untouched — same
+         .card-actions/.card-action-btn pattern already used for On
+         Budget's "+ Add spend" (ON--045) — so the one-tap jump straight
+         to the Claims tab is preserved, just relocated onto this card. -->
     <div class="grid-section-label pete-only">🧰 Work</div>
 
     <div class="app-card pete-only" style="--card-color:#f5a623" onclick="switchTo('fortnight', document.querySelector('[data-target=fortnight]'))">
@@ -756,14 +765,9 @@
         <div class="card-name">9-Day Fortnight</div>
       </div>
       <div class="card-stat muted" id="stat-fortnight"><span class="card-stat-dot"></span><span id="stat-fortnight-val">—</span></div>
-    </div>
-
-    <div class="app-card pete-only" style="--card-color:#f78166" onclick="launchFortnightClaims(event)">
-      <div class="card-top">
-        <div class="card-icon">💷</div>
-        <div class="card-name">Claim Tracker</div>
+      <div class="card-actions">
+        <button class="card-action-btn" onclick="launchFortnightClaims(event)">💷 View claims</button>
       </div>
-      <div class="card-stat muted" id="stat-claims"><span class="card-stat-dot"></span><span id="stat-claims-val">—</span></div>
     </div>
 
   </div>
@@ -927,7 +931,7 @@
      launcher boot) was already in place and is untouched — a genuine
      existing optimisation, not part of this issue. No card, nav, or
      session-relay logic touched — verified via node --check. -->
-<script src="pal-config.js?v=10.64"></script>
+<script src="pal-config.js?v=10.65"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -1523,6 +1527,12 @@ function statReading() {
 // tickTimers()/timerElapsedMs() pattern so the card stays live without
 // re-reading and re-parsing localStorage every second.
 let _ftRunningTimer = null;
+// PET-070 v10.65: cache of statClaims()' rendered summary line, folded
+// into the Fortnight card by statFortnight() (see _claimsLineHTML use
+// there). Populated by statClaims(), which now runs first in
+// refreshCardStats() precisely so this is ready in time — see that
+// function's ordering.
+let _claimsLineHTML = '';
 function ftFmtHMS(ms) {
   const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
@@ -1777,11 +1787,17 @@ function statFortnight() {
     } catch(_) {}
 
     // Write directly to avoid inline-span constraint
+    // PET-070 v10.65: _claimsLineHTML appended last — see statClaims()
+    // below, which now caches its render here instead of writing to the
+    // (now-removed) standalone Claim Tracker card. refreshCardStats()
+    // calls statClaims() before statFortnight() so the cache is always
+    // fresh by the time it's read here; _claimsLineHTML defaults to ''
+    // (see declaration) so a first-paint race is harmless either way.
     const statEl = document.getElementById('stat-fortnight');
     if (statEl) {
       const mode = hOver ? 'warn' : doneCount === totalDays ? 'ok' : '';
       statEl.className = 'card-stat' + (mode ? ' ' + mode : '');
-      statEl.innerHTML = todayLine + timerLine + hBar + holLine;
+      statEl.innerHTML = todayLine + timerLine + hBar + holLine + _claimsLineHTML;
     }
   } catch(e) {
     setCardStat('stat-fortnight', 'Open app to load', 'muted');
@@ -1848,11 +1864,29 @@ function statFortnight() {
 // already established at v10.45. Nav icon colour, backup wiring, health
 // check, and everything else from v10.45 deliberately left untouched —
 // scoped to the dashboard card only, per Pete's request.
+// v10.65 (PET-070): standalone Claim Tracker home-grid card removed —
+// Pete navigates to Claims from within Fortnight Tracker now that both
+// live in the same app (FT-041 already did the nav-icon/tab merge back
+// at v10.55; this finishes the job on the dashboard card). statClaims()
+// no longer owns a card — it now caches its rendered line into
+// _claimsLineHTML, which statFortnight() appends to the Fortnight
+// card's own innerHTML (same pattern as the PET-054 holiday-remaining
+// line). The "View claims" quick-action button reuses the existing
+// launchFortnightClaims() deep-link untouched, same .card-actions/
+// .card-action-btn pattern as On Budget's "+ Add spend" (ON--045) — so
+// the one-tap jump straight to the Claims tab is preserved. iframe,
+// backup-panel entry, HEALTH_APPS/BACKUP_ROW_MAP/PAL_NAV_SLUG_MAP
+// entries all deliberately UNCHANGED, same as FT-041 — Claim Tracker is
+// still a real standalone app, only its dashboard card is gone.
 function refreshCardStats() {
   statGigs();
   statReading();
-  statFortnight();
+  // PET-070 v10.65: statClaims() now runs before statFortnight() —
+  // it only caches HTML into _claimsLineHTML rather than touching the
+  // DOM (its own card is gone), and statFortnight() reads that cache
+  // while building the Fortnight card's innerHTML.
   statClaims();
+  statFortnight();
   statGym();
   statOnBudget();
   updateBackupExportDates(); // PET-053: populate last-export dates in backup rows
@@ -2794,11 +2828,18 @@ function statGym() {
 }
 // PET-053 v10.31: statOnBudget removed — On Budget retired.
 
-// ── Claim Tracker card stat ────────────────────────────────────────
+// ── Claim Tracker summary (PET-070 v10.65: folded into Fortnight card) ──
+// No longer writes to its own card — that card is gone. Instead builds
+// a compact line into the module-level _claimsLineHTML cache, which
+// statFortnight() appends to its own render. Math/logic below is
+// otherwise byte-identical to the pre-PET-070 version (still the same
+// deliberate replica of Claim Tracker's own unclaimed-mileage total —
+// see the CLA-011/PET-063 history further down); only the output target
+// changed.
 function statClaims() {
   try {
     const raw = localStorage.getItem('claim_tracker_v1');
-    if (!raw) { setCardStat('stat-claims', 'No claims yet', 'muted'); return; }
+    if (!raw) { _claimsLineHTML = claimsLineWrap('No claims yet', 'muted'); return; }
     const parsed = JSON.parse(raw);
     // Support envelope format (d.data.entries) and legacy flat format (d.entries)
     const d = parsed.data || parsed;
@@ -2815,7 +2856,7 @@ function statClaims() {
 
     // Only include entries that are unclaimed, not deleted, and within the claim window
     const unclaimed = (d.entries || []).filter(e => !e.claimed && !e._deleted && !ctExpired(e));
-    if (!unclaimed.length) { setCardStat('stat-claims', 'Nothing to claim', 'muted'); return; }
+    if (!unclaimed.length) { _claimsLineHTML = claimsLineWrap('Nothing to claim', 'muted'); return; }
     const ow      = d.settings?.commuteOw   || 11.5;
     const rate    = d.settings?.ratePerMile || 0.55;
     // CLA-011: passenger mileage rate, mirrored from Claim Tracker's own
@@ -2855,14 +2896,28 @@ function statClaims() {
     const breakdownLine = breakdownParts.length
       ? '<span style="display:block;font-size:10px;color:var(--ink2);margin-top:2px">' + breakdownParts.join(' · ') + '</span>'
       : '';
-    setCardStat('stat-claims',
+    _claimsLineHTML = claimsLineWrap(
       '<span class="val">£' + total.toFixed(2) + '</span> to claim · ' + unclaimed.length + ' entr' + (unclaimed.length === 1 ? 'y' : 'ies') +
       '<span style="display:block;font-size:10px;color:var(--ink2);margin-top:2px">Submit ' + subFmt + ' · ' + days + ' day' + (days === 1 ? '' : 's') + ' away</span>' +
       breakdownLine,
       total > 0 ? 'ok' : '');
   } catch(e) {
-    setCardStat('stat-claims', 'Open app to load', 'muted');
+    _claimsLineHTML = claimsLineWrap('Open app to load', 'muted');
   }
+}
+
+// PET-070 v10.65: wraps a statClaims() message in the same
+// .card-stat-row visual language as the Fortnight card's other lines
+// (todayLine/timerLine/holLine above) — dot + 💷 icon + text, with a
+// top margin/divider so it reads as a distinct block under the hours
+// bar rather than running into holLine. 'ok' mode tints the dot/amount
+// green (mirrors the old card's 'ok' setCardStat mode); 'muted' greys
+// the dot for the empty states.
+function claimsLineWrap(html, mode) {
+  const dotColour = mode === 'ok' ? '#3fb950' : mode === 'muted' ? 'var(--ink3)' : undefined;
+  return '<div class="card-stat-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">' +
+    '<span class="card-stat-dot"' + (dotColour ? ' style="background:' + dotColour + '"' : '') + '></span>' +
+    '<span>💷 ' + html + '</span></div>';
 }
 
 // PET-068 v10.53: statTi() removed — its card (and #stat-ti/#stat-ti-val)
