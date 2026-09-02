@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.16</title>
+<title>Claim Tracker v2.17</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -202,6 +202,20 @@
   .month-label{font-size:13px;font-weight:600;color:var(--ink)}
   .month-detail{font-size:11px;color:var(--ink2);margin-top:2px}
   .month-amount{font-size:15px;font-weight:700;color:var(--accent2);flex-shrink:0}
+  /* v2.17 (CLA-014): expandable rows in Stats — one row per previous
+     claim (a batch marked claimed together, keyed by claimed_date),
+     not per calendar month. Reuses the existing .month-row/.month-*
+     classes (originally built for the old By Month grouping) since the
+     visual shape is identical — just renders a claim-event label
+     instead of a month label. */
+  .month-row.expandable{cursor:pointer}
+  .month-row-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .claim-toggle-icon{font-size:11px;color:var(--ink3);transition:transform 0.15s}
+  .claim-toggle-icon.open{transform:rotate(180deg)}
+  .claim-detail-list{display:none;padding:2px 0 12px}
+  .claim-detail-list.open{display:block}
+  .claim-detail-list .entry-item{margin-bottom:8px}
+  .claim-detail-list .entry-item:last-child{margin-bottom:0}
 
   .empty-state{text-align:center;padding:48px 24px;color:var(--ink2)}
   .empty-state .empty-icon{font-size:48px;margin-bottom:14px}
@@ -253,7 +267,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.16</div>
+        <div class="ver">v2.17</div>
       </div>
     </div>
     <div class="header-actions">
@@ -384,7 +398,7 @@
   <div class="tab-panel" id="panel-stats">
     <div class="section-title" style="margin-top:0">All-Time Stats</div>
     <div class="stats-grid" id="allTimeStats"></div>
-    <div class="section-title">By Month (Claimed)</div>
+    <div class="section-title">Previous Claims</div>
     <div class="card" id="monthStats"></div>
   </div>
 
@@ -534,8 +548,8 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=2.16"></script>
-<script src="pal-sync.js?v=2.16"></script>
+<script src="pal-config.js?v=2.17"></script>
+<script src="pal-sync.js?v=2.17"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -572,6 +586,26 @@
 // setSyncState() to show "N pending sync" instead of a bare error while
 // a retry is queued. Every sync error log message now also runs through
 // the shared PalSync.errorHint() instead of a bare err.message.
+// v2.17 (CLA-014, NOTE — issue-ID collision: this brief's CLA-014 is a
+// different issue to the CLA-014 already shipped in v2.16 below (cache-
+// busting load-speed pass). Flagged to Pete; not renumbered here since
+// the brief specified CLA-014 explicitly — check Test & Issues for a
+// duplicate ID before the next release, same handling as the CLA-012
+// collision noted in v2.13). Stats tab gets a new "Previous Claims"
+// section, replacing the old "By Month (Claimed)" summary: each row is
+// one claim EVENT — a batch of entries marked claimed together on the
+// same date, matching the grouping the Claims tab's own "Claimed
+// Entries" list already uses — and expands on tap to show every entry
+// in that claim, rendered with the existing renderEntry() (same detail,
+// same Edit/Unclaim/Delete actions as the Claims tab, so behaviour
+// stays consistent and no new entry-rendering logic was written).
+// Purely additive to renderStats(); the sync engine, entries schema,
+// and _env export envelope are all untouched, so existing JSON backups
+// and the launcher card (which only reads unclaimed totals) are
+// unaffected. Verified via node --check, a duplicate-static-ID scan
+// (row IDs are index-derived, guaranteed unique), and a manual
+// expand/collapse pass confirming entry actions (edit/unclaim/delete)
+// still work correctly from within the expanded Stats view.
 // v2.16 (CLA-014): suite-wide load-speed pass. pal-config.js and
 // pal-sync.js were loaded with no cache-busting query string, so a
 // returning device (especially an iOS PWA) could keep running stale
@@ -666,7 +700,7 @@
 // uniform radius, shadow) and added click-outside-to-close, matching
 // the Sync & Backup drawer's existing behaviour. Sync & Backup drawer
 // itself is untouched — it's a deliberate bottom sheet, not a modal.
-const VERSION  = '2.16';
+const VERSION  = '2.17';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -1621,16 +1655,41 @@ function renderStats() {
     '<div class="stat-card"><div class="stat-card-label">Claimed Miles</div><div class="stat-card-val">'+totalMiles.toFixed(1)+'</div><div class="stat-card-sub">Claimable miles</div></div>'+
     '<div class="stat-card"><div class="stat-card-label">Expense Claims</div><div class="stat-card-val">'+countExp+'</div><div class="stat-card-sub">Entries</div></div>'+
     '<div class="stat-card"><div class="stat-card-label">Mileage Claims</div><div class="stat-card-val">'+countMil+'</div><div class="stat-card-sub">Entries</div></div>';
-  const byMonth = {};
-  claimed.forEach(e=>{ const m=(e.claimed_date||e.entry_date||'').slice(0,7); if(!m) return; if(!byMonth[m]) byMonth[m]={exp:0,mil:0,count:0}; if(e.type==='expense') byMonth[m].exp+=e.amount||0; else byMonth[m].mil+=e.amount||0; byMonth[m].count++; });
-  const months  = Object.entries(byMonth).sort((a,b)=>b[0].localeCompare(a[0]));
-  const monthEl = document.getElementById('monthStats');
-  if (!months.length) { monthEl.innerHTML='<p style="font-size:13px;color:var(--ink2)">No claimed entries yet</p>'; return; }
-  monthEl.innerHTML = months.map(([m,d])=>{
-    const [y,mo]=m.split('-').map(Number);
-    const label=new Date(y,mo-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-    return '<div class="month-row"><div><div class="month-label">'+label+'</div><div class="month-detail">'+fmtGBP(d.exp)+' expenses \u00b7 '+fmtGBP(d.mil)+' mileage \u00b7 '+d.count+' entr'+(d.count===1?'y':'ies')+'</div></div><div class="month-amount">'+fmtGBP(d.exp+d.mil)+'</div></div>';
+  // v2.17 (CLA-014): "Previous Claims" — one collapsible row per claim
+  // EVENT (a batch of entries marked claimed together on the same
+  // claimed_date), not per calendar month. This mirrors the grouping
+  // the Claims tab's own "Claimed Entries" section already uses
+  // (byDate in renderClaims()) — same idea, just collapsed by default
+  // here. Expanding a row reveals every entry from that claim via the
+  // existing renderEntry(), so detail/actions stay identical to the
+  // Claims tab. Rows are keyed by index (pc0, pc1…) rather than the raw
+  // date string, since claimed_date can be 'Unknown' for legacy/edited
+  // entries and an index is guaranteed unique and DOM-id-safe either way.
+  const byClaim = {};
+  claimed.forEach(e=>{ const k=e.claimed_date||'Unknown'; if(!byClaim[k]) byClaim[k]=[]; byClaim[k].push(e); });
+  const claimEvents = Object.entries(byClaim).sort((a,b)=>b[0].localeCompare(a[0]));
+  const claimsEl = document.getElementById('monthStats'); // legacy id, kept to minimise diff — now holds per-claim rows, not per-month
+  if (!claimEvents.length) { claimsEl.innerHTML='<p style="font-size:13px;color:var(--ink2)">No claimed entries yet</p>'; return; }
+  claimsEl.innerHTML = claimEvents.map(([date,entries],idx)=>{
+    const total   = entries.reduce((s,e)=>s+(e.amount||0),0);
+    const count   = entries.length;
+    const label   = date==='Unknown' ? 'Claim date unknown' : ('Claimed '+fmtDate(date));
+    const sorted  = [...entries].sort((a,b)=>(b.entry_date||'').localeCompare(a.entry_date||''));
+    const key     = 'pc'+idx;
+    return '<div class="month-row expandable" onclick="toggleClaimDetail(\''+key+'\')">'+
+        '<div><div class="month-label">'+label+'</div><div class="month-detail">'+count+' entr'+(count===1?'y':'ies')+'</div></div>'+
+        '<div class="month-row-right"><div class="month-amount">'+fmtGBP(total)+'</div><span class="claim-toggle-icon" id="cti-'+key+'">\u25be</span></div>'+
+      '</div>'+
+      '<div class="claim-detail-list" id="cdl-'+key+'">'+sorted.map(e=>renderEntry(e)).join('')+'</div>';
   }).join('');
+}
+
+function toggleClaimDetail(key) {
+  const list = document.getElementById('cdl-'+key);
+  const icon = document.getElementById('cti-'+key);
+  if (!list) return;
+  const open = list.classList.toggle('open');
+  if (icon) icon.classList.toggle('open', open);
 }
 
 // ═══════════════════════════════════════════════════════════════════
