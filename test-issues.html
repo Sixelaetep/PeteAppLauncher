@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.60</title>
+<title>Test &amp; Issues v1.61</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -474,7 +474,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.60</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.61</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -664,6 +664,17 @@
       <div class="section-head" style="margin-top:16px">🧹 Housekeeping</div>
       <button class="action-btn" id="compact-btn" onclick="compactOldDeletes()" style="font-size:11px;padding:5px 12px">🧹 Compact old deletes</button>
       <p style="font-size:11px;color:var(--ink3);margin-top:6px;line-height:1.6">Permanently removes deleted-record tombstones older than 90 days from this app's cloud table. Counts first and asks before removing anything — live records and recent deletes are never touched.</p>
+
+      <!-- TI-073: Data Integrity Check — read-only scan for the class of
+           bug that caused this release (an id referenced in a changelog
+           without ever being logged as a real issue, letting nextSeq
+           hand the same number out twice). Report-only by design: the
+           fixes involve human judgement (which prefix an old id should
+           have been, whether to backfill a real issue record), so this
+           surfaces the list rather than silently rewriting data. -->
+      <button class="action-btn" id="integrity-btn" onclick="runDataIntegrityCheck()" style="font-size:11px;padding:5px 12px;margin-top:10px">🔎 Run Data Integrity Check</button>
+      <p style="font-size:11px;color:var(--ink3);margin-top:6px;line-height:1.6">Scans for issue-id collisions and drift: ids referenced in a release but never logged, ids using a prefix no current app owns, and any nextSeq counter sitting behind the highest id actually in use. Read-only — reports only, changes nothing.</p>
+      <div id="integrity-results" style="margin-top:10px"></div>
     </div>
 
     <div class="section-head" style="margin-top:20px">Storage</div>
@@ -829,6 +840,26 @@
      itself carries no version data (id/name/emoji/prefix/aliases only),
      so nothing there needed touching. No manifest-schema, sync, or UI
      logic touched — verified via node --check. -->
+<!-- v1.61 (TI-073): fixes the exact class of bug this ticket reported.
+     Root cause found in migrateAppRegistry's nextSeq safety net: it only
+     scanned state.issues keys for the highest id in use, so an id
+     referenced in a release's resolvesIssues without ever being logged
+     as a real issue (no Log Issue record) was invisible to it. That's
+     precisely what happened to TI-071 and TI-072 (both used in comments/
+     manifests below, v1.59 and v1.60, but neither has a state.issues
+     record) — nextSeq stayed at 71 and handed TI-071 straight back out
+     for this very brief. Fortnight Tracker's own FT-053 collision (see
+     its v3.61 release notes) is the same bug in another app's data.
+     Fix: the safety net now also scans every app's version history for
+     resolvesIssues entries, so a referenced-but-unlogged id counts as
+     "in use" and can never be reissued. This release itself is filed as
+     TI-073, the next id actually free once TI-071/TI-072 are counted.
+     Added a read-only Data Integrity Check to the Sync & Backup drawer's
+     Housekeeping section so this class of drift is visible on demand
+     instead of surfacing as a live collision. No schema change; fully
+     backwards compatible with existing JSON backups (older backups
+     simply won't have the two extra id numbers counted until re-saved,
+     which happens automatically on next load). -->
 <!-- v1.60 (TI-072): third app in the pal-utils.js rollout (PAD-1;
      GigsAndTrips and Gym Tracker first, Reading Tracker same batch).
      Local esc(), applyTheme(), and toast() removed/thinned — now
@@ -846,9 +877,9 @@
      manifest-schema, sync, or data logic touched — verified via
      node --check, duplicate ID scan, dangling handler scan, and a
      functional test of the shared functions. -->
-<script src="pal-config.js?v=1.60"></script>
-<script src="pal-sync.js?v=1.60"></script>
-<script src="pal-utils.js?v=1.60"></script>
+<script src="pal-config.js?v=1.61"></script>
+<script src="pal-sync.js?v=1.61"></script>
+<script src="pal-utils.js?v=1.61"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // STORAGE ABSTRACTION
@@ -1096,11 +1127,30 @@ function migrateAppRegistry() {
     // behind the highest id actually in use (possible after years of
     // the same fragmentation this function fixes), bump it forward so
     // new issues can never collide with an existing id.
+    //
+    // TI-073: this used to scan state.issues only. A build brief or
+    // release manifest can reference an id (e.g. TI-071, FT-053) in
+    // resolvesIssues without ever going through Log Issue, so no
+    // state.issues record exists for it and nextSeq never learned the
+    // number was taken — the counter then handed the same id back out
+    // later (this exact scenario happened for TI-071/TI-072 and, in
+    // Fortnight Tracker's own data, FT-053). Now also scans every
+    // version's resolvesIssues array across all apps so a
+    // referenced-but-never-logged id still counts as "in use".
     let maxSeq = 0;
     Object.keys(state.issues).forEach(id => {
       if (!id.startsWith(reg.prefix)) return;
       const n = parseInt(id.slice(reg.prefix.length).replace(/^-+/,''), 10);
       if (!isNaN(n) && n > maxSeq) maxSeq = n;
+    });
+    Object.values(state.apps).forEach(a => {
+      (a.versions||[]).forEach(v => {
+        (v.resolvesIssues||[]).forEach(id => {
+          if (!id || !id.startsWith(reg.prefix)) return;
+          const n = parseInt(id.slice(reg.prefix.length).replace(/^-+/,''), 10);
+          if (!isNaN(n) && n > maxSeq) maxSeq = n;
+        });
+      });
     });
     if (maxSeq >= (state.nextSeq[reg.prefix]||1)) { state.nextSeq[reg.prefix] = maxSeq + 1; changed = true; }
 
@@ -2838,6 +2888,81 @@ async function compactOldDeletes() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// TI-073: Data Integrity Check. Read-only — computes three categories
+// of drift and renders them, never writes anything back to state.
+// 1) orphanRefs: an id sits in some version's resolvesIssues but has
+//    no matching record in state.issues (never went through Log Issue).
+//    This is exactly how TI-071/TI-072 went unnoticed by nextSeq.
+// 2) legacyPrefixes: an id (issues-dict key or resolvesIssues entry)
+//    uses a letter-prefix that no current APP_REGISTRY app owns —
+//    catches historic shorthand (GT-, PAD-) that pre-dates an app's
+//    canonical prefix (GIG, PET) and was never renamed.
+// 3) seqDrift: nextSeq[prefix] sitting at or behind the highest number
+//    actually in use for that prefix — should always read 0 after the
+//    migrateAppRegistry fix in this release, but kept as a visible
+//    tripwire in case data is ever edited directly in Supabase.
+function runDataIntegrityCheck() {
+  const knownPrefixes = APP_REGISTRY.map(r => r.prefix);
+  const orphanRefs = [];   // {id, app, version}
+  const seenIds = new Set();
+  const allRefs = {};      // prefix -> Set of numeric seqs seen anywhere
+
+  function noteRef(prefix, n) {
+    if (!allRefs[prefix]) allRefs[prefix] = new Set();
+    allRefs[prefix].add(n);
+  }
+  function splitId(id) {
+    const m = /^([A-Za-z]+-?)(\d+)$/.exec(id||'');
+    return m ? { prefix: m[1], n: parseInt(m[2],10) } : null;
+  }
+
+  Object.values(state.apps).forEach(a => {
+    (a.versions||[]).forEach(v => {
+      (v.resolvesIssues||[]).forEach(id => {
+        if (!id) return;
+        if (!state.issues[id] && !seenIds.has(id)) { orphanRefs.push({ id, app: a.name||a.id, version: v.version }); seenIds.add(id); }
+        const s = splitId(id);
+        if (s) noteRef(s.prefix, s.n);
+      });
+    });
+  });
+  Object.keys(state.issues).forEach(id => { const s = splitId(id); if (s) noteRef(s.prefix, s.n); });
+
+  const legacyPrefixSet = new Set();
+  Object.keys(allRefs).forEach(p => { if (!knownPrefixes.includes(p)) legacyPrefixSet.add(p); });
+  const legacyPrefixes = [...legacyPrefixSet].sort();
+
+  const seqDrift = [];
+  Object.keys(allRefs).forEach(p => {
+    if (!knownPrefixes.includes(p)) return; // legacy prefixes reported separately
+    const maxN = Math.max(...allRefs[p]);
+    const cur = state.nextSeq[p] || 1;
+    if (maxN >= cur) seqDrift.push({ prefix: p, maxInUse: maxN, nextSeq: cur });
+  });
+
+  const el = document.getElementById('integrity-results');
+  if (!el) return;
+  let html = '';
+  if (!orphanRefs.length && !legacyPrefixes.length && !seqDrift.length) {
+    html = '<div class="log-entry ok">✓ No drift found — every referenced id is logged, every prefix belongs to a registered app, and every counter is ahead of the highest id in use.</div>';
+  } else {
+    if (seqDrift.length) {
+      html += `<div style="font-size:11px;color:var(--ink3);margin:8px 0 4px;text-transform:uppercase;letter-spacing:0.05em">Counter drift (${seqDrift.length})</div>`;
+      html += seqDrift.map(d => `<div class="log-entry err">${esc(d.prefix)}: nextSeq is ${d.nextSeq} but ${d.prefix}${d.maxInUse} is already in use</div>`).join('');
+    }
+    if (orphanRefs.length) {
+      html += `<div style="font-size:11px;color:var(--ink3);margin:8px 0 4px;text-transform:uppercase;letter-spacing:0.05em">Referenced but never logged (${orphanRefs.length})</div>`;
+      html += orphanRefs.map(o => `<div class="log-entry info">${esc(o.id)} — resolved by ${esc(o.app)} v${esc(o.version)}, no issue record exists</div>`).join('');
+    }
+    if (legacyPrefixes.length) {
+      html += `<div style="font-size:11px;color:var(--ink3);margin:8px 0 4px;text-transform:uppercase;letter-spacing:0.05em">Prefixes with no current app (${legacyPrefixes.length})</div>`;
+      html += legacyPrefixes.map(p => `<div class="log-entry info">${esc(p)}- — no app in the registry currently uses this prefix; likely renamed (e.g. GT→GIG, PAD→PET)</div>`).join('');
+    }
+  }
+  el.innerHTML = html;
+  addSyncLog(`Data Integrity Check: ${orphanRefs.length} unlogged ref(s), ${legacyPrefixes.length} legacy prefix(es), ${seqDrift.length} counter drift`, (orphanRefs.length||legacyPrefixes.length||seqDrift.length) ? 'info' : 'ok');
 }
 
 // ── Per-entity sync helpers ─────────────────────────────────────
