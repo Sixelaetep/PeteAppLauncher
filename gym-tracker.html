@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.98</title>
+<title>Gym Tracker v2.99</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.98</div></span>
+      <span>Gym Tracker<div class="ver">v2.99</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -947,9 +947,9 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-config.js?v=2.98"></script>
-<script src="pal-sync.js?v=2.98"></script>
-<script src="pal-utils.js?v=2.98"></script>
+<script src="pal-config.js?v=2.99"></script>
+<script src="pal-sync.js?v=2.99"></script>
+<script src="pal-utils.js?v=2.99"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1199,6 +1199,40 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.99 (GYM-087): plan items now always get an estimated completion
+// time — supersedes GYM-024's original position (kept in updated form
+// as a comment on autoEstimateMinutes()) that workout data and "how
+// long this takes" were unrelated and estimatedMinutes should always
+// start blank. Pete's brief explicitly asks for the opposite: a timed
+// exercise's own target time doubles as its time-to-complete estimate;
+// everything else (reps/weight, and a distance target with no pace
+// time set) defaults to a flat 5 minutes.
+// New shared autoEstimateMinutes(item) — sums an item's target seconds
+// (time/distance types only) and converts to minutes (min 1, rounded),
+// falling back to 5 when there's no target time to derive from. Wired
+// into every place a plan item's timing is set or reset:
+// - migratePlans(): backfills EXISTING plan items with no timing.
+//   Treats 0 as "unset" too, not just undefined — this same line used
+//   to default straight to 0, so plans already through this migration
+//   under the old rule needed the falsy check to actually get
+//   backfilled rather than staying stuck at the old sentinel forever.
+// - addExerciseToPlanItems(): new items start from an estimate instead
+//   of 0/blank.
+// - The type-switch handler and cascadeExerciseTypeToPlans(): when a
+//   plan item's type changes, target sets already reset to the new
+//   type's defaults (existing behaviour) — the timing estimate now
+//   resets alongside it, since the old estimate was based on the old
+//   type's data and doesn't carry over.
+// - The program-bundle import path (a separate shared-program format
+//   that doesn't route through migratePlans()) gets its own
+//   autoEstimateMinutes() call so freshly-imported plans aren't left at 0.
+// Never overwrites a value someone's already set — every call site only
+// ever touches estimatedMinutes when it was falsy or being reset
+// alongside a type change. The estimate dropdown in the plan editor
+// (unchanged — already fully editable via updatePlanItemEstimate())
+// is exactly where "amend as you want" happens; estimateMinuteOptions()
+// already handles any arbitrary computed value gracefully, no changes
+// needed there.
 // v2.98 (GYM-085 — reused: v2.96 already used GYM-085 for the suite-
 // wide load-speed pass; flagged for renumbering in Test & Issues, same
 // pattern as the other known collisions).
@@ -2122,7 +2156,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.98';
+const VERSION = '2.99';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2226,7 +2260,12 @@ function migratePlans(env) {
   env.data.plans.forEach((p, idx) => {
     (p.items||[]).forEach(item => {
       if (!item.trackType) item.trackType = item.type || (exById[item.exerciseId] ? exById[item.exerciseId].type : 'reps');
-      if (item.estimatedMinutes === undefined) item.estimatedMinutes = 0;
+      // GYM-087: falsy (0 or undefined), not just undefined — this line
+      // used to default straight to 0, so plans already through this
+      // migration under the old rule need the falsy check to actually
+      // get backfilled with a real estimate rather than staying stuck
+      // at the old "unset" value forever.
+      if (!item.estimatedMinutes) item.estimatedMinutes = autoEstimateMinutes(item);
       if (item.notes === undefined) item.notes = ''; // GYM-063: per-plan-item note, separate from the exercise's own global notes
     });
     // GYM-031: explicit order field rather than relying on array position —
@@ -3983,6 +4022,7 @@ function setPlanItemType(idx, newType) {
   if (ex) { ex.type = newType; ex.updatedAt = new Date().toISOString(); sbUpsert('exercise', ex, null); }
   item.trackType = newType;
   item.targetSets = defaultTargetSetsForType(newType);
+  item.estimatedMinutes = autoEstimateMinutes(item); // GYM-087: old estimate was based on the old type's data, doesn't carry over
   cascadeExerciseTypeToPlans(exerciseId, newType, currentPlanId);
   save(_env);
   renderPlanItemsList();
@@ -4053,6 +4093,29 @@ function renderExercisePickerList() {
       <span>${escHtml(e.name)}</span>${typeBadge(e.type)}
     </div>`).join('');
 }
+// GYM-087: how long a target-sets configuration "should" take — used to
+// backfill plan items that have never had a timing filled in
+// (estimatedMinutes 0 or undefined both count as "not filled in"; 0 was
+// never a value the estimate dropdown actually let you choose before
+// this, so it only ever meant "unset") and as the starting point for
+// brand-new items and type switches going forward. Supersedes GYM-024's
+// original reasoning (kept below in updated form) — Pete's brief
+// explicitly asks for a timed exercise's own target time to double as
+// its completion-time estimate, rather than treating the two as
+// unrelated. Distance gets the same treatment when it has a target time
+// set (metres-only distance targets, with no pace time, have nothing
+// to derive a duration from) — reps/weight, and any distance target
+// without a time, fall back to the flat 5-minute default from the
+// brief. Always still just a *starting point* — the estimate dropdown
+// in the plan editor is exactly where "amend as you want" happens, and
+// nothing here ever overwrites a value someone's already set.
+function autoEstimateMinutes(item) {
+  if (item.trackType === 'time' || item.trackType === 'distance') {
+    const totalSeconds = (item.targetSets||[]).reduce((s,set)=>s+(set.seconds||0), 0);
+    if (totalSeconds > 0) return Math.max(1, Math.round(totalSeconds/60));
+  }
+  return 5;
+}
 // GYM-042: shared default-sets shape, also reused whenever a plan item's
 // type is switched (either from here or via the type switcher below) since
 // the old type's fields don't structurally carry over to the new one.
@@ -4063,11 +4126,11 @@ function defaultTargetSetsForType(type) {
 }
 function addExerciseToPlanItems(exerciseId) {
   const type = exerciseType(exerciseId);
-  // GYM-024: estimatedMinutes always starts at 0/unset regardless of type —
-  // even for time/distance exercises that already have a tracked duration,
-  // that's workout data, not a "how long does this realistically take"
-  // estimate, and the two shouldn't be conflated.
-  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets: defaultTargetSetsForType(type), estimatedMinutes: 0, notes: '' });
+  const targetSets = defaultTargetSetsForType(type);
+  // GYM-087: was always 0/unset here (see the old GYM-024 note this
+  // replaces) — now starts from autoEstimateMinutes()'s best guess
+  // instead of nothing.
+  _planItems.push({ id: uid('pi'), exerciseId, trackType:type, targetSets, estimatedMinutes: autoEstimateMinutes({trackType:type, targetSets}), notes: '' });
   closeModal('modalExercisePicker');
   renderPlanItemsList();
 }
@@ -4087,6 +4150,7 @@ function cascadeExerciseTypeToPlans(exerciseId, newType, excludePlanId) {
       if (item.exerciseId===exerciseId && item.trackType!==newType) {
         item.trackType = newType;
         item.targetSets = defaultTargetSetsForType(newType);
+        item.estimatedMinutes = autoEstimateMinutes(item); // GYM-087: same reset as the primary plan's own type switch above
         touched = true;
       }
     });
@@ -7714,7 +7778,12 @@ function importProgramFileHandler(event) {
             const exId = itemIn.exerciseName ? nameToId[itemIn.exerciseName.toLowerCase()] : null;
             if (!exId) return null; // exercise couldn't be resolved — dropped, not guessed at
             const trackType = ['reps','time','distance'].includes(itemIn.trackType) ? itemIn.trackType : exerciseType(exId);
-            return { id: uid('pi'), exerciseId: exId, trackType, targetSets: Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [], estimatedMinutes: 0, notes: (itemIn.notes||'').trim() };
+            const targetSets = Array.isArray(itemIn.targetSets) ? itemIn.targetSets : [];
+            // GYM-087: this bundle-import path doesn't go through
+            // migratePlans() (it's a standalone shared-program format,
+            // not a full envelope restore), so it needs its own
+            // autoEstimateMinutes() call rather than picking it up for free.
+            return { id: uid('pi'), exerciseId: exId, trackType, targetSets, estimatedMinutes: autoEstimateMinutes({trackType, targetSets}), notes: (itemIn.notes||'').trim() };
           }).filter(Boolean);
           if (!items.length) return;
           const record = { id: uid('plan'), name: planName, notes: planIn.notes||'', items, programId: program.id, order: nextPlanOrder(), archived: false, createdAt: now, updatedAt: now };
