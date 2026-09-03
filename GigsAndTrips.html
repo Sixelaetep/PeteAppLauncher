@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.42</title>
+<title>Gigs &amp; Trips v7.43</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -330,6 +330,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .item-time-badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;cursor:pointer;white-space:nowrap;flex-shrink:0}
 .item-time-badge.set{background:var(--acc-dim);color:var(--acc-dk)}
 .item-time-badge.unset{background:var(--surf);color:var(--ink4);border:1px dashed var(--bdr)}
+.item-travel-strip{font-size:11px;color:var(--ink3);padding:4px 12px;background:var(--surf);border-top:1px solid var(--bdr)}
 .item-check{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all var(--tr);cursor:pointer}
 .item-check.on{background:var(--ok);border-color:var(--ok);color:#fff}
 .item-type-icon{font-size:18px;flex-shrink:0}
@@ -538,7 +539,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.42</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.43</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -677,6 +678,38 @@ function itemTimeField(type){
   if(type==='travel') return 'depTime';
   if(type==='accommodation') return 'checkin';
   return 'time';
+}
+// Travel-time-to-next feature: "next" follows whichever sort mode is
+// currently active (Time or Manual, GIG-056) so the sequence always
+// matches what's actually on screen. Only real trip items participate —
+// gigs live in a different part of the data model and don't have a
+// directly comparable location field to chain against.
+function getNextItemInDay(tripId,dayId,currentItemId){
+  const trip=getEvent(tripId); if(!trip) return null;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return null;
+  const realItems=(day.items||[]).filter(it=>!it._placeholder);
+  const ordered=_itemSortMode==='manual'
+    ?[...realItems].sort((a,b)=>(a.order||0)-(b.order||0))
+    :sortDayTimeline(realItems);
+  const idx=ordered.findIndex(it=>it.id===currentItemId);
+  if(idx<0||idx>=ordered.length-1) return null;
+  return ordered[idx+1];
+}
+// Opens real Google Maps directions between this item and the next —
+// there's no way for a static app to fetch a travel time automatically
+// (that needs a paid Directions API + a backend), so this gets you to
+// Google's own page with real, traffic-aware directions to read and
+// enter into the duration picker yourself.
+function openTravelTimeMaps(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  const next=getNextItemInDay(tripId,dayId,itemId);
+  if(!next){ showToast('No next item on this day to route to'); return; }
+  const origin=itemLocationName(it);
+  const dest=itemLocationName(next);
+  if(!origin||!dest){ showToast('Add a location to '+(!origin?'this item':'the next item')+' first'); return; }
+  window.open('https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest),'_blank','noopener');
 }
 // Display name — same logic already used by renderTlStrip/renderItemCard,
 // centralised here so the itinerary text generator (below) and the
@@ -3294,6 +3327,7 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
         ${cost>0?`<span class="cost-pill">${s}${cost.toFixed(2)}</span>`:''}
       </div>
     </div>
+    ${it.travelTimeToNext!=null?`<div class="item-travel-strip">🚗 ${fmtDuration(it.travelTimeToNext)} to next</div>`:''}
     <div class="item-detail" id="${detId}">`;
 
   // Detail fields
@@ -3564,6 +3598,10 @@ function showItemForm(tripId,dayId,type,it){
       </div>`;
   }
 
+  fields+=`<div class="fg"><label>Travel time to next item</label>
+    ${durationPickerHtml('ifTravelTime',it?.travelTimeToNext)}
+    ${it?`<button type="button" class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="openTravelTimeMaps('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🗺️ Look up on Google Maps</button>`:''}
+  </div>`;
   fields+=`<div class="fg"><label>Notes</label><textarea class="fi" id="ifNotes" rows="2">${esc(it?.notes||'')}</textarea></div>`;
 
   showModal(`<div class="modal-hdr"><div class="modal-title">${esc(title)}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -3654,6 +3692,7 @@ function saveItem(tripId,dayId,type,existingId){
     const ca=document.getElementById('ifCostActual')?.value;
     it.costActual=ca!==''&&ca!=null?parseFloat(ca):null;
   }
+  it.travelTimeToNext=getDurationPicker('ifTravelTime');
   it.notes=document.getElementById('ifNotes')?.value.trim()||'';
 
   // v7.15 (GIG-039): auto-add this item's venue/location to the shared
@@ -5337,6 +5376,50 @@ function tripNights(t){
 // timeline strip and Upcoming's mini-day breakdown stay time-sorted
 // always, since they're compact previews rather than the editing
 // surface this request was about.
+// Travel-time-to-next entry: hours (0-8) + minutes in 5-min steps, same
+// two-select pattern as timePickerHtml but for a duration rather than a
+// clock time. Returns null (not 0) when both selects are left blank, so
+// "never set" and "explicitly zero minutes" stay distinguishable.
+function durationPickerHtml(idPrefix,totalMinutes){
+  const h=totalMinutes!=null?Math.floor(totalMinutes/60):'';
+  const m=totalMinutes!=null?(totalMinutes%60):'';
+  let hOpts=`<option value=""${h===''?' selected':''}>—</option>`;
+  for(let i=0;i<=8;i++) hOpts+=`<option value="${i}"${h===i?' selected':''}>${i}h</option>`;
+  let mOpts=`<option value=""${m===''?' selected':''}>—</option>`;
+  for(let i=0;i<60;i+=5) mOpts+=`<option value="${i}"${m===i?' selected':''}>${String(i).padStart(2,'0')}m</option>`;
+  return `<div style="display:flex;gap:8px">
+    <select class="fi" id="${idPrefix}H">${hOpts}</select>
+    <select class="fi" id="${idPrefix}M">${mOpts}</select>
+  </div>`;
+}
+function getDurationPicker(idPrefix){
+  const h=document.getElementById(idPrefix+'H')?.value;
+  const m=document.getElementById(idPrefix+'M')?.value;
+  if((h===''||h==null)&&(m===''||m==null)) return null;
+  return (parseInt(h||0,10)*60)+parseInt(m||0,10);
+}
+function fmtDuration(mins){
+  if(mins==null) return '';
+  const h=Math.floor(mins/60), m=mins%60;
+  if(h&&m) return `${h}h ${m}m`;
+  if(h) return `${h}h`;
+  return `${m}m`;
+}
+
+// v7.43 (GIG-056 follow-up): travel time to next item. Each item gains
+// an optional travelTimeToNext (minutes), entered via an hours+5-min-
+// steps duration picker in full edit, plus a "Look up on Google Maps"
+// button (existing items only) that opens real Google Maps directions
+// between this item and whatever's next — a static app can't fetch a
+// travel time automatically (that needs a paid Directions API + a
+// backend, same limitation discussed for full Google Calendar
+// integration), so this gets you to Google's own page to read the real
+// time and enter it yourself. "Next" follows whichever sort mode is
+// currently active (Time or Manual, GIG-056) via getNextItemInDay(), so
+// it always matches what's actually on screen. Scoped to trip items
+// only — gigs live in a different part of the data model with no
+// directly comparable location field to chain against. Visible on the
+// Day View item card as a small "🚗 25m to next" strip whenever set.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
