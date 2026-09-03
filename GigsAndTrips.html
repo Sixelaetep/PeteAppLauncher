@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.43</title>
+<title>Gigs &amp; Trips v7.45</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -330,7 +330,8 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .item-time-badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;cursor:pointer;white-space:nowrap;flex-shrink:0}
 .item-time-badge.set{background:var(--acc-dim);color:var(--acc-dk)}
 .item-time-badge.unset{background:var(--surf);color:var(--ink4);border:1px dashed var(--bdr)}
-.item-travel-strip{font-size:11px;color:var(--ink3);padding:4px 12px;background:var(--surf);border-top:1px solid var(--bdr)}
+.item-travel-strip{font-size:11px;color:var(--ink3);padding:4px 12px;background:var(--surf);border-top:1px solid var(--bdr);cursor:pointer}
+.item-travel-strip:active{background:var(--acc-dim)}
 .item-check{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all var(--tr);cursor:pointer}
 .item-check.on{background:var(--ok);border-color:var(--ok);color:#fff}
 .item-type-icon{font-size:18px;flex-shrink:0}
@@ -539,7 +540,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.43</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.45</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -699,17 +700,65 @@ function getNextItemInDay(tripId,dayId,currentItemId){
 // there's no way for a static app to fetch a travel time automatically
 // (that needs a paid Directions API + a backend), so this gets you to
 // Google's own page with real, traffic-aware directions to read and
-// enter into the duration picker yourself.
+// enter into the duration picker yourself. Returns true/false so callers
+// can tell whether it actually opened something.
 function openTravelTimeMaps(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return false;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return false;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return false;
+  const next=getNextItemInDay(tripId,dayId,itemId);
+  if(!next){ showToast('No next item on this day to route to'); return false; }
+  const origin=itemLocationName(it);
+  const dest=itemLocationName(next);
+  if(!origin||!dest){ showToast('Add a location to '+(!origin?'this item':'the next item')+' first'); return false; }
+  window.open('https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest),'_blank','noopener');
+  return true;
+}
+// One-tap "Time to next" button on the item card itself (rather than
+// only reachable from inside full edit). A browser has no reliable way
+// to detect when a new TAB (as opposed to a same-window popup) gets
+// closed — window.open's return value doesn't support meaningful
+// .closed polling for target=_blank links, especially on mobile Safari —
+// so rather than try to wait for that, this opens Maps AND the
+// duration-entry modal at the same time. Switch to the Maps tab, read
+// the time, switch back — the entry field is already sitting there
+// waiting rather than requiring a second tap to get to it.
+function openTravelTimeMapsAndEdit(tripId,dayId,itemId){
+  const opened=openTravelTimeMaps(tripId,dayId,itemId);
+  if(opened) openTravelTimeQuickEdit(tripId,dayId,itemId);
+}
+function openTravelTimeQuickEdit(tripId,dayId,itemId){
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
   const it=day.items.find(i=>i.id===itemId); if(!it) return;
-  const next=getNextItemInDay(tripId,dayId,itemId);
-  if(!next){ showToast('No next item on this day to route to'); return; }
-  const origin=itemLocationName(it);
-  const dest=itemLocationName(next);
-  if(!origin||!dest){ showToast('Add a location to '+(!origin?'this item':'the next item')+' first'); return; }
-  window.open('https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest),'_blank','noopener');
+  showModal(`<div class="modal-hdr"><div class="modal-title">Travel time to next</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="fg"><label>Duration</label>${durationPickerHtml('ttTime',it.travelTimeToNext)}</div>
+      <div class="form-actions">
+        <button class="btn btn-pri" onclick="saveTravelTimeQuickEdit('${esc(tripId)}','${esc(dayId)}','${esc(itemId)}')">Save</button>
+        ${it.travelTimeToNext!=null?`<button class="btn btn-ghost" onclick="clearTravelTimeQuickEdit('${esc(tripId)}','${esc(dayId)}','${esc(itemId)}')">Clear</button>`:''}
+      </div>
+    </div>`);
+}
+function saveTravelTimeQuickEdit(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  it.travelTimeToNext=getDurationPicker('ttTime');
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  closeModal(); showToast('Travel time updated ✓');
+  openDayView(tripId,dayId);
+}
+function clearTravelTimeQuickEdit(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  it.travelTimeToNext=null;
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  closeModal(); showToast('Travel time cleared');
+  openDayView(tripId,dayId);
 }
 // Display name — same logic already used by renderTlStrip/renderItemCard,
 // centralised here so the itinerary text generator (below) and the
@@ -1435,20 +1484,6 @@ function refreshCurrentView(){
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════
 let _tab='upcoming';
-// A display preference, not app data — kept in localStorage only (like
-// theme), not synced across devices. When on: gigs linked to a trip
-// (tripId set) are hidden from the flat Upcoming/Past list (they're
-// still fully visible inside their trip's own breakdown), trip cards
-// auto-expand their day list instead of needing a manual tap, and — in
-// Upcoming only — days that have already passed drop out of that
-// expanded list. Past intentionally skips the day-removal part, since
-// every day in a past trip already qualifies as "gone."
-let _hideTripGigs=localStorage.getItem('gat_hideTripGigs')==='1';
-function toggleHideTripGigs(){
-  _hideTripGigs=!_hideTripGigs;
-  localStorage.setItem('gat_hideTripGigs',_hideTripGigs?'1':'0');
-  render();
-}
 let _view='list'; // 'list' | 'tripDetail' | 'dayView'
 let _curTripId=null;
 let _curDayId=null;
@@ -1893,29 +1928,19 @@ function render(){
     }
   }
 
-  // Hide-trip-gigs toggle row — always shown on Upcoming/Past (search
-  // filter above is independent of this; both can be active at once).
-  const hideToggleRow=`<div class="hide-gigs-toggle-row" onclick="toggleHideTripGigs()">
-    <span class="tgl-lbl">Hide trip gigs</span>
-    <div class="tgl${_hideTripGigs?' on':''}"><div class="kn"></div></div>
-  </div>`;
-
-  // Applied after the search filter/label above so the "N results" count
-  // reflects search matches only — this is a separate, additional cut.
-  const visibleList=_hideTripGigs
-    ? filteredList.filter(ev=>!(ev.type==='gig'&&ev.tripId))
-    : filteredList;
-
-  if(!visibleList.length){
-    const hiddenBySearch=filteredList.length===0;
-    document.getElementById('appInner').innerHTML=hideToggleRow+`<div class="empty">
-      <div class="empty-icon">${_searchQuery?'🔍':hiddenBySearch?(_tab==='upcoming'?'🗓':'📖'):'🎸'}</div>
-      <p>${_searchQuery?'No events match "'+_searchQuery+'"':hiddenBySearch?(_tab==='upcoming'?'No upcoming gigs or trips.<br>Tap ＋ to add one.':'Nothing here yet — your past events will appear here.'):'All '+_tab+' gigs are linked to a trip and hidden.<br>Toggle above to show them, or open the trip.'}</p>
+  // GIG-056 follow-up: removed the "Hide trip gigs" toggle — trips now
+  // always show their full breakdown by default (see
+  // renderTripDaysBreakdown) so there's no longer a reason to hide
+  // trip-linked gigs from the flat list; everything just shows normally.
+  if(!filteredList.length){
+    document.getElementById('appInner').innerHTML=`<div class="empty">
+      <div class="empty-icon">${_searchQuery?'🔍':_tab==='upcoming'?'🗓':'📖'}</div>
+      <p>${_searchQuery?'No events match "'+_searchQuery+'"':_tab==='upcoming'?'No upcoming gigs or trips.<br>Tap ＋ to add one.':'Nothing here yet — your past events will appear here.'}</p>
     </div>`;
     return;
   }
 
-  let html=hideToggleRow;
+  let html='';
 
   // Helper: render year-grouped events for both tabs
   // GIG-034: each year now also splits into collapsible month sub-groups,
@@ -1974,19 +1999,19 @@ function render(){
 
   if(_searchQuery){
     // Flat list when searching — year groups add noise when filtering
-    visibleList.forEach(ev=>{
+    filteredList.forEach(ev=>{
       if(ev.type==='gig') html+=renderGigCard(ev,d);
       else html+=renderTripCard(ev,d);
     });
   } else if(_tab==='past'){
     if(!_collapsedYears) _collapsedYears=new Set();
     if(!_collapsedMonths) _collapsedMonths=new Set();
-    html+=renderYearGroups(visibleList,'past',_collapsedYears,_collapsedMonths);
+    html+=renderYearGroups(filteredList,'past',_collapsedYears,_collapsedMonths);
   } else {
     // Upcoming — year grouped, closest year first
     if(!_collapsedYearsUp) _collapsedYearsUp=new Set();
     if(!_collapsedMonthsUp) _collapsedMonthsUp=new Set();
-    html+=renderYearGroups(visibleList,'upcoming',_collapsedYearsUp,_collapsedMonthsUp);
+    html+=renderYearGroups(filteredList,'upcoming',_collapsedYearsUp,_collapsedMonthsUp);
   }
 
   document.getElementById('appInner').innerHTML=html;
@@ -2087,11 +2112,11 @@ function renderGigCard(g, d){
 }
 
 // ── Trip card day breakdown (GIG-037) ───────────────────────────────
-// Two independent collapse levels, both collapsed by default:
-// 1. _expandedTripCards — whether a trip card shows its day list at all
-// 2. _expandedTripCardDays — whether one specific day within an expanded
-//    trip card shows its item list (keyed 'tripId:dayId' since day ids
-//    aren't unique across trips)
+// GIG-056 follow-up: trip cards now always show their full breakdown by
+// default (renderTripDaysBreakdown), so these two collapse-state Sets
+// and their toggle functions are no longer called from anywhere in the
+// UI — left in place as harmless dead code rather than removed, in case
+// per-trip collapse is wanted back later.
 let _expandedTripCards=null;
 let _expandedTripCardDays=null;
 function toggleTripCardExpand(tripId){
@@ -2160,25 +2185,17 @@ function renderTripDaysBreakdown(t){
   const d=getData();
   const linkedGigs=(d.events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===t.id);
   const itemCount=tripItemCount(t);
-  // Auto-expand (no manual tap needed) whenever "Hide trip gigs" is on —
-  // that setting removes trip-linked gigs from the flat list, so the
-  // trip's own breakdown needs to carry that visibility instead. Manual
-  // per-trip expand still works independently when the setting is off.
-  const isExpanded=_hideTripGigs||(_expandedTripCards&&_expandedTripCards.has(t.id));
-  const toggleChevron=_hideTripGigs?'▾':(isExpanded?'▾':'▸');
-  const toggleClick=_hideTripGigs?'':` onclick="event.stopPropagation();toggleTripCardExpand('${esc(t.id)}')"`;
-  let html=`<div class="trip-days-toggle"${toggleClick}>
-    <span>${toggleChevron} ${dayCount} day${dayCount!==1?'s':''} · ${itemCount} item${itemCount!==1?'s':''}</span>
+  // GIG-056 follow-up: trip cards always show their full day-by-day
+  // breakdown now — the old "Hide trip gigs" toggle (which used to be
+  // the only way to force this) is gone, and this is just the permanent
+  // default instead. No manual collapse any more, at either the day-list
+  // or the individual-day-items level below — nothing to toggle, so the
+  // header is informational only.
+  let html=`<div class="trip-days-toggle">
+    <span>${dayCount} day${dayCount!==1?'s':''} · ${itemCount} item${itemCount!==1?'s':''}</span>
   </div>`;
-  if(isExpanded){
-    let sortedDays=(t.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-    // "Hide trip gigs" also drops days that have already gone — but only
-    // in Upcoming. Past intentionally shows every day, since they're all
-    // "gone" there by definition and filtering would hide everything.
-    if(_hideTripGigs&&_tab==='upcoming'){
-      const today=todayISO();
-      sortedDays=sortedDays.filter(day=>day.date>=today);
-    }
+  {
+    const sortedDays=(t.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
     const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     html+=`<div class="trip-days-mini">`;
     sortedDays.forEach(day=>{
@@ -2190,21 +2207,13 @@ function renderTripDaysBreakdown(t){
       const gigsThisDay=linkedGigs.filter(g=>g.date===day.date).map(g=>({...g,_linkedGig:true}));
       const allDayItems=[...realItems,...gigsThisDay];
       const dObj=new Date(day.date+'T00:00:00');
-      const dayKey=t.id+':'+day.id;
-      // Same auto-expand rule as the trip-level toggle above — "Hide trip
-      // gigs" forces every day's item list open too, not just the day
-      // headers, since that's the whole point of hiding gigs from the
-      // flat list: their detail needs to be visible here instead.
-      const dayExpanded=_hideTripGigs||(_expandedTripCardDays&&_expandedTripCardDays.has(dayKey));
-      const dayToggleClick=_hideTripGigs?'':` onclick="event.stopPropagation();toggleTripCardDay('${esc(t.id)}','${esc(day.id)}')"`;
       html+=`<div class="mini-day-card">
-        <div class="mini-day-hdr"${dayToggleClick}>
+        <div class="mini-day-hdr">
           <span class="mini-day-num">${day.dayNumber}</span>
           <span class="mini-day-date">${fmtDateShort(day.date)} ${dow[dObj.getDay()]}</span>
           <span class="mini-day-count">${allDayItems.length} item${allDayItems.length!==1?'s':''}</span>
-          <span class="mini-day-chevron">${dayExpanded?'▾':'▸'}</span>
         </div>
-        ${dayExpanded?renderMiniDayItems(allDayItems,t.id,day.id):''}
+        ${renderMiniDayItems(allDayItems,t.id,day.id)}
       </div>`;
     });
     html+=`</div>`;
@@ -3327,7 +3336,7 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
         ${cost>0?`<span class="cost-pill">${s}${cost.toFixed(2)}</span>`:''}
       </div>
     </div>
-    ${it.travelTimeToNext!=null?`<div class="item-travel-strip">🚗 ${fmtDuration(it.travelTimeToNext)} to next</div>`:''}
+    <div class="item-travel-strip" onclick="openTravelTimeMapsAndEdit('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🚗 ${it.travelTimeToNext!=null?`${fmtDuration(it.travelTimeToNext)} to next`:'Add travel time to next'}</div>
     <div class="item-detail" id="${detId}">`;
 
   // Detail fields
@@ -3372,13 +3381,15 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
     </div>`;
   }
 
+  card+=`</div>`; // close .item-detail — everything from here is a sibling, always visible
+
   card+=`<div class="item-actions">
     ${_itemSortMode==='manual'?`<button class="item-btn" onclick="moveItemOrder('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}',-1)" title="Move up">⬆️</button><button class="item-btn" onclick="moveItemOrder('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}',1)" title="Move down">⬇️</button>`:''}
     <button class="item-btn" onclick="openEditItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">✏️ Edit</button>
     ${trip&&day?`<a class="item-btn" style="color:#1a73e8;text-decoration:none" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">📅 Add to Calendar</a>`:''}
     <button class="item-btn danger" onclick="deleteItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🗑 Delete</button>
   </div>`;
-  card+=`</div></div>`;
+  card+=`</div>`;
   return card;
 }
 
@@ -5420,6 +5431,39 @@ function fmtDuration(mins){
 // only — gigs live in a different part of the data model with no
 // directly comparable location field to chain against. Visible on the
 // Day View item card as a small "🚗 25m to next" strip whenever set.
+// v7.44: two changes. (1) One-tap "🚗 Time to next" strip on every item
+// card — opens Google Maps directions AND the travel-time quick-edit
+// modal together (openTravelTimeMapsAndEdit), rather than only being
+// reachable from inside full edit. Opens both at once deliberately —
+// there's no reliable way to detect when a new browser TAB gets closed
+// (window.open's .closed polling doesn't work meaningfully for
+// target=_blank links, especially on mobile Safari), so this sidesteps
+// that entirely: switch to Maps, read the time, switch back, the entry
+// field's already waiting. (2) Removed the "Hide trip gigs" toggle
+// entirely per request — trips now always show their full day-by-day
+// breakdown by default in Upcoming/Past, unconditionally, with no
+// manual collapse any more at either level. toggleTripCardExpand/
+// toggleTripCardDay and their Sets are left in place as harmless dead
+// code, unreachable from the UI now.
+// v7.45: CRITICAL FIX — item cards' Edit/Add to Calendar/Delete buttons
+// (and, since v7.42, the Manual-order up/down arrows) have been
+// completely invisible since v7.29. renderItemCard's .item-actions row
+// was nested inside .item-detail, a "peek panel" div that defaults to
+// display:none and is only ever shown by toggleItemDetail(id) adding an
+// .open class. v7.29 moved the card's own click handler from
+// toggleItemDetail to openEditItem (launch straight to edit) but never
+// noticed .item-actions was sitting inside that same now-permanently-
+// hidden container — so every action button on every item card has been
+// unreachable for 16 versions, and nobody noticed because the header's
+// own click already opened edit, masking the missing Edit button
+// specifically; the arrows and Calendar/Delete buttons had no such
+// stand-in, which is what surfaced this when Pete went looking for the
+// reorder arrows. Fixed by closing .item-detail before .item-actions
+// opens, making it a proper sibling instead of a trapped descendant.
+// Verified with a real jsdom-rendered DOM (not just tag-balance
+// counting) confirming .item-actions is no longer contained by
+// .item-detail, and cross-checked that the same test correctly flags
+// the original buggy structure as broken.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
