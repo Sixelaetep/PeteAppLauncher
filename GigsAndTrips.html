@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.41</title>
+<title>Gigs &amp; Trips v7.42</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -325,12 +325,11 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .item-card{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--rsm);margin-bottom:8px;overflow:hidden;transition:opacity .15s,box-shadow .15s}
 .item-card.placeholder{opacity:.55;border-style:dashed}
 .item-card.done-item{opacity:.45}
-.item-card.dragging{opacity:.35;box-shadow:none}
-.item-card.drag-over{box-shadow:0 0 0 2px var(--acc);background:var(--acc-dim)}
 .item-card.ghost-stay{background:var(--ok-dim);border:1.5px dashed var(--ok);opacity:.8}
 .item-hdr{display:flex;align-items:center;padding:10px 12px;gap:10px;cursor:pointer}
-.drag-handle{color:var(--ink4);font-size:16px;cursor:grab;padding:4px 2px;flex-shrink:0;touch-action:none;-webkit-user-select:none;user-select:none}
-.drag-handle:active{cursor:grabbing;color:var(--acc)}
+.item-time-badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;cursor:pointer;white-space:nowrap;flex-shrink:0}
+.item-time-badge.set{background:var(--acc-dim);color:var(--acc-dk)}
+.item-time-badge.unset{background:var(--surf);color:var(--ink4);border:1px dashed var(--bdr)}
 .item-check{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all var(--tr);cursor:pointer}
 .item-check.on{background:var(--ok);border-color:var(--ok);color:#fff}
 .item-type-icon{font-size:18px;flex-shrink:0}
@@ -539,7 +538,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.41</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.42</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -671,6 +670,13 @@ function itemTime(it){
   if(it.type==='travel') return it.depTime||null;
   if(it.type==='accommodation') return it.checkin||null;
   return it.time||null;
+}
+// GIG-056: write-side counterpart to itemTime() above — which property
+// actually holds "the time" varies per type, same as the read side.
+function itemTimeField(type){
+  if(type==='travel') return 'depTime';
+  if(type==='accommodation') return 'checkin';
+  return 'time';
 }
 // Display name — same logic already used by renderTlStrip/renderItemCard,
 // centralised here so the itinerary text generator (below) and the
@@ -3148,14 +3154,28 @@ function openDayView(tripId,dayId,scrollToItems){
     });
   }
 
-  // Items — sorted by time (GIG-036), untimed first, matching the
+  // Items — GIG-056: sort mode is now a user choice. 'time' (default,
+  // unchanged from before): untimed first, then ascending, matching the
   // timeline strip above so all three views (strip, Gigs today, Items)
-  // never disagree on order. Gigs are now merged into this list too
-  // (using the same highlighted linked-gig-card style, not the neutral
-  // item-card one — Pete's call on GIG-043) so the day's full flow is
-  // visible without expanding the still-separate, still-collapsed-by-
-  // default "Gigs today" summary above.
-  const itemsAndGigs=sortDayTimeline([...realItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
+  // never disagree on order. 'manual': real items sort by their .order
+  // field via the up/down arrows on each card; gigs aren't part of the
+  // manually-orderable set (there's no meaningful "position" for a gig
+  // among trip items) so they stay time-sorted among themselves and are
+  // appended after the manually-ordered items.
+  let itemsAndGigs;
+  if(_itemSortMode==='manual'){
+    const orderedItems=[...realItems].sort((a,b)=>(a.order||0)-(b.order||0));
+    const orderedGigs=sortDayTimeline(linkedGigs.map(g=>({...g,_linkedGig:true})));
+    itemsAndGigs=[...orderedItems,...orderedGigs];
+  } else {
+    itemsAndGigs=sortDayTimeline([...realItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
+  }
+  if(realItems.length>1){
+    html+=`<div class="cal-view-switch" style="margin-top:14px;margin-bottom:2px">
+      <button class="cal-view-btn${_itemSortMode==='time'?' on':''}" onclick="setItemSortMode('time')">🕐 Time order</button>
+      <button class="cal-view-btn${_itemSortMode==='manual'?' on':''}" onclick="setItemSortMode('manual')">↕️ Manual order</button>
+    </div>`;
+  }
   if(itemsAndGigs.length) html+=`<div class="section-hdr">Items</div>`;
   itemsAndGigs.forEach(it=>{
     if(it._linkedGig){
@@ -3253,21 +3273,22 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   }
 
   const detId=`det-${it.id}`;
+  const itTime=itemTime(it);
   // Icon/text now launches straight to the edit form — previously this
   // toggled an inline "peek" panel (toggleItemDetail) showing extra
   // fields without leaving the card. That panel's markup is still built
   // below (harmless, just unreachable now) rather than ripped out, since
   // the per-type field data it uses is otherwise unused work to redo if
   // a quick-peek affordance turns out to be wanted back later.
-  let card=`<div class="item-card${it.completed?' done-item':''}" id="ic-${esc(it.id)}" draggable="true" data-item-id="${esc(it.id)}" data-trip-id="${esc(tripId)}" data-day-id="${esc(dayId)}" ondragstart="onItemDragStart(event)" ondragover="onItemDragOver(event)" ondragleave="onItemDragLeave(event)" ondrop="onItemDrop(event)" ondragend="onItemDragEnd(event)">
+  let card=`<div class="item-card${it.completed?' done-item':''}" id="ic-${esc(it.id)}" data-item-id="${esc(it.id)}" data-trip-id="${esc(tripId)}" data-day-id="${esc(dayId)}">
     <div class="item-hdr" onclick="openEditItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">
-      <span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>
       <div class="item-check${it.completed?' on':''}" onclick="event.stopPropagation();toggleDone('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">${it.completed?'✓':''}</div>
       <div class="item-type-icon">${typeIcon(it.type)}</div>
       <div class="item-main">
         <div class="item-name">${esc(name)}${it.calendarAdded?` <span class="cal-badge">📅 In Calendar</span>`:''}</div>
         ${sub?`<div class="item-sub">${esc(sub)} ${locLink}</div>`:''}
       </div>
+      <span class="item-time-badge ${itTime?'set':'unset'}" onclick="event.stopPropagation();openItemTimeQuickEdit('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">${itTime?`🕐 ${itTime}`:'+ Time'}</span>
       <div class="item-right">
         ${pill}
         ${cost>0?`<span class="cost-pill">${s}${cost.toFixed(2)}</span>`:''}
@@ -3318,6 +3339,7 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   }
 
   card+=`<div class="item-actions">
+    ${_itemSortMode==='manual'?`<button class="item-btn" onclick="moveItemOrder('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}',-1)" title="Move up">⬆️</button><button class="item-btn" onclick="moveItemOrder('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}',1)" title="Move down">⬇️</button>`:''}
     <button class="item-btn" onclick="openEditItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">✏️ Edit</button>
     ${trip&&day?`<a class="item-btn" style="color:#1a73e8;text-decoration:none" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">📅 Add to Calendar</a>`:''}
     <button class="item-btn danger" onclick="deleteItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🗑 Delete</button>
@@ -4687,48 +4709,71 @@ function getStarVal(cid){ return parseInt(document.getElementById(cid)?.dataset.
 // ═══════════════════════════════════════════════════════════════════
 // DRAG-TO-REORDER — day items
 // ═══════════════════════════════════════════════════════════════════
-let _dragItemId=null, _dragTripId=null, _dragDayId=null;
-
-function onItemDragStart(e){
-  const card=e.currentTarget;
-  _dragItemId=card.dataset.itemId;
-  _dragTripId=card.dataset.tripId;
-  _dragDayId=card.dataset.dayId;
-  card.classList.add('dragging');
-  e.dataTransfer.effectAllowed='move';
-  e.dataTransfer.setData('text/plain',_dragItemId);
+// GIG-056: removed HTML5 native drag-and-drop reordering — it never
+// worked on touch devices (iOS/Android don't fire native DnD events via
+// touch at all, only mouse), and even where it did "work," the .order
+// values it set were never actually read by the Items list render (that
+// sorts by time via sortDayTimeline, unconditionally). Replaced with an
+// explicit sort-mode toggle: Time order (unchanged default behaviour) or
+// Manual order, where up/down arrow buttons reorder items and actually
+// affect what's displayed.
+let _itemSortMode=localStorage.getItem('gat_itemSortMode')||'time'; // 'time'|'manual'
+function setItemSortMode(mode){
+  _itemSortMode=mode;
+  localStorage.setItem('gat_itemSortMode',mode);
+  openDayView(_curTripId,_curDayId);
 }
-function onItemDragOver(e){
-  e.preventDefault();
-  e.dataTransfer.dropEffect='move';
-  const card=e.currentTarget;
-  if(card.dataset.itemId!==_dragItemId) card.classList.add('drag-over');
-}
-function onItemDragLeave(e){ e.currentTarget.classList.remove('drag-over'); }
-function onItemDrop(e){
-  e.preventDefault();
-  const targetCard=e.currentTarget;
-  targetCard.classList.remove('drag-over');
-  const targetId=targetCard.dataset.itemId;
-  if(!_dragItemId||targetId===_dragItemId) return;
-  const trip=getEvent(_dragTripId); if(!trip) return;
-  const day=trip.days.find(d=>d.id===_dragDayId); if(!day) return;
-  const items=day.items||[];
-  const fromIdx=items.findIndex(i=>i.id===_dragItemId);
-  const toIdx=items.findIndex(i=>i.id===targetId);
-  if(fromIdx<0||toIdx<0) return;
-  const [moved]=items.splice(fromIdx,1);
-  items.splice(toIdx,0,moved);
-  items.forEach((it,i)=>{ it.order=i; });
-  day.items=items;
+function moveItemOrder(tripId,dayId,itemId,direction){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const items=(day.items||[]).filter(it=>!it._placeholder);
+  items.forEach((it,i)=>{ if(it.order==null) it.order=i; }); // seed order on first use
+  items.sort((a,b)=>(a.order||0)-(b.order||0));
+  const idx=items.findIndex(it=>it.id===itemId);
+  if(idx<0) return;
+  const swapIdx=idx+direction;
+  if(swapIdx<0||swapIdx>=items.length) return; // already at the top/bottom
+  const tmp=items[idx].order;
+  items[idx].order=items[swapIdx].order;
+  items[swapIdx].order=tmp;
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip);
-  openDayView(_dragTripId,_dragDayId);
+  openDayView(tripId,dayId);
 }
-function onItemDragEnd(e){
-  e.currentTarget.classList.remove('dragging');
-  document.querySelectorAll('.item-card').forEach(c=>c.classList.remove('drag-over'));
-  _dragItemId=null;
+function openItemTimeQuickEdit(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  const field=itemTimeField(it.type);
+  const label=it.type==='accommodation'?'Check-in time':it.type==='travel'?'Departure time':'Time';
+  showModal(`<div class="modal-hdr"><div class="modal-title">Set time</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="fg"><label>${label}</label>${timePickerHtml('qtTime',it[field])}</div>
+      <div class="form-actions">
+        <button class="btn btn-pri" onclick="saveItemTimeQuickEdit('${esc(tripId)}','${esc(dayId)}','${esc(itemId)}')">Save</button>
+        ${it[field]?`<button class="btn btn-ghost" onclick="clearItemTimeQuickEdit('${esc(tripId)}','${esc(dayId)}','${esc(itemId)}')">Clear time</button>`:''}
+      </div>
+    </div>`);
+}
+function saveItemTimeQuickEdit(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  it[itemTimeField(it.type)]=getTimePicker('qtTime');
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  closeModal(); showToast('Time updated ✓');
+  openDayView(tripId,dayId);
+}
+function clearItemTimeQuickEdit(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const it=day.items.find(i=>i.id===itemId); if(!it) return;
+  it[itemTimeField(it.type)]=null;
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  closeModal(); showToast('Time cleared');
+  openDayView(tripId,dayId);
 }
 
 // DATA MANAGER — export, import
@@ -5276,6 +5321,22 @@ function tripNights(t){
 // data logic touched — verified via node --check, duplicate ID scan,
 // dangling handler scan, and a functional test of the new esc()
 // against representative inputs from this app's own render calls.
+// v7.42 (GIG-056): removed the native HTML5 drag-and-drop item reorder
+// handle — it never fired on touch devices at all (iOS/Android only
+// support native DnD via mouse), and its .order output wasn't even read
+// by the Items list render, which always sorted by time. Replaced with
+// an explicit Time/Manual sort-mode toggle (_itemSortMode, localStorage,
+// default 'time' — unchanged behaviour unless you switch it); Manual
+// mode shows up/down arrows on each item card that genuinely reorder the
+// list (moveItemOrder). Also added a time badge on every item card —
+// shows the item's time or "+ Time" if unset, tapping it opens a small
+// quick-edit modal (openItemTimeQuickEdit) rather than the full edit
+// form. Tapping the card's icon/name still opens full edit, unchanged
+// from v7.29 — the time badge uses stopPropagation so the two don't
+// conflict. Scoped to the Day View's own Items section only — the
+// timeline strip and Upcoming's mini-day breakdown stay time-sorted
+// always, since they're compact previews rather than the editing
+// surface this request was about.
 function timePickerHtml(idPrefix, selected){
   const selH = selected ? selected.split(':')[0] : '';
   const selM = selected ? selected.split(':')[1] : '';
