@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.51</title>
+<title>Gigs &amp; Trips v7.52</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -542,7 +542,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.51</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.52</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -682,18 +682,18 @@ function itemTimeField(type){
   if(type==='accommodation') return 'checkin';
   return 'time';
 }
-// Travel-time-to-next feature: "next" follows whichever sort mode is
-// currently active (Time or Manual, GIG-056) so the sequence always
-// matches what's actually on screen. Only real trip items participate —
-// gigs live in a different part of the data model and don't have a
-// directly comparable location field to chain against.
+// Travel-time-to-next feature: "next" is always the next item
+// chronologically (sortDayTimeline) now that manual reordering has been
+// removed — an item's position is purely a function of its own time,
+// which is exactly what makes the automatic cascade in cascadeItemTimes
+// unambiguous. Only real trip items participate — gigs live in a
+// different part of the data model and don't have a directly comparable
+// location field to chain against.
 function getNextItemInDay(tripId,dayId,currentItemId){
   const trip=getEvent(tripId); if(!trip) return null;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return null;
   const realItems=(day.items||[]).filter(it=>!it._placeholder);
-  const ordered=_itemSortMode==='manual'
-    ?[...realItems].sort((a,b)=>(a.order||0)-(b.order||0))
-    :sortDayTimeline(realItems);
+  const ordered=sortDayTimeline(realItems);
   const idx=ordered.findIndex(it=>it.id===currentItemId);
   if(idx<0||idx>=ordered.length-1) return null;
   return ordered[idx+1];
@@ -3068,19 +3068,12 @@ function openTripDetail(id, tab){
         const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
         const dObj=new Date(day.date+'T00:00:00');
 
-        // Timeline items — real items + ghost stays from multi-night acc + linked gigs.
-        // GIG-056 follow-up: follows the same global sort-mode toggle as
-        // Day View, so this strip never disagrees with what you'd see
-        // after tapping into the day.
+        // Timeline items — real items + ghost stays from multi-night acc +
+        // linked gigs, always chronological now that manual reordering
+        // has been removed — matches Day View exactly, no branching needed.
         const gigsThisDay=linkedGigs.filter(g=>g.date===day.date);
         const ghostsThisDay=getAccGhosts(trip,day.id);
-        let allTlItems;
-        if(_itemSortMode==='manual'){
-          const orderedItems=[...realItems].sort((a,b)=>(a.order||0)-(b.order||0));
-          allTlItems=[...ghostsThisDay,...orderedItems,...sortDayTimeline(gigsThisDay.map(g=>({...g,_linkedGig:true})))];
-        } else {
-          allTlItems=sortDayTimeline([...ghostsThisDay,...realItems,...gigsThisDay.map(g=>({...g,_linkedGig:true}))]);
-        }
+        const allTlItems=sortDayTimeline([...ghostsThisDay,...realItems,...gigsThisDay.map(g=>({...g,_linkedGig:true}))]);
 
         html+=`<div class="day-card">
           <div class="day-hdr" onclick="openDayView('${esc(id)}','${esc(day.id)}')">
@@ -3203,24 +3196,11 @@ function openDayView(tripId,dayId,scrollToItems){
   const realItems=items.filter(it=>!it._placeholder);
   const placeholders=items.filter(it=>it._placeholder);
   const ghosts=getAccGhosts(trip,dayId);
-  // GIG-056 follow-up: the top timeline strip now follows the same sort
-  // mode as the Items section below it, instead of always being
-  // time-sorted regardless of what's selected. Manual mode: ghosts stay
-  // untimed/first (matching sortDayTimeline's own convention — a ghost
-  // stay's checkin time belongs to an earlier day, not this one) and
-  // real items sort by .order; gigs aren't part of the manually-
-  // orderable set (same reasoning as the Items section — there's no
-  // meaningful "position" for a gig among trip items) so they stay
-  // time-sorted among themselves and are appended after.
-  let allDisplayItems, allTlItems;
-  if(_itemSortMode==='manual'){
-    const orderedItems=[...realItems].sort((a,b)=>(a.order||0)-(b.order||0));
-    allDisplayItems=[...ghosts,...orderedItems];
-    allTlItems=[...allDisplayItems,...sortDayTimeline(linkedGigs.map(g=>({...g,_linkedGig:true})))];
-  } else {
-    allDisplayItems=sortDayTimeline([...ghosts,...realItems]);
-    allTlItems=sortDayTimeline([...allDisplayItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
-  }
+  // Always chronological now that manual reordering has been removed —
+  // an item's position is purely a function of its own (possibly
+  // cascade-calculated) time, so there's only one meaningful order left.
+  const allDisplayItems=sortDayTimeline([...ghosts,...realItems]);
+  const allTlItems=sortDayTimeline([...allDisplayItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
 
   let html=`<div style="padding:0 14px 90px">`;
 
@@ -3271,28 +3251,12 @@ function openDayView(tripId,dayId,scrollToItems){
     });
   }
 
-  // Items — GIG-056: sort mode is now a user choice. 'time' (default,
-  // unchanged from before): untimed first, then ascending, matching the
-  // timeline strip above so all three views (strip, Gigs today, Items)
-  // never disagree on order. 'manual': real items sort by their .order
-  // field via the up/down arrows on each card; gigs aren't part of the
-  // manually-orderable set (there's no meaningful "position" for a gig
-  // among trip items) so they stay time-sorted among themselves and are
-  // appended after the manually-ordered items.
-  let itemsAndGigs;
-  if(_itemSortMode==='manual'){
-    const orderedItems=[...realItems].sort((a,b)=>(a.order||0)-(b.order||0));
-    const orderedGigs=sortDayTimeline(linkedGigs.map(g=>({...g,_linkedGig:true})));
-    itemsAndGigs=[...orderedItems,...orderedGigs];
-  } else {
-    itemsAndGigs=sortDayTimeline([...realItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
-  }
-  if(realItems.length>1){
-    html+=`<div class="cal-view-switch" style="margin-top:14px;margin-bottom:2px">
-      <button class="cal-view-btn${_itemSortMode==='time'?' on':''}" onclick="setItemSortMode('time')">🕐 Time order</button>
-      <button class="cal-view-btn${_itemSortMode==='manual'?' on':''}" onclick="setItemSortMode('manual')">↕️ Manual order</button>
-    </div>`;
-  }
+  // Items — always chronological now that manual reordering has been
+  // removed. An item's order is purely a function of its own time, which
+  // is what makes the automatic cascade (cascadeItemTimes) unambiguous —
+  // there's no longer a second, independent "position" that could
+  // disagree with it.
+  const itemsAndGigs=sortDayTimeline([...realItems,...linkedGigs.map(g=>({...g,_linkedGig:true}))]);
   if(itemsAndGigs.length) html+=`<div class="section-hdr">Items</div>`;
   itemsAndGigs.forEach(it=>{
     if(it._linkedGig){
@@ -3476,10 +3440,9 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   // tapping the card's own title already opens full edit (since v7.29) —
   // so it's gone entirely. Delete moved into the edit form itself
   // (matches the gig form's own pattern) rather than sitting exposed on
-  // the card. Only Add to Calendar and the Manual-order arrows remain
-  // here, since neither has anywhere else to live.
+  // the card. Manual reordering removed entirely (see changelog) — only
+  // Add to Calendar remains here now.
   card+=`<div class="item-quick-actions">
-    ${_itemSortMode==='manual'?`<button class="item-icon-btn" onclick="event.stopPropagation();moveItemOrder('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}',-1)" title="Move up">⬆️</button><button class="item-icon-btn" onclick="event.stopPropagation();moveItemOrder('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}',1)" title="Move down">⬇️</button>`:''}
     ${trip&&day?`<a class="item-icon-btn" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="event.stopPropagation();markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Add to Calendar">📅</a>`:''}
   </div>`;
   card+=`</div>`;
@@ -3916,9 +3879,18 @@ function deleteItem(tripId,dayId,itemId){
   if(!confirm('Delete this item?')) return;
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  // Find whoever came before the deleted item BEFORE removing it, so the
+  // cascade can recalculate forward from its new (different) predecessor
+  // — deleting an item changes what "the previous item" means for
+  // whatever came after it, so that stored time can otherwise go stale.
+  const realItemsBefore=sortDayTimeline(day.items.filter(it=>!it._placeholder));
+  const deletedIdx=realItemsBefore.findIndex(it=>it.id===itemId);
+  const prevItemId=deletedIdx>0?realItemsBefore[deletedIdx-1].id:null;
   day.items=day.items.filter(i=>i.id!==itemId);
   trip.updatedAt=new Date().toISOString();
-  saveEvent(trip); showToast('Deleted'); refreshDayView(tripId,dayId);
+  saveEvent(trip); showToast('Deleted');
+  if(prevItemId) cascadeItemTimes(tripId,dayId,prevItemId);
+  refreshDayView(tripId,dayId);
 }
 
 // Converts a trip item into a real gig, linked back to this trip.
@@ -3955,9 +3927,13 @@ function convertItemToGig(tripId,dayId,itemId){
   };
   saveEvent(g);
 
+  const realItemsBefore=sortDayTimeline(day.items.filter(i=>!i._placeholder));
+  const removedIdx=realItemsBefore.findIndex(i=>i.id===itemId);
+  const prevItemId=removedIdx>0?realItemsBefore[removedIdx-1].id:null;
   day.items=day.items.filter(i=>i.id!==itemId);
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip);
+  if(prevItemId) cascadeItemTimes(tripId,dayId,prevItemId);
 
   closeModal();
   showToast('Converted to gig ✓');
@@ -4923,39 +4899,18 @@ function getStarVal(cid){ return parseInt(document.getElementById(cid)?.dataset.
 
 // ═══════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════
-// DRAG-TO-REORDER — day items
+// ITEM ORDERING — day items
 // ═══════════════════════════════════════════════════════════════════
-// GIG-056: removed HTML5 native drag-and-drop reordering — it never
-// worked on touch devices (iOS/Android don't fire native DnD events via
-// touch at all, only mouse), and even where it did "work," the .order
-// values it set were never actually read by the Items list render (that
-// sorts by time via sortDayTimeline, unconditionally). Replaced with an
-// explicit sort-mode toggle: Time order (unchanged default behaviour) or
-// Manual order, where up/down arrow buttons reorder items and actually
-// affect what's displayed.
-let _itemSortMode=localStorage.getItem('gat_itemSortMode')||'time'; // 'time'|'manual'
-function setItemSortMode(mode){
-  _itemSortMode=mode;
-  localStorage.setItem('gat_itemSortMode',mode);
-  refreshDayView(_curTripId,_curDayId);
-}
-function moveItemOrder(tripId,dayId,itemId,direction){
-  const trip=getEvent(tripId); if(!trip) return;
-  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
-  const items=(day.items||[]).filter(it=>!it._placeholder);
-  items.forEach((it,i)=>{ if(it.order==null) it.order=i; }); // seed order on first use
-  items.sort((a,b)=>(a.order||0)-(b.order||0));
-  const idx=items.findIndex(it=>it.id===itemId);
-  if(idx<0) return;
-  const swapIdx=idx+direction;
-  if(swapIdx<0||swapIdx>=items.length) return; // already at the top/bottom
-  const tmp=items[idx].order;
-  items[idx].order=items[swapIdx].order;
-  items[swapIdx].order=tmp;
-  trip.updatedAt=new Date().toISOString();
-  saveEvent(trip);
-  refreshDayView(tripId,dayId);
-}
+// GIG-056 first replaced broken drag-and-drop reordering with an
+// explicit Time/Manual sort-mode toggle. Removed again here — having a
+// second, independent "position" alongside the cascade-calculated time
+// (v7.51) created exactly the ambiguity Pete flagged: which one wins
+// when they disagree, what does "next item" mean for the cascade to
+// push forward through, does moving an item need to trigger a
+// recalculation too. Chronological order is now the only order — an
+// item's position is purely a function of its own time, so there's
+// nothing left to reconcile. The .order field itself is left alone on
+// existing records (harmless unused data) rather than stripped out.
 function openItemTimeQuickEdit(tripId,dayId,itemId){
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
@@ -5613,11 +5568,10 @@ function minutesToTimeStr(mins){
 }
 // Cascades a recalculated start time forward through a day, beginning
 // with the item AFTER fromItemId (the item that just changed keeps its
-// own time — only what comes after it moves). "Next" follows whichever
-// sort mode is currently active (Time or Manual), same convention as
-// getNextItemInDay/openTravelTimeMaps elsewhere in this file, since the
-// brief explicitly anticipated items being reordered independently of
-// list position.
+// own time — only what comes after it moves). "Next" is always the next
+// item chronologically now that manual reordering has been removed —
+// an item's position is purely a function of its own time, so there's
+// no separate "list position" that could disagree with the calculation.
 // Stops at (does not overwrite) the first item whose time was manually
 // set — it.timeManual — treating it as a new anchor, same as the first
 // item of the day. A calculated time that gets pushed forward is itself
@@ -5629,9 +5583,7 @@ function cascadeItemTimes(tripId,dayId,fromItemId){
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
   const realItems=(day.items||[]).filter(it=>!it._placeholder);
-  const ordered=_itemSortMode==='manual'
-    ?[...realItems].sort((a,b)=>(a.order||0)-(b.order||0))
-    :sortDayTimeline(realItems);
+  const ordered=sortDayTimeline(realItems);
   const startIdx=ordered.findIndex(it=>it.id===fromItemId);
   if(startIdx<0) return;
   let changed=false;
@@ -5671,6 +5623,21 @@ function cascadeItemTimes(tripId,dayId,fromItemId){
 // calculate further. Migration: no backfill — existing items simply have
 // no durationMinutes until edited, matching the brief exactly; the
 // default-by-type table only pre-fills a brand-new item's initial value.
+// v7.52: removed manual item reordering entirely (the Time/Manual toggle,
+// the up/down arrows, moveItemOrder/setItemSortMode) — a second,
+// independent "position" alongside the cascade-calculated time was
+// exactly the ambiguity it sounds like: which one wins when they
+// disagree, what "next item" means for the cascade to push through,
+// whether reordering itself should trigger a recalculation. Chronological
+// order (sortDayTimeline) is now the only order everywhere — Trip
+// Overview's day-card strip, Day View's own top strip, the Items list,
+// getNextItemInDay, and cascadeItemTimes all simplified back to a single
+// code path each, no more sort-mode branching. Also closed a gap in the
+// "all items recalculate when something is edited" requirement: deleting
+// an item, or converting one to a gig, now triggers cascadeItemTimes
+// from whichever item preceded it — removing an item changes what "the
+// previous item" means for whatever came after it, so that item's stored
+// time could otherwise go stale.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
