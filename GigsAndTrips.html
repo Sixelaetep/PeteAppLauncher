@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.52</title>
+<title>Gigs &amp; Trips v7.53</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -542,7 +542,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.52</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.53</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -1655,8 +1655,22 @@ function handleHdrAction(){
       </div>`);
   } else if(_view==='dayView'){
     const trip=getEvent(_curTripId), day=trip?.days?.find(d=>d.id===_curDayId); if(!day) return;
+    // Duration model: an explicit escape hatch for exactly the situation
+    // where every item in a day is a manual anchor (e.g. a hand-imported
+    // schedule, or just a lot of accumulated direct time edits) — the
+    // automatic cascade correctly refuses to push through an anchor, but
+    // that also means editing an early item can silently do nothing to
+    // anything after it, with no way back short of clearing times by
+    // hand one at a time. Clears every anchor except the day's first
+    // item (which always stays the deliberate starting point) and
+    // recalculates the whole day forward from there.
+    const realItemCount=(day.items||[]).filter(it=>!it._placeholder).length;
+    const resyncBtn=realItemCount>1
+      ?`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();resyncDayTimes('${esc(_curTripId)}','${esc(_curDayId)}')">🔄 Resync times from first item</button>`
+      :'';
     showModal(`<div class="modal-hdr"><div class="modal-title">Day options</div><button class="modal-close" onclick="closeModal()">✕</button></div>
       <div class="modal-body">
+        ${resyncBtn}
         <button class="btn btn-danger" style="width:100%" onclick="confirmDeleteDay('${esc(_curTripId)}','${esc(_curDayId)}')">🗑 Delete this day</button>
       </div>`);
   }
@@ -5599,6 +5613,26 @@ function cascadeItemTimes(tripId,dayId,fromItemId){
   }
   if(changed){ trip.updatedAt=new Date().toISOString(); saveEvent(trip); }
 }
+// The brief's own anticipated escape hatch: "unless the person
+// explicitly asks to resync the rest of the day." Clears the manual
+// anchor on every item except the day's first (which always stays the
+// deliberate starting point, never recalculated backward), then runs
+// the normal forward cascade from that first item — since nothing after
+// it is anchored any more, this pushes all the way through to the end
+// of the day in one go.
+function resyncDayTimes(tripId,dayId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const realItems=(day.items||[]).filter(it=>!it._placeholder);
+  const ordered=sortDayTimeline(realItems);
+  if(ordered.length<2) return;
+  ordered.slice(1).forEach(it=>{ it.timeManual=false; });
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  cascadeItemTimes(tripId,dayId,ordered[0].id);
+  showToast('Day resynced ✓');
+  refreshDayView(tripId,dayId);
+}
 
 // v7.51: Brief "Add duration to itinerary items" implemented. New
 // durationMinutes field (universal, all types) alongside the existing
@@ -5638,6 +5672,16 @@ function cascadeItemTimes(tripId,dayId,fromItemId){
 // from whichever item preceded it — removing an item changes what "the
 // previous item" means for whatever came after it, so that item's stored
 // time could otherwise go stale.
+// v7.53: added resyncDayTimes() and a "Resync times from first item"
+// option in the Day View's "..." menu. Root cause this fixes: the
+// Scotland trip import (gigs-and-trips-v751-ready.json) marked every
+// item as a manual anchor to protect the hand-crafted schedule from
+// being silently overwritten — correct at the time, but it also means
+// the cascade stops at the very next item every time, since everything
+// downstream is "protected." The brief itself anticipated needing
+// exactly this escape hatch ("unless the person explicitly asks to
+// resync the rest of the day") — it just hadn't been built until an
+// edit to Breakfast produced no visible change to anything after it.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
