@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.53</title>
+<title>Gigs &amp; Trips v7.55</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -78,6 +78,7 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
    but .main is position:absolute with top:var(--hdr) and does. */
 .hdr-subnav{height:var(--hdr-subnav);display:flex;align-items:center;padding:0 16px;gap:8px;border-top:1px solid var(--hdr-shadow)}
 .hdr-subnav-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:700;color:var(--ink)}
+.hdr-subnav-total{flex-shrink:0;font-size:13px;font-weight:600;color:var(--ink3);white-space:nowrap;margin-left:6px}
 .ni{display:flex;align-items:center;gap:5px;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:13px;font-weight:600;padding:0;flex:1;justify-content:center;height:var(--hdr-nav);transition:color var(--tr);font-family:var(--f);letter-spacing:.01em;position:relative}
 .ni.on{color:var(--ink)}
 .ni.on::after{content:'';position:absolute;bottom:0;left:16px;right:16px;height:2px;background:var(--acc);border-radius:2px 2px 0 0}
@@ -542,7 +543,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.53</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.55</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -558,6 +559,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
   <div class="hdr-subnav" id="tripSubNav" style="display:none">
     <button class="bk" id="backBtn" onclick="handleBack()">‹</button>
     <span class="hdr-subnav-title" id="tripSubNavTitle"></span>
+    <span class="hdr-subnav-total" id="tripSubNavTotal" style="display:none"></span>
     <button class="ha" id="hdrAction" style="display:none" onclick="handleHdrAction()">⋯</button>
   </div>
 </div>
@@ -1599,16 +1601,54 @@ function showListNav(){
 function showTripNav(trip){
   document.getElementById('tripSubNav').style.display='flex';
   document.getElementById('tripSubNavTitle').textContent=(trip.name||'Trip')+' ✈️';
+  // Grand total is Day View only (see showDayNav) — explicitly hide it
+  // here so a value left visible from a previous Day View visit doesn't
+  // leak into the Trip Detail title row.
+  document.getElementById('tripSubNavTotal').style.display='none';
   document.getElementById('hdrAction').style.display='';
   document.getElementById('fab').style.display='flex';
   document.documentElement.style.setProperty('--hdr','calc(var(--hdr-title) + var(--hdr-nav) + var(--hdr-subnav))');
 }
 
+// Trip grand total — same formula renderTripCosts uses (day items +
+// ghost-stay per-night costs + linked gig ticket prices + trip-level
+// costs), factored out here so the Day View header can show it without
+// duplicating renderTripCosts' own category-breakdown bookkeeping, which
+// this doesn't need.
+function computeTripGrandTotal(trip){
+  const days=trip.days||[];
+  const linkedGigs=(getData().events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===trip.id);
+  let dayTotal=0;
+  days.forEach(day=>{
+    const ghostCost=getAccGhosts(trip,day.id).reduce((sum,it)=>sum+parseFloat(it.costPerNight||0),0);
+    const gigCost=linkedGigs.filter(g=>g.date===day.date).reduce((sum,g)=>sum+parseFloat(g.ticketPrice||0),0);
+    const dayCost=(day.items||[]).filter(it=>!it._placeholder).reduce((sum,it)=>{
+      const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
+      return sum+c;
+    },0)+ghostCost+gigCost;
+    dayTotal+=dayCost;
+  });
+  const tlTotal=(trip.tripLevelCosts||[]).reduce((s,c)=>s+parseFloat(c.amount||0),0);
+  return dayTotal+tlTotal;
+}
 function showDayNav(trip,day){
   document.getElementById('tripSubNav').style.display='flex';
   const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const d=new Date(day.date+'T00:00:00');
   document.getElementById('tripSubNavTitle').textContent=`Day ${day.dayNumber} · ${dow[d.getDay()]} ${fmtDateShort(day.date)}`;
+  // Trip grand total shown on the same row as the day title and the
+  // "..." options button — its own non-shrinking span (not appended into
+  // the title text) so on a narrow screen the DAY TITLE truncates first
+  // if space is tight, never the total itself.
+  const s=sym(trip.currency||'GBP');
+  const grandTotal=computeTripGrandTotal(trip);
+  const totalEl=document.getElementById('tripSubNavTotal');
+  if(grandTotal>0){
+    totalEl.textContent=`${s}${grandTotal.toFixed(2)}`;
+    totalEl.style.display='';
+  } else {
+    totalEl.style.display='none';
+  }
   document.getElementById('hdrAction').style.display='';
   document.getElementById('fab').style.display='flex';
   document.documentElement.style.setProperty('--hdr','calc(var(--hdr-title) + var(--hdr-nav) + var(--hdr-subnav))');
@@ -3306,15 +3346,40 @@ function openDayView(tripId,dayId,scrollToItems){
   html+=`<div class="section-hdr" style="margin-top:12px">Day notes</div>
     <textarea class="fi" id="dayNotes" placeholder="Notes for this day…" rows="3" onblur="saveDayNotes('${esc(tripId)}','${esc(dayId)}',this.value)">${esc(day.notes||'')}</textarea>`;
 
-  // Day total — real items + per-night cost from ghost stays (continuing
-  // accommodation) + ticket price of any gig linked to this day
+  // Day total, broken down by category — Fuel is specifically Travel
+  // items with subtype 'Fuel' (Pete's own naming, not a generic "Travel"
+  // bucket — non-Fuel travel like flights/trains has no dedicated
+  // category he asked for, so it falls into Other alongside gig ticket
+  // costs and Keystop items, which don't have a cost field at all). Only
+  // categories with an actual nonzero spend are shown — "if other is a
+  // thing" generalised to every category, not just Other.
   const ghostCost=ghosts.reduce((sum,it)=>sum+parseFloat(it.costPerNight||0),0);
   const gigCostToday=linkedGigs.reduce((sum,g)=>sum+parseFloat(g.ticketPrice||0),0);
-  const dayCost=realItems.filter(it=>!it._placeholder).reduce((sum,it)=>{
+  const catTotals={fuel:0,food:0,accommodation:0,attraction:0,other:0};
+  realItems.filter(it=>!it._placeholder).forEach(it=>{
     const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
-    return sum+c;
-  },0)+ghostCost+gigCostToday;
-  if(dayCost>0) html+=`<div style="text-align:right;padding:12px 0;font-size:14px;font-weight:700;color:var(--ink2)">Day total: ${s}${dayCost.toFixed(2)}</div>`;
+    if(it.type==='travel'&&it.subtype==='Fuel') catTotals.fuel+=c;
+    else if(it.type==='food') catTotals.food+=c;
+    else if(it.type==='accommodation') catTotals.accommodation+=c;
+    else if(it.type==='attraction') catTotals.attraction+=c;
+    else catTotals.other+=c;
+  });
+  catTotals.accommodation+=ghostCost;
+  catTotals.other+=gigCostToday;
+  const dayCost=catTotals.fuel+catTotals.food+catTotals.accommodation+catTotals.attraction+catTotals.other;
+  if(dayCost>0){
+    const catRows=[
+      ['🚗 Fuel',catTotals.fuel],
+      ['🍽 Food',catTotals.food],
+      ['🏨 Accommodation',catTotals.accommodation],
+      ['🎡 Attractions',catTotals.attraction],
+      ['📌 Other',catTotals.other],
+    ].filter(([,val])=>val>0);
+    html+=`<div style="margin-top:12px;padding-top:8px;border-top:1px solid var(--bdr)">
+      ${catRows.map(([label,val])=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:var(--ink3)"><span>${label}</span><span>${s}${val.toFixed(2)}</span></div>`).join('')}
+      <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px solid var(--bdr);font-size:14px;font-weight:700;color:var(--ink2)"><span>Day total</span><span>${s}${dayCost.toFixed(2)}</span></div>
+    </div>`;
+  }
 
   html+=`</div>`;
   document.getElementById('dayContent').innerHTML=html;
@@ -5682,6 +5747,30 @@ function resyncDayTimes(tripId,dayId){
 // exactly this escape hatch ("unless the person explicitly asks to
 // resync the rest of the day") — it just hadn't been built until an
 // edit to Breakfast produced no visible change to anything after it.
+// v7.54: Day View's bottom total now breaks down by category — Fuel,
+// Food, Accommodation, Attractions, Other — instead of one combined
+// figure. "Fuel" is specifically Travel items with subtype 'Fuel' (per
+// Pete's own naming), not a generic Travel bucket; non-Fuel travel
+// (flights/trains/etc.) has no dedicated category he asked for, so it
+// falls into Other alongside gig ticket costs and Keystop items (which
+// have no cost field at all). Only categories with actual nonzero spend
+// show — "if other is a thing" generalised to every category. Total
+// mathematically unchanged, just re-bucketed for display — verified the
+// sum of category totals always equals the original combined figure.
+// v7.55: added a trip grand total to the Day View header, same row as
+// the day title and the "..." options button, above the prev/next "All
+// days" bar. Uses its own non-shrinking span (tripSubNavTotal) rather
+// than being appended into the day-title text — that text already
+// truncates with an ellipsis on narrow screens, so concatenating the
+// total onto the end would have made the total itself the first thing
+// silently cut off, defeating the point. Explicitly hidden again when
+// navigating to Trip Detail (showTripNav) so a value doesn't leak over
+// from a previous Day View visit. Reuses the same cost formula
+// renderTripCosts already relies on, factored out into
+// computeTripGrandTotal() so the two can't quietly drift apart. The
+// per-day category breakdown (Fuel/Food/Accommodation/Attractions/Other)
+// at the bottom of Day View was already built in an earlier session and
+// matches what was asked for here exactly — confirmed, not rebuilt.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
