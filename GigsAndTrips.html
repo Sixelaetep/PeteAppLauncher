@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.55</title>
+<title>Gigs &amp; Trips v7.56</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -78,7 +78,11 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
    but .main is position:absolute with top:var(--hdr) and does. */
 .hdr-subnav{height:var(--hdr-subnav);display:flex;align-items:center;padding:0 16px;gap:8px;border-top:1px solid var(--hdr-shadow)}
 .hdr-subnav-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:700;color:var(--ink)}
-.hdr-subnav-total{flex-shrink:0;font-size:13px;font-weight:600;color:var(--ink3);white-space:nowrap;margin-left:6px}
+.hdr-subnav-total{flex-shrink:0;display:flex;align-items:center;gap:4px;white-space:nowrap;margin-left:6px}
+.subnav-total-fig{font-size:13px;font-weight:700;color:var(--ink2)}
+.subnav-pay-pill{font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;line-height:1.4}
+.subnav-pay-pill.paid{background:var(--ok-dim);color:var(--ok)}
+.subnav-pay-pill.unpaid{background:var(--danger-dim);color:var(--danger)}
 .ni{display:flex;align-items:center;gap:5px;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:13px;font-weight:600;padding:0;flex:1;justify-content:center;height:var(--hdr-nav);transition:color var(--tr);font-family:var(--f);letter-spacing:.01em;position:relative}
 .ni.on{color:var(--ink)}
 .ni.on::after{content:'';position:absolute;bottom:0;left:16px;right:16px;height:2px;background:var(--acc);border-radius:2px 2px 0 0}
@@ -543,7 +547,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.55</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.56</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -1631,21 +1635,59 @@ function computeTripGrandTotal(trip){
   const tlTotal=(trip.tripLevelCosts||[]).reduce((s,c)=>s+parseFloat(c.amount||0),0);
   return dayTotal+tlTotal;
 }
+// Same cost sources as computeTripGrandTotal above, split by payment
+// status instead of summed into one figure. Only two item types carry an
+// explicit payment-status field: travel/attraction (.paid, boolean) and
+// accommodation (.paymentStatus, 'paid'/'deposit'/'unpaid') — a deposit
+// counts as unpaid here, since the full cost isn't actually settled yet.
+// Everything else (food, keystop, other, linked gig ticket prices,
+// trip-level costs) has no payment concept at all, so it defaults to
+// unpaid — "nothing recorded" reads as "not yet paid," not the reverse.
+// Ghost stays inherit paymentStatus from their origin item via the
+// {...it} spread in getAccGhosts, so they're handled the same way
+// accommodation items are without any special-casing.
+function computeTripPaidUnpaid(trip){
+  const days=trip.days||[];
+  const linkedGigs=(getData().events||[]).filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===trip.id);
+  let paid=0,unpaid=0;
+  const add=(c,isPaid)=>{ if(isPaid) paid+=c; else unpaid+=c; };
+  days.forEach(day=>{
+    getAccGhosts(trip,day.id).forEach(g=>add(parseFloat(g.costPerNight||0),g.paymentStatus==='paid'));
+    (day.items||[]).filter(it=>!it._placeholder).forEach(it=>{
+      const c=it.costActual!=null?it.costActual:(it.type==='accommodation'?parseFloat(it.costPerNight||0)*parseInt(it.nights||1):parseFloat(it.cost||0));
+      let isPaid=false;
+      if(it.type==='travel'||it.type==='attraction') isPaid=!!it.paid;
+      else if(it.type==='accommodation') isPaid=it.paymentStatus==='paid';
+      add(c,isPaid);
+    });
+    linkedGigs.filter(g=>g.date===day.date).forEach(g=>add(parseFloat(g.ticketPrice||0),false));
+  });
+  (trip.tripLevelCosts||[]).forEach(c=>add(parseFloat(c.amount||0),false));
+  return {paid,unpaid,total:paid+unpaid};
+}
 function showDayNav(trip,day){
   document.getElementById('tripSubNav').style.display='flex';
   const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const d=new Date(day.date+'T00:00:00');
   document.getElementById('tripSubNavTitle').textContent=`Day ${day.dayNumber} · ${dow[d.getDay()]} ${fmtDateShort(day.date)}`;
-  // Trip grand total shown on the same row as the day title and the
+  // Trip Total/Paid/Unpaid shown on the same row as the day title and the
   // "..." options button — its own non-shrinking span (not appended into
   // the title text) so on a narrow screen the DAY TITLE truncates first
-  // if space is tight, never the total itself.
+  // if space is tight, never the totals themselves. Three numbers plus a
+  // title plus two buttons in one 44px iPhone-width row only fits if
+  // it's genuinely compact: whole-currency-unit rounding (no decimals —
+  // full precision stays available in the Costs tab and Day View's own
+  // breakdown, which this doesn't replace), and colour instead of text
+  // labels for Paid/Unpaid, reusing the same green/red pill language
+  // already used on individual item cards elsewhere in the app (title
+  // attributes carry the "Paid"/"Unpaid" wording for anyone on a device
+  // where hover/long-press tooltips work).
   const s=sym(trip.currency||'GBP');
-  const grandTotal=computeTripGrandTotal(trip);
+  const {paid,unpaid,total}=computeTripPaidUnpaid(trip);
   const totalEl=document.getElementById('tripSubNavTotal');
-  if(grandTotal>0){
-    totalEl.textContent=`${s}${grandTotal.toFixed(2)}`;
-    totalEl.style.display='';
+  if(total>0){
+    totalEl.innerHTML=`<span class="subnav-total-fig">${s}${total.toFixed(0)}</span>${paid>0?`<span class="subnav-pay-pill paid" title="Paid">${s}${paid.toFixed(0)}</span>`:''}${unpaid>0?`<span class="subnav-pay-pill unpaid" title="Unpaid">${s}${unpaid.toFixed(0)}</span>`:''}`;
+    totalEl.style.display='flex';
   } else {
     totalEl.style.display='none';
   }
@@ -5771,6 +5813,20 @@ function resyncDayTimes(tripId,dayId){
 // per-day category breakdown (Fuel/Food/Accommodation/Attractions/Other)
 // at the bottom of Day View was already built in an earlier session and
 // matches what was asked for here exactly — confirmed, not rebuilt.
+// v7.56: the Day View header total now shows Total/Paid/Unpaid, not just
+// one figure. Added computeTripPaidUnpaid() alongside the existing
+// computeTripGrandTotal() — same cost sources, split by payment status.
+// Only travel/attraction (.paid) and accommodation (.paymentStatus) carry
+// an explicit payment concept; everything else (food, keystop, other,
+// gig tickets, trip-level costs) has none, so it defaults to unpaid
+// rather than being silently assumed settled. To fit one 44px iPhone-
+// width row alongside the day title and the "..." button, the display
+// is deliberately compact: whole-currency-unit rounding (no decimals —
+// the Costs tab and Day View's own breakdown still show full precision,
+// this doesn't replace either) and colour-coded pills instead of text
+// labels, reusing the same green/red visual language already on
+// individual item cards (.ppill-paid/.ppill-no) rather than inventing a
+// new one, with title="Paid"/"Unpaid" attributes for clarity.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
