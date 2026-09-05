@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.40</title>
+<title>Reading Tracker v3.41</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -222,6 +222,10 @@
   .wl-tag-suggest-pill { font-size:10px; font-weight:600; background:var(--surface); border:1px solid var(--border); color:var(--accent); border-radius:8px; padding:3px 9px; cursor:pointer; font-family:'Inter',sans-serif; }
   .wl-tag-suggest-pill.new { border-style:dashed; color:var(--success); border-color:rgba(91,191,138,.4); }
   .wl-tag-filter-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  /* v3.41 (MR-026): shown in place of the tag bar when a search narrows
+     the wishlist down to zero tags (distinct from the wl-tag-filter-bar
+     it replaces, so it never gets caught by flex/gap rules meant for chips) */
+  .wl-tag-filter-empty { font-size:11px; color:var(--muted); margin-bottom:10px; }
   .wl-tag-tracker-row { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; cursor:pointer; }
   .wl-tag-tracker-row:last-child { border-bottom:none; }
   .wl-tag-tracker-row input[type="checkbox"] { width:16px; height:16px; flex-shrink:0; accent-color: var(--accent); }
@@ -719,7 +723,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.40</span></div>
+    <div class="rt-logo">My Reading <span>v3.41</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1230,6 +1234,11 @@
         oninput="onWlSearchInput(this.value)">
       <button id="wlSearchClear" class="wl-search-clear" onclick="clearWlSearch()" style="display:none" title="Clear search">×</button>
     </div>
+    <!-- v3.41 (MR-026): tag filter bar moved to directly under the search
+         box (was below the sort dropdown) and now always visible in
+         every sort mode, including Group by tag — see renderWlTagFilterBar
+         for why the old v3.25 hide-in-that-mode rule was removed. -->
+    <div id="wlTagFilterBar"></div>
     <!-- Sort controls -->
     <div class="wl-controls">
       <span class="wl-sort-lbl">Sort by</span>
@@ -1244,7 +1253,6 @@
         <option value="tag_group" selected>Group by tag</option>
       </select>
     </div>
-    <div id="wlTagFilterBar"></div>
     <div id="wlBody"></div>
   </div>
 </div><!-- /wishlistApp -->
@@ -1351,9 +1359,9 @@
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-config.js?v=3.40"></script>
-<script src="pal-sync.js?v=3.40"></script>
-<script src="pal-utils.js?v=3.40"></script>
+<script src="pal-config.js?v=3.41"></script>
+<script src="pal-sync.js?v=3.41"></script>
+<script src="pal-utils.js?v=3.41"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -5322,24 +5330,39 @@ function wlMatchesSearch(w) {
 function renderWlTagFilterBar() {
   const container = document.getElementById("wlTagFilterBar");
   if (!container) return;
-  // v3.25 (MR-016): the standalone single-tag filter + "create tracker
-  // from this tag" button are redundant with Group by tag mode (which
-  // already shows every tag as its own section, each with its own
-  // create-tracker action) — showing both would mean picking a filter
-  // tag here effectively collapses the grouped view down to one group,
-  // which fights the whole point of grouping. Hide this bar in that mode.
-  if (document.getElementById("wlSortSel")?.value === "tag_group") { container.innerHTML = ""; return; }
   const wl = appState.wishlist || [];
-  const allTags = [...new Set(wl.flatMap(w => w.tags || []))].sort((a,b) => a.localeCompare(b));
-  if (allTags.length === 0) { container.innerHTML = ""; _wlActiveTagFilter = null; return; }
-  if (_wlActiveTagFilter && !allTags.includes(_wlActiveTagFilter)) _wlActiveTagFilter = null; // last tag removed elsewhere
+  // v3.41 (MR-026): tag existence is checked against the FULL wishlist,
+  // not the search-narrowed set below — a tag that's just temporarily
+  // hidden by the current search text shouldn't have its filter silently
+  // cleared; only a tag that's gone everywhere (last item retagged/
+  // deleted) should reset the selection.
+  const allTagsGlobal = [...new Set(wl.flatMap(w => w.tags || []))];
+  if (_wlActiveTagFilter && !allTagsGlobal.includes(_wlActiveTagFilter)) _wlActiveTagFilter = null;
 
-  let html = `<div class="wl-tag-filter-bar">` + allTags.map(tag =>
+  // v3.41 (MR-026): previously this bar hid itself entirely in Group by
+  // tag sort mode (v3.25) since that view already showed every tag as
+  // its own section. Now the bar sits directly under the search box and
+  // doubles as live "which tags match your search" feedback plus a
+  // click-to-filter shortcut — hiding it in one particular sort mode
+  // would make that feedback vanish depending on how the user happens to
+  // have the list sorted, which no longer fits the brief ("under the
+  // search show all the Tags"). Always render it now.
+  const source = _wlSearchQuery ? wl.filter(wlMatchesSearch) : wl;
+  const visibleTags = [...new Set(source.flatMap(w => w.tags || []))].sort((a,b) => a.localeCompare(b));
+
+  if (visibleTags.length === 0) {
+    container.innerHTML = _wlSearchQuery
+      ? `<div class="wl-tag-filter-empty">No tags match "${esc(_wlSearchQuery)}"</div>`
+      : "";
+    return;
+  }
+
+  let html = `<div class="wl-tag-filter-bar">` + visibleTags.map(tag =>
     `<button class="wl-tag-filter-btn${_wlActiveTagFilter===tag?' active':''}" onclick="toggleTagFilter(decodeURIComponent('${encodeURIComponent(tag)}'))">${esc(tag)}</button>`
   ).join("") + `</div>`;
 
-  if (_wlActiveTagFilter) {
-    const tagCount = wl.filter(w => (w.tags||[]).includes(_wlActiveTagFilter)).length;
+  if (_wlActiveTagFilter && visibleTags.includes(_wlActiveTagFilter)) {
+    const tagCount = source.filter(w => (w.tags||[]).includes(_wlActiveTagFilter)).length;
     html += `<button class="wl-create-from-tag" onclick="createTrackerFromTag(decodeURIComponent('${encodeURIComponent(_wlActiveTagFilter)}'))">+ Create tracker from "${esc(_wlActiveTagFilter)}" (${tagCount} book${tagCount!==1?"s":""})</button>`;
   }
   container.innerHTML = html;
@@ -5370,10 +5393,15 @@ function renderWishlistView() {
   // Sort
   const sort = document.getElementById("wlSortSel")?.value || "tag_group";
   let sorted = [...wl];
-  // v3.25 (MR-016): Group by tag mode ignores the standalone single-tag
-  // filter — narrowing to one tag here before grouping would leave only
-  // one group populated, defeating the point of seeing every tag at once.
-  if (_wlActiveTagFilter && sort !== "tag_group") sorted = sorted.filter(w => (w.tags||[]).includes(_wlActiveTagFilter));
+  // v3.41 (MR-026): tag filter now applies in every sort mode, including
+  // Group by tag — previously skipped there (v3.25) on the assumption
+  // the grouped view alone covered tag-based browsing. Now the tag bar
+  // is a persistent, always-visible filter alongside search (per brief),
+  // so picking a tag should narrow the list the same way regardless of
+  // how it's sorted; Group by tag then simply groups within that
+  // narrowed set (usually just the selected tag's group, plus any of its
+  // items' other co-tags).
+  if (_wlActiveTagFilter) sorted = sorted.filter(w => (w.tags||[]).includes(_wlActiveTagFilter));
   // v3.36 (MR-020): search narrows regardless of sort mode, including
   // tag_group (each tag's section only shows matching items; empty
   // sections are skipped further down since itemsForTag would be []).
