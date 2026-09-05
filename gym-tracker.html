@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.99</title>
+<title>Gym Tracker v2.100</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.99</div></span>
+      <span>Gym Tracker<div class="ver">v2.100</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -947,9 +947,9 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-config.js?v=2.99"></script>
-<script src="pal-sync.js?v=2.99"></script>
-<script src="pal-utils.js?v=2.99"></script>
+<script src="pal-config.js?v=2.100"></script>
+<script src="pal-sync.js?v=2.100"></script>
+<script src="pal-utils.js?v=2.100"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1199,6 +1199,44 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.100 (GYM-088): calorie/water averages no longer count partially-
+// logged days. A day with just one meal logged (forgot the rest) was
+// previously counted the same as a fully-logged day, understating true
+// average intake.
+// New per-day "Fully Logged Day" flag — one flag covers BOTH calorie
+// and water averaging (the brief asked for "a button", singular; both
+// metrics share the same underlying problem, so one toggle solving both
+// is simpler than two). New calendar day-card button
+// (renderDayFullyLoggedToggle()/toggleFullyLoggedDay()) marks a date;
+// only marked dates count in computeNutritionAverages()/
+// computeWaterAverageSplit()'s active/rest averages. The day's own
+// totals-vs-target lines (renderDayNutritionSummary()/
+// renderDayWaterSummary()) are untouched — they already show exactly
+// what was logged regardless of this flag; it only gates the AVERAGE.
+// dateKeys (used for the "how many days logged" count and the PDF's
+// day-by-day tables) deliberately still includes every day with any
+// entry, fully-logged or not — hiding partial days from the raw
+// breakdown would reduce transparency for no benefit. PDF day rows now
+// flag "(partial)" so it's clear why a listed day isn't part of the
+// average, and the "Days Logged" stat's active/rest sub-line now
+// explicitly reads "N fully logged (X active · Y rest)" rather than
+// implying those numbers sum to the headline count above them.
+// New data layer, following this suite's own established conventions
+// throughout: fullyLoggedDays array (soft-delete tombstones, same as
+// every other record — toggling "off" marks _deleted rather than
+// removing the record, so retractions actually propagate on sync
+// instead of resurrecting on the next pull), added to
+// defaultEnvelope()/load()/the JSON-restore path, and registered in
+// _gymTables/_gymArrKeys/the pull kinds list/the push-all list for full
+// sync plumbing.
+// ⚠ SQL migration required before this syncs across devices: needs a
+// new `gym_fully_logged_days` table in Supabase, same generic per-user
+// shape as every other gym_* table (id, user_id, date, updated_at,
+// deleted, created_at; RLS scoped to auth.uid()=user_id). Works fine
+// locally without it — table-specific sync failures are already
+// isolated per-kind — but flagging as a hard blocker before this reaches
+// a second device, per this suite's own "lead with the migration"
+// convention rather than burying it.
 // v2.99 (GYM-087): plan items now always get an estimated completion
 // time — supersedes GYM-024's original position (kept in updated form
 // as a comment on autoEstimateMinutes()) that workout data and "how
@@ -2156,7 +2194,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.99';
+const VERSION = '2.100';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2182,7 +2220,7 @@ function defaultEnvelope() {
     version: 2,
     lastUpdated: '',
     lastExported: '',
-    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], nutritionEntries: [], nutritionTargets: [], savedMeals: [], waterEntries: [], savedWaterItems: [], waterTargets: [], starterDismissed: false }
+    data: { exercises: [], plans: [], sessions: [], weightEntries: [], scheduleEntries: [], trainerNoteSets: [], ptSessions: [], programs: [], nutritionEntries: [], nutritionTargets: [], savedMeals: [], waterEntries: [], savedWaterItems: [], waterTargets: [], fullyLoggedDays: [], starterDismissed: false }
   };
 }
 
@@ -2210,6 +2248,7 @@ function load() {
       env.data.waterEntries = parsed.data.waterEntries || []; // GYM-068: absent in pre-v2.69 backups
       env.data.savedWaterItems = parsed.data.savedWaterItems || [];
       env.data.waterTargets = parsed.data.waterTargets || [];
+      env.data.fullyLoggedDays = parsed.data.fullyLoggedDays || []; // GYM-088: absent in pre-v2.100 backups
       env.data.starterDismissed = parsed.data.starterDismissed || false;
     }
     const exChanged = migrateExercises(env);
@@ -2475,6 +2514,34 @@ function isActiveDay(date) {
   if (resolvePlansForDate(date).length) return true;
   if (getSessions().some(s => s.date === date)) return true;
   return false;
+}
+// GYM-088: manual per-day flag, separate from and unrelated to
+// isActiveDay() above — this is about logging COMPLETENESS (did you log
+// everything you ate/drank that day), not workout activity. A day with
+// just one meal logged (forgot the rest) was previously counted the
+// same as a fully-logged day in computeNutritionAverages()/
+// computeWaterAverageSplit(), understating true intake. Soft-delete
+// tombstone, same as every other record in this suite — toggling "off"
+// marks the existing record _deleted rather than removing it, so the
+// retraction actually propagates on the next cloud sync instead of
+// silently vanishing locally and resurrecting on the next pull.
+function getFullyLoggedDays() { return _env.data.fullyLoggedDays.filter(d => !d._deleted); }
+function isFullyLoggedDay(date) { return getFullyLoggedDays().some(d => d.date === date); }
+function toggleFullyLoggedDay(date) {
+  const now = new Date().toISOString();
+  let record = _env.data.fullyLoggedDays.find(d => d.date === date);
+  if (record) {
+    record._deleted = !record._deleted;
+    record.updatedAt = now;
+  } else {
+    record = { id: uid('fld'), date, _deleted: false, createdAt: now, updatedAt: now };
+    _env.data.fullyLoggedDays.push(record);
+  }
+  save(_env);
+  sbUpsert('fullyLoggedDay', record, null);
+  renderCalendar();
+  renderInsights(); // averages may have shifted
+  toast(record._deleted ? 'No longer marked fully logged' : 'Marked as fully logged — now counts toward averages');
 }
 function getTargetsForDate(date) {
   const t = getNutritionTargets();
@@ -2889,8 +2956,17 @@ const _gymSavedMeals = window.PalSync.table('gym_saved_meals');
 const _gymWaterEntries = window.PalSync.table('gym_water_entries');
 const _gymSavedWaterItems = window.PalSync.table('gym_saved_water_items');
 const _gymWaterTargets = window.PalSync.table('gym_water_targets');
-const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms, nutritionEntry: _gymNutritionEntries, nutritionTarget: _gymNutritionTargets, savedMeal: _gymSavedMeals, waterEntry: _gymWaterEntries, savedWaterItem: _gymSavedWaterItems, waterTarget: _gymWaterTargets };
-const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs', nutritionEntry: 'nutritionEntries', nutritionTarget: 'nutritionTargets', savedMeal: 'savedMeals', waterEntry: 'waterEntries', savedWaterItem: 'savedWaterItems', waterTarget: 'waterTargets' };
+// GYM-088: new table — needs `gym_fully_logged_days` created in
+// Supabase (same generic per-user shape as every other gym_* table:
+// id, user_id, date, updated_at, deleted, created_at, with RLS scoped
+// to auth.uid()=user_id) before this can sync across devices. Works
+// fine locally without it — sbUpsert()/pull failures are isolated per-
+// kind, same as any other table outage — but flagging as a deploy
+// blocker for cross-device use, per this suite's own convention of
+// leading with SQL migrations rather than burying them.
+const _gymFullyLoggedDays = window.PalSync.table('gym_fully_logged_days');
+const _gymTables = { exercise: _gymExercises, plan: _gymPlans, session: _gymSessions, weight: _gymWeight, schedule: _gymSchedule, trainerNoteSet: _gymTrainerNotes, ptSession: _gymPT, program: _gymPrograms, nutritionEntry: _gymNutritionEntries, nutritionTarget: _gymNutritionTargets, savedMeal: _gymSavedMeals, waterEntry: _gymWaterEntries, savedWaterItem: _gymSavedWaterItems, waterTarget: _gymWaterTargets, fullyLoggedDay: _gymFullyLoggedDays };
+const _gymArrKeys = { exercise: 'exercises', plan: 'plans', session: 'sessions', weight: 'weightEntries', schedule: 'scheduleEntries', trainerNoteSet: 'trainerNoteSets', ptSession: 'ptSessions', program: 'programs', nutritionEntry: 'nutritionEntries', nutritionTarget: 'nutritionTargets', savedMeal: 'savedMeals', waterEntry: 'waterEntries', savedWaterItem: 'savedWaterItems', waterTarget: 'waterTargets', fullyLoggedDay: 'fullyLoggedDays' };
 
 // GYM-021: sessions can run long enough that the Supabase access token
 // (short-lived, issued once via PAL_SESSION at load) expires mid-workout,
@@ -2977,7 +3053,7 @@ function pullFromCloud(cb) {
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
-  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program','nutritionEntry','nutritionTarget','savedMeal','waterEntry','savedWaterItem','waterTarget'];
+  const kinds = ['exercise','plan','session','weight','schedule','trainerNoteSet','ptSession','program','nutritionEntry','nutritionTarget','savedMeal','waterEntry','savedWaterItem','waterTarget','fullyLoggedDay'];
   // GYM-009: each table's pull runs in its own try/catch, so one table
   // failing (e.g. a 401 on exercises) never blocks the other three from
   // completing — same guarantee as before, now per pal-sync.js call.
@@ -3057,7 +3133,7 @@ function manualPush() {
     setSyncStatus('syncing');
     slog('Manual push — '+total+' record(s)');
     let done = 0, errors = 0;
-    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs],['nutritionEntry',_env.data.nutritionEntries],['nutritionTarget',_env.data.nutritionTargets],['savedMeal',_env.data.savedMeals],['waterEntry',_env.data.waterEntries],['savedWaterItem',_env.data.savedWaterItems],['waterTarget',_env.data.waterTargets]].forEach(([kind, arr]) => {
+    [['exercise',_env.data.exercises],['plan',_env.data.plans],['session',_env.data.sessions],['weight',_env.data.weightEntries],['schedule',_env.data.scheduleEntries],['trainerNoteSet',_env.data.trainerNoteSets],['ptSession',_env.data.ptSessions],['program',_env.data.programs],['nutritionEntry',_env.data.nutritionEntries],['nutritionTarget',_env.data.nutritionTargets],['savedMeal',_env.data.savedMeals],['waterEntry',_env.data.waterEntries],['savedWaterItem',_env.data.savedWaterItems],['waterTarget',_env.data.waterTargets],['fullyLoggedDay',_env.data.fullyLoggedDays]].forEach(([kind, arr]) => {
       arr.forEach(rec => sbUpsert(kind, rec, ok => {
         if (!ok) errors++;
         done++;
@@ -4302,6 +4378,7 @@ function renderCalendar() {
     body += daySessions.map(calSessionChip).join('');
     body += renderDayNutritionSummary(date);
     body += renderDayWaterSummary(date);
+    body += renderDayFullyLoggedToggle(date); // GYM-088
     body += dayPTSummary(date); // GYM-078: PT logging moved here from Insights
     const done = isCurrentWeek && date < today;
     html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}" id="calDay-${date}">
@@ -5902,9 +5979,15 @@ function sparklineSvg(values, strokeColor, w, h) {
 function computeNutritionAverages(entries) {
   const byDate = {};
   entries.forEach(e => { (byDate[e.date] = byDate[e.date]||[]).push(e); });
-  const dateKeys = Object.keys(byDate).sort();
-  const activeDates = dateKeys.filter(d => isActiveDay(d));
-  const restDates = dateKeys.filter(d => !isActiveDay(d));
+  const dateKeys = Object.keys(byDate).sort(); // every day with ANY entry — used for the day-by-day table/count, unaffected by GYM-088 below
+  // GYM-088: averages only count days marked fully logged — a day with
+  // just one meal logged (forgot the rest) still appears in dateKeys
+  // above (so the per-day breakdown stays complete and transparent) but
+  // is excluded from the average itself, since counting it as if it
+  // were the whole day's intake would understate the true average.
+  const fullyLoggedDateKeys = dateKeys.filter(isFullyLoggedDay);
+  const activeDates = fullyLoggedDateKeys.filter(d => isActiveDay(d));
+  const restDates = fullyLoggedDateKeys.filter(d => !isActiveDay(d));
   const avgFor = (dates) => {
     if (!dates.length) return null;
     let cal=0, pro=0;
@@ -6023,9 +6106,12 @@ function renderPeriodSummaryCard() {
 function computeWaterAverageSplit(entries) {
   const byDate = {};
   entries.forEach(e => { (byDate[e.date] = byDate[e.date]||[]).push(e); });
-  const dateKeys = Object.keys(byDate).sort();
-  const activeDates = dateKeys.filter(d => isActiveDay(d));
-  const restDates = dateKeys.filter(d => !isActiveDay(d));
+  const dateKeys = Object.keys(byDate).sort(); // every day with ANY entry — unaffected by GYM-088 below
+  // GYM-088: same "only fully-logged days count toward the average" rule
+  // as computeNutritionAverages() above — see that comment for why.
+  const fullyLoggedDateKeys = dateKeys.filter(isFullyLoggedDay);
+  const activeDates = fullyLoggedDateKeys.filter(d => isActiveDay(d));
+  const restDates = fullyLoggedDateKeys.filter(d => !isActiveDay(d));
   const avgFor = (dates) => {
     if (!dates.length) return null;
     let total = 0;
@@ -6060,7 +6146,7 @@ function renderNutritionAveragesCard() {
   </div>`;
   };
   const cells = cell('Avg — Active Days', activeAvg, water.activeAvgMl, targets.activeCalories, targets.activeProtein) + cell('Avg — Rest Days', restAvg, water.restAvgMl, targets.restCalories, targets.restProtein);
-  wrap.innerHTML = cells ? `<div class="hero-row" style="margin-top:0">${cells}</div>` : '<div class="empty-state" style="padding:10px 0">No meals or water logged in this window</div>';
+  wrap.innerHTML = cells ? `<div class="hero-row" style="margin-top:0">${cells}</div>` : '<div class="empty-state" style="padding:10px 0">No days marked "Fully Logged" in this window yet — mark a day complete from its calendar card to include it in the average</div>';
 }
 // GYM-082: visual overhaul of the old one-line "Overall Progress" text
 // stat — a segmented bar (colour-coded, same badge colours the Exercise
@@ -7127,6 +7213,19 @@ function renderDayWaterSummary(date) {
     ${target.dailyMl ? `<div style="margin-top:6px"><div class="nutri-bar-track"><div class="nutri-bar-fill" style="width:${pct}%;background:${overTarget?'var(--accent2)':'#38bdf8'}"></div></div></div>` : ''}
   </div>`;
 }
+// GYM-088: covers BOTH calorie and water averaging with one flag, per
+// the brief ("a button" — singular) — a day is either fully logged or
+// it isn't, rather than tracking food/water completeness separately.
+// Only gates computeNutritionAverages()/computeWaterAverageSplit(); the
+// totals-vs-target lines just above (renderDayNutritionSummary(),
+// renderDayWaterSummary()) already show exactly what was logged that
+// day regardless of this flag, unaffected.
+function renderDayFullyLoggedToggle(date) {
+  const logged = isFullyLoggedDay(date);
+  return `<div class="li-actions" style="margin-top:6px">
+    <button class="btn ${logged?'btn-primary':'btn-secondary'} btn-sm btn-block" onclick="toggleFullyLoggedDay('${date}')">${logged?'✅ Fully Logged Day':'Mark as Fully Logged Day'}</button>
+  </div>`;
+}
 function renderWaterTargetSection() {
   const el = document.getElementById('targetWaterMlInput');
   const summaryEl = document.getElementById('waterTargetSummary');
@@ -7339,17 +7438,22 @@ function buildReportFoodBlock(entries) {
   const statCell = (label, avg, targetCal, targetPro) => !avg ? '' : `
     <div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avg.cal} cal / ${avg.pro}g protein</div>${(targetCal||targetPro)?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${targetCal||0} cal / ${fmtProtein(targetPro)}g protein</div>`:''}</div>`;
   const overview = `<div class="rpt-stat-grid">
-    <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${activeDates.length} active · ${restDates.length} rest</div></div>
+    <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${activeDates.length+restDates.length} fully logged (${activeDates.length} active · ${restDates.length} rest)</div></div>
     ${statCell('Avg — Active Days', activeAvg, targets.activeCalories, targets.activeProtein)}
     ${statCell('Avg — Rest Days', restAvg, targets.restCalories, targets.restProtein)}
   </div>`;
+  // GYM-088: every logged day still appears here for transparency — the
+  // average above only counts the fully-logged subset, but a partial
+  // day's own numbers are still worth seeing, just flagged so it's
+  // clear why it isn't part of the average.
   const dayRows = dateKeys.map(date => {
     const dayEntries = byDate[date];
     const dayCal = round2(dayEntries.reduce((s,e)=>s+(e.calories||0),0));
     const dayProtein = fmtProtein(dayEntries.reduce((s,e)=>s+(e.protein||0),0));
     const mealList = dayEntries.map(e => escHtml(e.mealName)+' ('+round2(e.calories)+' cal, '+fmtProtein(e.protein)+'g)').join('; ');
     const tag = isActiveDay(date) ? '🏋️' : '😴';
-    return `<tr><td>${fmtDate(date)}</td><td>${tag}</td><td style="font-size:10.5px">${mealList}</td><td>${dayCal}</td><td>${dayProtein}g</td></tr>`;
+    const partialTag = isFullyLoggedDay(date) ? '' : ' <span style="color:#b35900;font-size:9px">(partial)</span>';
+    return `<tr><td>${fmtDate(date)}${partialTag}</td><td>${tag}</td><td style="font-size:10.5px">${mealList}</td><td>${dayCal}</td><td>${dayProtein}g</td></tr>`;
   }).join('');
   return `<div class="rpt-section-title">Nutrition</div>
     ${overview}
@@ -7462,14 +7566,15 @@ function buildReportWaterBlock(entries) {
   const statCell = (label, avgMl) => avgMl==null ? '' : `
     <div class="rpt-stat"><div class="rpt-stat-label">${label}</div><div class="rpt-stat-val">${avgMl}ml</div>${target.dailyMl?`<div style="font-size:9px;color:#5b7386;margin-top:2px">target ${target.dailyMl}ml</div>`:''}</div>`;
   const overview = `<div class="rpt-stat-grid">
-    <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${activeDates.length} active · ${restDates.length} rest</div></div>
+    <div class="rpt-stat"><div class="rpt-stat-label">Days Logged</div><div class="rpt-stat-val">${dateKeys.length}</div><div style="font-size:9px;color:#5b7386;margin-top:2px">${activeDates.length+restDates.length} fully logged (${activeDates.length} active · ${restDates.length} rest)</div></div>
     ${statCell('Avg — Active Days', activeAvgMl)}
     ${statCell('Avg — Rest Days', restAvgMl)}
   </div>`;
   const dayRows = dateKeys.map(date => {
     const dayTotal = round2(byDate[date].reduce((s,e)=>s+(e.volumeMl||0),0));
     const tag = isActiveDay(date) ? '🏋️' : '😴';
-    return `<tr><td>${fmtDate(date)}</td><td>${tag}</td><td>${dayTotal}ml</td></tr>`;
+    const partialTag = isFullyLoggedDay(date) ? '' : ' <span style="color:#b35900;font-size:9px">(partial)</span>';
+    return `<tr><td>${fmtDate(date)}${partialTag}</td><td>${tag}</td><td>${dayTotal}ml</td></tr>`;
   }).join('');
   return `<div class="rpt-section-title">Hydration</div>
     ${overview}
@@ -7670,6 +7775,7 @@ function importJSON(event) {
         _env.data.waterEntries = _env.data.waterEntries || []; // GYM-068: absent in pre-v2.69 backups
         _env.data.savedWaterItems = _env.data.savedWaterItems || [];
         _env.data.waterTargets = _env.data.waterTargets || [];
+        _env.data.fullyLoggedDays = _env.data.fullyLoggedDays || []; // GYM-088: absent in pre-v2.100 backups
         const importNow = new Date().toISOString();
         _env.data.trainerNoteSets.forEach(s => { s.updatedAt = importNow; });
         ensureActiveNoteSet(_env); // resolve any ambiguity in the imported file itself immediately, don't wait for the next sync
