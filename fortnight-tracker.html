@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.63</title>
+<title>9-Day Fortnight Tracker v3.64</title>
 <style>
 :root {
   --bg:#0f1923; --surface:#172130; --card:#1e2d3d; --border:#2a3f55;
@@ -553,7 +553,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.63</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.64</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -720,9 +720,9 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <div class="toast" id="toast"></div>
 
 
-<script src="pal-config.js?v=3.63"></script>
-<script src="pal-sync.js?v=3.63"></script>
-<script src="pal-utils.js?v=3.63"></script>
+<script src="pal-config.js?v=3.64"></script>
+<script src="pal-sync.js?v=3.64"></script>
+<script src="pal-utils.js?v=3.64"></script>
 <script>
 'use strict';
 // PWA
@@ -894,6 +894,27 @@ function normDate(s){
 // target exactly like any other code, whether the absence was full or
 // partial. A full-day absence was never affected by this bug (holidayMins
 // already equalled stdMins in that case); only partial days were wrong.
+// v3.64 (FT-057): fixed a bug where a day auto-filled as Holiday/Sick
+// from a leave record showed 45 minutes more than it should (8h45m
+// instead of 8h on a Mon-Thu/second-week-Monday, correct only on the
+// short Friday by coincidence). fillDayFromLeave() zeroed the day's
+// clock (end=start) and lunch, but never zeroed extraH/extraM, so the
+// day's leftover default "extra" time (45min for every day except the
+// short Friday, whose default is already 0) got added on top of
+// holidayMins by dayTotal(). Now zeroed alongside end/lunch, with the
+// pre-fill values remembered (and restored on revert) the same way
+// end/lunch already were. migrateDays() backfills every bundle already
+// affected — any day with _autoLeaveId set that's still marked
+// holiday/sick has its leftover extraH/extraM cleared on next load, no
+// manual re-entry needed. Confirmed against the actual reported
+// bundle (Fortnight w/c 07 Sep 2026): Mon 07/09-Thu 10/09 and Mon
+// 14/09 go from 8h45m to 8h; Fri 11/09 (short Friday) is unaffected,
+// staying at 6h. The manual per-day Holiday/Sick toggle (setStat(),
+// used from the Live tab's own status buttons rather than via a leave
+// record) has a similar-looking gap but is a separate, pre-existing
+// code path not touched here — flagging separately, not fixed in this
+// release.
+//
 // v3.63 (FT-056): removed the DM Mono/DM Sans Google Fonts @import and
 // every font-family reference to them, switching to the same system
 // font stack (-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
@@ -1853,6 +1874,20 @@ function migrateDays(b) {
       var _ac = (typeof autoCodeFor === 'function') ? autoCodeFor(d.status) : null;
       if (_ac) d.alloc = [{ codeId: _ac.id, mins: d.holidayMins || 0 }];
     }
+    // FT-057: bundles auto-filled from a leave record before this fix
+    // shipped have leftover extraH/extraM from the day's original
+    // default schedule (fillDayFromLeave never zeroed them), which
+    // dayTotal() then silently added on top of holidayMins — inflating
+    // every affected day by 45 minutes (0 for the short Friday, whose
+    // default extra was already 0, which is why only that one looked
+    // right). Only touches days that were auto-filled (_autoLeaveId
+    // set) and are still marked absent, so a manually-toggled Holiday/
+    // Sick day (via setStat(), which has a separate, unrelated flow)
+    // is left untouched. Idempotent — safe to run on every load/pull.
+    if (d._autoLeaveId !== undefined && (d.status === 'holiday' || d.status === 'sick') && ((d.extraH || 0) !== 0 || (d.extraM || 0) !== 0)) {
+      d.extraH = 0;
+      d.extraM = 0;
+    }
     delete d.manualOverride;
   });
   if (b.active === undefined) b.active = false;
@@ -2333,23 +2368,39 @@ function applyAutoAbsence(d){
 // without this, deleting the leave record left the bundle day stuck
 // marked absent, which then still showed as a Holiday/Sick line in the
 // Leave tab (sourced from the bundle) even though the record was gone.
+// FT-057: also zeroes extraH/extraM now (and remembers their pre-fill
+// values). Previously only end/lunch were zeroed, so a day's leftover
+// default "extra" time (45min for every day except the short Friday,
+// which defaults to 0) got silently added on top of holidayMins by
+// dayTotal() — every auto-filled Mon-Thu/second-week-Monday holiday
+// showed 45 minutes over its real total (8h45m instead of 8h), while
+// the short Friday looked correct purely because its default extra
+// was already 0. See migrateDays() for the one-time backfill that
+// corrects bundles already affected by this before the fix shipped.
 function fillDayFromLeave(day,type,hours,leaveId){
   if(day._autoLeaveId===undefined){
-    day._autoLeavePrev={ end:day.end, lunch:day.lunch };
+    day._autoLeavePrev={ end:day.end, lunch:day.lunch, extraH:day.extraH, extraM:day.extraM };
   }
   day._autoLeaveId=leaveId;
   day.status=type;
   day.holidayMins=Math.round((hours||0)*60);
   day.end=day.start;
   day.lunch=0;
+  day.extraH=0;
+  day.extraM=0;
   applyAutoAbsence(day);
 }
-// Undoes fillDayFromLeave: restores the day's original end/lunch,
+// Undoes fillDayFromLeave: restores the day's original end/lunch/extra,
 // clears status/hours/allocation, and drops the provenance tags.
 function revertAutoLeaveDay(day){
   if(day._autoLeavePrev){
     day.end=day._autoLeavePrev.end;
     day.lunch=day._autoLeavePrev.lunch;
+    // FT-057: pre-fix _autoLeavePrev objects have no extraH/extraM keys
+    // (only end/lunch were tracked back then) — fall back to 0, the same
+    // neutral default a freshly-built day would have had.
+    day.extraH=(day._autoLeavePrev.extraH!==undefined)?day._autoLeavePrev.extraH:0;
+    day.extraM=(day._autoLeavePrev.extraM!==undefined)?day._autoLeavePrev.extraM:0;
   }
   day.status=null;
   day.holidayMins=0;
