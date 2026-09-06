@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.65</title>
+<title>Test &amp; Issues v1.66</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -476,7 +476,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.65</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.66</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -886,6 +886,50 @@
      itself carries no version data (id/name/emoji/prefix/aliases only),
      so nothing there needed touching. No manifest-schema, sync, or UI
      logic touched — verified via node --check. -->
+<!-- v1.66 (TI-079): investigated using the actual JSON backup rather
+     than jumping straight to a blind renumber. Findings, from a full
+     re-implementation of the Data Integrity Check's logic against the
+     real export:
+
+     1) The nextSeq counters for every currently-registered app are
+     already healthy — each sits exactly one past the highest id in
+     use, with zero drift. A blanket "bump the numbers" would not have
+     fixed anything real; it would only have burned a chunk of each
+     prefix's number space for no benefit, so it wasn't done.
+
+     2) Horizon (HZN) was missing from APP_REGISTRY (a gap already
+     flagged as outstanding before this release). Because
+     migrateAppRegistry only runs its drift-protection loop over
+     registered apps, HZN issues were the one prefix with NO
+     safety-net at all — registering it now closes that gap and is
+     the one concrete, safe fix shipped this release.
+
+     3) The Data Integrity Check itself (TI-073) had a real bug:
+     splitId()'s regex swallowed a trailing dash into the captured
+     prefix ("TI-079" -> "TI-"), which never matched the plain "TI" in
+     knownPrefixes — so running the check would have flagged almost
+     every normal id in the system as "no current app", burying the
+     handful of genuinely legacy ones in noise, and "ON--063"'s
+     doubled dash failed to parse at all. Fixed to match by known
+     registry prefix first (same length-based slicing
+     migrateAppRegistry already uses), falling back to a generic
+     split only for ids that aren't a known prefix. Re-run against the
+     real backup post-fix: 0 seq drift, 8 genuine legacy prefixes
+     (GJ, GT, MEA, MON, OB, PAD, PT, WOR — all pre-dating a rename or
+     belonging to a standalone/retired app), 48 old resolvesIssues
+     references with no logged record (harmless — already accounted
+     for by the counters).
+
+     4) 27 historical issues (all already status: fixed/deployed) have
+     an appId that no longer matches any current app record (old ids
+     like "pad" and "gigsandtrips" pre-date app renames/merges) — they
+     render under "Other" rather than their real app. Not reassigned
+     in this release: which app several of them really belong to is a
+     judgement call, not something to silently guess at — see the
+     GitHub description for the reviewed list.
+
+     No manifest-schema, sync, or launcher-facing logic touched;
+     verified via node --check against the real backup's own data. -->
 <!-- v1.65 (TI-078): "On Hold" added as a new issue status/category,
      wired through every place status already appears — filter dropdowns
      (issue list + Log Issue modal), Kanban column + CSS, status pill,
@@ -1009,9 +1053,9 @@
      manifest-schema, sync, or data logic touched — verified via
      node --check, duplicate ID scan, dangling handler scan, and a
      functional test of the shared functions. -->
-<script src="pal-config.js?v=1.65"></script>
-<script src="pal-sync.js?v=1.65"></script>
-<script src="pal-utils.js?v=1.65"></script>
+<script src="pal-config.js?v=1.66"></script>
+<script src="pal-sync.js?v=1.66"></script>
+<script src="pal-utils.js?v=1.66"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // STORAGE ABSTRACTION
@@ -1165,6 +1209,7 @@ const APP_REGISTRY = [
   { id: 'gym-tracker',          name: 'Gym Tracker',           emoji: '🏋️', prefix: 'GYM', aliases: ['gym-tracker'] },
   { id: 'meal-planner',         name: 'Meal Planner',          emoji: '🍽️', prefix: 'MP',  aliases: ['meal-planner'] },
   { id: 'html-vault',           name: 'HTML Vault',            emoji: '🗂️', prefix: 'HTV', aliases: ['html-vault'] },
+  { id: 'horizon',              name: 'Horizon',               emoji: '📈', prefix: 'HZN', aliases: ['horizon'] },
 ];
 // v1.26: top-level `const` doesn't attach to `window` the way `var` does,
 // so anything outside this page (the PAD Health Check) reading
@@ -3282,8 +3327,26 @@ function runDataIntegrityCheck() {
     allRefs[prefix].add(n);
   }
   function splitId(id) {
-    const m = /^([A-Za-z]+-?)(\d+)$/.exec(id||'');
-    return m ? { prefix: m[1], n: parseInt(m[2],10) } : null;
+    if (!id) return null;
+    // TI-079: match against a known registry prefix first, using the
+    // same length-based slicing migrateAppRegistry's own drift-scan
+    // uses (see maxSeq above), rather than a generic regex. The old
+    // regex here always swallowed a trailing dash into the captured
+    // prefix (e.g. "TI-079" -> "TI-"), which never equalled the plain
+    // "TI" stored in knownPrefixes — so every normal id, not just
+    // genuinely legacy ones, was misreported as "no current app".
+    // ON--063's doubled dash also failed the old regex outright and
+    // was silently dropped from every count. Falls back to a generic
+    // split for ids that don't match any known prefix, which is
+    // exactly the legacy/renamed case this check is meant to surface.
+    for (const p of knownPrefixes) {
+      if (id.startsWith(p)) {
+        const rest = id.slice(p.length).replace(/^-+/, '');
+        if (/^\d+$/.test(rest)) return { prefix: p, n: parseInt(rest, 10) };
+      }
+    }
+    const m = /^([A-Za-z]+)-*(\d+)$/.exec(id);
+    return m ? { prefix: m[1], n: parseInt(m[2], 10) } : null;
   }
 
   Object.values(state.apps).forEach(a => {
