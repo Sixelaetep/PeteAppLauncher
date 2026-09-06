@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.60</title>
+<title>Gigs &amp; Trips v7.61</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -505,7 +505,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.60</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.61</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -3419,7 +3419,7 @@ function showAddItemMenu(tripId,dayId){
     <div class="modal-body">
       <div class="add-menu-grid">
         <button class="add-menu-btn" onclick="closeModal();openAddGigForTrip('${esc(tripId)}','${esc(dayId)}','${esc(day?.date||'')}')"><span class="ami">🎸</span>Gig / Event</button>
-        ${ITEM_TYPES.map(t=>`<button class="add-menu-btn" onclick="closeModal();openAddItem('${esc(tripId)}','${esc(dayId)}','${t.id}')"><span class="ami">${t.icon}</span>${t.label}</button>`).join('')}
+        ${ITEM_TYPES.map(t=>`<button class="add-menu-btn" onclick="closeModal();openGuidedAddItem('${esc(tripId)}','${esc(dayId)}','${t.id}')"><span class="ami">${t.icon}</span>${t.label}</button>`).join('')}
       </div>
       <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="closeModal();showLinkGigPicker('${esc(tripId)}','${esc(dayId)}')">🔗 Link an existing gig</button>
     </div>`;
@@ -3427,14 +3427,232 @@ function showAddItemMenu(tripId,dayId){
 }
 
 function openAddItem(tripId,dayId,type){
-  // New items only ever get added from within a day view's "+" menu —
-  // there's no entry point for adding (only editing) from Upcoming's
-  // breakdown or the Trip Overview strip — so this always returns to the
-  // day view, same as before. Explicitly cleared here so a stale return
-  // context from a previous *edit* that was opened-then-cancelled can't
-  // leak into an unrelated add.
+  // No longer reachable from the UI — showAddItemMenu's type buttons now
+  // route through openGuidedAddItem() instead (GIG-061). Left defined
+  // rather than deleted in case a "skip the wizard" direct-add path is
+  // ever wanted back.
   _itemFormReturnTo=null;
   showItemForm(tripId,dayId,type,null);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GUIDED ITEM INSERT (GIG-061)
+// ═══════════════════════════════════════════════════════════════════
+// Replaces "pick a type → fill the whole form → hope you calculated the
+// right start time → remember the item before it now points at the
+// wrong destination" with a short guided sequence: where does this go,
+// what/where is it, how long from whatever's before it (real Maps
+// directions, not guesswork), how long you'll spend there, how long to
+// whatever's after it. The previous item's travel-time-to-next and the
+// new item's own start time are both computed, never typed — the whole
+// point was removing the "work out the time yourself" step.
+// Deliberately minimal fields (name/type/location/duration/travel-time
+// only) — anything else (cost, paid status, opening hours-equivalent
+// notes) is filled in afterward via the item's normal edit form, same
+// as GIG-057's "keep it brief" direction for entry generally.
+let _guidedInsert=null;
+
+function openGuidedAddItem(tripId,dayId,type){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
+  let opts=`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();startGuidedInsert('${esc(tripId)}','${esc(dayId)}','${type}',-1)">At the start of the day</button>`;
+  realItems.forEach((it,i)=>{
+    opts+=`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();startGuidedInsert('${esc(tripId)}','${esc(dayId)}','${type}',${i})">After ${esc(itemDisplayName(it))}${itemTime(it)?` (${itemTime(it)})`:''}</button>`;
+  });
+  showModal(`<div class="modal-hdr"><div class="modal-title">Where does this go?</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${opts}</div>`);
+}
+
+function startGuidedInsert(tripId,dayId,type,afterIndex){
+  _guidedInsert={tripId,dayId,type,afterIndex,name:'',location:'',startTime:null,prevTravelTime:null,duration:null,nextTravelTime:null,step:0};
+  renderGuidedInsertStep();
+}
+
+// The applicable step sequence depends on where in the day we're
+// inserting: the very start of the day has no predecessor to calculate
+// a travel-time-from or an inferred start time from (so it gets a direct
+// time entry instead); the very end has no successor to calculate a
+// travel-time-to.
+function _guidedInsertSteps(){
+  const {afterIndex}=_guidedInsert;
+  const trip=getEvent(_guidedInsert.tripId);
+  const day=trip.days.find(d=>d.id===_guidedInsert.dayId);
+  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
+  const hasPrev=afterIndex>=0;
+  const hasNext=afterIndex+1<realItems.length;
+  const steps=['basics'];
+  steps.push(hasPrev?'travelFrom':'startTime');
+  steps.push('duration');
+  if(hasNext) steps.push('travelTo');
+  return steps;
+}
+
+function renderGuidedInsertStep(){
+  const gi=_guidedInsert;
+  const steps=_guidedInsertSteps();
+  const stepName=steps[gi.step];
+  const trip=getEvent(gi.tripId);
+  const day=trip.days.find(d=>d.id===gi.dayId);
+  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
+  const prevItem=gi.afterIndex>=0?realItems[gi.afterIndex]:null;
+  const nextItem=gi.afterIndex+1<realItems.length?realItems[gi.afterIndex+1]:null;
+  const ti=ITEM_TYPES.find(t=>t.id===gi.type);
+  const backBtn=gi.step>0?`<button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="guidedInsertBack()">‹ Back</button>`:'';
+  const progress=`<div style="font-size:11px;color:var(--ink4);margin-bottom:10px">Step ${gi.step+1} of ${steps.length} — ${ti.icon} ${ti.label}${prevItem?` · after ${esc(itemDisplayName(prevItem))}`:''}</div>`;
+
+  let body='';
+  if(stepName==='basics'){
+    // Food's venue IS its name (no separate location field, matching the
+    // real edit form's own convention) — every other type keeps both as
+    // genuinely distinct fields.
+    body=gi.type==='food'
+      ?`${venuePickerFieldHtml('Restaurant / venue',gi.location,'giLocation','giLocationDrop')}
+        <button class="btn btn-pri" style="width:100%;margin-top:6px" onclick="guidedInsertNext()">Next ›</button>`
+      :`<div class="fg"><label>Name *</label><input class="fi" id="giName" placeholder="What is it?" value="${esc(gi.name)}"></div>
+      ${venuePickerFieldHtml('Location / venue',gi.location,'giLocation','giLocationDrop')}
+      <button class="btn btn-pri" style="width:100%;margin-top:6px" onclick="guidedInsertNext()">Next ›</button>`;
+  } else if(stepName==='startTime'){
+    body=`<p style="font-size:13px;color:var(--ink2);margin-bottom:10px">This is the first thing in the day — what time does it start?</p>
+      <div class="fg"><label>Start time</label>${timePickerHtml('giStartTime',gi.startTime)}</div>
+      <button class="btn btn-pri" style="width:100%;margin-top:6px" onclick="guidedInsertNext()">Next ›</button>${backBtn}`;
+  } else if(stepName==='travelFrom'){
+    const canLookup=itemLocationName(prevItem)&&gi.location;
+    body=`<p style="font-size:13px;color:var(--ink2);margin-bottom:10px">Travel time from ${esc(itemDisplayName(prevItem))} to here:</p>
+      ${canLookup?`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="guidedInsertLookupMaps('from')">🗺️ Look up on Google Maps</button>`:`<p style="font-size:12px;color:var(--ink4);margin-bottom:10px">Add a location to both to enable the Maps lookup — you can still enter a time by hand below.</p>`}
+      <div class="fg"><label>Duration</label>${durationPickerHtml('giPrevTravel',gi.prevTravelTime)}</div>
+      <button class="btn btn-pri" style="width:100%;margin-top:6px" onclick="guidedInsertNext()">Next ›</button>${backBtn}`;
+  } else if(stepName==='duration'){
+    body=`<p style="font-size:13px;color:var(--ink2);margin-bottom:10px">How long will you spend here?</p>
+      <div class="fg"><label>Duration</label>${durationPickerHtml('giDuration',gi.duration!=null?gi.duration:defaultDurationFor(gi.type,null,false))}</div>
+      <button class="btn btn-pri" style="width:100%;margin-top:6px" onclick="guidedInsertNext()">${nextItem?'Next ›':'Add item ✓'}</button>${backBtn}`;
+  } else if(stepName==='travelTo'){
+    const canLookup=gi.location&&itemLocationName(nextItem);
+    body=`<p style="font-size:13px;color:var(--ink2);margin-bottom:10px">Travel time from here to ${esc(itemDisplayName(nextItem))}:</p>
+      ${canLookup?`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="guidedInsertLookupMaps('to')">🗺️ Look up on Google Maps</button>`:`<p style="font-size:12px;color:var(--ink4);margin-bottom:10px">Add a location to both to enable the Maps lookup — you can still enter a time by hand below.</p>`}
+      <div class="fg"><label>Duration</label>${durationPickerHtml('giNextTravel',gi.nextTravelTime)}</div>
+      <button class="btn btn-pri" style="width:100%;margin-top:6px" onclick="guidedInsertNext()">Add item ✓</button>${backBtn}`;
+  }
+
+  showModal(`<div class="modal-hdr"><div class="modal-title">Add ${esc(ti.label)}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${progress}${body}</div>`);
+}
+
+// Opens real Google Maps directions for whichever leg the current step
+// concerns — same underlying pattern as openTravelTimeMaps elsewhere in
+// this file, just using the guided-insert's in-progress location rather
+// than two already-saved items.
+function guidedInsertLookupMaps(direction){
+  const gi=_guidedInsert;
+  const trip=getEvent(gi.tripId);
+  const day=trip.days.find(d=>d.id===gi.dayId);
+  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
+  gi.location=document.getElementById('giLocation')?.value.trim()||gi.location;
+  let origin,dest;
+  if(direction==='from'){
+    const prevItem=realItems[gi.afterIndex];
+    origin=itemLocationName(prevItem); dest=gi.location;
+  } else {
+    const nextItem=realItems[gi.afterIndex+1];
+    origin=gi.location; dest=itemLocationName(nextItem);
+  }
+  if(!origin||!dest){ showToast('Add a location to both first'); return; }
+  window.open('https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest),'_blank','noopener');
+}
+
+function guidedInsertBack(){
+  const gi=_guidedInsert;
+  _guidedInsertCaptureStep();
+  gi.step=Math.max(0,gi.step-1);
+  renderGuidedInsertStep();
+}
+
+// Reads whatever the CURRENT step's inputs hold into _guidedInsert
+// before moving away from it, regardless of direction (Next or Back) —
+// so going back and forward again never loses what was already entered.
+function _guidedInsertCaptureStep(){
+  const gi=_guidedInsert;
+  const steps=_guidedInsertSteps();
+  const stepName=steps[gi.step];
+  if(stepName==='basics'){
+    gi.location=document.getElementById('giLocation')?.value.trim()||'';
+    gi.name=gi.type==='food'?gi.location:(document.getElementById('giName')?.value.trim()||'');
+  } else if(stepName==='startTime'){
+    gi.startTime=getTimePicker('giStartTime');
+  } else if(stepName==='travelFrom'){
+    gi.prevTravelTime=getDurationPicker('giPrevTravel');
+  } else if(stepName==='duration'){
+    gi.duration=getDurationPicker('giDuration');
+  } else if(stepName==='travelTo'){
+    gi.nextTravelTime=getDurationPicker('giNextTravel');
+  }
+}
+
+function guidedInsertNext(){
+  const gi=_guidedInsert;
+  const steps=_guidedInsertSteps();
+  _guidedInsertCaptureStep();
+  if(steps[gi.step]==='basics'&&!gi.name){
+    showToast('Name is required'); return;
+  }
+  if(gi.step>=steps.length-1){ finishGuidedInsert(); return; }
+  gi.step++;
+  renderGuidedInsertStep();
+}
+
+// Creates the new item, fixes up whichever item now precedes it (its
+// travel-time-to-next was calculated for the OLD next item, not this
+// new one — reusing that stale number would silently describe the wrong
+// journey, which is exactly the bug this whole flow exists to avoid),
+// sets the new item's own start time (computed from the predecessor,
+// never typed, except at the very start of the day where there's
+// nothing to compute from), and cascades from whichever item is now the
+// earliest one this change could affect.
+function finishGuidedInsert(){
+  const gi=_guidedInsert;
+  const trip=getEvent(gi.tripId); if(!trip){ closeModal(); return; }
+  const day=trip.days.find(d=>d.id===gi.dayId); if(!day){ closeModal(); return; }
+  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
+  const prevItem=gi.afterIndex>=0?realItems[gi.afterIndex]:null;
+
+  const newItem={
+    id:genId(), type:gi.type, name:gi.name, completed:false, completedAt:null, review:null,
+    order:day.items.length, durationMinutes:gi.duration, travelTimeToNext:gi.nextTravelTime,
+    notes:'', timeManual:!prevItem
+  };
+  // Location lives under a different field name per type, same
+  // convention the rest of the app already uses (itemLocationName's
+  // read-side mapping). Food has nothing extra to set here — its name
+  // IS its venue, already captured above.
+  if(gi.type==='other'){ newItem.venue=gi.location; newItem.desc=gi.name; }
+  else if(gi.type==='travel') newItem.venue=gi.location;
+  else if(gi.type==='accommodation'){ newItem.location=gi.location; newItem.nights=1; newItem.isAccParent=true; newItem.paymentStatus='unpaid'; }
+  else if(gi.type==='attraction'||gi.type==='keystop') newItem.location=gi.location;
+
+  if(prevItem){
+    // Computed, never typed — the entire point of this flow.
+    const startMins=timeStrToMinutes(itemTime(prevItem))+parseInt(prevItem.durationMinutes||0,10)+parseInt(gi.prevTravelTime||0,10);
+    newItem[itemTimeField(gi.type)]=itemTime(prevItem)!=null&&prevItem.durationMinutes!=null&&gi.prevTravelTime!=null?minutesToTimeStr(startMins):null;
+  } else {
+    newItem[itemTimeField(gi.type)]=gi.startTime;
+  }
+
+  day.items.push(newItem);
+  if(prevItem){
+    // This is the fix-up that matters: the item before the new one had a
+    // travel-time-to-next describing the trip to whatever USED to be
+    // next. That's now wrong — it needs to describe the trip to THIS
+    // new item instead.
+    prevItem.travelTimeToNext=gi.prevTravelTime;
+  }
+  trip.updatedAt=new Date().toISOString();
+  saveEvent(trip);
+  cascadeItemTimes(gi.tripId,gi.dayId,prevItem?prevItem.id:newItem.id);
+
+  closeModal();
+  showToast('Item added ✓');
+  _guidedInsert=null;
+  refreshDayView(gi.tripId,gi.dayId);
 }
 // GIG-043: link an already-existing (unlinked) gig to this trip, either
 // via the picker below or a one-tap action from the conflict-banner
@@ -5326,6 +5544,28 @@ function resyncDayTimes(tripId,dayId){
 // "repeat rule" logic bundled in this same file is a completely
 // different feature (recurring weekly workout schedule entries) and was
 // not touched.
+// v7.61 (GIG-061, worked through with Pete before building): guided
+// item insert, replacing "pick a type → fill the whole form → work out
+// the right start time yourself → remember the item before it now
+// points at the wrong destination". showAddItemMenu's type buttons now
+// route through openGuidedAddItem() — pick where in the day this goes
+// (start / after item N / end), then a short guided sequence: basics
+// (name/type/location — food's venue IS its name, no separate field),
+// travel time from whatever's before it (real Maps directions via
+// guidedInsertLookupMaps, same pattern as openTravelTimeMaps elsewhere),
+// duration here, travel time to whatever's after it. Steps that don't
+// apply are skipped entirely (_guidedInsertSteps) — day-start has no
+// predecessor to calculate a travel-time-from or an inferred start time
+// from, so it asks for a direct time instead; day-end has no successor
+// to calculate a travel-time-to. finishGuidedInsert() computes the new
+// item's start time from the predecessor (never typed, except at day
+// start) AND overwrites the predecessor's travelTimeToNext — that value
+// described the OLD next item's journey and would silently describe the
+// wrong one if left alone, which was the actual bug this whole feature
+// exists to fix. Cascades from the predecessor (or the new item itself
+// at day start) afterward. openAddItem()/showItemForm's direct-add path
+// left in place, unreachable from the UI now, same pattern as prior
+// removals in this app.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
