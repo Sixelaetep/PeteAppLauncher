@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.62</title>
+<title>Gigs &amp; Trips v7.63</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -123,17 +123,12 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .sync-chip.state-syncing{background:var(--acc-dim);color:var(--acc);border-color:rgba(124,58,237,.35)}
 .sync-chip.state-synced{background:var(--ok-dim);color:var(--ok);border-color:rgba(10,124,92,.3)}
 .sync-chip.state-error{background:var(--danger-dim);color:var(--danger);border-color:rgba(211,47,47,.3)}
+.sync-chip.state-expired{background:var(--danger-dim);color:var(--danger);border-color:rgba(211,47,47,.3);font-weight:700}
 .sync-chip-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;transition:background .3s}
 .sync-chip.state-syncing .sync-chip-dot{animation:gatpulse .8s infinite alternate}
 @keyframes gatpulse{from{opacity:1}to{opacity:.35}}
 
 /* ── Sync bar ───────────────────────────────────────────────────── */
-.sync-bar{position:fixed;top:var(--hdr);left:0;right:0;height:26px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:600;z-index:90;opacity:0;pointer-events:none;transition:opacity .2s}
-.sync-bar.visible{opacity:1;pointer-events:auto}
-.sync-bar.syncing{background:#1a1a2e;color:rgba(255,255,255,.7)}
-.sync-bar.ok{background:#0a3a2a;color:#4ade80}
-.sync-bar.err{background:#3a0a0a;color:#f87171}
-.sbar-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .event-card{background:var(--card);border-radius:var(--r);box-shadow:var(--sh0);margin-bottom:10px;border:1px solid var(--bdr);overflow:hidden;cursor:pointer;transition:box-shadow var(--tr),transform var(--tr);-webkit-tap-highlight-color:transparent}
@@ -499,14 +494,11 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Auth screen ───────────────────────────────────────────────── -->
 <div id="pinScreen"></div>
 
-<!-- ── Sync bar ──────────────────────────────────────────────────── -->
-<div class="sync-bar" id="syncBar"><div class="sbar-dot"></div><span id="syncBarMsg">Syncing…</span></div>
-
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.62</span></h1>
-    <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.63</span></h1>
+    <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
     <button class="ni on" id="tab-upcoming" onclick="switchTab('upcoming',this)">Upcoming</button>
@@ -821,13 +813,27 @@ let _sbAccessToken = null;
 let _currentUserKey = 'pete';
 let _sessionBannerShown = false;
 
+// GIG-063: previously showed a dedicated banner. Now sets the pill into
+// its own distinct "expired" state — same idea (persistent, can't be
+// missed, stays until acted on) without a separate fixed element that
+// pushes page content down while visible. handleSyncChipClick() checks
+// for this state and reloads instead of opening the Data Manager, so
+// tapping the pill is still the one action that fixes it.
 function showSessionExpiredBanner(){
   if(_sessionBannerShown) return; _sessionBannerShown=true;
-  const bar=document.getElementById('syncBar'), msg=document.getElementById('syncBarMsg');
-  if(!bar||!msg) return;
-  bar.className='sync-bar visible err';
-  const main=document.getElementById('appMain'); if(main) main.style.top='calc(var(--hdr) + 26px)';
-  msg.innerHTML='Session expired — <a href="javascript:location.reload()" style="color:inherit;text-decoration:underline">tap to refresh</a>';
+  const bchip=document.getElementById('gatSyncBadge');
+  const btxt=document.getElementById('gatSyncText');
+  if(bchip) bchip.className='sync-chip state-expired';
+  if(btxt) btxt.textContent='Session expired — tap to refresh';
+}
+// The pill's onclick used to always open the Data Manager. While the
+// session-expired state is active, tapping it now reloads the page
+// instead — that's the actual fix for that state, and there's nowhere
+// else for that action to live now the banner (which used to carry its
+// own "tap to refresh" link) is gone.
+function handleSyncChipClick(){
+  if(_sessionBannerShown){ location.reload(); return; }
+  showDataManager();
 }
 
 // ── Theme (v4.3) ───────────────────────────────────────────────────────
@@ -1073,29 +1079,27 @@ async function sbFetch(method,path,body){
 }
 
 let _lastSyncState='';
+// GIG-063: sync status now lives ONLY in the persistent pill —
+// previously this also drove a fixed banner (#syncBar) that pushed the
+// whole page content down while visible, "interrupting the view" as
+// Pete put it. The pill already existed as a permanent, non-intrusive
+// indicator; it just wasn't the only place status was shown. customMsg
+// (e.g. "Updated ✓" after a silent background pull found changes) now
+// applies to the pill's own text instead of being lost along with the
+// banner it used to be exclusive to.
 function setSyncDot(state,customMsg){
-  const bar=document.getElementById('syncBar'), msg=document.getElementById('syncBarMsg');
-  const main=document.getElementById('appMain');
-  if(!bar) return;
-  if(state==='idle'){
-    // Only hide the transient bar — badge keeps showing last known state
-    bar.classList.remove('visible','syncing','ok','err');
-    if(main) main.style.top='';
-    return;
-  }
+  // 'idle' used to only hide the transient banner while leaving the
+  // pill showing its last real state — with no banner left to hide,
+  // it's now a genuine no-op. Without this guard, every one of the
+  // setTimeout(()=>setSyncDot('idle'),...) calls elsewhere would
+  // incorrectly reset the pill back to "Local" a couple of seconds
+  // after every sync, wiping out whatever real state it was showing.
+  if(state==='idle') return;
   _lastSyncState=state;
-  bar.className='sync-bar visible '+state;
-  if(main) main.style.top='calc(var(--hdr) + 26px)';
-  if(msg) msg.textContent=customMsg||(state==='syncing'?'Syncing…':state==='ok'?'Saved to cloud':'Sync failed');
-  // Update persistent chip — never written by idle, so last real state sticks
   const bchip=document.getElementById('gatSyncBadge');
   const btxt=document.getElementById('gatSyncText');
-  if(bchip){
-    bchip.className = 'sync-chip state-' + (state==='ok'?'synced' : state==='syncing'?'syncing' : state==='err'?'error' : 'local');
-  }
-  if(btxt){
-    btxt.textContent = state==='ok'?'Synced' : state==='syncing'?'Syncing…' : state==='err'?'Sync error' : 'Local';
-  }
+  if(bchip) bchip.className='sync-chip state-'+(state==='ok'?'synced':state==='syncing'?'syncing':state==='err'?'error':'local');
+  if(btxt) btxt.textContent=customMsg||(state==='ok'?'Synced':state==='syncing'?'Syncing…':state==='err'?'Sync error':'Local');
 }
 
 let _cachedUserId='';
@@ -3466,17 +3470,39 @@ function openGuidedAddItem(tripId,dayId,type){
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
   const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
-  let opts=`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();startGuidedInsert('${esc(tripId)}','${esc(dayId)}','${type}',-1)">At the start of the day</button>`;
-  realItems.forEach((it,i)=>{
-    opts+=`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();startGuidedInsert('${esc(tripId)}','${esc(dayId)}','${type}',${i})">After ${esc(itemDisplayName(it))}${itemTime(it)?` (${itemTime(it)})`:''}</button>`;
+  let opts=`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();startGuidedInsert('${esc(tripId)}','${esc(dayId)}','${type}',null)">At the start of the day</button>`;
+  realItems.forEach(it=>{
+    opts+=`<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();startGuidedInsert('${esc(tripId)}','${esc(dayId)}','${type}','${esc(it.id)}')">After ${esc(itemDisplayName(it))}${itemTime(it)?` (${itemTime(it)})`:''}</button>`;
   });
   showModal(`<div class="modal-hdr"><div class="modal-title">Where does this go?</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">${opts}</div>`);
 }
 
-function startGuidedInsert(tripId,dayId,type,afterIndex){
-  _guidedInsert={tripId,dayId,type,afterIndex,name:'',location:'',startTime:null,prevTravelTime:null,duration:null,nextTravelTime:null,step:0};
+function startGuidedInsert(tripId,dayId,type,afterItemId){
+  _guidedInsert={tripId,dayId,type,afterItemId,name:'',location:'',startTime:null,prevTravelTime:null,duration:null,nextTravelTime:null,step:0};
   renderGuidedInsertStep();
+}
+
+// Resolves afterItemId back to the actual predecessor/successor items,
+// freshly, against whatever the day's items currently are. This is the
+// fix for GIG-063's "inserted after the wrong item" report: an array
+// INDEX captured once at the start of the flow can go stale if the
+// day's items change at all before the flow finishes — a real risk
+// here specifically, since two of the steps send the user away to
+// Google Maps and back, and background sync keeps running the entire
+// time. An item's own id never goes stale the same way; re-resolving
+// its current position each time this is called is what makes that
+// safe regardless of how long the flow takes or what else changes
+// in the meantime.
+function _resolveGuidedInsertPosition(){
+  const gi=_guidedInsert;
+  const trip=getEvent(gi.tripId);
+  const day=trip.days.find(d=>d.id===gi.dayId);
+  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
+  if(!gi.afterItemId) return {realItems,prevItem:null,nextItem:realItems[0]||null};
+  const idx=realItems.findIndex(it=>it.id===gi.afterItemId);
+  if(idx<0) return {realItems,prevItem:null,nextItem:realItems[0]||null}; // predecessor no longer exists (e.g. deleted meanwhile) — fall back to inserting at the start rather than silently attaching to the wrong item
+  return {realItems,prevItem:realItems[idx],nextItem:realItems[idx+1]||null};
 }
 
 // The applicable step sequence depends on where in the day we're
@@ -3485,16 +3511,11 @@ function startGuidedInsert(tripId,dayId,type,afterIndex){
 // time entry instead); the very end has no successor to calculate a
 // travel-time-to.
 function _guidedInsertSteps(){
-  const {afterIndex}=_guidedInsert;
-  const trip=getEvent(_guidedInsert.tripId);
-  const day=trip.days.find(d=>d.id===_guidedInsert.dayId);
-  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
-  const hasPrev=afterIndex>=0;
-  const hasNext=afterIndex+1<realItems.length;
+  const {prevItem,nextItem}=_resolveGuidedInsertPosition();
   const steps=['basics'];
-  steps.push(hasPrev?'travelFrom':'startTime');
+  steps.push(prevItem?'travelFrom':'startTime');
   steps.push('duration');
-  if(hasNext) steps.push('travelTo');
+  if(nextItem) steps.push('travelTo');
   return steps;
 }
 
@@ -3502,11 +3523,7 @@ function renderGuidedInsertStep(){
   const gi=_guidedInsert;
   const steps=_guidedInsertSteps();
   const stepName=steps[gi.step];
-  const trip=getEvent(gi.tripId);
-  const day=trip.days.find(d=>d.id===gi.dayId);
-  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
-  const prevItem=gi.afterIndex>=0?realItems[gi.afterIndex]:null;
-  const nextItem=gi.afterIndex+1<realItems.length?realItems[gi.afterIndex+1]:null;
+  const {prevItem,nextItem}=_resolveGuidedInsertPosition();
   const ti=ITEM_TYPES.find(t=>t.id===gi.type);
   const backBtn=gi.step>0?`<button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="guidedInsertBack()">‹ Back</button>`:'';
   const progress=`<div style="font-size:11px;color:var(--ink4);margin-bottom:10px">Step ${gi.step+1} of ${steps.length} — ${ti.icon} ${ti.label}${prevItem?` · after ${esc(itemDisplayName(prevItem))}`:''}</div>`;
@@ -3554,16 +3571,12 @@ function renderGuidedInsertStep(){
 // than two already-saved items.
 function guidedInsertLookupMaps(direction){
   const gi=_guidedInsert;
-  const trip=getEvent(gi.tripId);
-  const day=trip.days.find(d=>d.id===gi.dayId);
-  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
   gi.location=document.getElementById('giLocation')?.value.trim()||gi.location;
+  const {prevItem,nextItem}=_resolveGuidedInsertPosition();
   let origin,dest;
   if(direction==='from'){
-    const prevItem=realItems[gi.afterIndex];
     origin=itemLocationName(prevItem); dest=gi.location;
   } else {
-    const nextItem=realItems[gi.afterIndex+1];
     origin=gi.location; dest=itemLocationName(nextItem);
   }
   if(!origin||!dest){ showToast('Add a location to both first'); return; }
@@ -3622,8 +3635,7 @@ function finishGuidedInsert(){
   const gi=_guidedInsert;
   const trip=getEvent(gi.tripId); if(!trip){ closeModal(); return; }
   const day=trip.days.find(d=>d.id===gi.dayId); if(!day){ closeModal(); return; }
-  const realItems=sortDayTimeline((day.items||[]).filter(it=>!it._placeholder));
-  const prevItem=gi.afterIndex>=0?realItems[gi.afterIndex]:null;
+  const {prevItem}=_resolveGuidedInsertPosition();
 
   const newItem={
     id:genId(), type:gi.type, name:gi.name, completed:false, completedAt:null, review:null,
@@ -5311,8 +5323,30 @@ function durationPickerHtml(idPrefix,totalMinutes){
   const m=totalMinutes!=null?(totalMinutes%60):'';
   let hOpts=`<option value=""${h===''?' selected':''}>—</option>`;
   for(let i=0;i<=8;i++) hOpts+=`<option value="${i}"${h===i?' selected':''}>${i}h</option>`;
+  // Minute select: 5-min steps for new entries, same as timePickerHtml —
+  // but an EXISTING value that isn't aligned to one (near-universal for
+  // a real Google Maps travel-time result — "23 minutes", "37 minutes"
+  // are the norm, not the exception) must still be exactly representable,
+  // or opening and re-saving the form for an unrelated reason silently
+  // rounds it down to the nearest 5-min mark (getDurationPicker's ||0
+  // fallback treats the unmatched blank minute as zero) — losing however
+  // many minutes were dropped, and doing it again on every subsequent
+  // save. This is very likely the primary cause of GIG-063's "cascade
+  // doesn't work" report: a corrupted travel-time or duration doesn't
+  // fail loudly, it just quietly throws the downstream calculation off
+  // by a few minutes each time the item is touched.
   let mOpts=`<option value=""${m===''?' selected':''}>—</option>`;
-  for(let i=0;i<60;i+=5) mOpts+=`<option value="${i}"${m===i?' selected':''}>${String(i).padStart(2,'0')}m</option>`;
+  let insertedExact=false;
+  for(let i=0;i<60;i+=5){
+    if(m!==''&&m%5!==0&&!insertedExact&&m<i){
+      mOpts+=`<option value="${m}" selected>${String(m).padStart(2,'0')}m</option>`;
+      insertedExact=true;
+    }
+    mOpts+=`<option value="${i}"${m===i?' selected':''}>${String(i).padStart(2,'0')}m</option>`;
+  }
+  if(m!==''&&m%5!==0&&!insertedExact){ // m is 56-59, sorts after every 5-min step
+    mOpts+=`<option value="${m}" selected>${String(m).padStart(2,'0')}m</option>`;
+  }
   return `<div style="display:flex;gap:8px">
     <select class="fi" id="${idPrefix}H">${hOpts}</select>
     <select class="fi" id="${idPrefix}M">${mOpts}</select>
@@ -5598,6 +5632,46 @@ function resyncDayTimes(tripId,dayId){
 // navigation, correctly still resetting scroll: first entering a trip
 // from a card, the Day View back button, a linked-trip pill from gig
 // detail, and creating a brand-new trip.
+// v7.63 (GIG-063): three fixes, each confirmed by actually reproducing
+// the reported bug with the old code before fixing it, not just review.
+// (1) CRITICAL — durationPickerHtml/timePickerHtml's minute selects only
+// offered 5-minute steps. Any existing value that wasn't a multiple of
+// 5 had no matching option, so simply opening and re-saving an item's
+// edit form — even to change something unrelated — silently corrupted
+// it: reproduced 23min->0min, 37min->0min, 68min->60min, 127min->120min
+// with the exact old code. This is very likely the actual cause of "the
+// calculations are not cascading" — travel times from real Google Maps
+// lookups are essentially never round 5-minute numbers ("23 minutes",
+// "37 minutes" are the norm), so a corrupted travel-time or duration
+// would quietly throw cascadeItemTimes off by however many minutes were
+// lost, with no error anywhere. Both pickers now insert the exact
+// existing value as an extra option when it isn't 5-min-aligned, so
+// re-opening and re-saving never alters data that wasn't touched.
+// (2) The guided insert flow (GIG-060/061) tracked "insert after this
+// item" using a raw array position (afterIndex), captured once when the
+// insertion-point picker was shown. That position can go stale if
+// anything about the day's items changes before the flow finishes — a
+// real risk specifically because two of its steps send the user away to
+// Google Maps and back, with background sync running the entire time.
+// Reproduced exactly: simulated another device's sync arriving mid-flow
+// and reordering the day's items, and confirmed the old index-based code
+// resolved to a different item than the one originally selected —
+// matching "inserted after the wrong item" precisely. Replaced afterIndex
+// with afterItemId (a stable id, resolved fresh via the new
+// _resolveGuidedInsertPosition() at every step) — an item's own id can't
+// go stale the same way a position can. Falls back gracefully to
+// "insert at start" if the predecessor was deleted entirely in the
+// meantime, rather than silently attaching to whatever's now at that
+// position.
+// (3) Removed the sync banner (#syncBar) entirely, per Pete's request —
+// it pushed page content down while visible, "interrupting the view."
+// Sync status (Syncing…/Synced/Sync error, plus custom messages like
+// "Updated ✓") now lives only in the persistent pill (setSyncDot
+// rewritten to target it directly, customMsg now applies there instead
+// of being lost). The banner's other job — a persistent "session
+// expired, tap to refresh" notice — moved onto the pill too, as a
+// distinct clickable state (handleSyncChipClick reloads instead of
+// opening the Data Manager while that state is active).
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
@@ -5725,11 +5799,34 @@ function timePickerHtml(idPrefix, selected){
     hOpts+=`<option value="${v}"${selH===v?' selected':''}>${v}</option>`;
   }
 
-  // Minute select: blank "—" option + 00, 05, 10 … 55
+  // Minute select: blank "—" option + 00, 05, 10 … 55. New selections are
+  // 5-min-increment only, by design — but an EXISTING time that isn't
+  // aligned to one (imported data, or any genuinely precise real-world
+  // time — a flight departing at :07, a check-in at :43) must still be
+  // representable, or simply opening and re-saving the form for an
+  // unrelated field silently wipes it: no option would match selM, the
+  // select would default to its first (blank) option, and the time comes
+  // back as "" on save — which then breaks the cascade at that item,
+  // since it looks like it has no time at all. Inserted in sorted order
+  // as an extra, exact-match option when needed, alongside the normal
+  // 5-min steps, rather than rounding it (which would still silently
+  // alter a real booking time, just less destructively).
+  const selMNum = selM!==''?parseInt(selM,10):null;
+  const isAligned = selMNum==null || selMNum%5===0;
   let mOpts = `<option value=""${noSel?' selected':''}>—</option>`;
+  let insertedExact=false;
   for(let m=0;m<60;m+=5){
+    if(!isAligned && !insertedExact && selMNum<m){
+      const ev=String(selMNum).padStart(2,'0');
+      mOpts+=`<option value="${ev}" selected>${ev}</option>`;
+      insertedExact=true;
+    }
     const v=String(m).padStart(2,'0');
     mOpts+=`<option value="${v}"${selM===v?' selected':''}>${v}</option>`;
+  }
+  if(!isAligned && !insertedExact){ // selMNum is 56-59, sorts after every 5-min step
+    const ev=String(selMNum).padStart(2,'0');
+    mOpts+=`<option value="${ev}" selected>${ev}</option>`;
   }
 
   return `<div class="time-pick" style="display:flex;gap:4px;align-items:center">` +
