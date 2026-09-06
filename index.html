@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.66</title>
+<title>P Apps v10.67</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -623,7 +623,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.66</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.67</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -879,6 +879,21 @@
     </p>
   </div>
 
+  <!-- PET-074 (Safari-speed investigation): load-speed panel. One line per
+       app, filled in the moment its iframe first loads — measures the
+       whole cold-boot cost (network + parse + inline-script execution),
+       same thing regardless of which app turns out to be slow, from a
+       single measurement point instead of per-app instrumentation. See
+       full rationale in the PET-074 changelog comment near BOOT below. -->
+  <div class="backup-panel" id="load-speed-panel">
+    <h3>⚡ Load Speed — first-open time per app</h3>
+    <p style="font-size:11px; color:var(--ink3); margin:-4px 0 10px; line-height:1.6;">
+      Fills in as you open each app for the first time this session. Open a few on Safari, then use "Copy all" to paste real numbers into a Test &amp; Issues entry.
+    </p>
+    <div id="load-speed-rows"><!-- renderLoadSpeedPanel() fills this in --></div>
+    <button class="br-btn" style="margin-top:10px" onclick="copyLoadSpeedDiagnostics()">📋 Copy all</button>
+  </div>
+
 </div><!-- /home-screen -->
 
 <!-- ── App iframes ── -->
@@ -916,6 +931,44 @@
 
 <div id="toast"></div>
 
+<!-- v10.67 (PET-074): Safari-speed investigation, launcher side. Test &
+     Issues TI-076 added a per-app diagnostics panel (init render / sync
+     pull / storage write) after static review found nothing conclusive
+     in that one app; rolling the same panel out to all 9 apps would have
+     meant 8 more version bumps and 8 near-duplicate copies of the same
+     instrumentation to maintain. Cheaper option, same evidence: every app
+     already loads lazily into an iframe here (data-src, populated on
+     first switchTo()), and every iframe already fires a native 'load'
+     event this file already listens to (for the PAL_SESSION/theme pings).
+     So this adds exactly one timer per app — performance.now() when
+     frame.src is set, performance.now() again in the existing 'load'
+     listener — giving a genuine cold-boot number (network + parse +
+     inline-script execution, the bulk of what any of these apps do on
+     open) for all 9 apps from a single file. Warm re-visits are correctly
+     left alone: frame.src is only set once per session (loaded[target]
+     guards that), so 'load' never refires and the number stays the
+     first-open figure, which is the one that matters for a boot-cost
+     comparison across apps.
+     New: LOAD_SPEED_APPS map, _perfTimings object, renderLoadSpeedPanel(),
+     copyLoadSpeedDiagnostics(), a "⚡ Load Speed" section on the home
+     screen (same backup-row visual pattern, right after the existing
+     Backups panel) with a Copy-all button for pasting real numbers into
+     a Test & Issues entry. HTML Vault is included here even though it's
+     deliberately excluded from HEALTH_APPS — that exclusion was about
+     localStorage/backup-format checks (Vault has no local data model),
+     which has no bearing on how long its iframe takes to load.
+     Nothing about switchTo()'s existing branching, the PAL_SESSION relay,
+     theme broadcast, or card-stat wiring was touched — only two small
+     additions inside functions that already existed (recording t0 in the
+     !loaded[target] branch, recording loadMs in the existing 'load'
+     listener). pal-config.js cache-bust bumped to ?v=10.67 per this app's
+     own established pattern; pal-utils.js's "?v=1.0" placeholder is a
+     pre-existing, separately-flagged issue, left untouched here.
+     Verified via node --check and a duplicate-id/duplicate-function scan;
+     manually walked switchTo() for both branches (first open vs. warm
+     re-visit) and confirmed the panel only updates on first open. No
+     changes to any of the 9 app files themselves.
+-->
 <!-- v10.64 (PET-072): suite-wide load-speed pass, app 9 (last) of the
      rollout (Claim Tracker CLA-014, Fortnight Tracker FT-053,
      GigsAndTrips GIG-050, Gym Tracker GYM-085, Horizon HZN-010,
@@ -946,7 +999,7 @@
      cache stays in step across the suite; this app's own version
      (10.66) isn't the right value here, unlike pal-config.js above,
      since pal-utils is a suite-wide shared file, not per-app config. -->
-<script src="pal-config.js?v=10.66"></script>
+<script src="pal-config.js?v=10.67"></script>
 <script src="pal-utils.js?v=1.0"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -962,6 +1015,53 @@ let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
 const loaded    = {};
+
+// PET-074: Safari-speed investigation — one measurement point instead of
+// nine. Icon/name here match the existing backup-panel rows; 'vault' is
+// included even though it's excluded from HEALTH_APPS (that exclusion was
+// about localStorage/backup-format checks, irrelevant to load timing).
+function _now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+const LOAD_SPEED_APPS = {
+  gigs:      { name: 'Gigs & Trips',    icon: '📅' },
+  fortnight: { name: '9-Day Fortnight', icon: '⏳' },
+  budget:    { name: 'On Budget',       icon: '🪙' },
+  reading:   { name: 'Reading Tracker', icon: '📚' },
+  ti:        { name: 'Test & Issues',   icon: '🚦' },
+  claims:    { name: 'Claim Tracker',   icon: '💷' },
+  gym:       { name: 'Gym Tracker',     icon: '🏋️' },
+  vault:     { name: 'HTML Vault',      icon: '🗂️' },
+  horizon:   { name: 'Horizon',         icon: '📈' }
+};
+const _perfTimings = {}; // target -> { t0, loadMs }
+
+function renderLoadSpeedPanel() {
+  const el = document.getElementById('load-speed-rows');
+  if (!el) return;
+  el.innerHTML = Object.keys(LOAD_SPEED_APPS).map(target => {
+    const app = LOAD_SPEED_APPS[target];
+    const t = _perfTimings[target];
+    const val = t && t.loadMs != null ? t.loadMs.toFixed(0) + 'ms' : 'not opened yet';
+    return `
+      <div class="backup-row">
+        <div class="br-icon">${app.icon}</div>
+        <div class="br-info">
+          <div class="br-name">${app.name}</div>
+        </div>
+        <div style="font-size:12px;color:var(--ink2);white-space:nowrap">${val}</div>
+      </div>`;
+  }).join('');
+}
+
+function copyLoadSpeedDiagnostics() {
+  const lines = Object.keys(LOAD_SPEED_APPS).map(target => {
+    const app = LOAD_SPEED_APPS[target];
+    const t = _perfTimings[target];
+    const val = t && t.loadMs != null ? t.loadMs.toFixed(0) + 'ms' : 'not opened this session';
+    return `${app.name}: ${val}`;
+  });
+  const text = `PET-074 load-speed diagnostics\nUA: ${navigator.userAgent}\n` + lines.join('\n');
+  navigator.clipboard.writeText(text).then(() => toast('✓ Diagnostics copied'), () => toast('⚠ Copy failed'));
+}
 
 // ── Boot sequence ──────────────────────────────────────────────────
 (async function boot() {
@@ -1359,10 +1459,20 @@ document.querySelectorAll('.app-frame').forEach(frame => {
   frame.addEventListener('load', () => {
     if (sbSession) setTimeout(() => pingFrame(frame), 100);
     setTimeout(() => pingTheme(frame), 100);
+    // PET-074: cold-boot end — only meaningful for a frame's first load,
+    // so a target with no recorded t0 (a warm re-visit doesn't reset
+    // frame.src, so 'load' never refires) is correctly left alone.
+    const target = frame.id.replace('frame-', '');
+    const t = _perfTimings[target];
+    if (t && t.loadMs == null) {
+      t.loadMs = _now() - t.t0;
+      renderLoadSpeedPanel();
+    }
   });
 });
 applyOwnTheme();
 updateThemeBtn();
+renderLoadSpeedPanel(); // PET-074: paint "not opened yet" rows before anything's been switched to
 function switchTo(target, btnEl) {
   // Clear active from all nav buttons AND the logo
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -1382,6 +1492,7 @@ function switchTo(target, btnEl) {
 
   const frame = document.getElementById('frame-' + target);
   if (frame && !loaded[target]) {
+    _perfTimings[target] = { t0: _now(), loadMs: null }; // PET-074: cold-boot start
     frame.src = frame.dataset.src;
     loaded[target] = true;
     // load listener above handles the postMessage ping
