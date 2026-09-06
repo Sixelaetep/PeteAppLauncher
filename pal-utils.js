@@ -2,7 +2,7 @@
  * pal-utils.js
  * ─────────────────────────────────────────────────────────────
  * Shared PURE, STATELESS utility functions used across the PAD suite.
- * Loaded via <script src="pal-utils.js?v=X.X"></script> — same
+ * Loaded via <script src="pal-utils.js?v=X.X"><\/script> — same
  * cache-busting pattern as pal-config.js and pal-sync.js.
  *
  * What belongs here: small helpers with zero cross-app state and no
