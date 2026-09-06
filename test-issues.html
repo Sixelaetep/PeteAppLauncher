@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.63</title>
+<title>Test &amp; Issues v1.64</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -474,7 +474,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.63</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.64</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -683,6 +683,12 @@
       <span style="color:var(--ink3)">Loading…</span>
     </div>
 
+    <div class="section-head" style="margin-top:16px">Speed Diagnostics (TI-076)</div>
+    <div id="perf-info" style="display:flex;flex-wrap:wrap;gap:14px;padding:6px 0 4px;font-size:11px;color:var(--ink2)">
+      <span style="color:var(--ink3)">Not yet measured — use the app a little, then reopen this panel</span>
+    </div>
+    <button class="action-btn" onclick="copyPerfDiagnostics()">📋 Copy diagnostics</button>
+
     <div class="section-head" style="margin-top:20px">Export Backup</div>
     <button class="action-btn primary" onclick="exportData()">⬇ Export test-issues.json</button>
     <p style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.6">Downloads the full data wrapper (apps, issues, tests). Export regularly as a backup.</p>
@@ -873,6 +879,30 @@
      itself carries no version data (id/name/emoji/prefix/aliases only),
      so nothing there needed touching. No manifest-schema, sync, or UI
      logic touched — verified via node --check. -->
+<!-- v1.64 (TI-076): Safari-speed investigation — diagnostics, not a fix.
+     An external brief suggested migrating localStorage to IndexedDB
+     suite-wide to cure a Safari-only slowdown; that jumps straight to a
+     conclusion without evidence. Static review first: this app makes only
+     4 localStorage calls total and writes a small JSON blob, and
+     pal-sync.js has no polling loop — both make storage I/O an unlikely
+     root cause at this data scale, as the ticket itself suspected. But
+     "unlikely" isn't "confirmed", and nobody can profile Safari from a
+     Chrome dev machine, so instead of guessing further this ships a
+     lightweight, read-only timing panel (Sync modal → "Speed Diagnostics")
+     covering the three named hypotheses: init render (load+migrate+first
+     paint, before any network call), sync pull round-trip (last 5 samples,
+     averaged), and localStorage write time (last + running max). A "Copy
+     diagnostics" button bundles all of it plus the user agent string as
+     plain text for pasting into the next Test & Issues entry. All timing
+     uses performance.now() with a Date.now() fallback, wrapped so a
+     missing #perf-info element or unsupported API just no-ops — zero
+     behavioural change to render, save, or sync logic; verified via
+     node --check and a manual walkthrough of boot → tab switch → sync
+     pull → export/restore, confirming the panel populates at each of the
+     5 existing renderStorageInfo() call sites without altering their
+     other output. No storage-layer change made — any migration remains
+     its own scoped proposal per the ticket, and now has real numbers to
+     test against next time this is opened in Safari. -->
 <!-- v1.63 (TI-075): two usability follow-ups to v1.62's Import Issues
      feature, both from real first use. (1) "⬆ Import Instead" button
      added to the Log Issue modal itself — start logging a single issue,
@@ -957,9 +987,9 @@
      manifest-schema, sync, or data logic touched — verified via
      node --check, duplicate ID scan, dangling handler scan, and a
      functional test of the shared functions. -->
-<script src="pal-config.js?v=1.63"></script>
-<script src="pal-sync.js?v=1.63"></script>
-<script src="pal-utils.js?v=1.63"></script>
+<script src="pal-config.js?v=1.64"></script>
+<script src="pal-sync.js?v=1.64"></script>
+<script src="pal-utils.js?v=1.64"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // STORAGE ABSTRACTION
@@ -1013,9 +1043,29 @@ function load() {
   }
 }
 
+// TI-076: perf.now()-based timing helper — falls back to Date.now() if
+// unavailable (shouldn't happen in any real browser, but costs nothing
+// to guard). Used only to populate the diagnostics panel below; never
+// affects app logic or control flow.
+function _now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+
+// TI-076: rolling perf samples for the Safari-speed investigation.
+// Populated by save(), syncPull(), and the boot sequence at the bottom
+// of this file. Purely observational — read by renderPerfInfo() only.
+const _perfTimings = {
+  initMs: null,
+  storageWriteMs: null,
+  storageWriteMaxMs: 0,
+  syncPullSamples: [] // last 5 durations in ms, newest last
+};
+
 function save(wrapper) {
   wrapper.lastUpdated = new Date().toISOString();
+  const _t0 = _now();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(wrapper));
+  const _dt = _now() - _t0;
+  _perfTimings.storageWriteMs = _dt;
+  if (_dt > _perfTimings.storageWriteMaxMs) _perfTimings.storageWriteMaxMs = _dt;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -3029,6 +3079,38 @@ function renderStorageInfo() {
     <div class="stat-chip ${_wrapper.lastExported?'green':'red'}"><span>Exported:</span> <b>${exp}</b></div>
     <div class="stat-chip"><span>Schema:</span> <b>v${_wrapper.version||1}</b></div>
   `;
+  renderPerfInfo(); // TI-076: keep the perf panel in step with every existing refresh point
+}
+
+// TI-076: Safari-speed investigation panel. Renders whatever's been
+// captured by save()/syncPull()/boot so far — purely a readout, no
+// side effects. Point Pete to this panel (Sync modal) after using the
+// app in Safari to get real numbers for the three hypotheses (render,
+// sync round-trip, storage I/O) instead of guessing.
+function renderPerfInfo() {
+  const el = document.getElementById('perf-info');
+  if (!el) return;
+  const p = _perfTimings;
+  const fmt = v => v == null ? '—' : v.toFixed(1) + 'ms';
+  const avgPull = p.syncPullSamples.length
+    ? (p.syncPullSamples.reduce((a,b)=>a+b,0) / p.syncPullSamples.length)
+    : null;
+  el.innerHTML = `
+    <div class="stat-chip"><span>Init render:</span> <b>${fmt(p.initMs)}</b></div>
+    <div class="stat-chip"><span>Storage write (last / max):</span> <b>${fmt(p.storageWriteMs)} / ${fmt(p.storageWriteMaxMs)}</b></div>
+    <div class="stat-chip"><span>Sync pull (avg of ${p.syncPullSamples.length}):</span> <b>${fmt(avgPull)}</b></div>
+  `;
+}
+
+function copyPerfDiagnostics() {
+  const p = _perfTimings;
+  const fmt = v => v == null ? 'n/a' : v.toFixed(1) + 'ms';
+  const avgPull = p.syncPullSamples.length
+    ? (p.syncPullSamples.reduce((a,b)=>a+b,0) / p.syncPullSamples.length)
+    : null;
+  const ua = navigator.userAgent;
+  const text = `TI-076 diagnostics\nUA: ${ua}\nInit render: ${fmt(p.initMs)}\nStorage write last/max: ${fmt(p.storageWriteMs)} / ${fmt(p.storageWriteMaxMs)}\nSync pull avg (n=${p.syncPullSamples.length}): ${fmt(avgPull)}\nSync pull samples: ${p.syncPullSamples.map(v=>v.toFixed(1)).join(', ')}`;
+  navigator.clipboard.writeText(text).then(() => toast('✓ Diagnostics copied'), () => toast('⚠ Copy failed'));
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -3312,6 +3394,7 @@ async function syncPull() {
   if (!window.PalSync.hasSession()) { addSyncLog('Pull skipped — no session','info'); return; }
   if (_syncLock) { addSyncLog('Pull deferred — sync in progress','info'); return; }
   setSyncState('syncing','Pulling…');
+  const _syncT0 = _now(); // TI-076: round-trip timing for the perf panel
   try {
     const rows         = await window.PalSync.fetchTableRows(SB_TABLE);
     const appsResult   = await _tiApps.pull(Object.values(state.apps), 'id', 'updatedAt', rows);
@@ -3364,7 +3447,16 @@ async function syncPull() {
     setSyncState('synced');
     const parts = [`${pulled} pulled`, pushedUp ? `${pushedUp} pushed up` : '', registryCleanup ? `${registryCleanup} duplicate app(s) consolidated` : ''].filter(Boolean).join(', ');
     addSyncLog(`Pull complete — ${parts}`,'ok');
-  } catch(err) { setSyncState('error'); addSyncLog('Pull failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
+    // TI-076: record round-trip duration (network + merge + render) for the perf panel
+    _perfTimings.syncPullSamples.push(_now() - _syncT0);
+    if (_perfTimings.syncPullSamples.length > 5) _perfTimings.syncPullSamples.shift();
+    renderPerfInfo();
+  } catch(err) {
+    setSyncState('error'); addSyncLog('Pull failed: '+window.PalSync.errorHint(err.status, err.message),'err');
+    _perfTimings.syncPullSamples.push(_now() - _syncT0);
+    if (_perfTimings.syncPullSamples.length > 5) _perfTimings.syncPullSamples.shift();
+    renderPerfInfo();
+  }
 }
 
 function openSyncModal() {
@@ -3428,6 +3520,7 @@ window.PalSync.initSession({
 // ══════════════════════════════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════════════════════════════
+const _bootT0 = _now(); // TI-076: measures load()+migration+first paint, before any network sync
 loadState();
 // Migrate legacy issue statuses (fixed/testing → deployed) — TI-064
 let _migrated = false;
@@ -3441,6 +3534,7 @@ if (_migrated) saveState();
 if (migrateAppRegistry().changed) saveState();
 showTab('kanban');
 refreshStats();
+_perfTimings.initMs = _now() - _bootT0; // TI-076: capture before renderStorageInfo so the panel shows it on first open
 renderStorageInfo();
 </script>
 </body>
