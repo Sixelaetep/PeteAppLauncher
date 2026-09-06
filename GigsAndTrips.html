@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.61</title>
+<title>Gigs &amp; Trips v7.62</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -505,7 +505,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.61</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.62</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="showDataManager()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -1474,20 +1474,33 @@ async function pullFromSupabase(silent){
 // ═══════════════════════════════════════════════════════════════════
 // Called by background sync so the user isn't kicked back to the list
 // while browsing a trip detail or day view.
+// Refreshes Trip Detail in place without losing scroll position — same
+// pattern as refreshDayView below. Needed because refreshCurrentView()
+// (called after every pull, including the silent 60s background poll)
+// was calling openTripDetail() directly, which always resets scroll via
+// showPanel('trip') — so simply sitting on a trip's itinerary while the
+// background sync ran was enough to snap you back to the top, with no
+// action of your own involved at all.
+function refreshTripDetail(tripId,tab){
+  const panel=document.getElementById('panelTrip');
+  const scrollPos=panel?panel.scrollTop:0;
+  openTripDetail(tripId,tab);
+  if(panel) panel.scrollTop=scrollPos;
+}
 function refreshCurrentView(){
   if(_view==='tripDetail' && _curTripId){
     // Verify the trip still exists (could have been deleted on another device)
     const trip=getEvent(_curTripId);
-    if(trip){ openTripDetail(_curTripId, _curTripTab); return; }
+    if(trip){ refreshTripDetail(_curTripId, _curTripTab); return; }
     // Trip gone — fall back to list gracefully
     _view='list'; _curTripId=null;
     showListNav(); showPanel('list');
   } else if(_view==='dayView' && _curTripId && _curDayId){
     const trip=getEvent(_curTripId);
     const day=trip?.days?.find(d=>d.id===_curDayId);
-    if(trip && day){ openDayView(_curTripId, _curDayId); return; }
+    if(trip && day){ refreshDayView(_curTripId, _curDayId); return; }
     // Day or trip gone — fall back to trip detail if possible, else list
-    if(trip){ _view='tripDetail'; _curDayId=null; openTripDetail(_curTripId, _curTripTab); return; }
+    if(trip){ _view='tripDetail'; _curDayId=null; refreshTripDetail(_curTripId, _curTripTab); return; }
     _view='list'; _curTripId=null; _curDayId=null;
     showListNav(); showPanel('list');
   }
@@ -1736,7 +1749,7 @@ function toggleTripComplete(id){
   t.updatedAt=new Date().toISOString();
   saveEvent(t);
   showToast(wasComplete?'Trip reopened':'Trip marked complete ✓');
-  openTripDetail(id,_curTripTab);
+  refreshTripDetail(id,_curTripTab);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2841,7 +2854,7 @@ function saveTrip(existingId){
     copyTripItineraryToClipboard(t); // GIG-036 — see markCalendarAdded for the repeat-send path
   }
   saveEvent(t); closeModal();
-  if(!isNew){ _view='tripDetail'; openTripDetail(t.id,_curTripTab); }
+  if(!isNew){ _view='tripDetail'; refreshTripDetail(t.id,_curTripTab); }
   else{ _view='tripDetail'; _curTripId=t.id; openTripDetail(t.id,'itinerary'); }
 }
 
@@ -3075,10 +3088,7 @@ function toggleTripGigsOverview(tripId){
   if(!_expandedGigsToday) _expandedGigsToday=new Set();
   const key=tripId+':__overview';
   if(_expandedGigsToday.has(key)) _expandedGigsToday.delete(key); else _expandedGigsToday.add(key);
-  const panel=document.getElementById('panelTrip');
-  const scrollPos=panel?panel.scrollTop:0;
-  openTripDetail(tripId,_curTripTab);
-  if(panel) panel.scrollTop=scrollPos;
+  refreshTripDetail(tripId,_curTripTab);
 }
 // Refreshes the Day View in place without losing scroll position. Every
 // action taken FROM WITHIN an already-open day view (saving an edit,
@@ -3384,7 +3394,7 @@ function addDay(tripId){
   trip.days.push(newDay);
   trip.days.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   trip.updatedAt=new Date().toISOString();
-  saveEvent(trip); showToast('Day added'); openTripDetail(tripId,'itinerary');
+  saveEvent(trip); showToast('Day added'); refreshTripDetail(tripId,'itinerary');
 }
 
 function confirmDeleteDay(tripId,dayId){
@@ -3392,7 +3402,7 @@ function confirmDeleteDay(tripId,dayId){
   const trip=getEvent(tripId); if(!trip) return;
   trip.days=trip.days.filter(d=>d.id!==dayId);
   trip.updatedAt=new Date().toISOString();
-  saveEvent(trip); closeModal(); _view='tripDetail'; openTripDetail(tripId,'itinerary');
+  saveEvent(trip); closeModal(); _view='tripDetail'; refreshTripDetail(tripId,'itinerary');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3947,7 +3957,7 @@ function saveItem(tripId,dayId,type,existingId){
   if(returnTo&&returnTo.view==='list'){
     render();
   } else if(returnTo&&returnTo.view==='tripDetail'&&returnTo.tripId===tripId){
-    openTripDetail(tripId,_curTripTab);
+    refreshTripDetail(tripId,_curTripTab);
   } else {
     refreshDayView(tripId,dayId);
   }
@@ -4187,7 +4197,7 @@ function saveTripLevelCost(tripId, existingId){
   saveEvent(trip);
   closeModal();
   showToast(existingId?'Cost updated ✓':'Cost added ✓');
-  openTripDetail(tripId,'costs');
+  refreshTripDetail(tripId,'costs');
 }
 
 function deleteTripLevelCost(tripId, costId){
@@ -4197,7 +4207,7 @@ function deleteTripLevelCost(tripId, costId){
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip);
   showToast('Removed');
-  openTripDetail(tripId,'costs');
+  refreshTripDetail(tripId,'costs');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -4257,7 +4267,7 @@ function saveTripReview(tripId){
   trip.review.reviewedAt=new Date().toISOString();
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); closeModal(); showToast('Review saved ★');
-  openTripDetail(tripId,'review');
+  refreshTripDetail(tripId,'review');
 }
 
 function showItemReviewForm(tripId,itemId){
@@ -4284,7 +4294,7 @@ function saveItemReview(tripId,dayId,itemId){
   it.review={rating:getStarVal('irStar')||null,note:document.getElementById('irNote')?.value.trim()||'',reviewedAt:new Date().toISOString()};
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); closeModal(); showToast('Review saved ★');
-  openTripDetail(tripId,'review');
+  refreshTripDetail(tripId,'review');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -5566,6 +5576,28 @@ function resyncDayTimes(tripId,dayId){
 // at day start) afterward. openAddItem()/showItemForm's direct-add path
 // left in place, unreachable from the UI now, same pattern as prior
 // removals in this app.
+// v7.62 (GIG-062): fixed Trip Detail scrolling to the top on every save
+// and every background sync — the same class of bug fixed for Day View
+// back in v7.48 (refreshDayView), just never applied to Trip Detail.
+// Root cause: openTripDetail() always resets scroll via showPanel('trip'),
+// and refreshCurrentView() — called after EVERY pull, including the
+// silent 60-second background poll — called it directly with no
+// preservation at all, so simply sitting on a trip's itinerary while a
+// background sync ran was enough to snap you to the top with no action
+// of your own involved. Added refreshTripDetail() (capture scrollTop,
+// refresh, restore — same shape as refreshDayView) and routed both
+// refreshCurrentView() branches (trip detail AND day view — the day view
+// one had the identical bug, just not what was reported) through their
+// respective helpers instead of calling openTripDetail/openDayView
+// directly. Also swept every other direct openTripDetail() call and
+// fixed every genuine "save something while already viewing the trip"
+// case: adding/deleting a day, editing an item from Trip Overview's own
+// day-card breakdown, trip-level costs, trip and item reviews, marking a
+// trip complete, and editing an existing trip's own details (always
+// triggered from within Trip Detail's own menu). Left as genuine
+// navigation, correctly still resetting scroll: first entering a trip
+// from a card, the Day View back button, a linked-trip pill from gig
+// detail, and creating a brand-new trip.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
