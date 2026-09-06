@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.100</title>
+<title>Gym Tracker v2.101</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.100</div></span>
+      <span>Gym Tracker<div class="ver">v2.101</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -947,9 +947,9 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-config.js?v=2.100"></script>
-<script src="pal-sync.js?v=2.100"></script>
-<script src="pal-utils.js?v=2.100"></script>
+<script src="pal-config.js?v=2.101"></script>
+<script src="pal-sync.js?v=2.101"></script>
+<script src="pal-utils.js?v=2.101"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1199,6 +1199,29 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.101 (GYM-089): defer building Insights until first navigated to —
+// Home is the default active tab, and Insights (Period Summary,
+// Nutrition Averages, Progress Breakdown's segmented bars/sparklines,
+// Exercise List's per-exercise estimated-1RM/trend classification
+// across every session, Body Areas Worked) is by far the heaviest
+// render in the app, so building it on every initial page load was
+// pure wasted work whenever you land on Home (the common case).
+// New _insightsBuilt flag (starts false): renderAll() now skips
+// renderInsights() until it flips true, which happens exactly once, in
+// switchTab('insights') the first time it's called — after that,
+// renderAll() calls renderInsights() on every render exactly as before.
+// A one-time deferral of the FIRST build, not a standing "only render
+// while the tab is active" gate — the latter would be a real
+// behavioural change (Insights going stale while backgrounded, needing
+// its own re-render-on-return trigger), not the pure render-order
+// change this issue asked for. Confirmed nothing inside renderInsights()
+// depends on the panel being visible to render correctly (no
+// scrollHeight/layout reads — the one thing that DOES need real
+// visibility, Notes' textarea autoGrow, already has its own switchTab
+// special-case above and is untouched here) — every sub-render is a
+// plain string-templated innerHTML write, including the weight chart's
+// SVG (fixed viewBox, CSS-scaled, no live-layout dependency). No data
+// model or sync changes — purely render-order, as scoped.
 // v2.100 (GYM-088): calorie/water averages no longer count partially-
 // logged days. A day with just one meal logged (forgot the rest) was
 // previously counted the same as a fully-logged day, understating true
@@ -2194,7 +2217,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.100';
+const VERSION = '2.101';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3205,8 +3228,22 @@ window.addEventListener('resize', adjustBodyScrollTop);
 // ═══════════════════════════════════════════════════════════════════
 // RENDER ALL
 // ═══════════════════════════════════════════════════════════════════
+// GYM-089: Insights (Period Summary, Nutrition Averages, Progress
+// Breakdown's segmented bars/sparklines, Exercise List's per-exercise
+// estimated-1RM/trend classification across every session, Body Areas
+// Worked) is by far the heaviest render in the app and isn't needed on
+// initial paint — Home is the default active tab, not Insights. Deferred
+// until switchTab('insights') is called for the first time (see there);
+// after that first visit this flips true permanently and renderInsights()
+// resumes running on every renderAll() exactly as before — a one-time
+// deferral of the FIRST build, not a standing "only render when active"
+// gate (that would be a real behavioural change — staleness while
+// backgrounded — not the pure render-order change this issue asked for).
+let _insightsBuilt = false;
 function renderAll() {
-  renderHome(); renderCalendar(); renderPlanList(); renderExerciseList(); renderInsights(); renderNotesTab();
+  renderHome(); renderCalendar(); renderPlanList(); renderExerciseList();
+  if (_insightsBuilt) renderInsights();
+  renderNotesTab();
   reportToLauncher();
   renderSyncPanel();
 }
@@ -7956,6 +7993,9 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   document.querySelector('.body-scroll').scrollTop=0;
+  // GYM-089: first-ever visit to Insights is what actually builds it —
+  // renderAll() skips it until _insightsBuilt flips true, right here.
+  if (name === 'insights' && !_insightsBuilt) { _insightsBuilt = true; renderInsights(); }
   // FT-031: notes are sized on render, but the Notes panel is display:none
   // whenever it's not the active tab, so scrollHeight reads 0 then and
   // autoGrow skips it (see autoGrow's guard). Now that the panel is
