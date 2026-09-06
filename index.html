@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.71</title>
+<title>P Apps v10.72</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -569,6 +569,24 @@
   }
   .br-btn:hover { border-color: var(--accent2); color: var(--accent2); }
 
+  /* PET-079 v10.72: collapsible per-app diagnostics history. Scoped to
+     #load-speed-rows only — .backup-row/.br-* stay untouched everywhere
+     else they're used (the real per-app JSON backup rows). */
+  #load-speed-rows .backup-row { border-bottom: none; }
+  #load-speed-rows .diag-app { border-bottom: 1px solid var(--border); }
+  #load-speed-rows .diag-app:last-child { border-bottom: none; }
+  #load-speed-rows .diag-app-row { cursor: pointer; }
+  #load-speed-rows .diag-app-row:hover { background: var(--neutral-bg); }
+  .diag-chevron { font-size: 11px; color: var(--ink3); margin-left: 6px; transition: transform 0.15s; flex-shrink: 0; }
+  .diag-app.open .diag-chevron { transform: rotate(180deg); }
+  .diag-app-detail { display: none; padding: 2px 0 12px 38px; }
+  .diag-app.open .diag-app-detail { display: block; }
+  .diag-reading { padding: 6px 0; border-bottom: 1px dashed var(--border); font-size: 11px; }
+  .diag-reading:last-child { border-bottom: none; }
+  .diag-reading-head { color: var(--ink2); }
+  .diag-reading-phases { color: var(--ink3); margin-top: 2px; }
+  .diag-loading, .diag-empty { font-size: 11px; color: var(--ink3); padding: 6px 0; }
+
   /* ── App frames ── */
   .app-frame {
     position: fixed;
@@ -634,7 +652,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.71</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.72</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -931,12 +949,22 @@
        Supabase table, automatically, no button needed — see
        logLoadDiagnostic() near the frame 'load' listener below. "Copy
        all" still copies just this session's on-screen totals; "Export
-       history" (new) pulls the full cross-device, cross-session record
-       so it can be analysed for patterns instead of one run at a time. -->
+       history" pulls the full cross-device, cross-session record so it
+       can be analysed for patterns instead of one run at a time.
+       PET-079 v10.72: each app row is now a collapsible section (see
+       toggleDiagApp()/renderDiagDetail() below). The collapsed row is
+       unchanged from PET-074/078 — this session's live total, same
+       number as before. Expanding it lazily fetches the full synced
+       history ONCE (cached in _diagHistoryCache, shared across every
+       app's section so opening a second app doesn't re-fetch) and lists
+       every reading for that app, newest first, each with its own phase
+       breakdown — this is the "all the different readings" Pete asked
+       for, distinct from the single current figure on the collapsed
+       row. -->
   <div class="backup-panel" id="load-speed-panel">
     <h3>⚡ Load Speed — first-open time per app</h3>
     <p style="font-size:11px; color:var(--ink3); margin:-4px 0 10px; line-height:1.6;">
-      Fills in as you open each app for the first time this session. Open a few on Safari, then use "Copy all" to paste real numbers into a Test &amp; Issues entry, or "Export history" for the full synced record across every device.
+      Tap an app to see its full synced history. "Copy all" copies this session's on-screen totals; "Export history" downloads every reading, for every app and device, as JSON.
     </p>
     <div id="load-speed-rows"><!-- renderLoadSpeedPanel() fills this in --></div>
     <button class="br-btn" style="margin-top:10px" onclick="copyLoadSpeedDiagnostics()">📋 Copy all</button>
@@ -1144,13 +1172,17 @@ function renderLoadSpeedPanel() {
     const val = t && t.loadMs != null ? t.loadMs.toFixed(0) + 'ms' : 'not opened yet';
     const viaNote = app.via ? `<div style="font-size:10px;color:var(--ink3)">via ${LOAD_SPEED_APPS[app.via].name}</div>` : '';
     return `
-      <div class="backup-row">
-        <div class="br-icon">${app.icon}</div>
-        <div class="br-info">
-          <div class="br-name">${app.name}</div>
-          ${viaNote}
+      <div class="diag-app" id="diag-app-${target}">
+        <div class="backup-row diag-app-row" onclick="toggleDiagApp('${target}')">
+          <div class="br-icon">${app.icon}</div>
+          <div class="br-info">
+            <div class="br-name">${app.name}</div>
+            ${viaNote}
+          </div>
+          <div style="font-size:12px;color:var(--ink2);white-space:nowrap">${val}</div>
+          <div class="diag-chevron">▾</div>
         </div>
-        <div style="font-size:12px;color:var(--ink2);white-space:nowrap">${val}</div>
+        <div class="diag-app-detail" id="diag-detail-${target}"></div>
       </div>`;
   }).join('');
 }
@@ -1244,6 +1276,14 @@ function logLoadDiagnostic(target, totalMs) {
     }, phases);
     PalSync.setSession(sbSession.access_token, sbSession.user.id);
     PalSync.table('pal_diagnostics').upsert(uid('diag'), payload);
+    // PET-079 v10.72: keep an already-loaded/expanded history in sync
+    // without a re-fetch — optimistic, doesn't wait for the upsert to
+    // actually confirm (same fire-and-forget tolerance as the write above).
+    if (_diagHistoryCache) {
+      _diagHistoryCache.unshift(payload);
+      const wrap = document.getElementById('diag-app-' + target);
+      if (wrap && wrap.classList.contains('open')) renderDiagDetail(target);
+    }
   } catch (e) { /* diagnostics logging must never break the app switch itself */ }
 }
 
@@ -1264,6 +1304,79 @@ async function exportLoadDiagnostics() {
     URL.revokeObjectURL(url);
     toast('✓ Exported ' + records.length + ' rows');
   } catch (e) { toast('⚠ Export failed'); }
+}
+
+// ── PET-079 v10.72: collapsible per-app history ──────────────────────
+// One shared fetch for the whole panel: expanding any app's section
+// loads (and caches) every app's history in one call, so opening a
+// second, third, fourth section never re-fetches. null = not loaded
+// yet; [] = loaded but genuinely empty/unavailable (no session, or a
+// failed fetch) — both render the same "no readings yet" state, which
+// is the correct behaviour either way.
+let _diagHistoryCache = null;
+
+async function ensureDiagHistoryLoaded() {
+  if (_diagHistoryCache) return _diagHistoryCache;
+  if (!sbSession) { _diagHistoryCache = []; return _diagHistoryCache; }
+  try {
+    PalSync.setSession(sbSession.access_token, sbSession.user.id);
+    const rows = await PalSync.fetchTableRows('pal_diagnostics');
+    _diagHistoryCache = rows.map(r => r.data);
+  } catch (e) { _diagHistoryCache = []; }
+  return _diagHistoryCache;
+}
+
+// Coarse browser label for the readings list — the full UA string is
+// still in every row of the JSON export, this is just for a scannable
+// in-panel line.
+function browserLabelFromUA(ua) {
+  if (!ua) return 'Unknown';
+  if (/Firefox/.test(ua)) return 'Firefox';
+  if (/Edg\//.test(ua)) return 'Edge';
+  if (/CriOS/.test(ua)) return 'Chrome (iOS)';
+  if (/Chrome/.test(ua)) return 'Chrome';
+  if (/Safari/.test(ua)) return 'Safari';
+  return 'Other';
+}
+
+function renderDiagDetail(target) {
+  const el = document.getElementById('diag-detail-' + target);
+  if (!el) return;
+  if (!_diagHistoryCache) { el.innerHTML = '<div class="diag-loading">Loading history…</div>'; return; }
+  const rows = _diagHistoryCache
+    .filter(r => r.app === target)
+    .sort((a, b) => (b.recorded_at || '').localeCompare(a.recorded_at || ''));
+  if (!rows.length) { el.innerHTML = '<div class="diag-empty">No synced readings yet for this app.</div>'; return; }
+  el.innerHTML = rows.map(r => {
+    const when = r.recorded_at ? new Date(r.recorded_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+    const dev = (r.device_id || '').slice(-6);
+    const browser = browserLabelFromUA(r.browser_ua);
+    const phaseParts = [
+      r.dns_ms      != null ? 'DNS ' + r.dns_ms : null,
+      r.connect_ms  != null ? 'Connect ' + r.connect_ms : null,
+      r.ttfb_ms     != null ? 'TTFB ' + r.ttfb_ms : null,
+      r.download_ms != null ? 'DL ' + r.download_ms : null,
+      r.dom_ms      != null ? 'DOM ' + r.dom_ms : null,
+      r.supabase_ms != null ? 'Supabase ' + r.supabase_ms : null
+    ].filter(Boolean).join(' · ');
+    return `
+      <div class="diag-reading">
+        <div class="diag-reading-head">${esc(when)} · ${esc(browser)} · …${esc(dev)} — <b>${r.total_ms != null ? r.total_ms + 'ms' : '—'}</b></div>
+        ${phaseParts ? `<div class="diag-reading-phases">${esc(phaseParts)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+async function toggleDiagApp(target) {
+  const wrap = document.getElementById('diag-app-' + target);
+  if (!wrap) return;
+  const nowOpen = wrap.classList.toggle('open');
+  if (!nowOpen) return;
+  renderDiagDetail(target); // shows cache immediately if already loaded, else "Loading…"
+  if (!_diagHistoryCache) {
+    await ensureDiagHistoryLoaded();
+    renderDiagDetail(target); // re-render once the real data arrives
+  }
 }
 
 // ── Boot sequence ──────────────────────────────────────────────────
