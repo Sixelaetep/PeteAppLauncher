@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.70</title>
+<title>P Apps v10.71</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -634,7 +634,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.70</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.71</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -925,14 +925,22 @@
        whole cold-boot cost (network + parse + inline-script execution),
        same thing regardless of which app turns out to be slow, from a
        single measurement point instead of per-app instrumentation. See
-       full rationale in the PET-074 changelog comment near BOOT below. -->
+       full rationale in the PET-074 changelog comment near BOOT below.
+       PET-078 v10.71: every row shown here is now also persisted (with a
+       phase breakdown, not just the total) to a new pal_diagnostics
+       Supabase table, automatically, no button needed — see
+       logLoadDiagnostic() near the frame 'load' listener below. "Copy
+       all" still copies just this session's on-screen totals; "Export
+       history" (new) pulls the full cross-device, cross-session record
+       so it can be analysed for patterns instead of one run at a time. -->
   <div class="backup-panel" id="load-speed-panel">
     <h3>⚡ Load Speed — first-open time per app</h3>
     <p style="font-size:11px; color:var(--ink3); margin:-4px 0 10px; line-height:1.6;">
-      Fills in as you open each app for the first time this session. Open a few on Safari, then use "Copy all" to paste real numbers into a Test &amp; Issues entry.
+      Fills in as you open each app for the first time this session. Open a few on Safari, then use "Copy all" to paste real numbers into a Test &amp; Issues entry, or "Export history" for the full synced record across every device.
     </p>
     <div id="load-speed-rows"><!-- renderLoadSpeedPanel() fills this in --></div>
     <button class="br-btn" style="margin-top:10px" onclick="copyLoadSpeedDiagnostics()">📋 Copy all</button>
+    <button class="br-btn" style="margin-top:6px" onclick="exportLoadDiagnostics()">⬇️ Export history (JSON)</button>
   </div>
 
 </div><!-- /home-screen -->
@@ -1075,7 +1083,18 @@
      cache stays in step across the suite; this app's own version
      (10.66) isn't the right value here, unlike pal-config.js above,
      since pal-utils is a suite-wide shared file, not per-app config. -->
-<script src="pal-config.js?v=10.70"></script>
+<!-- PET-078 v10.71: launcher now also loads pal-sync.js, purely for its
+     already-proven generic table()/sbFetch()/fetchTableRows() helpers —
+     used only to write/read the new pal_diagnostics table (see
+     logLoadDiagnostic()/exportLoadDiagnostics() below). The launcher
+     never calls initSession() (that listens for an inbound PAL_SESSION
+     postMessage, which is what the launcher SENDS to iframed apps, not
+     something it receives itself) — it calls PalSync.setSession()
+     directly with its own existing sbSession token/user id right before
+     each use. Cache-bust tied to this app's own version, same pattern
+     as pal-config.js above. -->
+<script src="pal-config.js?v=10.71"></script>
+<script src="pal-sync.js?v=10.71"></script>
 <script src="pal-utils.js?v=1.0"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -1146,6 +1165,105 @@ function copyLoadSpeedDiagnostics() {
   });
   const text = `PET-074 load-speed diagnostics\nUA: ${navigator.userAgent}\n` + lines.join('\n');
   navigator.clipboard.writeText(text).then(() => toast('✓ Diagnostics copied'), () => toast('⚠ Copy failed'));
+}
+
+// ── PET-078 v10.71: persistent, phase-broken-down load history ──────
+// Extends PET-074's in-session-only total into a durable record synced
+// to Supabase, so intermittent issues (the Safari load-speed spikes
+// under investigation) can be analysed across many sessions/devices
+// instead of one manual copy-paste at a time. Fires automatically from
+// the existing frame 'load' listener below — no separate opt-in.
+// SCOPE NOTE: this only sees loads that go through THIS launcher's own
+// iframes. An app opened directly from its own PWA home-screen icon
+// (bypassing the launcher entirely) is invisible to this — worth
+// knowing if a "slow app" report never shows up here.
+function round(n) { return (typeof n === 'number' && isFinite(n) && n >= 0) ? Math.round(n) : null; }
+
+// Stable per-browser identifier, generated once and reused for every
+// diagnostic row from this device/browser combo. uid() is pal-utils.js's
+// shared generator, already loaded above.
+function getDiagDeviceId() {
+  try {
+    let id = localStorage.getItem('pal_device_id');
+    if (!id) { id = uid('dev'); localStorage.setItem('pal_device_id', id); }
+    return id;
+  } catch (e) { return 'dev_unknown'; }
+}
+
+// Reads whatever same-origin Performance entries the iframe exposes.
+// Navigation timing is full-detail (the app's own HTML page is same-
+// origin as the launcher); the three shared scripts are full-detail
+// too (same origin); Supabase resource entries are cross-origin, so
+// per spec only startTime/responseEnd/duration survive without a
+// Timing-Allow-Origin header (Supabase doesn't send one) — but
+// duration is exactly what's needed to see whether the network round-
+// trip is the culprit, so that's not a real limitation here.
+function capturePhaseBreakdown(frame) {
+  const out = { dns_ms: null, connect_ms: null, ttfb_ms: null, download_ms: null, dom_ms: null,
+                script_pal_config_ms: null, script_pal_utils_ms: null, script_pal_sync_ms: null,
+                supabase_ms: null };
+  try {
+    const perf = frame.contentWindow.performance;
+    const nav = perf.getEntriesByType('navigation')[0];
+    if (nav) {
+      out.dns_ms      = round(nav.domainLookupEnd - nav.domainLookupStart);
+      out.connect_ms  = round(nav.connectEnd - nav.connectStart);
+      out.ttfb_ms     = round(nav.responseStart - nav.requestStart);
+      out.download_ms = round(nav.responseEnd - nav.responseStart);
+      out.dom_ms      = round(nav.domContentLoadedEventEnd - nav.responseEnd);
+    }
+    let supabaseTotal = 0, sawSupabase = false;
+    perf.getEntriesByType('resource').forEach(r => {
+      if (r.name.indexOf('pal-config.js') !== -1) out.script_pal_config_ms = round(r.duration);
+      else if (r.name.indexOf('pal-utils.js') !== -1) out.script_pal_utils_ms = round(r.duration);
+      else if (r.name.indexOf('pal-sync.js') !== -1) out.script_pal_sync_ms = round(r.duration);
+      else if (r.name.indexOf(window.PAL_CONFIG.SB_URL) !== -1) { supabaseTotal += r.duration; sawSupabase = true; }
+    });
+    if (sawSupabase) out.supabase_ms = round(supabaseTotal);
+  } catch (e) { /* cross-origin/iframe access blocked in this browser — total_ms is still logged */ }
+  return out;
+}
+
+// Fire-and-forget: never blocks or delays the app the user is actually
+// trying to open. A failed insert (offline, table not yet migrated,
+// RLS issue) is silently dropped — same tolerance as any other
+// non-critical background write in this suite.
+function logLoadDiagnostic(target, totalMs) {
+  if (!sbSession) return;
+  try {
+    const frame = document.getElementById('frame-' + target);
+    const app = LOAD_SPEED_APPS[target];
+    const phases = frame ? capturePhaseBreakdown(frame) : {};
+    const payload = Object.assign({
+      device_id:   getDiagDeviceId(),
+      browser_ua:  navigator.userAgent,
+      app:         target,
+      app_name:    app ? app.name : target,
+      total_ms:    round(totalMs),
+      recorded_at: new Date().toISOString()
+    }, phases);
+    PalSync.setSession(sbSession.access_token, sbSession.user.id);
+    PalSync.table('pal_diagnostics').upsert(uid('diag'), payload);
+  } catch (e) { /* diagnostics logging must never break the app switch itself */ }
+}
+
+// Pulls the full synced history (every device, every session) and
+// downloads it as one JSON file — the export Pete asked for so this
+// can be analysed properly instead of read off the on-screen panel.
+async function exportLoadDiagnostics() {
+  if (!sbSession) { toast('⚠ Not connected — cannot export'); return; }
+  try {
+    PalSync.setSession(sbSession.access_token, sbSession.user.id);
+    const rows = await PalSync.fetchTableRows('pal_diagnostics');
+    const records = rows.map(r => r.data);
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), count: records.length, records: records }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'pal-load-diagnostics-' + todayISO() + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    toast('✓ Exported ' + records.length + ' rows');
+  } catch (e) { toast('⚠ Export failed'); }
 }
 
 // ── Boot sequence ──────────────────────────────────────────────────
@@ -1552,6 +1670,7 @@ document.querySelectorAll('.app-frame').forEach(frame => {
     if (t && t.loadMs == null) {
       t.loadMs = _now() - t.t0;
       renderLoadSpeedPanel();
+      logLoadDiagnostic(target, t.loadMs); // PET-078 v10.71: persist phase-broken-down history
     }
   });
 });
