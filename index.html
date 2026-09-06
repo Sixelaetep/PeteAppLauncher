@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.68</title>
+<title>P Apps v10.69</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -634,7 +634,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.68</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.69</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -1020,6 +1020,23 @@
      calls switchTo('horizon') or switchTo('claims') any more, so they'll
      permanently read "not opened yet". Flagged for Pete rather than
      removed unasked. -->
+<!-- PET-076 v10.69 (bugfix, reported by Pete after v10.68 shipped):
+     1) Horizon opens On Budget but doesn't land on the Horizon tab — the
+     {action:'openTab', tab:'horizon'} guess in launchHorizon() (flagged
+     as unverified at v10.68) doesn't match On Budget's real listener.
+     STILL OPEN — needs on-budget.html's source (or its OB_ACTION
+     listener code) to fix properly; not guessed a second time. Degrades
+     gracefully in the meantime (On Budget still opens).
+     2) Horizon/Claims never recorded a load time at all — root cause
+     was in ensureLoaded() itself (see its own PET-076 comment below),
+     not specific to these two cards: it never started the cold-boot
+     timer PET-074 relies on, only switchTo() did, and every launch*
+     shortcut calls ensureLoaded() BEFORE switchTo(), so switchTo() always
+     saw an already-loaded target and skipped timing entirely. Fixed at
+     the root (ensureLoaded()), plus Horizon/Claims now mirror their
+     parent's timing into their own Load Speed row (LOAD_SPEED_APPS gets
+     a `via` field, panel/copy both annotate it) since neither has an
+     iframe of its own left to time directly. -->
 <!-- v10.64 (PET-072): suite-wide load-speed pass, app 9 (last) of the
      rollout (Claim Tracker CLA-014, Fortnight Tracker FT-053,
      GigsAndTrips GIG-050, Gym Tracker GYM-085, Horizon HZN-010,
@@ -1050,7 +1067,7 @@
      cache stays in step across the suite; this app's own version
      (10.66) isn't the right value here, unlike pal-config.js above,
      since pal-utils is a suite-wide shared file, not per-app config. -->
-<script src="pal-config.js?v=10.68"></script>
+<script src="pal-config.js?v=10.69"></script>
 <script src="pal-utils.js?v=1.0"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -1078,11 +1095,17 @@ const LOAD_SPEED_APPS = {
   budget:    { name: 'On Budget',       icon: '🪙' },
   reading:   { name: 'Reading Tracker', icon: '📚' },
   ti:        { name: 'Test & Issues',   icon: '🚦' },
-  claims:    { name: 'Claim Tracker',   icon: '💷' },
+  claims:    { name: 'Claim Tracker',   icon: '💷', via: 'fortnight' },
   gym:       { name: 'Gym Tracker',     icon: '🏋️' },
   vault:     { name: 'HTML Vault',      icon: '🗂️' },
-  horizon:   { name: 'Horizon',         icon: '📈' }
+  horizon:   { name: 'Horizon',         icon: '📈', via: 'budget' }
 };
+// PET-076 v10.69: `via` added to claims/horizon — since PET-075, neither
+// has its own iframe entry point any more (both launch their parent app
+// instead), so their number here is really their parent's cold-boot time,
+// mirrored in on click (see launchHorizon()/launchFortnightClaims()).
+// renderLoadSpeedPanel()/copyLoadSpeedDiagnostics() both annotate this so
+// it doesn't read as if Horizon/Claims have their own separate cost.
 const _perfTimings = {}; // target -> { t0, loadMs }
 
 function renderLoadSpeedPanel() {
@@ -1092,11 +1115,13 @@ function renderLoadSpeedPanel() {
     const app = LOAD_SPEED_APPS[target];
     const t = _perfTimings[target];
     const val = t && t.loadMs != null ? t.loadMs.toFixed(0) + 'ms' : 'not opened yet';
+    const viaNote = app.via ? `<div style="font-size:10px;color:var(--ink3)">via ${LOAD_SPEED_APPS[app.via].name}</div>` : '';
     return `
       <div class="backup-row">
         <div class="br-icon">${app.icon}</div>
         <div class="br-info">
           <div class="br-name">${app.name}</div>
+          ${viaNote}
         </div>
         <div style="font-size:12px;color:var(--ink2);white-space:nowrap">${val}</div>
       </div>`;
@@ -1108,7 +1133,8 @@ function copyLoadSpeedDiagnostics() {
     const app = LOAD_SPEED_APPS[target];
     const t = _perfTimings[target];
     const val = t && t.loadMs != null ? t.loadMs.toFixed(0) + 'ms' : 'not opened this session';
-    return `${app.name}: ${val}`;
+    const viaNote = app.via ? ` (via ${LOAD_SPEED_APPS[app.via].name})` : '';
+    return `${app.name}${viaNote}: ${val}`;
   });
   const text = `PET-074 load-speed diagnostics\nUA: ${navigator.userAgent}\n` + lines.join('\n');
   navigator.clipboard.writeText(text).then(() => toast('✓ Diagnostics copied'), () => toast('⚠ Copy failed'));
@@ -2360,10 +2386,26 @@ function statOnBudget() {
 // The 'loaded' map (keyed by target name) tracks whether src has been
 // set; the load event is used to await the page — not a poll — so
 // there's no timing race. 15 s timeout guards against a hung load.
+// PET-076 v10.69 (bugfix): PET-074's cold-boot timer was only ever
+// started inside switchTo()'s own !loaded[target] branch. Every launch*
+// helper here (launchOBAddSpend, launchFortnightClaims, launchHorizon)
+// calls ensureLoaded(target) BEFORE switchTo(target,...) — so by the
+// time switchTo() runs, loaded[target] is already true (ensureLoaded set
+// it), and switchTo() takes its WARM branch, which never touches
+// _perfTimings at all. Net effect: a target with NO OTHER entry point
+// than a launch* shortcut — which is exactly what Horizon and Claims
+// became at PET-075 — never got a t0, so loadMs never computed, so the
+// Load Speed panel showed "not opened yet" for them forever, regardless
+// of how many times they were opened. Fix: ensureLoaded() now starts the
+// same timer switchTo() would have, guarded so it never overwrites an
+// already-running or already-finished one (e.g. if switchTo() via the
+// app's own nav icon got there first). This fixes every target that can
+// be opened via a launch* shortcut, not just Horizon/Claims.
 async function ensureLoaded(target) {
   const frame = document.getElementById('frame-' + target);
   if (!frame) throw new Error('No frame for ' + target);
   if (loaded[target]) return frame;
+  if (!_perfTimings[target]) _perfTimings[target] = { t0: _now(), loadMs: null };
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('Timeout loading ' + target)), 15000);
     frame.addEventListener('load', async () => {
@@ -2385,6 +2427,12 @@ async function ensureLoaded(target) {
 // boot sequence. switchTo() afterwards is then a no-op on frame.src
 // (already loaded) and just makes the frame visible + pings
 // session/theme, exactly as normal navigation would.
+// PET-076 v10.69: mirrors Fortnight's own _perfTimings entry into
+// 'claims' once ensureLoaded resolves (loadMs is guaranteed set by then
+// — the boot-time global 'load' listener that computes it fires before
+// this one, since it was registered first) — see the LOAD_SPEED_APPS
+// `via` comment and ensureLoaded()'s PET-076 comment above for why this
+// is needed at all now Claims has no iframe of its own to time.
 async function launchFortnightClaims(e) {
   e.stopPropagation();
   toast('Opening Fortnight Tracker…');
@@ -2392,6 +2440,7 @@ async function launchFortnightClaims(e) {
     const frame = await ensureLoaded('fortnight');
     switchTo('fortnight', document.querySelector('[data-target="fortnight"]'));
     frame.contentWindow.postMessage({ type: 'FT_ACTION', action: 'openTab', tab: 'claims' }, window.location.origin);
+    if (_perfTimings['fortnight']) { _perfTimings['claims'] = { ..._perfTimings['fortnight'] }; renderLoadSpeedPanel(); }
   } catch (err) {
     toast('Fortnight Tracker unavailable — open the app to view claims');
   }
@@ -2428,17 +2477,18 @@ async function launchOBAddSpend(e) {
 // launchOBAddSpend/launchFortnightClaims and for the same reason:
 // guarantees On Budget's own action listener is registered before the
 // message is sent.
-// FLAGGED ASSUMPTION: on-budget.html's source wasn't available in this
-// session, so the exact postMessage action name/tab id its internal
-// Horizon tab actually listens for is UNVERIFIED. This follows the same
-// {action:'openTab', tab:'<id>'} shape as the working Claims deep-link
-// (FT_ACTION) as the most consistent guess, applied to OB_ACTION. If the
-// name doesn't match On Budget's real listener, this still degrades
-// gracefully rather than breaking: On Budget still opens (toast fires,
-// iframe loads, view switches) — it just lands on On Budget's own
-// default tab instead of jumping straight to Horizon. Please confirm/
-// adjust 'openTab'/'horizon' against on-budget.html's actual OB_ACTION
-// handler.
+// STILL OPEN (confirmed broken by Pete after v10.68 shipped): the
+// {action:'openTab', tab:'horizon'} guess below does NOT match On
+// Budget's real internal listener — it opens On Budget correctly but
+// lands on its default tab, not Horizon. on-budget.html's source still
+// isn't available in this session, so the actual action/tab identifier
+// its OB_ACTION handler expects for Horizon can't be determined from
+// here — needs on-budget.html (or just its OB_ACTION listener) to fix
+// properly rather than guess a second time. Left as-is below pending
+// that; still degrades gracefully (On Budget opens either way).
+// PET-076 v10.69: mirrors On Budget's own _perfTimings entry into
+// 'horizon' once ensureLoaded resolves — same fix/reasoning as
+// launchFortnightClaims's equivalent line above.
 async function launchHorizon(e) {
   e.stopPropagation();
   toast('Opening On Budget…');
@@ -2446,6 +2496,7 @@ async function launchHorizon(e) {
     const frame = await ensureLoaded('budget');
     switchTo('budget', document.querySelector('[data-target="budget"]'));
     frame.contentWindow.postMessage({ type: 'OB_ACTION', action: 'openTab', tab: 'horizon' }, window.location.origin);
+    if (_perfTimings['budget']) { _perfTimings['horizon'] = { ..._perfTimings['budget'] }; renderLoadSpeedPanel(); }
   } catch (err) {
     toast('On Budget unavailable — open Horizon from within it');
   }
