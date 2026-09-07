@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.65</title>
+<title>Gigs &amp; Trips v7.66</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -497,7 +497,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.65</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.66</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -706,11 +706,25 @@ function openFullDayMapsRoute(tripId,dayId,itemId){
   if(idx>=ordered.length-1){ showToast('This is the last item of the day — nothing later to route to'); return; }
   const laterLocations=ordered.slice(idx+1).map(it=>itemLocationName(it)).filter(Boolean);
   if(!laterLocations.length){ showToast('Add locations to items later in the day to build a route'); return; }
-  const dest=laterLocations[laterLocations.length-1];
-  const waypoints=laterLocations.slice(0,-1);
+  // Google's own Maps URLs documentation: "up to three waypoints
+  // supported on mobile browsers" (nine on desktop) — exceeding this on
+  // a phone doesn't fail cleanly, it appears to make Maps silently fall
+  // back to a plain search for whatever it can parse first, which is
+  // exactly what was reported ("only searching the item selected"). A
+  // typical full day easily has more stops than that, so capping here
+  // is a real, unavoidable Google-side limit, not something fixable in
+  // this app — the honest fix is to stay under it and say so when a day
+  // has more stops than fit in one link, rather than build a request
+  // that looks fine but silently degrades on the platform it's opened on.
+  const MAX_WAYPOINTS=3;
+  const truncated=laterLocations.length>MAX_WAYPOINTS+1;
+  const usable=truncated?laterLocations.slice(0,MAX_WAYPOINTS+1):laterLocations;
+  const dest=usable[usable.length-1];
+  const waypoints=usable.slice(0,-1);
   let url='https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest);
   if(waypoints.length) url+='&waypoints='+waypoints.map(encodeURIComponent).join('|');
   window.open(url,'_blank','noopener');
+  if(truncated) showToast(`Showing the next ${MAX_WAYPOINTS+1} stops — Google Maps limits routes to ${MAX_WAYPOINTS} waypoints on mobile`);
 }
 // One-tap "Time to next" button on the item card itself (rather than
 // only reachable from inside full edit). A browser has no reliable way
@@ -3393,7 +3407,7 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   // the card. Manual reordering removed entirely (see changelog) —
   // Add to Calendar and the full-day route button (GIG-065) live here.
   card+=`<div class="item-quick-actions">
-    <button class="item-icon-btn" onclick="event.stopPropagation();openFullDayMapsRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions for rest of day">🗺️</button>
+    <button class="item-icon-btn" onclick="event.stopPropagation();openFullDayMapsRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions to next few stops">🗺️</button>
     ${trip&&day?`<a class="item-icon-btn" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="event.stopPropagation();markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Add to Calendar">📅</a>`:''}
   </div>`;
   card+=`</div>`;
@@ -5740,6 +5754,23 @@ function resyncDayTimes(tripId,dayId){
 // location are skipped from the route rather than blocking the whole
 // thing over one gap; tapping the last item of the day gets its own
 // distinct message rather than a broken single-point link.
+// v7.66: fixed the v7.65 "Directions for rest of day" button silently
+// falling back to a plain search on iPhone instead of showing a route.
+// Root cause confirmed against Google's own current Maps URLs
+// documentation, not guessed: "up to three waypoints supported on
+// mobile browsers" (nine on desktop) — a typical full day easily has
+// more stops than that, and exceeding the limit appears to make Maps
+// silently degrade to a search rather than fail cleanly or truncate
+// itself. This is a genuine Google-side constraint, not something fixable
+// in this app — capped waypoints to 3 (5 stops total including origin
+// and destination) and added a clear message when a day has more stops
+// than fit in one link ("Showing the next N stops — Google Maps limits
+// routes to 3 waypoints on mobile"), rather than silently building a
+// request that looks fine but degrades on the platform it opens on.
+// Updated the button's tooltip from "rest of day" to "next few stops" to
+// match what it actually does now. Verified against the exact boundary
+// (4 later stops = 3 waypoints + destination, fits exactly, no
+// truncation; 5 later stops = genuinely one over, truncates correctly).
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
