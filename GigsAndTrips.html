@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.66</title>
+<title>Gigs &amp; Trips v7.67</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -497,7 +497,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.66</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.67</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -725,6 +725,45 @@ function openFullDayMapsRoute(tripId,dayId,itemId){
   if(waypoints.length) url+='&waypoints='+waypoints.map(encodeURIComponent).join('|');
   window.open(url,'_blank','noopener');
   if(truncated) showToast(`Showing the next ${MAX_WAYPOINTS+1} stops — Google Maps limits routes to ${MAX_WAYPOINTS} waypoints on mobile`);
+}
+// Apple Maps equivalent, added alongside the Google version rather than
+// replacing it — Apple's OLD maps.apple.com URL scheme never supported
+// multi-stop routing at all (source/destination only), but iOS 18.4+
+// (also macOS 15.4+, watchOS 11.4+) shipped a new "unified Maps URLs"
+// scheme (maps.apple.com/directions) that does: repeat the waypoint=
+// parameter once per stop, rather than Google's single pipe-separated
+// list. Apple's documentation for this scheme states no explicit
+// waypoint limit the way Google's does ("3 on mobile browsers") — so
+// this deliberately doesn't truncate the way the Google version has to.
+// The cap below (14 later stops) is a precaution, not a confirmed
+// requirement — it mirrors the "up to 15 stops" Apple documents for
+// Maps' own in-app multi-stop UI, since the URL scheme's actual ceiling
+// isn't stated anywhere. On an iOS version older than 18.4, this link
+// will still open Maps, but will likely only honour source+destination
+// and silently ignore the extra waypoints, since the old scheme never
+// supported them — there's no way to detect the OS version from a web
+// page to warn about that ahead of time.
+function openAppleMapsFullDayRoute(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const realItems=(day.items||[]).filter(it=>!it._placeholder);
+  const ordered=sortDayTimeline(realItems);
+  const idx=ordered.findIndex(it=>it.id===itemId);
+  if(idx<0) return;
+  const source=itemLocationName(ordered[idx]);
+  if(!source){ showToast('Add a location to this item first'); return; }
+  if(idx>=ordered.length-1){ showToast('This is the last item of the day — nothing later to route to'); return; }
+  const laterLocations=ordered.slice(idx+1).map(it=>itemLocationName(it)).filter(Boolean);
+  if(!laterLocations.length){ showToast('Add locations to items later in the day to build a route'); return; }
+  const MAX_LATER_STOPS=14; // precautionary — mirrors Apple's documented 15-stop in-app limit, not a confirmed URL-scheme ceiling
+  const truncated=laterLocations.length>MAX_LATER_STOPS;
+  const usable=truncated?laterLocations.slice(0,MAX_LATER_STOPS):laterLocations;
+  const destination=usable[usable.length-1];
+  const waypoints=usable.slice(0,-1);
+  let url='https://maps.apple.com/directions?source='+encodeURIComponent(source)+'&destination='+encodeURIComponent(destination)+'&mode=driving';
+  waypoints.forEach(w=>{ url+='&waypoint='+encodeURIComponent(w); });
+  window.open(url,'_blank','noopener');
+  if(truncated) showToast(`Showing the next ${MAX_LATER_STOPS+1} stops — that's the practical limit for one route`);
 }
 // One-tap "Time to next" button on the item card itself (rather than
 // only reachable from inside full edit). A browser has no reliable way
@@ -3407,7 +3446,8 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   // the card. Manual reordering removed entirely (see changelog) —
   // Add to Calendar and the full-day route button (GIG-065) live here.
   card+=`<div class="item-quick-actions">
-    <button class="item-icon-btn" onclick="event.stopPropagation();openFullDayMapsRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions to next few stops">🗺️</button>
+    <button class="item-icon-btn" onclick="event.stopPropagation();openFullDayMapsRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions to next few stops (Google Maps)">🗺️</button>
+    <button class="item-icon-btn" onclick="event.stopPropagation();openAppleMapsFullDayRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions to next few stops (Apple Maps)">🧭</button>
     ${trip&&day?`<a class="item-icon-btn" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="event.stopPropagation();markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Add to Calendar">📅</a>`:''}
   </div>`;
   card+=`</div>`;
@@ -5771,6 +5811,24 @@ function resyncDayTimes(tripId,dayId){
 // match what it actually does now. Verified against the exact boundary
 // (4 later stops = 3 waypoints + destination, fits exactly, no
 // truncation; 5 later stops = genuinely one over, truncates correctly).
+// v7.67: added an Apple Maps "next few stops" button (🧭) alongside the
+// existing Google Maps one (🗺️), not replacing it. Uses Apple's new
+// "unified Maps URLs" scheme (maps.apple.com/directions — iOS 18.4+,
+// macOS 15.4+, watchOS 11.4+ only), confirmed against Apple's own
+// current documentation rather than assumed: multiple stops are passed
+// as REPEATED waypoint= parameters, not a single pipe-separated list
+// like Google's format. Unlike Google (documented hard cap of 3
+// waypoints on mobile — the actual root cause of v7.66's fix), Apple's
+// docs state no explicit waypoint limit for this scheme, so this
+// doesn't truncate at 3 — it uses a much more generous 14-later-stop
+// precautionary cap instead, mirrored from the 15-stop limit Apple
+// documents for Maps' own in-app multi-stop UI (not a confirmed
+// URL-scheme ceiling, since Apple's docs don't state one for this
+// specifically). On iOS versions older than 18.4, this link will still
+// open Maps but will likely only honour source+destination and ignore
+// the extra waypoints, since the old scheme never supported multi-stop
+// routing at all — there's no way to detect OS version from a web page
+// to warn about that ahead of time.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
