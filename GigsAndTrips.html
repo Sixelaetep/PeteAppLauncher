@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.64</title>
+<title>Gigs &amp; Trips v7.65</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -497,7 +497,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.64</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.65</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -682,6 +682,35 @@ function openTravelTimeMaps(tripId,dayId,itemId){
   if(!origin||!dest){ showToast('Add a location to '+(!origin?'this item':'the next item')+' first'); return false; }
   window.open('https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest),'_blank','noopener');
   return true;
+}
+// GIG-065: multi-stop Google Maps directions covering this item and
+// every item that follows it that day — not just the single next leg
+// openTravelTimeMaps above already covers. Uses Maps' own waypoints
+// parameter (origin + destination + a pipe-separated list of stops in
+// between), same "real directions, not guesswork" reasoning as the
+// single-leg version. This item's own location is a hard requirement
+// (it's explicitly the starting point being tapped from) — a clear
+// message if it's missing, rather than silently starting the route from
+// wherever happens to come next. Later items with no location set are
+// skipped from the route rather than blocking the whole thing over one
+// gap.
+function openFullDayMapsRoute(tripId,dayId,itemId){
+  const trip=getEvent(tripId); if(!trip) return;
+  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
+  const realItems=(day.items||[]).filter(it=>!it._placeholder);
+  const ordered=sortDayTimeline(realItems);
+  const idx=ordered.findIndex(it=>it.id===itemId);
+  if(idx<0) return;
+  const origin=itemLocationName(ordered[idx]);
+  if(!origin){ showToast('Add a location to this item first'); return; }
+  if(idx>=ordered.length-1){ showToast('This is the last item of the day — nothing later to route to'); return; }
+  const laterLocations=ordered.slice(idx+1).map(it=>itemLocationName(it)).filter(Boolean);
+  if(!laterLocations.length){ showToast('Add locations to items later in the day to build a route'); return; }
+  const dest=laterLocations[laterLocations.length-1];
+  const waypoints=laterLocations.slice(0,-1);
+  let url='https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest);
+  if(waypoints.length) url+='&waypoints='+waypoints.map(encodeURIComponent).join('|');
+  window.open(url,'_blank','noopener');
 }
 // One-tap "Time to next" button on the item card itself (rather than
 // only reachable from inside full edit). A browser has no reliable way
@@ -3361,9 +3390,10 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   // tapping the card's own title already opens full edit (since v7.29) —
   // so it's gone entirely. Delete moved into the edit form itself
   // (matches the gig form's own pattern) rather than sitting exposed on
-  // the card. Manual reordering removed entirely (see changelog) — only
-  // Add to Calendar remains here now.
+  // the card. Manual reordering removed entirely (see changelog) —
+  // Add to Calendar and the full-day route button (GIG-065) live here.
   card+=`<div class="item-quick-actions">
+    <button class="item-icon-btn" onclick="event.stopPropagation();openFullDayMapsRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions for rest of day">🗺️</button>
     ${trip&&day?`<a class="item-icon-btn" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="event.stopPropagation();markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Add to Calendar">📅</a>`:''}
   </div>`;
   card+=`</div>`;
@@ -5698,6 +5728,18 @@ function resyncDayTimes(tripId,dayId){
 // kind of thing worth rating). Deliberately NOT added to GIG_TYPES (the
 // separate gig/event type list from GIG-049) — that ticket was scoped to
 // trip items specifically.
+// v7.65 (GIG-065): added a "Directions for rest of day" button (🗺️) to
+// every item card, alongside the existing Add to Calendar icon button.
+// Opens a real, multi-stop Google Maps route covering this item and
+// every item that follows it that day — not just the single next leg
+// openTravelTimeMaps already covers. Uses Maps' own origin/destination/
+// waypoints URL parameters (a literal pipe separates individually
+// URL-encoded stops, matching Google's documented format). This item's
+// own location is a hard requirement (it's explicitly the tapped
+// starting point) with a clear message if missing; later items with no
+// location are skipped from the route rather than blocking the whole
+// thing over one gap; tapping the last item of the day gets its own
+// distinct message rather than a broken single-point link.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
