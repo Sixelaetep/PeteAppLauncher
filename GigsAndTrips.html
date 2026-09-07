@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.68</title>
+<title>Gigs &amp; Trips v7.69</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -497,7 +497,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.68</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.69</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -616,6 +616,13 @@ const ITEM_TYPES = [
   {id:'viewpoint',    icon:'⛰️', label:'Viewpoint'},
   {id:'other',        icon:'💳', label:'Other'},
 ];
+// Shared across every place that needs to know which item types can be
+// reviewed (the edit form's review section, the per-trip Review tab,
+// and the master Reviews tab) — one definition instead of three
+// separately-maintained OR-chains that could drift out of sync.
+function isReviewableType(type){
+  return type==='attraction'||type==='food'||type==='accommodation'||type==='keystop'||type==='viewpoint';
+}
 
 function gigTypeInfo(k){ return GIG_TYPES.find(t=>t.key===k)||GIG_TYPES[0]; }
 function typeIcon(t){ const x=ITEM_TYPES.find(i=>i.id===t); return x?x.icon:'📌'; }
@@ -672,11 +679,10 @@ function getNextItemInDay(tripId,dayId,currentItemId){
 // enter into the duration picker yourself. Returns true/false so callers
 // can tell whether it actually opened something.
 // Shared single-leg directions URL builder — both providers, one place.
-// Google's classic dir API vs Apple's new unified scheme (iOS 18.4+);
-// see openAppleMapsFullDayRoute's own comment for why the multi-stop
-// versions of these two differ so much more than this single-leg case
-// does — for exactly two points there's no waypoints-vs-repeated-
-// waypoint syntax difference to account for.
+// Google's classic dir API vs Apple's new unified scheme (iOS 18.4+) —
+// for exactly two points there's no waypoints-vs-repeated-waypoint
+// syntax difference to account for (that only mattered for the
+// multi-stop route buttons, removed in GIG-066).
 function buildMapsDirectionsUrl(provider,origin,dest){
   if(provider==='apple') return 'https://maps.apple.com/directions?source='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest)+'&mode=driving';
   return 'https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest);
@@ -694,88 +700,10 @@ function openTravelTimeMaps(tripId,dayId,itemId,provider){
   window.open(buildMapsDirectionsUrl(provider,origin,dest),'_blank','noopener');
   return true;
 }
-// GIG-065: multi-stop Google Maps directions covering this item and
-// every item that follows it that day — not just the single next leg
-// openTravelTimeMaps above already covers. Uses Maps' own waypoints
-// parameter (origin + destination + a pipe-separated list of stops in
-// between), same "real directions, not guesswork" reasoning as the
-// single-leg version. This item's own location is a hard requirement
-// (it's explicitly the starting point being tapped from) — a clear
-// message if it's missing, rather than silently starting the route from
-// wherever happens to come next. Later items with no location set are
-// skipped from the route rather than blocking the whole thing over one
-// gap.
-function openFullDayMapsRoute(tripId,dayId,itemId){
-  const trip=getEvent(tripId); if(!trip) return;
-  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
-  const realItems=(day.items||[]).filter(it=>!it._placeholder);
-  const ordered=sortDayTimeline(realItems);
-  const idx=ordered.findIndex(it=>it.id===itemId);
-  if(idx<0) return;
-  const origin=itemLocationName(ordered[idx]);
-  if(!origin){ showToast('Add a location to this item first'); return; }
-  if(idx>=ordered.length-1){ showToast('This is the last item of the day — nothing later to route to'); return; }
-  const laterLocations=ordered.slice(idx+1).map(it=>itemLocationName(it)).filter(Boolean);
-  if(!laterLocations.length){ showToast('Add locations to items later in the day to build a route'); return; }
-  // Google's own Maps URLs documentation: "up to three waypoints
-  // supported on mobile browsers" (nine on desktop) — exceeding this on
-  // a phone doesn't fail cleanly, it appears to make Maps silently fall
-  // back to a plain search for whatever it can parse first, which is
-  // exactly what was reported ("only searching the item selected"). A
-  // typical full day easily has more stops than that, so capping here
-  // is a real, unavoidable Google-side limit, not something fixable in
-  // this app — the honest fix is to stay under it and say so when a day
-  // has more stops than fit in one link, rather than build a request
-  // that looks fine but silently degrades on the platform it's opened on.
-  const MAX_WAYPOINTS=3;
-  const truncated=laterLocations.length>MAX_WAYPOINTS+1;
-  const usable=truncated?laterLocations.slice(0,MAX_WAYPOINTS+1):laterLocations;
-  const dest=usable[usable.length-1];
-  const waypoints=usable.slice(0,-1);
-  let url='https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest);
-  if(waypoints.length) url+='&waypoints='+waypoints.map(encodeURIComponent).join('|');
-  window.open(url,'_blank','noopener');
-  if(truncated) showToast(`Showing the next ${MAX_WAYPOINTS+1} stops — Google Maps limits routes to ${MAX_WAYPOINTS} waypoints on mobile`);
-}
-// Apple Maps equivalent, added alongside the Google version rather than
-// replacing it — Apple's OLD maps.apple.com URL scheme never supported
-// multi-stop routing at all (source/destination only), but iOS 18.4+
-// (also macOS 15.4+, watchOS 11.4+) shipped a new "unified Maps URLs"
-// scheme (maps.apple.com/directions) that does: repeat the waypoint=
-// parameter once per stop, rather than Google's single pipe-separated
-// list. Apple's documentation for this scheme states no explicit
-// waypoint limit the way Google's does ("3 on mobile browsers") — so
-// this deliberately doesn't truncate the way the Google version has to.
-// The cap below (14 later stops) is a precaution, not a confirmed
-// requirement — it mirrors the "up to 15 stops" Apple documents for
-// Maps' own in-app multi-stop UI, since the URL scheme's actual ceiling
-// isn't stated anywhere. On an iOS version older than 18.4, this link
-// will still open Maps, but will likely only honour source+destination
-// and silently ignore the extra waypoints, since the old scheme never
-// supported them — there's no way to detect the OS version from a web
-// page to warn about that ahead of time.
-function openAppleMapsFullDayRoute(tripId,dayId,itemId){
-  const trip=getEvent(tripId); if(!trip) return;
-  const day=trip.days.find(d=>d.id===dayId); if(!day) return;
-  const realItems=(day.items||[]).filter(it=>!it._placeholder);
-  const ordered=sortDayTimeline(realItems);
-  const idx=ordered.findIndex(it=>it.id===itemId);
-  if(idx<0) return;
-  const source=itemLocationName(ordered[idx]);
-  if(!source){ showToast('Add a location to this item first'); return; }
-  if(idx>=ordered.length-1){ showToast('This is the last item of the day — nothing later to route to'); return; }
-  const laterLocations=ordered.slice(idx+1).map(it=>itemLocationName(it)).filter(Boolean);
-  if(!laterLocations.length){ showToast('Add locations to items later in the day to build a route'); return; }
-  const MAX_LATER_STOPS=14; // precautionary — mirrors Apple's documented 15-stop in-app limit, not a confirmed URL-scheme ceiling
-  const truncated=laterLocations.length>MAX_LATER_STOPS;
-  const usable=truncated?laterLocations.slice(0,MAX_LATER_STOPS):laterLocations;
-  const destination=usable[usable.length-1];
-  const waypoints=usable.slice(0,-1);
-  let url='https://maps.apple.com/directions?source='+encodeURIComponent(source)+'&destination='+encodeURIComponent(destination)+'&mode=driving';
-  waypoints.forEach(w=>{ url+='&waypoint='+encodeURIComponent(w); });
-  window.open(url,'_blank','noopener');
-  if(truncated) showToast(`Showing the next ${MAX_LATER_STOPS+1} stops — that's the practical limit for one route`);
-}
+// GIG-066: openFullDayMapsRoute and openAppleMapsFullDayRoute (the
+// full-day multi-stop route buttons from GIG-065/v7.67) removed
+// entirely per Pete's call — the single-leg travel-time lookup below
+// and the location's own "open in Maps" link are what's kept.
 // One-tap "Time to next" button on the item card itself (rather than
 // only reachable from inside full edit). A browser has no reliable way
 // to detect when a new TAB (as opposed to a same-window popup) gets
@@ -3467,11 +3395,13 @@ function renderItemCard(it,tripId,dayId,s,trip,day){
   // tapping the card's own title already opens full edit (since v7.29) —
   // so it's gone entirely. Delete moved into the edit form itself
   // (matches the gig form's own pattern) rather than sitting exposed on
-  // the card. Manual reordering removed entirely (see changelog) —
-  // Add to Calendar and the full-day route button (GIG-065) live here.
+  // the card. Manual reordering removed entirely (see changelog).
+  // GIG-066: the full-day multi-stop route buttons (GIG-065/v7.67) were
+  // removed per Pete's call — the single-leg travel-time-to-next lookup
+  // (the 🚗 segment in the timing strip, with its own Google/Apple
+  // choice) and the location's own "open in Maps" link below cover what's
+  // actually wanted; a separate multi-stop button per card wasn't.
   card+=`<div class="item-quick-actions">
-    <button class="item-icon-btn" onclick="event.stopPropagation();openFullDayMapsRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions to next few stops (Google Maps)">🗺️</button>
-    <button class="item-icon-btn" onclick="event.stopPropagation();openAppleMapsFullDayRoute('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Directions to next few stops (Apple Maps)">🍎</button>
     ${trip&&day?`<a class="item-icon-btn" href="${gcalItemUrl(trip,day,it)}" target="_blank" rel="noopener" onclick="event.stopPropagation();markItemCalendarAdded('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')" title="Add to Calendar">📅</a>`:''}
   </div>`;
   card+=`</div>`;
@@ -3957,6 +3887,22 @@ function showItemForm(tripId,dayId,type,it){
     <button type="button" class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="openTravelTimeMaps('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}','apple')">🍎 Look up on Apple Maps</button>`:''}
   </div>`;
   fields+=`<div class="fg"><label>Notes</label><textarea class="fi" id="ifNotes" rows="2">${esc(it?.notes||'')}</textarea></div>`;
+  // GIG-067: review element lives in the edit modal too now, not just
+  // the Review tab — same it.review={rating,note,reviewedAt} shape,
+  // same renderStarInput/getStarVal mechanism, so editing from either
+  // place updates the exact same data. Reviewable types only (matches
+  // isReviewableType everywhere else); greyed out and genuinely disabled
+  // (pointer-events:none on the star row, the disabled attribute on the
+  // textarea) until the item is marked done — there's nothing to review
+  // yet if you haven't done it.
+  if(isReviewableType(type)){
+    const canReview=!!(it&&it.completed);
+    const r=it?.review||{};
+    fields+=`<div class="fg"><label>Review${canReview?'':' (mark this done first)'}</label>
+      <div class="star-row" id="ifReviewStar" style="${canReview?'':'opacity:.4;pointer-events:none'}"></div>
+      <textarea class="fi" id="ifReviewNote" rows="2" placeholder="Notes" ${canReview?'':'disabled'} style="margin-top:8px">${esc(r.note||'')}</textarea>
+    </div>`;
+  }
 
   showModal(`<div class="modal-hdr"><div class="modal-title">${esc(title)}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -3967,6 +3913,7 @@ function showItemForm(tripId,dayId,type,it){
         ${it?`<button class="btn btn-danger" onclick="deleteItem('${esc(tripId)}','${esc(dayId)}','${esc(it.id)}')">🗑 Delete</button>`:''}
       </div>
     </div>`);
+  if(isReviewableType(type)) renderStarInput('ifReviewStar',it?.review?.rating||0);
   // v7.15 (GIG-039): wire the venue picker for whichever field this type
   // uses — Food's venue picker lives on the shared 'ifName' id (it IS the
   // restaurant name), every other type that has one uses 'ifLocation'.
@@ -4044,6 +3991,13 @@ function saveItem(tripId,dayId,type,existingId){
   it.travelTimeToNext=getDurationPicker('ifTravelTime');
   it.durationMinutes=getDurationPicker('ifDuration');
   it.notes=document.getElementById('ifNotes')?.value.trim()||'';
+  // GIG-067: same shape and unconditional-overwrite behavior as
+  // saveItemReview (the Review tab's own save function) — deliberately
+  // matched so editing the same item's review from either place behaves
+  // identically and neither one can silently disagree with the other.
+  if(isReviewableType(type)&&it.completed&&document.getElementById('ifReviewStar')){
+    it.review={rating:getStarVal('ifReviewStar')||null,note:document.getElementById('ifReviewNote')?.value.trim()||'',reviewedAt:new Date().toISOString()};
+  }
 
   // Duration-model anchor tracking (see oldTimeVal above): a changed or
   // newly-set time becomes a manual anchor; an unchanged time keeps
@@ -4362,22 +4316,32 @@ function renderTripReview(trip){
   </div>`;
 }
 
+// Shared single review-card markup — used by both the per-trip Review
+// tab (renderStopReviews, grouped by day) and the master Reviews tab
+// (grouped by trip then day) so the two stay visually identical rather
+// than drifting into two similar-but-different card designs.
+function buildStopReviewCard(tripId,it){
+  const r=it.review||{};
+  const name=it.type==='food'?(it.subtype+(it.name?` — ${it.name}`:'')):it.name||typeLabel(it.type);
+  return `<div style="background:var(--card);border-radius:var(--rsm);border:1px solid var(--bdr);padding:12px;margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:${r.rating?'8px':'0'}">
+      <span style="font-size:18px">${typeIcon(it.type)}</span>
+      <span style="font-size:14px;font-weight:600;flex:1">${esc(name)}</span>
+      ${r.rating?`<span style="color:var(--gold);font-size:13px">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span>`:''}
+      <button class="item-btn" style="flex:none;width:auto;padding:6px 10px" onclick="showItemReviewForm('${esc(tripId)}','${esc(it.id)}')">${r.rating?'Edit':'Review'}</button>
+    </div>
+    ${r.note?`<div style="font-size:13px;color:var(--ink2);line-height:1.5">${esc(r.note)}</div>`:''}
+  </div>`;
+}
 function renderStopReviews(trip){
-  const reviewable=(trip.days||[]).flatMap(day=>(day.items||[]).filter(it=>!it._placeholder&&(it.type==='attraction'||it.type==='food'||it.type==='accommodation'||it.type==='keystop'||it.type==='viewpoint')));
-  if(!reviewable.length) return `<p style="font-size:13px;color:var(--ink3)">Add attractions, food and stays to your itinerary to review them here.</p>`;
-  return reviewable.map(it=>{
-    const r=it.review||{};
-    const name=it.type==='food'?(it.subtype+(it.name?` — ${it.name}`:'')):it.name||typeLabel(it.type);
-    return `<div style="background:var(--card);border-radius:var(--rsm);border:1px solid var(--bdr);padding:12px;margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:${r.rating?'8px':'0'}">
-        <span style="font-size:18px">${typeIcon(it.type)}</span>
-        <span style="font-size:14px;font-weight:600;flex:1">${esc(name)}</span>
-        ${r.rating?`<span style="color:var(--gold);font-size:13px">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span>`:''}
-        <button class="item-btn" style="flex:none;width:auto;padding:6px 10px" onclick="showItemReviewForm('${esc(trip.id)}','${esc(it.id)}')">${r.rating?'Edit':'Review'}</button>
-      </div>
-      ${r.note?`<div style="font-size:13px;color:var(--ink2);line-height:1.5">${esc(r.note)}</div>`:''}
-    </div>`;
-  }).join('');
+  const days=(trip.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const groups=days.map(day=>({
+    day,
+    items:(day.items||[]).filter(it=>!it._placeholder&&isReviewableType(it.type))
+  })).filter(g=>g.items.length);
+  if(!groups.length) return `<p style="font-size:13px;color:var(--ink3)">Add attractions, food and stays to your itinerary to review them here.</p>`;
+  return groups.map(g=>`<div class="section-hdr" style="margin-top:16px">${fmtDateShort(g.day.date)}${g.day.dayNumber?` · Day ${g.day.dayNumber}`:''}</div>
+    ${g.items.map(it=>buildStopReviewCard(trip.id,it)).join('')}`).join('');
 }
 
 function showTripReviewForm(tripId){
@@ -4401,7 +4365,13 @@ function saveTripReview(tripId){
   trip.review.reviewedAt=new Date().toISOString();
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); closeModal(); showToast('Review saved ★');
-  refreshTripDetail(tripId,'review');
+  // GIG-067: this form can now be opened from the master Reviews tab's
+  // grouped trip section too, not just Trip Detail's own Review
+  // sub-tab — return to whichever one it was actually opened from
+  // rather than always forcing a navigation into Trip Detail. _tab
+  // doesn't change while a modal is open, so checking it here correctly
+  // reflects where Save was clicked from.
+  if(_tab==='reviews') renderReviews(); else refreshTripDetail(tripId,'review');
 }
 
 function showItemReviewForm(tripId,itemId){
@@ -4428,19 +4398,29 @@ function saveItemReview(tripId,dayId,itemId){
   it.review={rating:getStarVal('irStar')||null,note:document.getElementById('irNote')?.value.trim()||'',reviewedAt:new Date().toISOString()};
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); closeModal(); showToast('Review saved ★');
-  refreshTripDetail(tripId,'review');
+  if(_tab==='reviews') renderReviews(); else refreshTripDetail(tripId,'review');
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // REVIEWS TAB
 // ═══════════════════════════════════════════════════════════════════
+// GIG-067: trip-related reviews now group under the trip, then under
+// the day within it, instead of being flattened into the same
+// reviewed/awaiting lists gigs use — a long trip could have a dozen
+// stop reviews scattered through an otherwise gig-focused list with no
+// sense of which trip or day they belonged to. Gigs are unaffected;
+// they were never part of this problem. Inclusion rules are unchanged
+// from before this restructuring: a trip (or one of its stops) only
+// appears once it's actually reviewed OR the trip itself has ended/been
+// marked complete — nothing from a future or in-progress trip shows up
+// here at all.
 function renderReviews(){
   const d=getData();
   const filterType=document.getElementById('rvFilterType')?.value||'';
   const sortBy=document.getElementById('rvSort')?.value||'rating';
 
-  // Collect all reviewable items: gigs + trip-level + trip stop items
-  let reviewed=[], unreviewed=[];
+  let reviewed=[], unreviewed=[]; // gigs only now
+  const tripGroups=[];
 
   (d.events||[]).filter(ev=>!ev._deleted).forEach(ev=>{
     if(ev.type==='gig'){
@@ -4449,28 +4429,31 @@ function renderReviews(){
       if(ev.review?.rating) reviewed.push(entry); else if(ev.done||ev.missed||(ev.date<todayISO())) unreviewed.push(entry);
     } else if(ev.type==='trip'){
       if(filterType==='gig') return;
-      // Trip-level review
-      const tripEntry={_kind:'trip',ev,date:ev.endDate||ev.startDate,name:ev.name,rating:ev.review?.rating||0};
-      if(ev.review?.rating) reviewed.push(tripEntry); else if(ev.status==='Completed'||(ev.endDate&&ev.endDate<todayISO())) unreviewed.push(tripEntry);
-      // Individual stop reviews from trip days
-      (ev.days||[]).forEach(day=>{
-        (day.items||[]).filter(it=>!it._placeholder&&(it.type==='attraction'||it.type==='food'||it.type==='accommodation'||it.type==='keystop'||it.type==='viewpoint')).forEach(it=>{
-          const stopEntry={_kind:'stop',ev,it,day,date:day.date,name:it.type==='food'?(it.subtype+(it.name?` — ${it.name}`:'')):it.name||typeLabel(it.type),rating:it.review?.rating||0};
-          if(it.review?.rating) reviewed.push(stopEntry); else if(ev.status==='Completed'||(ev.endDate&&ev.endDate<todayISO())) unreviewed.push(stopEntry);
-        });
+      const eligible=ev.status==='Completed'||(ev.endDate&&ev.endDate<todayISO());
+      const tripReviewShown=!!(ev.review?.rating)||eligible;
+      const days=(ev.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      const dayGroups=days.map(day=>({
+        day,
+        items:(day.items||[]).filter(it=>!it._placeholder&&isReviewableType(it.type)&&(it.review?.rating||eligible))
+      })).filter(g=>g.items.length);
+      if(!tripReviewShown&&!dayGroups.length) return; // nothing eligible for this trip at all
+      tripGroups.push({
+        trip:ev, tripReviewShown, dayGroups,
+        date:ev.endDate||ev.startDate, name:ev.name, rating:ev.review?.rating||0
       });
     }
   });
 
-  // Sort reviewed
   if(sortBy==='rating') reviewed.sort((a,b)=>b.rating-a.rating||b.date.localeCompare(a.date));
   else if(sortBy==='recent') reviewed.sort((a,b)=>b.date.localeCompare(a.date));
   else if(sortBy==='name') reviewed.sort((a,b)=>a.name.localeCompare(b.name));
-
-  // Sort unreviewed with same sort (rating falls back to date desc)
   if(sortBy==='rating') unreviewed.sort((a,b)=>b.date.localeCompare(a.date));
   else if(sortBy==='recent') unreviewed.sort((a,b)=>b.date.localeCompare(a.date));
   else if(sortBy==='name') unreviewed.sort((a,b)=>a.name.localeCompare(b.name));
+
+  if(sortBy==='rating') tripGroups.sort((a,b)=>b.rating-a.rating||b.date.localeCompare(a.date));
+  else if(sortBy==='recent') tripGroups.sort((a,b)=>b.date.localeCompare(a.date));
+  else if(sortBy==='name') tripGroups.sort((a,b)=>a.name.localeCompare(b.name));
 
   const filterBar=`<div class="filter-bar">
     <select id="rvFilterType" onchange="renderReviews()">
@@ -4487,16 +4470,26 @@ function renderReviews(){
 
   let html=filterBar;
 
-  if(!reviewed.length&&!unreviewed.length){
+  if(!reviewed.length&&!unreviewed.length&&!tripGroups.length){
     html+=`<div class="empty"><div class="empty-icon">⭐</div><p>No past events to review yet.<br>Mark a gig as done or complete a trip.</p></div>`;
   } else {
     if(reviewed.length){
-      html+=`<div class="section-hdr">Reviewed (${reviewed.length})</div>`;
+      html+=`<div class="section-hdr">Reviewed gigs (${reviewed.length})</div>`;
       reviewed.forEach(r=>{ html+=buildRevCard(r); });
     }
     if(unreviewed.length){
       html+=`<div class="section-hdr">Awaiting review (${unreviewed.length})</div>`;
       unreviewed.forEach(r=>{ html+=buildRevCard(r,true); });
+    }
+    if(tripGroups.length){
+      html+=`<div class="section-hdr">Trips</div>`;
+      tripGroups.forEach(tg=>{
+        html+=buildTripGroupHeader(tg.trip);
+        tg.dayGroups.forEach(g=>{
+          html+=`<div style="font-size:12px;font-weight:600;color:var(--ink3);margin:8px 0 6px 8px">${fmtDateShort(g.day.date)}${g.day.dayNumber?` · Day ${g.day.dayNumber}`:''}</div>`;
+          g.items.forEach(it=>{ html+=buildStopReviewCard(tg.trip.id,it); });
+        });
+      });
     }
   }
 
@@ -4508,53 +4501,47 @@ function renderReviews(){
 // stays local — it's a more general date-formatter used with
 // arbitrary dates throughout this file, out of scope for this pass.
 
+// GIG-067: simplified to gig-only — renderReviews no longer produces
+// _kind:'trip' or _kind:'stop' entries (those now go through
+// buildTripGroupHeader/buildStopReviewCard as part of the grouped trip
+// section), so those branches were unreachable dead code.
 function buildRevCard(r, unrev){
-  if(r._kind==='gig'){
-    const g=r.ev, ti=gigTypeInfo(g.gigType||'music'), rv=g.review||{};
-    const stars=rv.rating?'★'.repeat(rv.rating)+'☆'.repeat(5-rv.rating):'';
-    const againClass={'Definitely':'again-def','Probably':'again-prob','Maybe':'again-maybe','No':'again-no'}[rv.again]||'';
-    return `<div class="rev-card${unrev?' unreviewed':''}" onclick="${unrev?`showReviewForm('${esc(g.id)}')`:`openGigDetail('${esc(g.id)}')`}">
-      <div class="rev-name">${ti.icon} ${esc(g.name)}</div>
-      <div class="rev-sub">${g.venue?`📍 ${esc(g.venue)} · `:''}${fmtDateLong(g.date)}</div>
-      ${unrev?`<div style="font-size:12px;color:var(--acc);font-weight:600">Tap to add review →</div>`:`
-      <div class="rev-meta">
-        <span style="color:var(--gold);font-size:15px;letter-spacing:1px">${stars}</span>
-        ${rv.again?`<span class="again-pill ${againClass}">${rv.again}</span>`:''}
-        <span class="by-pill">${ti.label}</span>
-      </div>
-      ${(rv.atmosphereRating||rv.venueRating)?`<div class="rev-ratings">
-        ${rv.atmosphereRating?`<div class="rev-rating-item"><div class="rrl">Atmosphere</div><div style="color:var(--gold);font-size:12px">${'★'.repeat(rv.atmosphereRating)}${'☆'.repeat(5-rv.atmosphereRating)}</div></div>`:''}
-        ${rv.venueRating?`<div class="rev-rating-item"><div class="rrl">Venue</div><div style="color:var(--gold);font-size:12px">${'★'.repeat(rv.venueRating)}${'☆'.repeat(5-rv.venueRating)}</div></div>`:''}
-      </div>`:``}
-      ${rv.note?`<div class="rev-note">${esc(rv.note)}</div>`:''}`}
-    </div>`;
-  } else if(r._kind==='trip'){
-    const t=r.ev, rv=t.review||{};
-    const stars=rv.rating?'★'.repeat(rv.rating)+'☆'.repeat(5-rv.rating):'';
-    return `<div class="rev-card trip-rev${unrev?' unreviewed':''}" onclick="${unrev?`openTripDetail('${esc(t.id)}','review')`:`openTripDetail('${esc(t.id)}','review')`}">
-      <div class="rev-name">✈️ ${esc(t.name)}</div>
-      <div class="rev-sub">${t.destination?`📍 ${esc(t.destination)} · `:''}${fmtDateLong(t.startDate)} — ${fmtDateLong(t.endDate)}</div>
-      ${unrev?`<div style="font-size:12px;color:var(--acc);font-weight:600">Tap to add trip review →</div>`:`
-      <div class="rev-meta">
-        <span style="color:var(--gold);font-size:15px;letter-spacing:1px">${stars}</span>
-        <span class="by-pill">Trip</span>
-      </div>
-      ${rv.note?`<div class="rev-note">${esc(rv.note)}</div>`:''}`}
-    </div>`;
-  } else { // stop
-    const t=r.ev, it=r.it, rv=it.review||{};
-    const stars=rv.rating?'★'.repeat(rv.rating)+'☆'.repeat(5-rv.rating):'';
-    return `<div class="rev-card trip-rev${unrev?' unreviewed':''}" onclick="openTripDetail('${esc(t.id)}','review')">
-      <div class="rev-name">${typeIcon(it.type)} ${esc(r.name)}</div>
-      <div class="rev-sub">✈️ ${esc(t.name)} · ${fmtDateShort(r.date)}</div>
-      ${unrev?`<div style="font-size:12px;color:var(--acc);font-weight:600">Tap to add review →</div>`:`
-      <div class="rev-meta">
-        <span style="color:var(--gold);font-size:15px;letter-spacing:1px">${stars}</span>
-        <span class="by-pill">${typeLabel(it.type)}</span>
-      </div>
-      ${rv.note?`<div class="rev-note">${esc(rv.note)}</div>`:''}`}
-    </div>`;
-  }
+  const g=r.ev, ti=gigTypeInfo(g.gigType||'music'), rv=g.review||{};
+  const stars=rv.rating?'★'.repeat(rv.rating)+'☆'.repeat(5-rv.rating):'';
+  const againClass={'Definitely':'again-def','Probably':'again-prob','Maybe':'again-maybe','No':'again-no'}[rv.again]||'';
+  return `<div class="rev-card${unrev?' unreviewed':''}" onclick="${unrev?`showReviewForm('${esc(g.id)}')`:`openGigDetail('${esc(g.id)}')`}">
+    <div class="rev-name">${ti.icon} ${esc(g.name)}</div>
+    <div class="rev-sub">${g.venue?`📍 ${esc(g.venue)} · `:''}${fmtDateLong(g.date)}</div>
+    ${unrev?`<div style="font-size:12px;color:var(--acc);font-weight:600">Tap to add review →</div>`:`
+    <div class="rev-meta">
+      <span style="color:var(--gold);font-size:15px;letter-spacing:1px">${stars}</span>
+      ${rv.again?`<span class="again-pill ${againClass}">${rv.again}</span>`:''}
+      <span class="by-pill">${ti.label}</span>
+    </div>
+    ${(rv.atmosphereRating||rv.venueRating)?`<div class="rev-ratings">
+      ${rv.atmosphereRating?`<div class="rev-rating-item"><div class="rrl">Atmosphere</div><div style="color:var(--gold);font-size:12px">${'★'.repeat(rv.atmosphereRating)}${'☆'.repeat(5-rv.atmosphereRating)}</div></div>`:''}
+      ${rv.venueRating?`<div class="rev-rating-item"><div class="rrl">Venue</div><div style="color:var(--gold);font-size:12px">${'★'.repeat(rv.venueRating)}${'☆'.repeat(5-rv.venueRating)}</div></div>`:''}
+    </div>`:``}
+    ${rv.note?`<div class="rev-note">${esc(rv.note)}</div>`:''}`}
+  </div>`;
+}
+// Trip-level header card for the master Reviews tab's grouped trip
+// section — edits inline via showTripReviewForm (same as tapping
+// "Review"/"Edit" anywhere else a trip's own review appears), rather
+// than just navigating into Trip Detail the way the old flat trip card
+// did; there's no reason to leave the grouped view for this now.
+function buildTripGroupHeader(trip){
+  const rv=trip.review||{};
+  const stars=rv.rating?'★'.repeat(rv.rating)+'☆'.repeat(5-rv.rating):'';
+  return `<div style="background:var(--gold-dim);border-radius:var(--rsm);padding:12px;margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:${rv.rating?'8px':'0'}">
+      <span style="font-size:18px">✈️</span>
+      <span style="font-size:15px;font-weight:700;flex:1">${esc(trip.name)}</span>
+      ${stars?`<span style="color:var(--gold);font-size:13px">${stars}</span>`:''}
+      <button class="item-btn" style="flex:none;width:auto;padding:6px 10px" onclick="showTripReviewForm('${esc(trip.id)}')">${rv.rating?'Edit':'Review'}</button>
+    </div>
+    ${rv.note?`<div style="font-size:13px;color:var(--ink2);line-height:1.5">${esc(rv.note)}</div>`:''}
+  </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -4735,12 +4722,34 @@ function needsDayOff(dateStr,timeStr){
 function gmapsSearchUrl(name){
   return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(name);
 }
+function appleMapsSearchUrl(name){
+  return 'https://maps.apple.com/?q='+encodeURIComponent(name);
+}
 function venueLinkHtml(name){
   if(!name) return '';
   const venues=normaliseVenues(getData().venues);
   const v=venues.find(x=>venueId(x.name)===venueId(name));
-  const url=(v&&v.mapUrl)?v.mapUrl:gmapsSearchUrl(name);
-  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="venue-link" title="Open in Maps" onclick="event.stopPropagation()">🗺</a>`;
+  if(v&&v.mapUrl){
+    // A saved venue with its own specific map URL is a deliberate,
+    // already-chosen link (could be either provider) — open it
+    // directly, same as always. The provider choice below only applies
+    // to the fresh-search fallback.
+    return `<a href="${esc(v.mapUrl)}" target="_blank" rel="noopener" class="venue-link" title="Open in Maps" onclick="event.stopPropagation()">🗺</a>`;
+  }
+  return `<button type="button" class="venue-link" title="Open in Maps" onclick="event.stopPropagation();chooseMapsProviderForLocation('${esc(name)}')">🗺</button>`;
+}
+// GIG-066: this single-destination "open in Maps" link (distinct from
+// the travel-time-to-next lookup, and from the now-removed multi-stop
+// route buttons) gets an Apple option too. Only one compact icon spot
+// here, same constraint as the timing strip's travel-time segment, so
+// this uses the same small choice-prompt pattern rather than trying to
+// fit two icons in.
+function chooseMapsProviderForLocation(name){
+  showModal(`<div class="modal-hdr"><div class="modal-title">Open in Maps</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="closeModal();window.open('${esc(gmapsSearchUrl(name))}','_blank','noopener')">🗺️ Google Maps</button>
+      <button class="btn btn-ghost" style="width:100%" onclick="closeModal();window.open('${esc(appleMapsSearchUrl(name))}','_blank','noopener')">🍎 Apple Maps</button>
+    </div>`);
 }
 
 let _venueInput=null, _venueDrop=null;
@@ -5872,6 +5881,32 @@ function resyncDayTimes(tripId,dayId){
 // first instead, keeping the same one-tap-per-provider feel. Also
 // swapped the full-day Apple Maps route button's icon from 🧭 to 🍎, per
 // Pete's request, to read as unambiguously Apple.
+// v7.69 (GIG-066, GIG-067):
+// GIG-066 — removed the full-day multi-stop route buttons entirely
+// (openFullDayMapsRoute/openAppleMapsFullDayRoute, GIG-065/v7.67-68).
+// The item card's single-location "open in Maps" link (venueLinkHtml,
+// pre-dating all this Maps work) is the button Pete actually meant by
+// "launches map direction to that place" — that one's kept, and now
+// offers a Google/Apple choice via a small prompt (a saved venue's own
+// specific mapUrl still opens directly, unchanged). Verified against
+// Apple's own developer documentation that maps.apple.com/?q= is the
+// long-established classic search format, not the newer iOS-18.4-only
+// scheme.
+// GIG-067 — added a Review section to the item edit modal for
+// reviewable types (isReviewableType — new shared helper, replacing
+// three separately-maintained duplicate checks), greyed out and
+// genuinely disabled (not just dimmed) until the item is marked done.
+// Writes into the exact same it.review={rating,note,reviewedAt} shape
+// and unconditional-overwrite behavior saveItemReview already used, so
+// editing from either place converges on the same data. Restructured
+// both the per-trip Review tab (by day) and the master Reviews tab (by
+// trip, then day) — gigs in the master tab are unaffected. Along the
+// way, found and fixed a real bug this would have introduced:
+// saveTripReview/saveItemReview always navigated into Trip Detail after
+// saving, which would've been wrong when opened from the new grouped
+// section in the master tab — both now return to wherever they were
+// actually opened from. Simplified buildRevCard to gig-only, since the
+// restructuring made its trip/stop branches unreachable.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
