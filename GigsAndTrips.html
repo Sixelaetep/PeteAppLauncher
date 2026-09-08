@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.72</title>
+<title>Gigs &amp; Trips v7.73</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -497,7 +497,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.72</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.73</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -683,8 +683,28 @@ function getNextItemInDay(tripId,dayId,currentItemId){
 // for exactly two points there's no waypoints-vs-repeated-waypoint
 // syntax difference to account for (that only mattered for the
 // multi-stop route buttons, removed in GIG-066).
+// GIG-069: HTTPS Universal Links (the standard google.com/maps URLs)
+// are supposed to hand off to the native app on iOS automatically, and
+// a genuine direct <a href> click (v7.70) should be the most reliable
+// way to trigger that — but Pete confirmed it's still landing in Safari
+// rather than the app. Google documents a dedicated alternative
+// specifically for this: the comgooglemaps:// custom URL scheme, a
+// direct OS-level "does anything own this scheme" handoff rather than
+// the more heuristic Universal Link mechanism, which is far more
+// reliable for actually launching the app. Only exists on iOS, so it's
+// gated behind isIOS() — everywhere else keeps the plain web URL,
+// exactly as asked (iOS → app, browser → web page). Deliberately no
+// JS-timer fallback for "app not installed" — that trick is exactly the
+// kind of extra indirection that caused the original unreliability, and
+// the Apple Maps button sitting right next to every one of these is
+// already a working alternative if Google Maps isn't installed.
+function isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); // modern iPadOS reports as Mac otherwise
+}
 function buildMapsDirectionsUrl(provider,origin,dest){
   if(provider==='apple') return 'https://maps.apple.com/directions?source='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest)+'&mode=driving';
+  if(isIOS()) return 'comgooglemaps://?saddr='+encodeURIComponent(origin)+'&daddr='+encodeURIComponent(dest)+'&directionsmode=driving';
   return 'https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(origin)+'&destination='+encodeURIComponent(dest);
 }
 // openTravelTimeMaps/openTravelTimeMapsAndEdit/chooseMapsProviderForTravelTime
@@ -4675,6 +4695,14 @@ function editVenue(id){
     </div>`);
 }
 
+// Deliberately always the plain web URL, never the iOS comgooglemaps://
+// scheme used elsewhere (buildMapsDirectionsUrl/gmapsSearchUrl) — this
+// one gets SAVED into a venue's own persistent mapUrl field, shared
+// across devices and people (Pete and Lex both see the same venues).
+// The other three call sites build a URL fresh at the moment of use,
+// correctly checking whichever device is looking at it right then; this
+// one would bake in a single device's platform into data everyone
+// shares, breaking the saved link for anyone not on that exact platform.
 function prefillMapUrl(){
   const name=document.getElementById('evName')?.value.trim();
   if(!name) return;
@@ -4759,6 +4787,7 @@ function needsDayOff(dateStr,timeStr){
 // fallback when there's no saved map URL — used everywhere a venue or
 // item location is shown (gigs, trip items, the venue library itself).
 function gmapsSearchUrl(name){
+  if(isIOS()) return 'comgooglemaps://?q='+encodeURIComponent(name);
   return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(name);
 }
 function appleMapsSearchUrl(name){
@@ -5988,6 +6017,25 @@ function resyncDayTimes(tripId,dayId){
 // handler firing right after. Confirmed this was a real risk, not a
 // theoretical one, by reproducing it with the exact unfixed markup
 // before adding the fix.
+// v7.73 (GIG-069): Google Maps links were still opening in Safari on
+// iOS despite v7.70's switch to genuine direct <a href> links — Pete
+// confirmed Universal Links weren't handing off reliably even from a
+// real click. Added isIOS() and switched buildMapsDirectionsUrl/
+// gmapsSearchUrl to Google's dedicated comgooglemaps:// custom URL
+// scheme on iOS specifically — a direct OS-level "does anything own
+// this scheme" handoff, not the more heuristic Universal Link mechanism
+// that was failing. Every other platform (desktop, Android) keeps the
+// plain web URL, exactly as asked: iOS opens the app, browser opens the
+// web page. Apple Maps' own links are untouched — this was a
+// Google-specific problem. Deliberately no JS-timer "app not installed"
+// fallback — that kind of extra indirection is exactly what caused the
+// original unreliability, and the Apple Maps button next to every one
+// of these is already a working alternative. One exception, deliberate:
+// prefillMapUrl (the venue editor's "auto-fill from name" suggestion)
+// stays a plain web URL always — it SAVES into a venue's shared,
+// persistent mapUrl field, and baking in one device's platform there
+// would silently break the saved link for anyone viewing it from a
+// different device.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
