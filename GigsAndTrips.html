@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.70</title>
+<title>Gigs &amp; Trips v7.71</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -497,7 +497,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.70</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.71</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -2324,28 +2324,66 @@ function renderTripDaysBreakdown(t){
   {
     const sortedDays=(t.days||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
     const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    html+=`<div class="trip-days-mini">`;
-    sortedDays.forEach(day=>{
-      const realItems=(day.items||[]).filter(it=>!it._placeholder);
-      // v7.13 (GIG-038): merge in gigs linked to this trip that fall on
-      // this day — previously omitted entirely, so a linked gig never
-      // showed up in its expanded day here even though it does in the
-      // Trip Details day view.
-      const gigsThisDay=linkedGigs.filter(g=>g.date===day.date).map(g=>({...g,_linkedGig:true}));
+    // GIG-068: for a trip that isn't finished yet, days that have
+    // already happened move out of the way — collapsed into a "past
+    // days" toggle at the bottom rather than cluttering the top of the
+    // list — and anything already done is hidden from the compact
+    // breakdown entirely, on any day. A completed or cancelled trip is
+    // deliberately exempt from both: every single day of a finished
+    // trip is "past" by definition, so applying this there would leave
+    // the whole breakdown empty, which defeats the point of looking
+    // back at it.
+    const activeTrip=t.status!=='Completed'&&t.status!=='Cancelled';
+    const today=todayISO();
+
+    function buildDayCard(day){
+      const realItemsAll=(day.items||[]).filter(it=>!it._placeholder);
+      const gigsThisDayAll=linkedGigs.filter(g=>g.date===day.date).map(g=>({...g,_linkedGig:true}));
+      const realItems=activeTrip?realItemsAll.filter(it=>!it.completed):realItemsAll;
+      const gigsThisDay=activeTrip?gigsThisDayAll.filter(g=>!g.done):gigsThisDayAll;
       const allDayItems=[...realItems,...gigsThisDay];
+      const hadItemsBeforeFilter=(realItemsAll.length+gigsThisDayAll.length)>0;
       const dObj=new Date(day.date+'T00:00:00');
-      html+=`<div class="mini-day-card">
+      return `<div class="mini-day-card">
         <div class="mini-day-hdr">
           <span class="mini-day-num">${day.dayNumber}</span>
           <span class="mini-day-date">${fmtDateShort(day.date)} ${dow[dObj.getDay()]}</span>
           <span class="mini-day-count">${allDayItems.length} item${allDayItems.length!==1?'s':''}</span>
         </div>
-        ${renderMiniDayItems(allDayItems,t.id,day.id)}
+        ${!allDayItems.length&&hadItemsBeforeFilter?`<div class="mini-day-items"><div style="font-size:11px;color:var(--ink4);padding:4px 0">All done ✓</div></div>`:renderMiniDayItems(allDayItems,t.id,day.id)}
       </div>`;
-    });
+    }
+
+    html+=`<div class="trip-days-mini">`;
+    if(activeTrip){
+      const upcomingDays=sortedDays.filter(day=>day.date>=today);
+      const pastDays=sortedDays.filter(day=>day.date<today);
+      upcomingDays.forEach(day=>{ html+=buildDayCard(day); });
+      if(pastDays.length){
+        const key='pastdays:'+t.id;
+        const expanded=_expandedGigsToday&&_expandedGigsToday.has(key);
+        html+=`<div class="past-days-toggle" style="text-align:center;padding:8px;font-size:12px;color:var(--ink3);cursor:pointer" onclick="event.stopPropagation();togglePastDaysSection('${esc(t.id)}')">${expanded?'▾ Hide':'▸ Show'} ${pastDays.length} past day${pastDays.length!==1?'s':''}</div>`;
+        if(expanded) pastDays.forEach(day=>{ html+=buildDayCard(day); });
+      }
+    } else {
+      sortedDays.forEach(day=>{ html+=buildDayCard(day); });
+    }
     html+=`</div>`;
   }
   return html;
+}
+// Toggles the past-days section on an active trip's overview card —
+// reuses the same _expandedGigsToday Set every other trip-overview
+// collapse toggle already uses, just with its own key prefix. render()
+// already calls showPanel('list',true) unconditionally at its own top,
+// so calling it here correctly preserves the list's scroll position —
+// no separate capture/restore needed, unlike the Trip Detail refreshes
+// elsewhere in this file that had to add their own.
+function togglePastDaysSection(tripId){
+  if(!_expandedGigsToday) _expandedGigsToday=new Set();
+  const key='pastdays:'+tripId;
+  if(_expandedGigsToday.has(key)) _expandedGigsToday.delete(key); else _expandedGigsToday.add(key);
+  render();
 }
 
 function renderTripCard(t, d){
@@ -5923,6 +5961,21 @@ function resyncDayTimes(tripId,dayId){
 // is still missing. Removed as fully superseded: openTravelTimeMaps,
 // openTravelTimeMapsAndEdit, guidedInsertLookupMaps,
 // chooseMapsProviderForLocation, chooseMapsProviderForTravelTime.
+// v7.71 (GIG-068): Trip Overview's day-by-day breakdown (the mini-day
+// cards on a trip's own card in Upcoming) now, for a trip that isn't
+// finished yet: collapses past days into a "Show N past days" toggle at
+// the bottom instead of listing them chronologically at the top, and
+// hides completed items from every day's compact item list (a day
+// where everything was done now says "All done ✓" rather than the
+// generic empty-list message, which would otherwise misleadingly read
+// as if nothing had ever been added). A completed or cancelled trip is
+// deliberately exempt from both — every one of its days is "past" by
+// definition, so applying this there would leave the whole breakdown
+// empty. togglePastDaysSection() reuses the same _expandedGigsToday Set
+// every other trip-overview collapse toggle in this file already uses,
+// keyed by 'pastdays:'+tripId; render() already calls
+// showPanel('list',true) at its own top, so calling it from the toggle
+// correctly preserves the list's scroll position with no extra work.
 function fmtDuration(mins){
   if(mins==null) return '';
   const h=Math.floor(mins/60), m=mins%60;
