@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.55</title>
+<title>Reading Tracker v3.57</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -746,7 +746,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.55</span></div>
+    <div class="rt-logo">My Reading <span>v3.57</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1724,6 +1724,48 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.57 (MR-042): v3.56 fixed which sort MODE syncs across devices, but
+// not the actual manual ARRANGEMENT "manual order" mode reads — that
+// was only ever raw appState.wishlist array position, never an
+// explicit stored value, so pal-sync's per-record merge (which has no
+// reason to reproduce a specific position, only to merge each item by
+// id/updatedAt) had nothing to preserve it with. Fixed by giving each
+// item its own w.manualOrder number — an ordinary field on an ordinary
+// row, synced exactly like title/pages/tags already are. reorderWishlist
+// now renumbers same-type items sequentially and pushes each directly
+// (existing-record updates need that, same MR-016 reasoning as
+// everywhere else); bookListQueue()'s manual branch and
+// renderWishlistView()'s own manual sort both now sort by this field
+// instead of relying on array order. Also scoped reorderWishlist to
+// same-type items only — previously a book's up/down could silently
+// swap it past an audiobook sitting between them in the raw array
+// without visibly moving it at all, since the Books/Audiobooks
+// sections only ever show a book next to other books. Backfilled once
+// from current array position (preserves whatever's already there
+// rather than resetting it); new items get one at creation, appended
+// to the end of their type.
+// v3.56 (MR-041): monthlyConfig (targets/sort/cycle date/collections)
+// now syncs across devices — root-caused a real bug report: two
+// devices could both show "Manual order" selected in the Book List
+// screen's OWN sort dropdown (wlSortSel — a separate, per-screen,
+// never-synced display preference, unrelated to which book is active)
+// while their Monthly widgets picked completely different active
+// books, because cfg.bookSort/audioSort — the setting that actually
+// drives the widget — never left the device it was set on. Fixed by
+// riding monthlyConfig through the exact same sync channel as wishlist
+// items: one extra row with a reserved id (MONTHLY_CONFIG_ROW_ID),
+// added only inside flattenForSync()'s returned payload —
+// appState.wishlist itself is never touched, so nothing UI-facing
+// needed a filter added. reassembleFromSync() extracts it back out
+// before assignment. Merge is last-write-wins on cfg.updatedAt, same
+// as every other synced record — the three places that actually
+// mutate the config (onMonthlyConfigChange, confirmCreateCollection,
+// deleteCollection) now stamp it, and a freshly-defaulted config is
+// stamped with an ancient sentinel instead of "now" so an untouched
+// default never beats a real config already sitting in the cloud.
+// Also fixed onMonthlyConfigChange's own sort fallbacks, which still
+// said "dateAdded" — a leftover from before v3.54 changed the actual
+// default to "manual".
 // v3.55 (MR-040): the Trackers-tab Active/Pages/Chapters boxes only ever
 // read appState.trackers — since Monthly Mode moved off trackers
 // entirely in v3.47, anyone doing most of their reading through the
@@ -2440,7 +2482,12 @@ function defaultMonthlyConfig() {
     // widgets' daily-target math. null means "just use the calendar
     // month", same as before this existed.
     cycleStartDate: null,
-    collections: []
+    collections: [],
+    // v3.56 (MR-041): a deliberately ancient sentinel — see
+    // syncMonthlyConfigViaWishlist's comment. Any config that's actually
+    // been through onMonthlyConfigChange (or the collection functions)
+    // gets a real timestamp and will always beat this in a merge.
+    updatedAt: "1970-01-01T00:00:00.000Z"
   };
 }
 function backfillBookListFields() {
@@ -2451,6 +2498,12 @@ function backfillBookListFields() {
   if (!cfg.bookSort) cfg.bookSort = "manual";
   if (!cfg.audioSort) cfg.audioSort = "manual";
   if (!Array.isArray(cfg.collections)) cfg.collections = [];
+  // v3.56 (MR-041): a config that already exists locally but predates
+  // this field is a real, meaningful, currently-in-use setting — stamp
+  // it with now, not the "ancient" sentinel defaultMonthlyConfig() uses
+  // for a genuinely fresh config, or it'll lose to literally anything
+  // on first sync merge, including an empty one.
+  if (!cfg.updatedAt) cfg.updatedAt = new Date().toISOString();
   (appState.wishlist || []).forEach(w => {
     // dateAdded backfills from updatedAt (itself backfilled to "now" by
     // backfillReadingTimestamps if missing) rather than a fresh "now" —
@@ -2458,6 +2511,18 @@ function backfillBookListFields() {
     // look brand-new to the "Date added" sort the first time this runs.
     if (!w.dateAdded) w.dateAdded = (w.updatedAt || new Date().toISOString()).slice(0, 10);
     if (!Array.isArray(w.readingEntries)) w.readingEntries = [];
+  });
+  // v3.57 (MR-042): one-time manualOrder backfill, per type, from
+  // whatever the CURRENT array order already is — preserves an
+  // existing local arrangement (or one just pulled from another
+  // device) rather than resetting anything. Only runs the renumbering
+  // for a type at all if something in it is still missing a value;
+  // once every item has one, this becomes a no-op every load after.
+  ["book", "audiobook"].forEach(type => {
+    const items = (appState.wishlist || []).filter(w => (w.type || "book") === type);
+    if (items.some(w => w.manualOrder == null)) {
+      items.forEach((w, i) => { if (w.manualOrder == null) w.manualOrder = i; });
+    }
   });
 }
 
@@ -2490,6 +2555,31 @@ function stampImportedTimestamps(trackers, wishlist) {
 // it's implicit via nesting locally, but needs to be explicit once
 // flattened so a pull can put each book/entry back under the right
 // tracker.
+// v3.56 (MR-041): appState.monthlyConfig (targets, sort order, cycle
+// date, collections) was local-only — flagged as a known limitation
+// back at v3.47, and it's now caused a real, confusing bug: two
+// devices' Book List screens can show the exact same "Manual order"
+// label (that dropdown, wlSortSel, is a separate, per-screen, never-
+// synced display preference) while their Monthly widgets pick
+// DIFFERENT active books, because the setting that actually drives the
+// widget — cfg.bookSort/audioSort — never left the device it was set
+// on. Rather than keep explaining the gap, closing it: monthlyConfig
+// now rides through the exact same sync channel as wishlist items, as
+// one extra row with a reserved id, added here only in the FLATTENED
+// payload — appState.wishlist itself is never touched, so nothing
+// UI-facing needs to filter it out. Merge is last-write-wins on
+// cfg.updatedAt (see onMonthlyConfigChange/confirmCreateCollection/
+// deleteCollection, the three places that actually change it), exactly
+// like every other synced record — that's also why a fresh
+// defaultMonthlyConfig() is stamped with an ancient sentinel rather
+// than "now": an untouched default should never beat a real config
+// already sitting in the cloud.
+const MONTHLY_CONFIG_ROW_ID = "__monthlyConfig__";
+function buildMonthlyConfigSyncRow() {
+  const cfg = appState.monthlyConfig || defaultMonthlyConfig();
+  return { id: MONTHLY_CONFIG_ROW_ID, configJSON: JSON.stringify(cfg), updatedAt: cfg.updatedAt || new Date().toISOString() };
+}
+
 function flattenForSync() {
   const trackers = [], books = [], entries = [];
   (appState.trackers || []).forEach(t => {
@@ -2507,7 +2597,7 @@ function flattenForSync() {
     (t.books || []).forEach(b => books.push(Object.assign({}, b, { trackerId: t.id })));
     (t.entries || []).forEach(e => entries.push(Object.assign({}, e, { trackerId: t.id })));
   });
-  return { trackers, books, entries, wishlist: appState.wishlist || [] };
+  return { trackers, books, entries, wishlist: [...(appState.wishlist || []), buildMonthlyConfigSyncRow()] };
 }
 
 // Rebuild appState.trackers[].books[]/.entries[] from the flat merged
@@ -2533,7 +2623,18 @@ function reassembleFromSync(flat) {
     t.entries.push(rest);
   });
   appState.trackers = Object.values(byId);
-  appState.wishlist = flat.wishlist.filter(w => !w._deleted);
+  // v3.56 (MR-041): pull the synced config row back out before it ever
+  // reaches appState.wishlist — see buildMonthlyConfigSyncRow's comment.
+  // Last-write-wins already happened inside pal-sync's own pull() (same
+  // mechanism as every other record, keyed on this row's updatedAt vs
+  // whatever's in the cloud) by the time this function runs, so
+  // whichever version survived here IS the merged result.
+  const configRow = flat.wishlist.find(w => w.id === MONTHLY_CONFIG_ROW_ID && !w._deleted);
+  if (configRow && configRow.configJSON) {
+    try { appState.monthlyConfig = JSON.parse(configRow.configJSON); } catch (e) { /* keep whatever's already there */ }
+  }
+  appState.wishlist = flat.wishlist.filter(w => !w._deleted && w.id !== MONTHLY_CONFIG_ROW_ID);
+  backfillBookListFields();
 }
 
 // MR-011 (suite-wide sync audit): pushAllToCloud() used to blind-upsert
@@ -3089,7 +3190,11 @@ function bookListQueue(type) {
   // tags being carried across (see buildBookFromWishlist's v3.46 fix;
   // that fix only applies going forward, not retroactively).
   if (sortMode === "tag")       return items.slice().sort((a, b) => ((a.tags && a.tags[0]) || a.genre || "").localeCompare((b.tags && b.tags[0]) || b.genre || "") || a.title.localeCompare(b.title));
-  return items; // 'manual' — wishlist's own stored order
+  // v3.57 (MR-042): 'manual' now sorts explicitly by w.manualOrder — an
+  // ordinary synced field — rather than relying on raw array order,
+  // which pal-sync's per-record merge has no reason to reproduce
+  // across devices. See reorderWishlist's comment for the full story.
+  return items.slice().sort((a, b) => (Number(a.manualOrder) || 0) - (Number(b.manualOrder) || 0));
 }
 
 // One-time migration from the old (v3.44-46) tracker-based Monthly Mode:
@@ -3112,7 +3217,8 @@ function mergeMonthlyTrackerIntoBookList() {
   if (!confirm(`Merge "${t.trackerName}"'s ${bookCount} book${bookCount !== 1 ? "s" : ""} and reading progress into the Book List, then remove the old tracker?`)) return;
 
   const wType = isAudible(t) ? "audiobook" : "book";
-  (t.books || []).forEach(book => {
+  const _existingCount = appState.wishlist.filter(w => (w.type || "book") === wType).length;
+  (t.books || []).forEach((book, idx) => {
     const entries = (t.entries || []).filter(e => e.bookId === book.id).map(e => ({ id: e.id, date: e.date, pageTo: e.pageTo }));
     const done = highestPageForIn(t.entries, book.id) >= book.pages || book.manualComplete;
     const item = {
@@ -3120,6 +3226,10 @@ function mergeMonthlyTrackerIntoBookList() {
       pages: book.pages || 0, type: wType, tags: book.tags || [], ownership: book.ownership || "owned",
       dateAdded: (book.updatedAt || new Date().toISOString()).slice(0, 10),
       readingEntries: entries,
+      // v3.57 (MR-042): preserves the tracker's own read order as the
+      // starting manual order, rather than leaving it to fall back to
+      // whatever push/pull order these end up in.
+      manualOrder: _existingCount + idx,
       updatedAt: new Date().toISOString()
     };
     if (book.notes) item.notes = book.notes;
@@ -3499,10 +3609,14 @@ function onMonthlyConfigChange() {
   cfg.cycleStartDate      = document.getElementById("cfgCycleStartDate")?.value || null;
   cfg.bookTarget          = num("cfgBookTarget") ?? 1;
   cfg.bookPageTarget      = num("cfgBookPageTarget");
-  cfg.bookSort            = document.getElementById("cfgBookSort")?.value || "dateAdded";
+  cfg.bookSort            = document.getElementById("cfgBookSort")?.value || "manual";
   cfg.audioTarget         = num("cfgAudioTarget") ?? 1;
   cfg.audioChapterTarget  = num("cfgAudioChapterTarget");
-  cfg.audioSort           = document.getElementById("cfgAudioSort")?.value || "dateAdded";
+  cfg.audioSort           = document.getElementById("cfgAudioSort")?.value || "manual";
+  // v3.56 (MR-041): stamped so this change can actually win a sync
+  // merge against another device's older config — see
+  // syncMonthlyConfigViaWishlist's comment for why this matters now.
+  cfg.updatedAt = new Date().toISOString();
   save();
   renderMonthlyWidgets();
 }
@@ -3531,6 +3645,7 @@ function confirmCreateCollection() {
   if (bookIds.length === 0) { showToast("Select at least one book"); return; }
   const cfg = appState.monthlyConfig || (appState.monthlyConfig = defaultMonthlyConfig());
   cfg.collections.push({ id: uid('c'), name, targetDate, bookIds });
+  cfg.updatedAt = new Date().toISOString();
   save();
   closeCollectionModal();
   renderMonthlyConfigUI();
@@ -3543,6 +3658,7 @@ function deleteCollection(id) {
   if (!cfg) return;
   if (!confirm("Delete this collection? The books themselves stay on your Book List.")) return;
   cfg.collections = cfg.collections.filter(c => c.id !== id);
+  cfg.updatedAt = new Date().toISOString();
   save();
   renderMonthlyConfigUI();
   renderCollectionCards();
@@ -4257,11 +4373,37 @@ function reorderTracker(trackerId, dir) {
   }
 }
 
+// v3.57 (MR-042): this used to just splice appState.wishlist directly
+// (moveItem(appState.wishlist, itemId, dir)) with no explicit order
+// ever stored anywhere — "manual order" was really just "whatever
+// position this item happens to sit at in the array right now." That's
+// fine on a single device, but pal-sync's cloud pull merges wishlist
+// items individually by id/updatedAt (same as every other collection);
+// nothing about that merge has any reason to reproduce a specific
+// array position, so the arrangement someone dragged into place on one
+// device had no way to reach another — v3.56 fixed the SETTING (which
+// sort mode is selected) syncing, but not this: the actual arrangement
+// manual mode reads. Fixed by storing an explicit w.manualOrder number
+// per item — an ordinary field on an ordinary row, synced exactly like
+// title/pages/tags already are, so it survives the same way they do.
+// Also scoped the reorder to same-type items only — previously a
+// book's up/down could silently swap it past an audiobook sitting
+// between them in the raw array without changing its visual position
+// at all, since the Books/Audiobooks sections only ever show a book
+// next to other books.
 function reorderWishlist(itemId, dir) {
-  if (moveItem(appState.wishlist, itemId, dir)) {
-    save();
-    renderWishlistView();
-  }
+  const item = appState.wishlist.find(w => w.id === itemId);
+  if (!item) return;
+  const type = item.type || "book";
+  const sameType = appState.wishlist
+    .filter(w => (w.type || "book") === type)
+    .sort((a, b) => (Number(a.manualOrder) || 0) - (Number(b.manualOrder) || 0));
+  if (!moveItem(sameType, itemId, dir)) return;
+  const now = new Date().toISOString();
+  sameType.forEach((w, i) => { w.manualOrder = i; w.updatedAt = now; });
+  save();
+  sameType.forEach(w => pushWishlistItemNow(w));
+  renderWishlistView();
 }
 
 
@@ -6588,6 +6730,11 @@ function renderWishlistView() {
     return;
   }
   if (_wlViewMode === "past") sorted.sort((a,b) => (b.completedDate||"").localeCompare(a.completedDate||""));
+  // v3.57 (MR-042): manual order now sorts explicitly by w.manualOrder
+  // instead of relying on incidental array position — see this
+  // version's comment on reorderWishlist for why array position alone
+  // was never a safe source of truth once sync entered the picture.
+  else if (sort === "manual")      sorted.sort((a,b) => (Number(a.manualOrder)||0) - (Number(b.manualOrder)||0));
   else if (sort === "title_az")    sorted.sort((a,b) => a.title.localeCompare(b.title));
   else if (sort === "title_za")    sorted.sort((a,b) => b.title.localeCompare(a.title));
   else if (sort === "author")      sorted.sort((a,b) => (a.author||"").localeCompare(b.author||""));
@@ -6882,11 +7029,15 @@ function addToWishlistFromView() {
   // book with no count here won't get a target until one's added (the
   // Monthly widget will prompt for it once this book comes up active).
   const _noPagesYet = !pages;
+  const _sameTypeCount = appState.wishlist.filter(w => (w.type || "book") === _wlType).length;
   const newItem = { id: uid('t'), title, author, genre, pages, type: _wlType, tags: _wlAddTags, ownership: "wanted", updatedAt: new Date().toISOString(),
     // v3.47 (MR-032): new Book List fields set at creation, not left for
     // the load-time backfill — otherwise a book added and immediately
     // sorted by "Date added" would have no dateAdded to sort by.
-    dateAdded: todayISO(), readingEntries: [] };
+    // v3.57 (MR-042): manualOrder likewise — appended to the end of its
+    // type, same as it'd naturally land in array order anyway, but now
+    // as an explicit synced field rather than incidental position.
+    dateAdded: todayISO(), readingEntries: [], manualOrder: _sameTypeCount };
   appState.wishlist.push(newItem);
   document.getElementById("wlAddTitle").value  = "";
   document.getElementById("wlAddAuthor").value = "";
