@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.49</title>
+<title>Reading Tracker v3.50</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -741,7 +741,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.49</span></div>
+    <div class="rt-logo">My Reading <span>v3.50</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1713,6 +1713,24 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.50 (MR-035): fixes the actual bug behind "no target pages and log
+// entry" for a book on the Book List — isBookListItemDone(w) computed
+// highestPageForItem(w) >= (w.pages || 0); for any book added with no
+// page count, that's 0 >= 0, true, so it was silently marked "done"
+// and permanently excluded from bookListQueue() — it could never
+// become the active book, so it never got a target or a log field, and
+// there was nothing wrong-looking to notice (it just quietly wasn't
+// there). Fixed to only complete on an explicit pages count
+// (manualComplete still works as an independent override).
+//  - That alone would have left a 0-pages active book showing a
+//    meaningless "0 of 0, finished" — added a distinct widget state
+//    instead: "No page count set yet" with the log input repurposed to
+//    SET the total instead of logging progress (logBookListQuick/
+//    onBookListLogInput both branch on item.pages > 0 now).
+//  - addToWishlistFromView's Pages field stays optional (you may
+//    genuinely want to jot a title down before knowing its length) but
+//    now flags it in the confirmation toast, so this doesn't silently
+//    recur without at least a heads-up at add time.
 // v3.49 (MR-034): brings back a recurring "cycle start date" for the
 // Monthly widgets — this existed briefly in v3.46 (a per-tracker field,
 // back when Monthly Mode was still tracker-based) but was dropped
@@ -2954,7 +2972,14 @@ function highestPageForItem(w) {
   return vals.length ? Math.max(...vals) : 0;
 }
 function isBookListItemDone(w) {
-  return highestPageForItem(w) >= (w.pages || 0) || !!w.manualComplete;
+  // v3.50 (MR-035): a book with no page count set was being treated as
+  // instantly "done" — highestPageForItem(w) (0, nothing logged yet) >=
+  // (w.pages || 0) (also 0) is true. That silently dropped it out of
+  // the active queue entirely, with no target or log field ever shown
+  // for it — exactly what was reported. Only an explicit pages count
+  // can complete a book now; manualComplete still works as an override
+  // either way.
+  return (w.pages > 0 && highestPageForItem(w) >= w.pages) || !!w.manualComplete;
 }
 // The live Monthly queue for one type ('book' or 'audiobook'): every
 // not-yet-done Book List item of that type, in the order its sort mode
@@ -3102,6 +3127,29 @@ function renderMonthlyWidget(type) {
   document.getElementById(p + "Author").textContent = item.author || "";
   document.getElementById(p + "Count").textContent  = `${queue.length} up next`;
 
+  // v3.50 (MR-035): this is the actual bug report's fix — a book added
+  // without a page/chapter count used to be silently marked "done" and
+  // never show up here at all (see isBookListItemDone's comment). Now
+  // it DOES become active, but there's still nothing to compute a
+  // target or % from — show a distinct "set a total" state instead of
+  // a broken "0 of 0, finished" one, using the same log input to
+  // capture that total (see logBookListQuick/onBookListLogInput).
+  if (!(item.pages > 0)) {
+    document.getElementById(p + "Current").textContent = "No page count set yet";
+    if (targetWrap) targetWrap.style.display = "none";
+    document.getElementById(p + "BarLeft").textContent  = "";
+    document.getElementById(p + "BarRight").textContent = "";
+    document.getElementById(p + "SegPrior").style.width = "0%";
+    document.getElementById(p + "SegRest").style.width  = "100%";
+    const inputEl = document.getElementById(p + "LogPage");
+    if (inputEl) inputEl.placeholder = `Total ${unitP} in this book`;
+    document.getElementById(p + "LogHint").textContent = `Add a ${unitS} count to start tracking targets for this book.`;
+    return;
+  }
+  const _defaultPlaceholder = type === "audiobook" ? "Chapter I reached" : "Page I reached";
+  const _inputElReset = document.getElementById(p + "LogPage");
+  if (_inputElReset) _inputElReset.placeholder = _defaultPlaceholder;
+
   const current = highestPageForItem(item);
   const pct = item.pages > 0 ? Math.min(100, Math.round((current / item.pages) * 100)) : 0;
   document.getElementById(p + "Current").textContent = `${current} of ${item.pages} ${unitP} · ${pct}%`;
@@ -3133,10 +3181,21 @@ function onBookListLogInput(type) {
   const hint = document.getElementById(p + "LogHint");
   if (!item || !hint) return;
   const inputEl = document.getElementById(p + "LogPage");
-  const current = highestPageForItem(item);
   const unitS = type === "audiobook" ? "chapter" : "page";
   const unitP = type === "audiobook" ? "chapters" : "pages";
   const val = inputEl.value;
+  // v3.50 (MR-035): this item has no total page/chapter count yet — the
+  // same input doubles as "set the total" rather than "log progress",
+  // since neither a target nor a % read means anything without one.
+  if (!(item.pages > 0)) {
+    if (!val) { hint.className = "field-hint"; hint.textContent = `Add a ${unitS} count to start tracking this book.`; return; }
+    const rawTotal = parseInt(val, 10);
+    if (isNaN(rawTotal) || rawTotal <= 0) { hint.className = "field-hint error"; hint.textContent = "Enter a valid number"; return; }
+    hint.className = "field-hint positive";
+    hint.textContent = `Will set total to ${rawTotal} ${unitP}`;
+    return;
+  }
+  const current = highestPageForItem(item);
   if (!val) { hint.className = "field-hint"; hint.textContent = current > 0 ? `Currently on ${unitS} ${current}` : "Not started yet"; return; }
   const raw = parseInt(val, 10);
   if (isNaN(raw) || raw <= 0) { hint.className = "field-hint error"; hint.textContent = `Enter a valid ${unitS} number`; return; }
@@ -3154,8 +3213,24 @@ function logBookListQuick(type) {
   const inputEl = document.getElementById(p + "LogPage");
   const raw = parseInt(inputEl ? inputEl.value : "", 10);
   if (isNaN(raw) || raw <= 0) { showToast("Enter a valid number"); return; }
-  const current = highestPageForItem(item);
   const unitP = type === "audiobook" ? "chapters" : "pages";
+
+  // v3.50 (MR-035): no total set yet on this item — this log doubles as
+  // setting it, then stops; the very next log actually records progress
+  // against that new total.
+  if (!(item.pages > 0)) {
+    item.pages = raw;
+    item.updatedAt = new Date().toISOString();
+    if (inputEl) inputEl.value = "";
+    save();
+    pushWishlistItemNow(item);
+    renderMonthlyWidgets();
+    if (document.getElementById("wishlistApp")?.classList.contains("active")) renderWishlistView();
+    showToast(`Set ${raw} ${unitP} for "${item.title}" ✓`);
+    return;
+  }
+
+  const current = highestPageForItem(item);
   if (raw <= current)   { showToast(`Must be higher than ${current}`); return; }
   if (raw > item.pages) { showToast(`Only has ${item.pages} ${unitP}`); return; }
 
@@ -6515,6 +6590,11 @@ function addToWishlistFromView() {
   const genre  = document.getElementById("wlAddGenre")?.value || "";
   const pages  = parseInt(document.getElementById("wlAddPages")?.value || "0") || 0;
   if (!title) { showToast("Title required"); return; }
+  // v3.50 (MR-035): not a hard requirement — you may genuinely want to
+  // jot a title down before knowing its length — but flagged, since a
+  // book with no count here won't get a target until one's added (the
+  // Monthly widget will prompt for it once this book comes up active).
+  const _noPagesYet = !pages;
   const newItem = { id: uid('t'), title, author, genre, pages, type: _wlType, tags: _wlAddTags, ownership: "wanted", updatedAt: new Date().toISOString(),
     // v3.47 (MR-032): new Book List fields set at creation, not left for
     // the load-time backfill — otherwise a book added and immediately
@@ -6528,7 +6608,7 @@ function addToWishlistFromView() {
   _wlAddTags = [];
   refreshWlAddTagsChips();
   _wlType = "book"; selectWlType("book");
-  save(); renderWishlistView(); showToast("Added to Book List ✓");
+  save(); renderWishlistView(); showToast(_noPagesYet ? `"${title}" added — no page count yet, so it won't get a target until you add one` : "Added to Book List ✓");
   pushWishlistItemNow(newItem); // v3.29 (MR-016): direct push, see function comment
   // v3.33 (MR-018): collapse the form back after a successful add, same
   // pattern as logFromBook/saveBookEdit collapsing their own sections.
