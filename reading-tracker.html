@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.43</title>
+<title>Reading Tracker v3.44</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -556,6 +556,9 @@
   #nrSegNeeded { background:var(--danger); opacity:.75; } /* red — still needed today   */
   #nrSegBonus  { background:#7b5ea7; }             /* purple      — read beyond target  */
   #nrSegRest   { background:var(--border); flex-grow:1; } /* dim — unread pages        */
+  /* v3.44 (MR-029): Monthly widget's simpler 2-zone bar (read / remaining) */
+  #moSegPrior  { background:#2d7a52; }
+  #moSegRest   { background:var(--border); flex-grow:1; }
 
   /* Counts row — coloured figures beside today's target */
   .nr-counts { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
@@ -583,7 +586,8 @@
   /* v3.32 (MR-017): Pages/% log-mode toggle, shared style for book cards and Now Reading card */
   .log-mode-toggle { display:flex; gap:4px; margin-bottom:6px; }
   /* v3.32 (HZN-004): 3-way tracking mode toggle */
-  .tracking-mode-toggle { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
+  /* v3.44 (MR-029): widened to 4 columns for the new "Monthly" mode */
+  .tracking-mode-toggle { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px; }
   .tm-btn { font-size:12px; font-weight:600; padding:8px 6px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--muted); cursor:pointer; font-family:'Inter',sans-serif; text-align:center; }
   .tm-btn.active { background:rgba(200,169,110,.15); border-color:var(--accent); color:var(--accent); }
   .pace-info-box { border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:12px; line-height:1.7; color:var(--text); }
@@ -592,6 +596,13 @@
   .pace-info-box .pace-delta-ahead { color:var(--success); font-weight:600; }
   .pace-info-box .pace-delta-behind { color:var(--danger); font-weight:600; }
   .pace-info-box .pace-delta-ontrack { color:var(--muted); }
+  /* v3.44 (MR-029): Monthly Mode — dashboard widget (reuses .now-reading-card
+     visual language so it doesn't need its own set of styles) plus the
+     one-time setup banner shown before Monthly Mode has been built. */
+  .monthly-book-count { font-size:10px; color:var(--muted); margin-top:2px; }
+  .monthly-setup-banner { cursor:pointer; }
+  .monthly-setup-banner .tc-name { display:flex; align-items:center; gap:6px; }
+  .monthly-setup-sub { font-size:11px; color:var(--muted); margin-top:4px; line-height:1.5; }
   .log-mode-btn { flex:0 0 auto; font-size:10px; font-weight:600; padding:3px 10px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--muted); cursor:pointer; font-family:'Inter',sans-serif; }
   .log-mode-btn.active { background:rgba(200,169,110,.15); border-color:var(--accent); color:var(--accent); }
   /* Log button on Now Reading card */
@@ -726,7 +737,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.43</span></div>
+    <div class="rt-logo">My Reading <span>v3.44</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -865,6 +876,47 @@
 
 <!-- ═══════════════════ DASHBOARD (Trackers tab content) ═══════════════════ -->
 <div id="dashboard">
+  <!-- v3.44 (MR-029): Monthly Mode — one-time setup banner (shown until
+       built) and the live widget (shown after), both ahead of "My
+       Trackers" since this is meant to be the front-screen view of
+       whatever book Monthly Mode currently has active. -->
+  <div class="tc monthly-setup-banner" id="monthlySetupBanner" style="display:none;border-color:rgba(200,169,110,.4);margin-bottom:14px" onclick="promptSetupMonthlyMode()">
+    <div class="tc-name">📅 Set up Monthly Reading Mode</div>
+    <div class="monthly-setup-sub">Builds a month-by-month read order from your owned books (print/ebook, not audio) and puts the active book front and centre here.</div>
+  </div>
+  <div class="now-reading-card" id="monthlyCard" style="margin-bottom:14px;cursor:pointer" onclick="openMonthlyTracker()">
+    <div class="now-reading-top">
+      <div>
+        <div class="now-reading-label">📅 Monthly Read</div>
+        <div class="now-reading-title" id="moTitle">—</div>
+        <div class="now-reading-author" id="moAuthor"></div>
+        <div class="monthly-book-count" id="moCount"></div>
+      </div>
+      <div class="now-reading-pages">
+        <div class="now-reading-current" id="moCurrent"></div>
+        <div class="now-reading-target-wrap" id="moTargetWrap">
+          <div class="now-reading-target-lbl">This month's target</div>
+          <div class="now-reading-target-num" id="moTarget">—</div>
+          <div class="now-reading-target-sub" id="moTargetSub">page to reach</div>
+        </div>
+      </div>
+    </div>
+    <div class="nr-bar-labels">
+      <span id="moBarLeft"></span>
+      <span id="moBarRight"></span>
+    </div>
+    <div class="nr-seg-track">
+      <div id="moSegPrior"></div>
+      <div id="moSegRest"></div>
+    </div>
+    <div class="nr-done-banner" id="moDoneBanner">✓ All caught up for this book — nice work!</div>
+    <div class="nr-log-row" id="moLogRow" onclick="event.stopPropagation()">
+      <input type="number" id="moLogPage" placeholder="Page I reached" min="1" onclick="event.stopPropagation()" oninput="onMonthlyLogInput()">
+      <button class="btn btn-primary" onclick="event.stopPropagation(); logMonthlyQuick()">Log</button>
+    </div>
+    <div class="nr-log-hint field-hint" id="moLogHint"></div>
+  </div>
+
   <div class="card-title" style="margin-top:8px;margin-bottom:10px">My Trackers</div>
   <div class="tracker-cards" id="trackerCards"></div>
 
@@ -1086,7 +1138,11 @@
           <button class="tm-btn" id="tmBtnNone" onclick="setTrackingMode('none')">No target</button>
           <button class="tm-btn" id="tmBtnDate" onclick="setTrackingMode('date')">Target date</button>
           <button class="tm-btn" id="tmBtnPace" onclick="setTrackingMode('pace')">Reading pace</button>
+          <button class="tm-btn" id="tmBtnMonthly" onclick="setTrackingMode('monthly')">Monthly</button>
         </div>
+      </div>
+      <div id="tmMonthlyFields" class="mb-12" style="display:none">
+        <div id="tmMonthlyInfo" class="pace-info-box"></div>
       </div>
       <div id="tmDateFields" class="form-2col mb-12" style="display:none">
         <div class="field">
@@ -1536,6 +1592,62 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.44 (MR-029): Monthly Mode — a 4th tracker trackingMode ('monthly'),
+// alongside the existing 'none'/'date'/'pace'. Lets Pete build a month-by-
+// month read order across his owned print/ebook books and have whichever
+// book is "up" surface on the Home Screen itself, not just inside an
+// opened tracker.
+//  - Implemented as a single ongoing tracker rather than one tracker per
+//    book: the tracker's books[] array IS the read order. reorderBook()
+//    already kept incomplete books at the front of that array (pre-
+//    existing behaviour, unchanged) — this feature's only real addition
+//    is auto-advance: syncMonthlyActiveBook() moves activeBookId on to
+//    the next unfinished book automatically once the current one's done,
+//    where every other mode requires a manual re-pin via setActiveBook().
+//    Called after every log (both the dashboard widget's own quick-log
+//    and the normal in-tracker logPages()) and defensively on every
+//    render(), so a cross-device sync landing mid-session self-heals
+//    rather than needing a manual fix.
+//  - Handover is flexible by design, per the brief: the next book starts
+//    whenever the current one is finished, not on a fixed calendar
+//    boundary. "This month's target" on the widget is still a genuine
+//    daily page target, though — remaining pages ÷ days left in the
+//    CURRENT calendar month, recalculated fresh on every render, so it
+//    adapts automatically if a book runs long into a new month rather
+//    than needing its own stored deadline.
+//  - One-time setup (promptSetupMonthlyMode/buildMonthlyReadOrder) reads
+//    real data rather than guessing: candidates are wishlist items with
+//    ownership 'owned' and type !== 'audiobook' (owned audiobooks and
+//    anything still 'wanted' are left out, per Pete's answer), in their
+//    existing wishlist order. If a book is already being actively read
+//    in some OTHER tracker (found via findCurrentlyReadingOutsideMonthly:
+//    that tracker's activeBookId, not complete, at least one page
+//    logged), it's MOVED in as Month 1 — book + its entries relocated
+//    with history intact, not duplicated — per Pete's answer that his
+//    current read (Set Adrift, in the standalone "Clearances" tracker)
+//    should count as Month 1. The old tracker is left in place with
+//    whatever it has left (deleting it wasn't asked for and is one click
+//    away if wanted).
+//  - The move needs its OWN direct cloud push with the corrected
+//    trackerId: general sync only auto-pushes brand-new records (see the
+//    MR-016/HZN-004 comments below on pushBookNow/pushTrackerNow) — an
+//    existing book/entry row that just changed owning tracker is exactly
+//    the "update to something already in the cloud" case those functions
+//    exist for, so buildMonthlyReadOrder() upserts the moved book/entries
+//    directly rather than relying on the debounced full-state sync.
+//  - The dashboard widget (renderMonthlyWidget/logMonthlyQuick/
+//    onMonthlyLogInput) deliberately never touches `state` or
+//    appState.activeTrackerId — every other per-book UI in this file
+//    reads/writes through the currently OPEN tracker, but this widget has
+//    to work from the Home Screen with no tracker open (or a different
+//    one open), so it finds the monthly tracker directly and logs
+//    straight into it. highestPageFor() was split into a thin wrapper
+//    around a new highestPageForIn(entries, bookId) for this reason — the
+//    original only ever read state.entries.
+//  - Clicking the widget (outside the log input/button) opens the
+//    Monthly tracker itself via openTracker(), same as any other tracker
+//    card, for reordering/editing beyond quick logging — per the brief's
+//    "happy to click into it for further edits".
 // v3.33 (MR-018): "Add to wishlist" moved above the sort/tag/search
 // controls and books list — was a permanently-expanded form at the very
 // bottom of the page, pushing the whole wishlist below the fold. Now a
@@ -2634,6 +2746,250 @@ function trackingModeOf(t) {
   return t.targetDate ? "date" : "none";
 }
 
+// v3.44 (MR-029): Monthly Mode — a 4th trackingMode, resolved the same
+// explicit way as 'pace' (never inferred). Implemented as a single ongoing
+// tracker whose books[] array IS the read order: reorderBook already keeps
+// incomplete books at the front of that array (see its own comment), so
+// "next up" is simply the first book in array order that isn't finished.
+// This section adds: (a) auto-advance so activeBookId moves on by itself
+// when a book completes — every other tracking mode requires a manual
+// re-pin via setActiveBook, but Monthly Mode's whole point is that it
+// drives itself — (b) a one-time setup action that builds the initial
+// read order from owned, non-audiobook wishlist items plus whatever book
+// is already actively being read elsewhere, and (c) the dashboard widget
+// itself, which has to work from the Home Screen regardless of which
+// tracker (if any) is currently open — so, unlike almost everything else
+// in this file, it never touches the `state` proxy or
+// appState.activeTrackerId, only the monthly tracker object directly.
+function getMonthlyTracker() {
+  return appState.trackers.find(t => trackingModeOf(t) === "monthly") || null;
+}
+
+// Days remaining in the current calendar month, inclusive of today —
+// this month's page target is remaining-pages ÷ this, so it recalculates
+// itself fresh every month rather than needing a stored deadline.
+function daysLeftInMonth(fromISO) {
+  const d = new Date(fromISO + "T00:00:00");
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return Math.max(1, Math.round((end - d) / 86400000) + 1);
+}
+
+// Moves activeBookId on to the next unfinished book in read order once the
+// current one is done (or if there's no active book at all yet). Safe to
+// call on every render — a no-op when the active book still has pages left.
+function syncMonthlyActiveBook(t) {
+  if (!t || trackingModeOf(t) !== "monthly") return;
+  const activeBook = t.books.find(b => b.id === t.activeBookId);
+  const activeDone = !activeBook || highestPageForIn(t.entries, activeBook.id) >= activeBook.pages || activeBook.manualComplete;
+  if (!activeDone) return;
+  const next = t.books.find(b => {
+    const logged = highestPageForIn(t.entries, b.id);
+    return logged < b.pages && !b.manualComplete;
+  });
+  const nextId = next ? next.id : null;
+  if (t.activeBookId === nextId) return;
+  t.activeBookId = nextId;
+  touch(t);
+  if (next && next.ownership !== "owned") touch(Object.assign(next, { ownership: "owned" }));
+  pushTrackerNow(t);
+}
+
+// Looks for a book being actively read in some OTHER tracker (has a
+// tracker's activeBookId pointing at it, isn't finished, and has at least
+// one page logged) — used once, at setup, to fold "what I'm reading right
+// now" in as Month 1 instead of starting the order from scratch.
+function findCurrentlyReadingOutsideMonthly() {
+  for (const t of appState.trackers) {
+    if (trackingModeOf(t) === "monthly" || !t.activeBookId) continue;
+    const book = t.books.find(b => b.id === t.activeBookId);
+    if (!book) continue;
+    const logged = highestPageForIn(t.entries, book.id);
+    const done = logged >= book.pages || book.manualComplete;
+    if (!done && logged > 0) return { tracker: t, book };
+  }
+  return null;
+}
+
+// One-time setup, triggered from the dashboard banner. Confirms the plan
+// with the actual current counts before touching anything.
+function promptSetupMonthlyMode() {
+  if (getMonthlyTracker()) return;
+  const candidates = appState.wishlist.filter(w => w.ownership === "owned" && (w.type || "book") !== "audiobook");
+  const current = findCurrentlyReadingOutsideMonthly();
+  const total = candidates.length + (current ? 1 : 0);
+  if (total === 0) { showToast("No owned books found to build a read order from"); return; }
+  const msg = `Build Monthly Reading Mode with ${total} book${total !== 1 ? "s" : ""}?` +
+    (current ? `\n\nMonth 1 will be "${current.book.title}", moved in from "${current.tracker.trackerName}" with its progress intact.` : "") +
+    `\n\nOwned audiobooks and "wanted" (not-yet-owned) books are left out for now — you can add and reorder books anytime from the Books tab.`;
+  if (!confirm(msg)) return;
+  buildMonthlyReadOrder(candidates, current);
+}
+
+function buildMonthlyReadOrder(candidates, current) {
+  const t = blankTracker("Monthly Reads", null, "book");
+  t.trackingMode = "monthly";
+
+  if (current) {
+    const oldTracker = current.tracker, book = current.book;
+    oldTracker.books = oldTracker.books.filter(b => b.id !== book.id);
+    const movedEntries = oldTracker.entries.filter(e => e.bookId === book.id);
+    oldTracker.entries = oldTracker.entries.filter(e => e.bookId !== book.id);
+    if (oldTracker.activeBookId === book.id) oldTracker.activeBookId = null;
+    touch(oldTracker);
+    t.books.push(book);
+    t.entries.push(...movedEntries);
+    t.activeBookId = book.id;
+    pushTrackerNow(oldTracker);
+    // Direct push with the corrected trackerId — general sync only ever
+    // auto-pushes brand-new records, not updates to ones already in the
+    // cloud under the old tracker (see the MR-016/HZN-004 comments on
+    // pushBookNow/pushTrackerNow above).
+    if (window.PalSync && window.PalSync.hasSession()) {
+      _rtBooks.upsert(book.id, Object.assign({}, book, { trackerId: t.id })).catch(()=>{});
+      movedEntries.forEach(e => _rtEntries.upsert(e.id, Object.assign({}, e, { trackerId: t.id })).catch(()=>{}));
+    }
+  }
+
+  candidates.forEach(w => {
+    const newId = uid('t');
+    t.books.push(buildBookFromWishlist(w, newId));
+    t.entries.push(...restoredEntriesFor(w, newId));
+  });
+  const consumedIds = new Set(candidates.map(w => w.id));
+  candidates.forEach(w => tombstoneWishlistInCloud(w));
+  appState.wishlist = appState.wishlist.filter(w => !consumedIds.has(w.id));
+
+  if (!t.activeBookId) t.activeBookId = t.books.length ? t.books[0].id : null;
+
+  appState.trackers.push(t);
+  syncMonthlyActiveBook(t);
+  save();
+  renderDashboard();
+  updateWishlistCard();
+  showToast(`Monthly Reads set up with ${t.books.length} book${t.books.length !== 1 ? "s" : ""} ✓`);
+}
+
+function openMonthlyTracker() {
+  const t = getMonthlyTracker();
+  if (t) openTracker(t.id);
+}
+
+// Dashboard widget — deliberately independent of `state`/activeTrackerId
+// so it works regardless of which tracker (if any) is currently open.
+function renderMonthlyWidget() {
+  const banner = document.getElementById("monthlySetupBanner");
+  const card   = document.getElementById("monthlyCard");
+  const t = getMonthlyTracker();
+  if (!t) {
+    if (banner) banner.style.display = "block";
+    if (card)   card.style.display = "none";
+    return;
+  }
+  if (banner) banner.style.display = "none";
+  if (card)   card.style.display = "block";
+  syncMonthlyActiveBook(t);
+
+  const book = t.books.find(b => b.id === t.activeBookId);
+  const idx  = t.books.findIndex(b => b.id === t.activeBookId);
+  const doneCount = t.books.filter(b => highestPageForIn(t.entries, b.id) >= b.pages || b.manualComplete).length;
+
+  const targetWrap = document.getElementById("moTargetWrap");
+  const logRow     = document.getElementById("moLogRow");
+  const doneBanner = document.getElementById("moDoneBanner");
+
+  if (!book) {
+    document.getElementById("moTitle").textContent  = t.books.length ? "🎉 All books read!" : "No books yet";
+    document.getElementById("moAuthor").textContent  = "";
+    document.getElementById("moCount").textContent   = t.books.length ? `${doneCount} of ${t.books.length} complete` : "Add owned books to your wishlist to grow the read order";
+    document.getElementById("moCurrent").textContent = "";
+    if (targetWrap) targetWrap.style.display = "none";
+    document.getElementById("moBarLeft").textContent  = "";
+    document.getElementById("moBarRight").textContent = "";
+    document.getElementById("moSegPrior").style.width = "0%";
+    document.getElementById("moSegRest").style.width  = "100%";
+    if (doneBanner) doneBanner.classList.toggle("visible", t.books.length > 0);
+    if (logRow) logRow.style.display = "none";
+    document.getElementById("moLogHint").textContent = "";
+    return;
+  }
+
+  if (targetWrap) targetWrap.style.display = "";
+  if (doneBanner) doneBanner.classList.remove("visible");
+  if (logRow) logRow.style.display = "grid";
+
+  document.getElementById("moTitle").textContent  = book.title;
+  document.getElementById("moAuthor").textContent = book.author || "";
+  document.getElementById("moCount").textContent  = `Book ${idx + 1} of ${t.books.length} · ${doneCount} complete`;
+
+  const current = highestPageForIn(t.entries, book.id);
+  const pct = book.pages > 0 ? Math.min(100, Math.round((current / book.pages) * 100)) : 0;
+  document.getElementById("moCurrent").textContent = `${current} of ${book.pages} pages · ${pct}%`;
+
+  const remaining = Math.max(0, book.pages - current);
+  const dl = daysLeftInMonth(todayISO());
+  const dailyTarget = remaining > 0 ? Math.max(1, Math.ceil(remaining / dl)) : 0;
+  document.getElementById("moTarget").textContent    = remaining > 0 ? (current + dailyTarget) : "✓";
+  document.getElementById("moTargetSub").textContent = remaining > 0 ? `page to reach (${dl} day${dl !== 1 ? "s" : ""} left this month)` : "finished";
+
+  document.getElementById("moBarLeft").textContent  = `${pct}% read`;
+  document.getElementById("moBarRight").textContent = `${remaining} page${remaining !== 1 ? "s" : ""} left`;
+  document.getElementById("moSegPrior").style.width = pct + "%";
+  document.getElementById("moSegRest").style.width  = (100 - pct) + "%";
+
+  const hint = document.getElementById("moLogHint");
+  if (hint) hint.textContent = current > 0 ? `Currently on page ${current}` : "Not started yet";
+}
+
+function onMonthlyLogInput() {
+  const t = getMonthlyTracker();
+  const hint = document.getElementById("moLogHint");
+  if (!t || !hint) return;
+  const book = t.books.find(b => b.id === t.activeBookId);
+  if (!book) return;
+  const inputEl = document.getElementById("moLogPage");
+  const current = highestPageForIn(t.entries, book.id);
+  const val = inputEl.value;
+  if (!val) { hint.className = "field-hint"; hint.textContent = current > 0 ? `Currently on page ${current}` : "Not started yet"; return; }
+  const raw = parseInt(val, 10);
+  if (isNaN(raw) || raw <= 0)  { hint.className = "field-hint error"; hint.textContent = "Enter a valid page number"; return; }
+  if (raw <= current)          { hint.className = "field-hint warn";  hint.textContent = `Must be higher than current page (${current})`; return; }
+  if (raw > book.pages)        { hint.className = "field-hint warn";  hint.textContent = `Book only has ${book.pages} pages`; return; }
+  const diff = raw - current;
+  hint.className = "field-hint positive";
+  hint.textContent = `+${diff} page${diff !== 1 ? "s" : ""} read`;
+}
+
+function logMonthlyQuick() {
+  const t = getMonthlyTracker();
+  if (!t) return;
+  const book = t.books.find(b => b.id === t.activeBookId);
+  if (!book) return;
+  const inputEl = document.getElementById("moLogPage");
+  const raw = parseInt(inputEl ? inputEl.value : "", 10);
+  if (isNaN(raw) || raw <= 0) { showToast("Enter a page number"); return; }
+  const current = highestPageForIn(t.entries, book.id);
+  if (raw <= current)   { showToast(`Must be higher than page ${current}`); return; }
+  if (raw > book.pages) { showToast(`Book only has ${book.pages} pages`); return; }
+
+  const entry = { id: uid('t'), bookId: book.id, date: todayISO(), pageTo: raw };
+  t.entries.push(entry);
+  const pagesRead = raw - current;
+  const nowComplete = raw >= book.pages;
+  if (nowComplete) { book.completedDate = todayISO(); touch(book); }
+  touch(t);
+  syncMonthlyActiveBook(t);
+  if (inputEl) inputEl.value = "";
+  save();
+  if (window.PalSync && window.PalSync.hasSession()) {
+    _rtEntries.upsert(entry.id, Object.assign({}, entry, { trackerId: t.id })).catch(()=>{});
+    if (nowComplete) _rtBooks.upsert(book.id, Object.assign({}, book, { trackerId: t.id })).catch(()=>{});
+  }
+  pushTrackerNow(t);
+  renderMonthlyWidget();
+  if (appState.activeTrackerId === t.id) render();
+  showToast(nowComplete ? `🎉 "${book.title}" finished!` : `+${pagesRead} page${pagesRead !== 1 ? "s" : ""} logged ✓`);
+}
+
 // Given pages remaining and an expected pace (pages/chapters per day),
 // project a finish date forward from fromDateISO. Returns null if the
 // pace is invalid or there's nothing left to read.
@@ -2654,7 +3010,14 @@ function safePage(val) {
 
 // For a given book, return the highest pageTo recorded across all entries
 function highestPageFor(bookId) {
-  const vals = state.entries
+  return highestPageForIn(state.entries, bookId);
+}
+// v3.44 (MR-029): same calc, but against an explicit entries array rather
+// than the currently-open tracker via `state`. Needed by the Monthly Mode
+// dashboard widget, which shows/logs the monthly tracker regardless of
+// which tracker (if any) is actually open in appState.activeTrackerId.
+function highestPageForIn(entries, bookId) {
+  const vals = (entries || [])
     .filter(e => e.bookId === bookId)
     .map(e => safePage(e.pageTo));
   return vals.length > 0 ? Math.max(...vals) : 0;
@@ -2702,6 +3065,13 @@ function switchTab(name) {
 
 // ── Render ────────────────────────────────────────────────────────────
 function render() {
+  // v3.44 (MR-029): defensive re-check on every render of the tracker
+  // screen — covers a Monthly tracker pulled in from another device mid-
+  // session where the sync merge landed books/entries but not yet a
+  // consistent activeBookId.
+  const _preCt = appState.trackers.find(t => t.id === appState.activeTrackerId);
+  if (_preCt) syncMonthlyActiveBook(_preCt);
+
   const tp  = totalPages();
   const tr  = totalRead();
   const rem = Math.max(0, tp - tr);
@@ -3432,13 +3802,31 @@ function renderSettings() {
   const btnNone = document.getElementById("tmBtnNone");
   const btnDate = document.getElementById("tmBtnDate");
   const btnPace = document.getElementById("tmBtnPace");
+  const btnMonthly = document.getElementById("tmBtnMonthly");
   if (btnNone) btnNone.classList.toggle("active", mode === "none");
   if (btnDate) btnDate.classList.toggle("active", mode === "date");
   if (btnPace) btnPace.classList.toggle("active", mode === "pace");
+  if (btnMonthly) btnMonthly.classList.toggle("active", mode === "monthly");
   const dateFields = document.getElementById("tmDateFields");
   const paceFields = document.getElementById("tmPaceFields");
+  const monthlyFields = document.getElementById("tmMonthlyFields");
   if (dateFields) dateFields.style.display = mode === "date" ? "grid" : "none";
   if (paceFields) paceFields.style.display = mode === "pace" ? "block" : "none";
+  if (monthlyFields) monthlyFields.style.display = mode === "monthly" ? "block" : "none";
+  // v3.44 (MR-029): Monthly Mode's own settings info — read order position,
+  // total books, and a reminder that reordering happens from the Books tab
+  // (reorderBook already keeps incomplete books at the front of the array,
+  // which is exactly the "read order" this mode walks through).
+  if (mode === "monthly" && ct4) {
+    const infoEl = document.getElementById("tmMonthlyInfo");
+    if (infoEl) {
+      const idx = ct4.books.findIndex(b => b.id === ct4.activeBookId);
+      const posStr = idx >= 0 ? `Book ${idx + 1} of ${ct4.books.length}` : `${ct4.books.length} book${ct4.books.length !== 1 ? "s" : ""} in the read order`;
+      infoEl.innerHTML = `<div class="pace-row"><span class="pace-label">Read order</span><span>${posStr}</span></div>` +
+        `<div class="pace-row"><span class="pace-label">Handover</span><span>Next book starts once the current one is finished</span></div>` +
+        `<div style="margin-top:6px;font-size:11px;color:var(--muted)">Reorder upcoming books from the ▲▼ arrows on the Books tab.</div>`;
+    }
+  }
 
   const dl   = daysLeft(state.targetDate);
   const rem  = Math.max(0, totalPages() - totalRead());
@@ -3534,6 +3922,11 @@ function logPages(bookId, pageTo, clearInputId) {
   // the book's sync timestamp too — render() (below) already persists
   // locally and schedules a sync push.
   if (nowComplete) { touch(book); pushBookNow(book); } // v3.30 (MR-016): direct push, see function comment
+  // v3.44 (MR-029): Monthly Mode auto-advances to the next book in the
+  // read order once the active one is finished — logging from inside the
+  // opened tracker (Books tab / Now Reading) needs the same behaviour as
+  // logging from the dashboard widget's own quick-log (logMonthlyQuick).
+  if (nowComplete && trackingModeOf(_lpCt) === "monthly") syncMonthlyActiveBook(_lpCt);
   render();
   if (nowComplete) {
     showToast(`🎉 "${book.title}" finished!`);
@@ -4674,6 +5067,7 @@ function renderDashboard() {
   const trackers = appState.trackers;
 
   renderAggStats('trackers');
+  renderMonthlyWidget();
 
   // Tracker cards
   updateWishlistCard();
