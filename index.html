@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.73</title>
+<title>P Apps v10.74</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -652,7 +652,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.73</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.74</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -1834,6 +1834,15 @@ function setCardStat(id, text, mode) {
 }
 
 
+// PET-081 v10.74: colour scheme fix — the card's bar used a generic
+// green/amber "met or not" fill that doesn't exist anywhere in Reading
+// Tracker's own palette (it's never used amber). Rebuilt as the same
+// 4-zone segmented bar the app itself shows (dark green read-before-
+// today, bright green today-within-target, red still-needed, purple
+// over-target), using hex values copied directly from reading-
+// tracker.html's :root and hardcoded segment colours — can't share CSS
+// variables across separate files, so this is hardcoded on both ends
+// and needs updating here too if the app's palette ever changes.
 // PET-080 v10.73: Reading Tracker's card rebuilt around the Book List
 // instead of a single tracker — since Reading Tracker v3.47, Monthly
 // Mode (its primary reading model) moved off trackers entirely onto a
@@ -1892,19 +1901,33 @@ function statReading() {
       return Math.max(1, Math.round((next - d) / 86400000));
     }
 
-    // Same compact bar reading-tracker.html's own launcher card used
-    // before — reused as-is for each of the two queue rows below.
-    function buildPageBar(cur, tot, tgt) {
+    // v3.55 colour fix: this used to be a plain green/amber "met or not"
+    // bar — the app itself has never used amber anywhere; its actual
+    // language is a 4-zone segmented bar (dark green read-before-today,
+    // bright green today-within-target, red still-needed, purple
+    // bonus-over-target — see reading-tracker.html's renderMonthlyWidget
+    // and its #moBSeg*/#moASeg* CSS). Hex values below are copied
+    // directly from that file's :root (--success/--danger) and its
+    // hardcoded segment colours (#2d7a52 prior, #7b5ea7 bonus) — can't
+    // share the CSS variables themselves across separate files, so
+    // hardcoding here is the only way the two actually match.
+    const RT_PRIOR  = '#2d7a52';
+    const RT_TODAY  = '#5bbf8a'; // --success
+    const RT_NEEDED = '#e05c5c'; // --danger
+    const RT_BONUS  = '#7b5ea7';
+    const RT_REST   = '#2a3d52'; // --border (dark theme)
+
+    function buildPageBar(startOfDayPage, pagesOnTarget, pagesStillNeeded, pagesBonus, tot) {
       if (!tot || tot <= 0) return '';
-      const curPct = Math.min(100, Math.round((cur / tot) * 100));
-      const tgtPct = Math.min(100, Math.round((tgt / tot) * 100));
-      const colour = cur >= tgt ? '#3fb950' : '#f59e0b';
-      return `<div style="margin-top:4px;position:relative">
-        <div style="height:5px;border-radius:3px;background:var(--track);overflow:hidden">
-          <div style="height:100%;width:${curPct}%;background:${colour};border-radius:3px;transition:width 0.3s"></div>
-        </div>
-        ${tgt > cur && tgt < tot ? `<div style="position:absolute;top:0;left:${tgtPct}%;width:2px;height:5px;background:var(--tick);border-radius:1px;transform:translateX(-50%)"></div>` : ''}
-      </div>`;
+      const toPct = n => Math.max(0, n) / tot * 100;
+      const segs = [
+        [toPct(startOfDayPage),  RT_PRIOR],
+        [toPct(pagesOnTarget),   RT_TODAY],
+        [toPct(pagesStillNeeded),RT_NEEDED],
+        [toPct(pagesBonus),      RT_BONUS]
+      ];
+      const bars = segs.map(([pct, colour]) => pct > 0 ? `<div style="height:100%;width:${pct.toFixed(2)}%;background:${colour};flex-shrink:0"></div>` : '').join('');
+      return `<div style="margin-top:4px;height:5px;border-radius:3px;overflow:hidden;display:flex;background:${RT_REST}">${bars}</div>`;
     }
 
     const today = todayISO();
@@ -1932,12 +1955,19 @@ function statReading() {
       const targetPage = Math.min(item.pages, startOfDayPage + reqDaily);
       const doneToday = current >= targetPage;
       const shortTitle = (item.title || '').substring(0, 22) + (item.title && item.title.length > 22 ? '…' : '');
-      const dotColour = doneToday ? '#3fb950' : '#f59e0b';
+      const dotColour = doneToday ? RT_TODAY : RT_NEEDED;
+
+      // Same 4-way split as renderMonthlyWidget() in reading-tracker.html.
+      const pagesRequired    = Math.max(0, targetPage - startOfDayPage);
+      const pagesReadToday   = Math.max(0, current - startOfDayPage);
+      const pagesOnTarget    = Math.min(pagesReadToday, pagesRequired);
+      const pagesStillNeeded = Math.max(0, pagesRequired - pagesReadToday);
+      const pagesBonus       = Math.max(0, current - targetPage);
 
       return {
         html: `<div class="card-stat-row"><span class="card-stat-dot" style="background:${dotColour}"></span><span>${icon} ${escHtml(shortTitle)}</span></div>` +
           `<div style="font-size:10px;color:var(--ink3);margin-top:2px">${unitS}.${current} of ${item.pages}${doneToday ? ' — target met ✓' : ' · reach ' + unitS + '.' + targetPage + ' today'}</div>` +
-          buildPageBar(current, item.pages, targetPage),
+          buildPageBar(startOfDayPage, pagesOnTarget, pagesStillNeeded, pagesBonus, item.pages),
         ok: doneToday
       };
     }
