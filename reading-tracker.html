@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.53</title>
+<title>Reading Tracker v3.54</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -746,7 +746,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.53</span></div>
+    <div class="rt-logo">My Reading <span>v3.54</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1430,14 +1430,14 @@
     <div class="wl-controls">
       <span class="wl-sort-lbl">Sort by</span>
       <select class="wl-sort-sel" id="wlSortSel" onchange="renderWishlistView()">
-        <option value="manual">Manual order</option>
+        <option value="manual" selected>Manual order</option>
         <option value="title_az">Title A → Z</option>
         <option value="title_za">Title Z → A</option>
         <option value="author">Author A → Z</option>
         <option value="genre">Genre</option>
         <option value="pages_asc">Pages ↑</option>
         <option value="pages_desc">Pages ↓</option>
-        <option value="tag_group" selected>Group by tag</option>
+        <option value="tag_group">Group by tag</option>
       </select>
     </div>
     <div id="wlBody"></div>
@@ -1724,6 +1724,21 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.54 (MR-039): Book List defaults + collapsible sections.
+//  - Default sort changed from "Group by tag" to "Manual order" — both
+//    the Book List screen's own sort dropdown and a fresh install's
+//    Monthly reading-order defaults (bookSort/audioSort in
+//    defaultMonthlyConfig, plus backfillBookListFields' fallback for an
+//    existing config missing the field). Doesn't touch anyone who's
+//    already picked a sort mode explicitly.
+//  - The 📚 Books and 🎧 Audiobooks sections (shown in every sort mode
+//    except Group by tag) are now individually collapsible via their
+//    header, defaulting to expanded. State lives in module-level
+//    _wlSectionOpen so it survives the full DOM rebuild
+//    renderWishlistView() does on every change — same reason
+//    _wlActiveTagFilter/_wlViewMode are module-level too. Tag-group
+//    sections deliberately keep their existing always-expanded
+//    behaviour; only asked for Books/Audiobooks.
 // v3.53 (MR-038): two feature gaps versus the old tracker's Now Reading
 // widget, both reported directly.
 //  - Today's target was recalculating on every log within the same
@@ -2405,8 +2420,8 @@ function backfillReadingTimestamps() {
 // safe to call on every load.
 function defaultMonthlyConfig() {
   return {
-    bookTarget: 1, bookPageTarget: null, bookSort: "dateAdded",
-    audioTarget: 1, audioChapterTarget: null, audioSort: "dateAdded",
+    bookTarget: 1, bookPageTarget: null, bookSort: "manual",
+    audioTarget: 1, audioChapterTarget: null, audioSort: "manual",
     // v3.49 (MR-034): recurring cycle start date — shared by both
     // widgets' daily-target math. null means "just use the calendar
     // month", same as before this existed.
@@ -2419,8 +2434,8 @@ function backfillBookListFields() {
   const cfg = appState.monthlyConfig;
   if (cfg.bookTarget == null) cfg.bookTarget = 1;
   if (cfg.audioTarget == null) cfg.audioTarget = 1;
-  if (!cfg.bookSort) cfg.bookSort = "dateAdded";
-  if (!cfg.audioSort) cfg.audioSort = "dateAdded";
+  if (!cfg.bookSort) cfg.bookSort = "manual";
+  if (!cfg.audioSort) cfg.audioSort = "manual";
   if (!Array.isArray(cfg.collections)) cfg.collections = [];
   (appState.wishlist || []).forEach(w => {
     // dateAdded backfills from updatedAt (itself backfilled to "now" by
@@ -6329,6 +6344,16 @@ function setWlViewMode(mode) {
   _wlViewMode = mode;
   renderWishlistView();
 }
+// v3.54 (MR-039): Books/Audiobooks sections default expanded — only
+// collapsed once the user explicitly closes one. Module-level so it
+// survives the full re-render renderWishlistView() does on every
+// change (same reason _wlActiveTagFilter/_wlSearchQuery are module-
+// level too).
+let _wlSectionOpen = { books: true, audiobooks: true };
+function toggleWlSection(key) {
+  _wlSectionOpen[key] = !(_wlSectionOpen[key] !== false);
+  renderWishlistView();
+}
 // Undo for an accidental/no-longer-wanted completion — clears the
 // completion stamp so the item drops back into the Active view. Doesn't
 // touch its reading entries, so progress isn't lost; if it's still at
@@ -6505,7 +6530,7 @@ function renderWishlistView() {
   body.innerHTML = "";
 
   // Sort
-  const sort = document.getElementById("wlSortSel")?.value || "tag_group";
+  const sort = document.getElementById("wlSortSel")?.value || "manual";
   let sorted = [...wl];
   // v3.41 (MR-026): tag filter now applies in every sort mode, including
   // Group by tag — previously skipped there (v3.25) on the assumption
@@ -6536,11 +6561,22 @@ function renderWishlistView() {
   const bookItems  = sorted.filter(w => (w.type||"book") !== "audiobook");
   const audioItems = sorted.filter(w => (w.type||"book") === "audiobook");
 
-  function renderSection(items, sectionLabel, headerExtra) {
+  function renderSection(items, sectionLabel, headerExtra, collapseKey) {
+    // v3.54 (MR-039): Books/Audiobobooks sections are now collapsible
+    // (default expanded) — collapseKey is only passed for those two
+    // calls at the bottom of this function; tag-group sections keep
+    // their existing always-expanded behaviour unchanged.
+    const isOpen = collapseKey ? (_wlSectionOpen[collapseKey] !== false) : true;
+
     // Section header
     const hdr = document.createElement("div");
     hdr.className = "wl-section-hdr";
-    if (headerExtra) {
+    const arrow = collapseKey ? `<span class="caret" style="font-size:10px;margin-right:6px">${isOpen ? "▼" : "▶"}</span>` : "";
+    if (collapseKey) {
+      hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer";
+      hdr.innerHTML = `<span>${arrow}${esc(sectionLabel)}</span>${headerExtra || ""}`;
+      hdr.addEventListener("click", (e) => { if (headerExtra && e.target.closest(".wl-group-create-btn")) return; toggleWlSection(collapseKey); });
+    } else if (headerExtra) {
       hdr.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px";
       hdr.innerHTML = `<span>${esc(sectionLabel)}</span>${headerExtra}`;
     } else {
@@ -6548,11 +6584,22 @@ function renderWishlistView() {
     }
     body.appendChild(hdr);
 
+    // Collapsible sections render their items into their own wrapper so
+    // the whole group can be hidden/shown without touching the header;
+    // non-collapsible sections (tag groups) append straight to body,
+    // exactly as before.
+    const container = collapseKey ? document.createElement("div") : body;
+    if (collapseKey) {
+      container.id = `wlsec-${collapseKey}`;
+      container.style.display = isOpen ? "" : "none";
+    }
+
     if (items.length === 0) {
       const empty = document.createElement("div");
       empty.className = "wl-section-empty";
       empty.textContent = `No ${sectionLabel.toLowerCase()} on your Book List yet.`;
-      body.appendChild(empty);
+      container.appendChild(empty);
+      if (collapseKey) body.appendChild(container);
       return;
     }
 
@@ -6687,8 +6734,9 @@ function renderWishlistView() {
         });
       }
 
-      body.appendChild(div);
+      container.appendChild(div);
     });
+    if (collapseKey) body.appendChild(container);
   }
 
   // v3.25 (MR-016): Group by tag — one section per tag (alphabetical),
@@ -6708,8 +6756,8 @@ function renderWishlistView() {
     return;
   }
 
-  renderSection(bookItems,  "📚 Books");
-  renderSection(audioItems, "🎧 Audiobooks");
+  renderSection(bookItems,  "📚 Books",       null, "books");
+  renderSection(audioItems, "🎧 Audiobooks",  null, "audiobooks");
 }
 
 function updateWishlistCard() {
