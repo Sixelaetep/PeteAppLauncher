@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.72</title>
+<title>P Apps v10.73</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -652,7 +652,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.72</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.73</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -1834,6 +1834,16 @@ function setCardStat(id, text, mode) {
 }
 
 
+// PET-080 v10.73: Reading Tracker's card rebuilt around the Book List
+// instead of a single tracker — since Reading Tracker v3.47, Monthly
+// Mode (its primary reading model) moved off trackers entirely onto a
+// Book List + two Monthly queues (Books/Audiobooks), so the old single-
+// tracker reconstruction here went stale/misleading for anyone whose
+// reading now happens mostly through that. Duplicates (can't import —
+// separate file) the same queue/target logic reading-tracker.html
+// itself uses, including its v3.53 fix anchoring today's target on
+// start-of-day page rather than live current page. Shows both queues'
+// active item as two compact rows instead of one tracker's bar.
 function statReading() {
   try {
     const raw = localStorage.getItem('reading-tracker-v6')
@@ -1841,127 +1851,114 @@ function statReading() {
       || localStorage.getItem('reading-tracker-v4');
     if (!raw) { setCardStat('stat-reading', 'No data yet', 'muted'); return; }
     const appState = JSON.parse(raw);
-    const trackers = appState.trackers || [];
-    if (!trackers.length) { setCardStat('stat-reading', 'No trackers set up', 'muted'); return; }
-    const tracker = trackers.find(t => t.books && t.books.length) || trackers[0];
-    const books   = tracker.books   || [];
-    const entries = tracker.entries || [];
 
-    function highestPageFor(bookId) {
-      const vals = entries.filter(e => e.bookId === bookId).map(e => e.pageTo || 0);
-      return vals.length ? Math.max(...vals) : 0;
+    // MR-040: the card used to reconstruct progress from a single
+    // tracker (appState.trackers), picking whichever one had books.
+    // Since v3.47, Reading Tracker's primary reading model is the Book
+    // List (appState.wishlist) plus two Monthly queues (Books/
+    // Audiobooks) driven by appState.monthlyConfig — trackers still
+    // exist for ad-hoc use but aren't where most day-to-day progress
+    // lives any more. Rebuilt around the Book List instead, duplicating
+    // (not importing — separate file/context) the same queue/target
+    // logic reading-tracker.html itself uses: bookListQueue(),
+    // isBookListItemDone(), and the start-of-day-anchored daily target
+    // from v3.53 (today's target only depends on entries BEFORE today,
+    // so it can't shift no matter how many times someone's logged
+    // today — see that version's fix for why this matters).
+    const wishlist = appState.wishlist || [];
+    const cfg = appState.monthlyConfig || null;
+
+    function safePage(v) { const n = Number(v); return isFinite(n) && n > 0 ? n : 0; }
+    function highestPageForItem(w) { const vals = (w.readingEntries || []).map(e => safePage(e.pageTo)); return vals.length ? Math.max(...vals) : 0; }
+    function isBookListItemDone(w) { return (w.pages > 0 && highestPageForItem(w) >= w.pages) || !!w.manualComplete; }
+    function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function queueFor(type) {
+      const sortMode = cfg ? (type === 'audiobook' ? cfg.audioSort : cfg.bookSort) : 'manual';
+      const items = wishlist.filter(w => (w.type || 'book') === type && !isBookListItemDone(w));
+      if (sortMode === 'dateAdded') return items.slice().sort((a, b) => (a.dateAdded || '').localeCompare(b.dateAdded || ''));
+      if (sortMode === 'tag') return items.slice().sort((a, b) => ((a.tags && a.tags[0]) || a.genre || '').localeCompare((b.tags && b.tags[0]) || b.genre || '') || a.title.localeCompare(b.title));
+      return items; // 'manual' — stored array order
+    }
+    function daysLeftInMonth(fromISO) {
+      const d = new Date(fromISO + 'T00:00:00');
+      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      return Math.max(1, Math.round((end - d) / 86400000) + 1);
+    }
+    function daysLeftInMonthlyCycle(fromISO, anchorDay) {
+      const d = new Date(fromISO + 'T00:00:00');
+      function occurrenceIn(year, month) { const lastDay = new Date(year, month + 1, 0).getDate(); return new Date(year, month, Math.min(anchorDay, lastDay)); }
+      let next = occurrenceIn(d.getFullYear(), d.getMonth());
+      if (next <= d) next = occurrenceIn(d.getFullYear(), d.getMonth() + 1);
+      return Math.max(1, Math.round((next - d) / 86400000));
     }
 
-    const totalPages = books.reduce((s, b) => s + (b.pages||0), 0);
-    const totalRead  = books.reduce((s, b) => {
-      const logged = highestPageFor(b.id);
-      if (b.manualComplete && logged < (b.pages||0)) return s + (b.pages||0);
-      return s + logged;
-    }, 0);
-    const rem = Math.max(0, totalPages - totalRead);
-
-    // Find the active book (in progress, or next unstarted, or first)
-    const activeBook = books.find(b => {
-      if (b.manualComplete) return false;
-      const pg = highestPageFor(b.id);
-      return pg > 0 && pg < (b.pages||0);
-    }) || books.find(b => !b.manualComplete && highestPageFor(b.id) === 0 && (b.pages||0) > 0)
-      || books[0];
-
-    const curPage  = activeBook ? highestPageFor(activeBook.id) : 0;
-    const bookPages = activeBook?.pages || 0;
-    const shortTitle = activeBook
-      ? (activeBook.title||'').substring(0, 26) + (activeBook.title && activeBook.title.length > 26 ? '…' : '')
-      : '';
-
-    // Helper: write directly to stat-reading to allow block-level bar at full width
-    function writeReadingStat(html, mode) {
-      const el = document.getElementById('stat-reading');
-      if (el) {
-        el.className = 'card-stat' + (mode ? ' ' + mode : '');
-        el.innerHTML = html;
-      }
-    }
-
-    // ── No target date set or all done ───────────────────────────
-    const targetDate = tracker.targetDate;
-    if (rem === 0 && totalPages > 0) {
-      writeReadingStat('<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span><span><span class="val">All done</span> — finished! 🎉</span></div>', 'ok');
-      return;
-    }
-    if (!targetDate) {
-      // No target — just show current book progress bar
-      const bar = bookPages > 0 ? buildPageBar(curPage, bookPages, curPage, bookPages) : '';
-      writeReadingStat(
-        `<div class="card-stat-row"><span class="card-stat-dot"></span><span>${shortTitle || 'No book started'}</span></div>` +
-        (bookPages > 0
-          ? `<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:4px">p.${curPage} of ${bookPages}</div>` + bar
-          : ''),
-        ''
-      );
-      return;
-    }
-
-    // ── Target date set — calculate daily target page ─────────────
-    const today    = new Date(); today.setHours(0,0,0,0);
-    const target   = new Date(targetDate + 'T00:00:00');
-    const daysLeft = Math.max(1, Math.ceil((target - today) / 86400000));
-
-    const todayStr    = todayISO();
-    const readToday   = books.reduce((s, b) => {
-      const priorMax = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'') < todayStr).map(e => e.pageTo||0), 0);
-      const todayMax = Math.max(0, ...entries.filter(e => e.bookId === b.id && (e.date||'').slice(0,10) === todayStr).map(e => e.pageTo||0), 0);
-      return s + Math.max(0, todayMax - priorMax);
-    }, 0);
-
-    const pagesPerDay = Math.floor(rem / daysLeft);
-    const stillDue    = Math.max(0, Math.min(pagesPerDay, rem) - readToday);
-
-    // Target page for today = curPage + stillDue (within book bounds)
-    const targetPage = activeBook ? Math.min(bookPages, curPage + stillDue) : 0;
-
-    // Progress bar: current position vs target page vs book end
-    function buildPageBar(cur, tot, tgt, bookEnd) {
+    // Same compact bar reading-tracker.html's own launcher card used
+    // before — reused as-is for each of the two queue rows below.
+    function buildPageBar(cur, tot, tgt) {
       if (!tot || tot <= 0) return '';
       const curPct = Math.min(100, Math.round((cur / tot) * 100));
       const tgtPct = Math.min(100, Math.round((tgt / tot) * 100));
       const colour = cur >= tgt ? '#3fb950' : '#f59e0b';
-      return `<div style="margin-top:6px;position:relative">
-        <div style="height:6px;border-radius:3px;background:var(--track);overflow:hidden">
+      return `<div style="margin-top:4px;position:relative">
+        <div style="height:5px;border-radius:3px;background:var(--track);overflow:hidden">
           <div style="height:100%;width:${curPct}%;background:${colour};border-radius:3px;transition:width 0.3s"></div>
         </div>
-        ${tgt > cur && tgt < bookEnd ? `<div style="position:absolute;top:0;left:${tgtPct}%;width:2px;height:6px;background:var(--tick);border-radius:1px;transform:translateX(-50%)"></div>` : ''}
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);margin-top:3px">
-          <span>p.${cur}</span>
-          <span>p.${bookEnd}</span>
-        </div>
+        ${tgt > cur && tgt < tot ? `<div style="position:absolute;top:0;left:${tgtPct}%;width:2px;height:5px;background:var(--tick);border-radius:1px;transform:translateX(-50%)"></div>` : ''}
       </div>`;
     }
 
-    if (stillDue === 0) {
-      // Daily target met
-      const bar = buildPageBar(curPage, bookPages, targetPage, bookPages);
-      writeReadingStat(
-        `<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span><span><span class="val">Daily target met</span> ✓</span></div>` +
-        (shortTitle ? `<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:4px">${shortTitle}</div>` : '') +
-        bar,
-        'ok'
-      );
-    } else {
-      // Show target page as hero
-      const bar = buildPageBar(curPage, bookPages, targetPage, bookPages);
-      const mode = stillDue > 20 ? 'warn' : '';
-      writeReadingStat(
-        `<div class="card-stat-row"><span class="card-stat-dot"></span><span>Reach <span class="val">p.${targetPage}</span> today</span></div>` +
-        (shortTitle ? `<div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:4px">${shortTitle} — ${stillDue} page${stillDue!==1?'s':''} to go</div>` : '') +
-        bar,
-        mode
-      );
+    const today = todayISO();
+    function rowFor(type) {
+      const icon = type === 'audiobook' ? '🎧' : '📖';
+      const unitS = type === 'audiobook' ? 'ch' : 'p';
+      const queue = queueFor(type);
+      const item = queue[0];
+      if (!item) {
+        const hasAny = wishlist.some(w => (w.type || 'book') === type);
+        return { html: `<div class="card-stat-row"><span class="card-stat-dot"></span><span>${icon} ${hasAny ? 'All caught up' : 'Nothing on the list'}</span></div>`, ok: hasAny };
+      }
+      if (!(item.pages > 0)) {
+        return { html: `<div class="card-stat-row"><span class="card-stat-dot"></span><span>${icon} ${escHtml(item.title)} — no page count</span></div>`, ok: false };
+      }
+
+      const priorEntries = (item.readingEntries || []).filter(e => e.date < today);
+      const startOfDayPage = priorEntries.length ? Math.max(...priorEntries.map(e => safePage(e.pageTo))) : 0;
+      const current = highestPageForItem(item);
+      const remainingAtStart = Math.max(0, item.pages - startOfDayPage);
+      const dl = (cfg && cfg.cycleStartDate)
+        ? daysLeftInMonthlyCycle(today, new Date(cfg.cycleStartDate + 'T00:00:00').getDate())
+        : daysLeftInMonth(today);
+      const reqDaily = remainingAtStart > 0 ? Math.max(1, Math.ceil(remainingAtStart / dl)) : 0;
+      const targetPage = Math.min(item.pages, startOfDayPage + reqDaily);
+      const doneToday = current >= targetPage;
+      const shortTitle = (item.title || '').substring(0, 22) + (item.title && item.title.length > 22 ? '…' : '');
+      const dotColour = doneToday ? '#3fb950' : '#f59e0b';
+
+      return {
+        html: `<div class="card-stat-row"><span class="card-stat-dot" style="background:${dotColour}"></span><span>${icon} ${escHtml(shortTitle)}</span></div>` +
+          `<div style="font-size:10px;color:var(--ink3);margin-top:2px">${unitS}.${current} of ${item.pages}${doneToday ? ' — target met ✓' : ' · reach ' + unitS + '.' + targetPage + ' today'}</div>` +
+          buildPageBar(current, item.pages, targetPage),
+        ok: doneToday
+      };
+    }
+
+    if (!wishlist.length) {
+      setCardStat('stat-reading', 'No Book List data yet', 'muted');
+      return;
+    }
+
+    const bookRow = rowFor('book');
+    const audioRow = rowFor('audiobook');
+    const el = document.getElementById('stat-reading');
+    if (el) {
+      el.className = 'card-stat' + ((bookRow.ok && audioRow.ok) ? ' ok' : '');
+      el.innerHTML = bookRow.html + '<div style="height:7px"></div>' + audioRow.html;
     }
   } catch(e) {
     setCardStat('stat-reading', 'Open app to load', 'muted');
   }
 }
+
 
 // PET-071: cache of the currently-running Fortnight Tracker timer (or
 // null), refreshed by statFortnight() and ticked once/sec by
