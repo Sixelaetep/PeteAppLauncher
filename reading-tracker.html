@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.48</title>
+<title>Reading Tracker v3.49</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -741,7 +741,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.48</span></div>
+    <div class="rt-logo">My Reading <span>v3.49</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1295,7 +1295,16 @@
       🎯 Monthly targets & reading order
     </button>
     <div class="collapsible-body" id="monthlyConfigSection">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <!-- v3.49 (MR-034): recurring cycle start date, shared by both
+           widgets — e.g. set to the 12th, the daily target then counts
+           down to the next 12th each month instead of the calendar
+           month-end. Leave blank to just use the calendar month. -->
+      <div class="field mb-12">
+        <label>Cycle start date <span style="color:var(--muted);font-weight:400">(optional — repeats monthly on this day-of-month; leave blank to use the calendar month)</span></label>
+        <input type="date" id="cfgCycleStartDate" onchange="onMonthlyConfigChange()">
+      </div>
+      <div class="divider"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">
         <div class="field"><label>📚 Books/month target</label><input type="number" id="cfgBookTarget" min="0" onchange="onMonthlyConfigChange()"></div>
         <div class="field"><label>📚 Pages/month target <span style="color:var(--muted);font-weight:400">(optional)</span></label><input type="number" id="cfgBookPageTarget" min="0" placeholder="off" onchange="onMonthlyConfigChange()"></div>
         <div class="field" style="grid-column:span 2"><label>📚 Books reading order</label>
@@ -1704,6 +1713,16 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.49 (MR-034): brings back a recurring "cycle start date" for the
+// Monthly widgets — this existed briefly in v3.46 (a per-tracker field,
+// back when Monthly Mode was still tracker-based) but was dropped
+// entirely in v3.47's Book List rebuild without being replaced, since
+// that rebuild changed what "Monthly" even was. Re-added as a single
+// shared appState.monthlyConfig.cycleStartDate (not per-type — one
+// cycle date covers both widgets), used by daysLeftInMonthlyCycle() in
+// place of the plain calendar-month calc whenever it's set. Optional:
+// leave it blank and the widgets fall back to counting down to the
+// calendar month-end, same as v3.47/48's default behaviour.
 // v3.48 (MR-033): two small polish fixes from real use of v3.47.
 //  - Every remaining user-facing "Wishlist" string renamed to "Book
 //    List" — the screen header/card/button text was updated in v3.47,
@@ -2306,6 +2325,10 @@ function defaultMonthlyConfig() {
   return {
     bookTarget: 1, bookPageTarget: null, bookSort: "dateAdded",
     audioTarget: 1, audioChapterTarget: null, audioSort: "dateAdded",
+    // v3.49 (MR-034): recurring cycle start date — shared by both
+    // widgets' daily-target math. null means "just use the calendar
+    // month", same as before this existed.
+    cycleStartDate: null,
     collections: []
   };
 }
@@ -2899,6 +2922,24 @@ function daysLeftInMonth(fromISO) {
   const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
   return Math.max(1, Math.round((end - d) / 86400000) + 1);
 }
+// v3.49 (MR-034): days remaining until the next occurrence of the
+// Monthly config's own recurring day-of-month (cycleStartDate's date-of-
+// month — e.g. the 12th), for a cycle that repeats every month on that
+// day rather than the plain calendar-month boundary above. If today IS
+// that day, that counts as the cycle just starting, not ending — so the
+// next boundary is next month's occurrence, not today (0 days left).
+// Clamps to the last real day of a shorter month for an anchor day like
+// the 31st, same way `new Date(y, m, 0)` already does elsewhere here.
+function daysLeftInMonthlyCycle(fromISO, anchorDay) {
+  const d = new Date(fromISO + "T00:00:00");
+  function occurrenceIn(year, month) {
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(anchorDay, lastDay));
+  }
+  let next = occurrenceIn(d.getFullYear(), d.getMonth());
+  if (next <= d) next = occurrenceIn(d.getFullYear(), d.getMonth() + 1);
+  return Math.max(1, Math.round((next - d) / 86400000));
+}
 
 // ── Book List / Monthly reading ──────────────────────────────────────
 // v3.47 (MR-032): the wishlist ("Book List") is now the single place
@@ -3066,10 +3107,16 @@ function renderMonthlyWidget(type) {
   document.getElementById(p + "Current").textContent = `${current} of ${item.pages} ${unitP} · ${pct}%`;
 
   const remaining = Math.max(0, item.pages - current);
-  const dl = daysLeftInMonth(todayISO());
+  // v3.49 (MR-034): once a cycle start date is set, count down to the
+  // next occurrence of that day-of-month instead of the calendar month
+  // end — falls back to the plain calendar month when unset.
+  const dl = cfg.cycleStartDate
+    ? daysLeftInMonthlyCycle(todayISO(), new Date(cfg.cycleStartDate + "T00:00:00").getDate())
+    : daysLeftInMonth(todayISO());
+  const cycleWord = cfg.cycleStartDate ? "cycle" : "month";
   const dailyTarget = remaining > 0 ? Math.max(1, Math.ceil(remaining / dl)) : 0;
   document.getElementById(p + "Target").textContent    = remaining > 0 ? (current + dailyTarget) : "✓";
-  document.getElementById(p + "TargetSub").textContent = remaining > 0 ? `${unitS} to reach (${dl} day${dl !== 1 ? "s" : ""} left this month)` : "finished";
+  document.getElementById(p + "TargetSub").textContent = remaining > 0 ? `${unitS} to reach (${dl} day${dl !== 1 ? "s" : ""} left this ${cycleWord})` : "finished";
 
   document.getElementById(p + "BarLeft").textContent  = `${pct}% read`;
   document.getElementById(p + "BarRight").textContent = `${remaining} ${remaining !== 1 ? unitP : unitS} left`;
@@ -3136,6 +3183,7 @@ function openBookList(type) { openWishlist(); }
 function renderMonthlyConfigUI() {
   const cfg = appState.monthlyConfig || defaultMonthlyConfig();
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val == null ? "" : val; };
+  set("cfgCycleStartDate", cfg.cycleStartDate);
   set("cfgBookTarget", cfg.bookTarget);
   set("cfgBookPageTarget", cfg.bookPageTarget);
   set("cfgBookSort", cfg.bookSort);
@@ -3158,6 +3206,7 @@ function renderMonthlyConfigUI() {
 function onMonthlyConfigChange() {
   const cfg = appState.monthlyConfig || (appState.monthlyConfig = defaultMonthlyConfig());
   const num = (id) => { const v = document.getElementById(id)?.value; return v === "" || v == null ? null : Number(v); };
+  cfg.cycleStartDate      = document.getElementById("cfgCycleStartDate")?.value || null;
   cfg.bookTarget          = num("cfgBookTarget") ?? 1;
   cfg.bookPageTarget      = num("cfgBookPageTarget");
   cfg.bookSort            = document.getElementById("cfgBookSort")?.value || "dateAdded";
