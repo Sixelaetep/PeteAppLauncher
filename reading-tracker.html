@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.57</title>
+<title>Reading Tracker v3.58</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -357,6 +357,8 @@
   .drag-handle:hover { color: var(--muted); }
   /* Reorder arrow buttons — used on books, trackers, wishlist */
   .reorder-btns { display:flex; flex-direction:column; gap:1px; flex-shrink:0; align-self:center; }
+  /* v3.58 (MR-043): jump-to-position select, sits next to the ▲▼ arrows */
+  .wl-order-sel { flex-shrink:0; align-self:center; width:46px; font-size:12px; padding:3px 2px; text-align:center; background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; }
   .reorder-btn { background:none; border:none; color:var(--border); cursor:pointer; font-size:10px; line-height:1; padding:1px 3px; border-radius:3px; transition:color .15s, background .15s; }
   .reorder-btn:hover:not(:disabled) { color:var(--accent); background:rgba(200,169,110,.1); }
   .reorder-btn:disabled { opacity:.2; cursor:default; }
@@ -746,7 +748,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.57</span></div>
+    <div class="rt-logo">My Reading <span>v3.58</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1724,6 +1726,20 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.58 (MR-043): per the brief — an explicit numbered position select,
+// alongside the ▲▼ arrows, as a friendlier way to reach a specific spot
+// in a long manual-order list than nudging one step at a time. Reuses
+// v3.57's w.manualOrder field and per-type scoping entirely; this is
+// only a different way of setting it. setManualPosition() splices the
+// item out and reinserts it at the chosen index, then renumbers
+// 0..N-1 — the "everything after cascades down one" behaviour the
+// brief described falls straight out of that renumbering, no special-
+// cased shift logic needed. Also fixed the arrows' enabled/disabled
+// state and the select's option list, which previously would have used
+// the WRONG index (whole-wishlist position, not same-type position) —
+// same class of bug v3.57 already fixed for the reorder itself, just
+// missed here since this piece renders the buttons rather than moving
+// anything.
 // v3.57 (MR-042): v3.56 fixed which sort MODE syncs across devices, but
 // not the actual manual ARRANGEMENT "manual order" mode reads — that
 // was only ever raw appState.wishlist array position, never an
@@ -4404,6 +4420,37 @@ function reorderWishlist(itemId, dir) {
   save();
   sameType.forEach(w => pushWishlistItemNow(w));
   renderWishlistView();
+  renderMonthlyWidgets();
+}
+
+// v3.58 (MR-043): jump-to-position, the select-field alternative to
+// nudging with the arrows one step at a time — pick a number and the
+// book moves straight there; whatever was already at that spot (and
+// everything after it) shifts down one, same cascade the brief
+// described. Same underlying field and same per-type scoping as
+// reorderWishlist above — this is just a different way of landing on
+// a final same-type order, which is why splice-and-renumber produces
+// the described cascade for free rather than needing special-cased
+// shift logic: renumbering 0..N-1 after removing and reinserting one
+// item is already exactly that.
+function setManualPosition(itemId, newPos1Indexed) {
+  const item = appState.wishlist.find(w => w.id === itemId);
+  if (!item) return;
+  const type = item.type || "book";
+  const sameType = appState.wishlist
+    .filter(w => (w.type || "book") === type)
+    .sort((a, b) => (Number(a.manualOrder) || 0) - (Number(b.manualOrder) || 0));
+  const fromIdx = sameType.findIndex(w => w.id === itemId);
+  const toIdx = Math.max(0, Math.min(sameType.length - 1, Number(newPos1Indexed) - 1));
+  if (fromIdx < 0 || fromIdx === toIdx) return;
+  const [moved] = sameType.splice(fromIdx, 1);
+  sameType.splice(toIdx, 0, moved);
+  const now = new Date().toISOString();
+  sameType.forEach((w, i) => { w.manualOrder = i; w.updatedAt = now; });
+  save();
+  sameType.forEach(w => pushWishlistItemNow(w));
+  renderWishlistView();
+  renderMonthlyWidgets();
 }
 
 
@@ -6795,10 +6842,22 @@ function renderWishlistView() {
       const isPast = _wlViewMode === "past";
       const isManual = sort === "manual" && !isPast;
 
-      // Arrow position within the wishlist array (for disabled state)
-      const wIdxInAll = appState.wishlist.findIndex(x => x.id === w.id);
-      const isFirstWl = wIdxInAll === 0;
-      const isLastWl  = wIdxInAll === appState.wishlist.length - 1;
+      // v3.58 (MR-043): position within the SAME-TYPE list (items here
+      // is already that exact list, pre-filtered and, in manual mode,
+      // pre-sorted by manualOrder) — not the whole-array index this
+      // used before, which could mis-enable/disable the arrows and
+      // would have made the new position select below meaningless
+      // (options need to run 1..N *of this type*, not of everything).
+      const wSameTypeIdx = items.indexOf(w);
+      const isFirstWl = wSameTypeIdx === 0;
+      const isLastWl  = wSameTypeIdx === items.length - 1;
+      // Select field: jump straight to a position instead of nudging
+      // one step at a time — picking a number already taken pushes
+      // that book (and everything after it) down one, per the brief.
+      // setManualPosition() does the actual splice+renumber; the
+      // select is just a friendlier way to call it than the arrows for
+      // a list of any real size.
+      const posOptions = items.map((_, i) => `<option value="${i+1}" ${i === wSameTypeIdx ? "selected" : ""}>${i+1}</option>`).join("");
 
       const compatTrackers = appState.trackers.filter(t => (wType === "audiobook") === isAudible(t));
       const typeLabel = wType === "audiobook" ? "🎧 Audible" : "📚 Books";
@@ -6828,7 +6887,8 @@ function renderWishlistView() {
           <div class="reorder-btns">
             <button class="reorder-btn" onclick="reorderWishlist('${w.id}',-1)" ${isFirstWl?"disabled":""} title="Move up">▲</button>
             <button class="reorder-btn" onclick="reorderWishlist('${w.id}',1)"  ${isLastWl ?"disabled":""} title="Move down">▼</button>
-          </div>` : ""}
+          </div>
+          <select class="wl-order-sel" title="Set position" onchange="setManualPosition('${w.id}', this.value)" onclick="event.stopPropagation()">${posOptions}</select>` : ""}
           <div class="wi-info" style="flex:1;min-width:0">
             <div class="wi-title">${wIcon} ${esc(w.title)}</div>
             ${w.author ? `<div class="wi-author">${esc(w.author)}</div>` : ""}
