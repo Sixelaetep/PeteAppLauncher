@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.58</title>
+<title>Reading Tracker v3.59</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -704,10 +704,9 @@
 
 
   /* ── Wishlist drag reorder ── */
-  .wi-drag { color:var(--border); cursor:grab; font-size:14px; padding:0 6px 0 0; flex-shrink:0; user-select:none; line-height:1; transition:color .2s; }
-  .wi-drag:hover { color:var(--muted); }
-  .wishlist-item.wi-dragging { opacity:.4; border-style:dashed; }
-  .wishlist-item.wi-drag-over { border-color:var(--accent); box-shadow:0 0 0 2px rgba(200,169,110,.2); }
+  /* v3.59 (MR-044): .wi-drag/.wi-dragging/.wi-drag-over removed — the
+     drag-and-drop handles they styled are gone; manual order goes
+     through the position select only now. */
   /* Wishlist edit inline */
   .wi-edit-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; padding-top:8px; }
   .wi-edit-grid .fe { grid-column:span 2; }
@@ -748,7 +747,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.58</span></div>
+    <div class="rt-logo">My Reading <span>v3.59</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1726,6 +1725,19 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.59 (MR-044): cards cleaned up — removed the ▲▼ arrows and the ⠿
+// drag handle from Book List items; manual order now goes through the
+// v3.58 position select only, one control instead of three doing the
+// same job. Also removed reorderWishlist() (the arrows' handler) and
+// the item cards' HTML5 drag-and-drop listeners entirely. The drag-
+// and-drop removal is worth calling out as more than tidying: that
+// path spliced appState.wishlist directly and never touched
+// w.manualOrder or pushed anything anywhere, the exact bug v3.57 fixed
+// for the arrows — it had just been overlooked as a second, still-live
+// way to trigger it. Left the underlying .reorder-btn/.reorder-btns
+// CSS alone (still used by tracker book/tracker-card reordering,
+// unrelated to any of this); removed only .wi-drag and its two drag-
+// state classes, which nothing references any more.
 // v3.58 (MR-043): per the brief — an explicit numbered position select,
 // alongside the ▲▼ arrows, as a friendlier way to reach a specific spot
 // in a long manual-order list than nudging one step at a time. Reuses
@@ -4389,39 +4401,14 @@ function reorderTracker(trackerId, dir) {
   }
 }
 
-// v3.57 (MR-042): this used to just splice appState.wishlist directly
-// (moveItem(appState.wishlist, itemId, dir)) with no explicit order
-// ever stored anywhere — "manual order" was really just "whatever
-// position this item happens to sit at in the array right now." That's
-// fine on a single device, but pal-sync's cloud pull merges wishlist
-// items individually by id/updatedAt (same as every other collection);
-// nothing about that merge has any reason to reproduce a specific
-// array position, so the arrangement someone dragged into place on one
-// device had no way to reach another — v3.56 fixed the SETTING (which
-// sort mode is selected) syncing, but not this: the actual arrangement
-// manual mode reads. Fixed by storing an explicit w.manualOrder number
-// per item — an ordinary field on an ordinary row, synced exactly like
-// title/pages/tags already are, so it survives the same way they do.
-// Also scoped the reorder to same-type items only — previously a
-// book's up/down could silently swap it past an audiobook sitting
-// between them in the raw array without changing its visual position
-// at all, since the Books/Audiobooks sections only ever show a book
-// next to other books.
-function reorderWishlist(itemId, dir) {
-  const item = appState.wishlist.find(w => w.id === itemId);
-  if (!item) return;
-  const type = item.type || "book";
-  const sameType = appState.wishlist
-    .filter(w => (w.type || "book") === type)
-    .sort((a, b) => (Number(a.manualOrder) || 0) - (Number(b.manualOrder) || 0));
-  if (!moveItem(sameType, itemId, dir)) return;
-  const now = new Date().toISOString();
-  sameType.forEach((w, i) => { w.manualOrder = i; w.updatedAt = now; });
-  save();
-  sameType.forEach(w => pushWishlistItemNow(w));
-  renderWishlistView();
-  renderMonthlyWidgets();
-}
+// v3.59 (MR-044): reorderWishlist() (the ▲▼ arrow handler) and the
+// HTML5 drag-and-drop handles removed — manual order now goes only
+// through setManualPosition() (the position select) below. The drag-
+// and-drop path in particular was a genuine bug, not just redundant:
+// it spliced appState.wishlist directly, same as the pre-v3.57 arrows
+// did, never touching w.manualOrder or pushing anything — using it
+// would have silently reintroduced the exact cross-device mismatch
+// v3.57 fixed.
 
 // v3.58 (MR-043): jump-to-position, the select-field alternative to
 // nudging with the arrows one step at a time — pick a number and the
@@ -6842,21 +6829,14 @@ function renderWishlistView() {
       const isPast = _wlViewMode === "past";
       const isManual = sort === "manual" && !isPast;
 
-      // v3.58 (MR-043): position within the SAME-TYPE list (items here
-      // is already that exact list, pre-filtered and, in manual mode,
-      // pre-sorted by manualOrder) — not the whole-array index this
-      // used before, which could mis-enable/disable the arrows and
-      // would have made the new position select below meaningless
-      // (options need to run 1..N *of this type*, not of everything).
+      // v3.59 (MR-044): cards cleaned up — arrows and the drag handle
+      // are gone; manual order now goes through the position select
+      // only. wSameTypeIdx is still needed to mark this item's current
+      // position as the select's selected option.
       const wSameTypeIdx = items.indexOf(w);
-      const isFirstWl = wSameTypeIdx === 0;
-      const isLastWl  = wSameTypeIdx === items.length - 1;
-      // Select field: jump straight to a position instead of nudging
-      // one step at a time — picking a number already taken pushes
-      // that book (and everything after it) down one, per the brief.
-      // setManualPosition() does the actual splice+renumber; the
-      // select is just a friendlier way to call it than the arrows for
-      // a list of any real size.
+      // Select field: jump straight to a position — picking a number
+      // already taken pushes that book (and everything after it) down
+      // one. setManualPosition() does the actual splice+renumber.
       const posOptions = items.map((_, i) => `<option value="${i+1}" ${i === wSameTypeIdx ? "selected" : ""}>${i+1}</option>`).join("");
 
       const compatTrackers = appState.trackers.filter(t => (wType === "audiobook") === isAudible(t));
@@ -6882,13 +6862,7 @@ function renderWishlistView() {
       div.style.cssText = "flex-direction:column;align-items:stretch;gap:6px;margin-bottom:9px";
       div.innerHTML = `
         <div style="display:flex;align-items:flex-start;gap:6px">
-          ${isManual ? `<span class="wi-drag" title="Drag to reorder">⠿</span>` : `<span style="width:16px;flex-shrink:0"></span>`}
-          ${isManual ? `
-          <div class="reorder-btns">
-            <button class="reorder-btn" onclick="reorderWishlist('${w.id}',-1)" ${isFirstWl?"disabled":""} title="Move up">▲</button>
-            <button class="reorder-btn" onclick="reorderWishlist('${w.id}',1)"  ${isLastWl ?"disabled":""} title="Move down">▼</button>
-          </div>
-          <select class="wl-order-sel" title="Set position" onchange="setManualPosition('${w.id}', this.value)" onclick="event.stopPropagation()">${posOptions}</select>` : ""}
+          ${isManual ? `<select class="wl-order-sel" title="Set position" onchange="setManualPosition('${w.id}', this.value)" onclick="event.stopPropagation()">${posOptions}</select>` : ""}
           <div class="wi-info" style="flex:1;min-width:0">
             <div class="wi-title">${wIcon} ${esc(w.title)}</div>
             ${w.author ? `<div class="wi-author">${esc(w.author)}</div>` : ""}
@@ -6958,26 +6932,6 @@ function renderWishlistView() {
           <select class="wi-tracker-sel" id="wi-trk-${w.id}" style="flex:1">${trackerOpts}</select>
           <button class="wi-add-btn" onclick="addWishlistToTracker('${w.id}')">+ Add to tracker</button>
         </div>` : noCompatMsg}`;
-
-      // Drag to reorder (manual sort only)
-      if (isManual) {
-        div.draggable = true;
-        div.addEventListener("dragstart", e => { e.dataTransfer.effectAllowed="move"; e.dataTransfer.setData("wi-id",w.id); div.classList.add("wi-dragging"); });
-        div.addEventListener("dragover",  e => { e.preventDefault(); div.classList.add("wi-drag-over"); });
-        div.addEventListener("dragleave", () => div.classList.remove("wi-drag-over"));
-        div.addEventListener("dragend",   () => { div.classList.remove("wi-dragging"); div.classList.remove("wi-drag-over"); });
-        div.addEventListener("drop", e => {
-          e.preventDefault(); div.classList.remove("wi-drag-over");
-          const srcId = e.dataTransfer.getData("wi-id");
-          if (!srcId || srcId === w.id) return;
-          const srcIdx = appState.wishlist.findIndex(x => x.id === srcId);
-          const tgtIdx = appState.wishlist.findIndex(x => x.id === w.id);
-          if (srcIdx < 0 || tgtIdx < 0) return;
-          const [moved] = appState.wishlist.splice(srcIdx, 1);
-          appState.wishlist.splice(tgtIdx, 0, moved);
-          save(); renderWishlistView();
-        });
-      }
 
       container.appendChild(div);
     });
