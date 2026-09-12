@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.52</title>
+<title>Reading Tracker v3.53</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -558,8 +558,13 @@
   #nrSegRest   { background:var(--border); flex-grow:1; } /* dim — unread pages        */
   /* v3.44 (MR-029): Monthly widget's simpler 2-zone bar (read / remaining) */
   /* v3.47 (MR-032): Monthly widgets' 2-zone bars (read / remaining), one pair per type */
-  #moBSegPrior, #moASegPrior { background:#2d7a52; }
-  #moBSegRest,  #moASegRest  { background:var(--border); flex-grow:1; }
+  /* v3.53 (MR-038): 5-zone segmented bar matching the tracker screen's
+     Now Reading widget — prior/today/needed/bonus/rest */
+  #moBSegPrior,  #moASegPrior  { background:#2d7a52; }
+  #moBSegToday,  #moASegToday  { background:var(--success); }
+  #moBSegNeeded, #moASegNeeded { background:var(--danger); opacity:.75; }
+  #moBSegBonus,  #moASegBonus  { background:#7b5ea7; }
+  #moBSegRest,   #moASegRest   { background:var(--border); flex-grow:1; }
 
   /* Counts row — coloured figures beside today's target */
   .nr-counts { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
@@ -741,7 +746,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.52</span></div>
+    <div class="rt-logo">My Reading <span>v3.53</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -937,7 +942,10 @@
       </div>
     </div>
     <div class="nr-bar-labels"><span id="moBBarLeft"></span><span id="moBBarRight"></span></div>
-    <div class="nr-seg-track"><div id="moBSegPrior"></div><div id="moBSegRest"></div></div>
+    <div class="nr-seg-track">
+      <div id="moBSegPrior"></div><div id="moBSegToday"></div><div id="moBSegNeeded"></div><div id="moBSegBonus"></div><div id="moBSegRest"></div>
+    </div>
+    <div class="nr-counts" id="moBCounts"></div>
     <div class="monthly-target-line" id="moBMonthLine"></div>
     <div class="nr-done-banner" id="moBDoneBanner">✓ All caught up — nice work!</div>
     <div class="nr-log-row" id="moBLogRow" onclick="event.stopPropagation()">
@@ -965,7 +973,10 @@
       </div>
     </div>
     <div class="nr-bar-labels"><span id="moABarLeft"></span><span id="moABarRight"></span></div>
-    <div class="nr-seg-track"><div id="moASegPrior"></div><div id="moASegRest"></div></div>
+    <div class="nr-seg-track">
+      <div id="moASegPrior"></div><div id="moASegToday"></div><div id="moASegNeeded"></div><div id="moASegBonus"></div><div id="moASegRest"></div>
+    </div>
+    <div class="nr-counts" id="moACounts"></div>
     <div class="monthly-target-line" id="moAMonthLine"></div>
     <div class="nr-done-banner" id="moADoneBanner">✓ All caught up — nice work!</div>
     <div class="nr-log-row" id="moALogRow" onclick="event.stopPropagation()">
@@ -1713,6 +1724,30 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.53 (MR-038): two feature gaps versus the old tracker's Now Reading
+// widget, both reported directly.
+//  - Today's target was recalculating on every log within the same
+//    day, because it was derived from the LIVE current page (including
+//    anything logged today) — each additional log shrank "remaining"
+//    and therefore shrank the target, a moving goalpost instead of a
+//    fixed number to work towards. Fixed by anchoring the whole day's
+//    math on startOfDayPage (entries dated strictly before today) —
+//    the exact mechanic the tracker screen's renderNowReading() has
+//    always used. startOfDayPage can't change again until tomorrow, so
+//    re-deriving from it fresh on every render is safe without storing
+//    any separate "locked" value — the anchor itself does the locking.
+//  - Rebuilt the widgets' progress bar from 2 zones (read/remaining) to
+//    the same 4 zones as Now Reading: dark green (read before today),
+//    bright green (read today, within target), red (still needed
+//    today), purple (beyond target) — plus a counts row underneath
+//    breaking those figures out individually.
+//  - Added log history to the Book List itself: a "📜 History (N)"
+//    section per item, next to the existing "✎ Edit" one, listing every
+//    reading-entries with a delete button, plus a date+page mini-form
+//    to back-fill a missed log. Deleting the entry that had completed a
+//    book un-completes it (only the auto-derived completedDate — never
+//    a manualComplete override); adding one past the total completes
+//    it the same way logging normally does.
 // v3.52 (MR-037): the widget's "This month's target" label was a static
 // hardcoded string — it never switched to "This cycle's target" even
 // when a cycle start date was set, even though the subtext underneath
@@ -3152,8 +3187,12 @@ function renderMonthlyWidget(type) {
     if (targetWrap) targetWrap.style.display = "none";
     document.getElementById(p + "BarLeft").textContent  = "";
     document.getElementById(p + "BarRight").textContent = "";
-    document.getElementById(p + "SegPrior").style.width = "0%";
-    document.getElementById(p + "SegRest").style.width  = "100%";
+    document.getElementById(p + "SegPrior").style.width  = "0%";
+    document.getElementById(p + "SegToday").style.width  = "0%";
+    document.getElementById(p + "SegNeeded").style.width = "0%";
+    document.getElementById(p + "SegBonus").style.width  = "0%";
+    const countsEl0 = document.getElementById(p + "Counts");
+    if (countsEl0) countsEl0.innerHTML = "";
     if (doneBanner) doneBanner.classList.toggle("visible", hasAny);
     if (logRow) logRow.style.display = "none";
     document.getElementById(p + "LogHint").textContent = "";
@@ -3180,8 +3219,12 @@ function renderMonthlyWidget(type) {
     if (targetWrap) targetWrap.style.display = "none";
     document.getElementById(p + "BarLeft").textContent  = "";
     document.getElementById(p + "BarRight").textContent = "";
-    document.getElementById(p + "SegPrior").style.width = "0%";
-    document.getElementById(p + "SegRest").style.width  = "100%";
+    document.getElementById(p + "SegPrior").style.width  = "0%";
+    document.getElementById(p + "SegToday").style.width  = "0%";
+    document.getElementById(p + "SegNeeded").style.width = "0%";
+    document.getElementById(p + "SegBonus").style.width  = "0%";
+    const countsEl1 = document.getElementById(p + "Counts");
+    if (countsEl1) countsEl1.innerHTML = "";
     const inputEl = document.getElementById(p + "LogPage");
     if (inputEl) inputEl.placeholder = `Total ${unitP} in this book`;
     document.getElementById(p + "LogHint").textContent = `Add a ${unitS} count to start tracking targets for this book.`;
@@ -3191,11 +3234,26 @@ function renderMonthlyWidget(type) {
   const _inputElReset = document.getElementById(p + "LogPage");
   if (_inputElReset) _inputElReset.placeholder = _defaultPlaceholder;
 
+  // v3.53 (MR-038): today's target now anchors on the page/chapter count
+  // as of the START of today (entries dated before today), same
+  // mechanic the tracker screen's own Now Reading widget has always
+  // used — NOT the live "current" figure, which includes anything
+  // logged today. That's what actually keeps the target fixed for the
+  // whole day: startOfDayPage can't change again until tomorrow, no
+  // matter how many times you log today, so re-deriving the target from
+  // it on every render is safe and needs no separate "locked" value
+  // stored anywhere. Using the live current instead (the previous
+  // version's bug) meant every additional log shrank "remaining" and
+  // therefore shrank the target within the same day — a moving
+  // goalpost instead of something to work towards.
+  const today = todayISO();
+  const priorEntries = (item.readingEntries || []).filter(e => e.date < today);
+  const startOfDayPage = priorEntries.length ? Math.max(...priorEntries.map(e => safePage(e.pageTo))) : 0;
   const current = highestPageForItem(item);
   const pct = item.pages > 0 ? Math.min(100, Math.round((current / item.pages) * 100)) : 0;
   document.getElementById(p + "Current").textContent = `${current} of ${item.pages} ${unitP} · ${pct}%`;
 
-  const remaining = Math.max(0, item.pages - current);
+  const remainingAtStart = Math.max(0, item.pages - startOfDayPage);
   // v3.49 (MR-034): once a cycle start date is set, count down to the
   // next occurrence of that day-of-month instead of the calendar month
   // end — falls back to the plain calendar month when unset.
@@ -3205,14 +3263,44 @@ function renderMonthlyWidget(type) {
   const cycleWord = cfg.cycleStartDate ? "cycle" : "month";
   const targetLbl = document.getElementById(p + "TargetLbl");
   if (targetLbl) targetLbl.textContent = cfg.cycleStartDate ? "This cycle's target" : "This month's target";
-  const dailyTarget = remaining > 0 ? Math.max(1, Math.ceil(remaining / dl)) : 0;
-  document.getElementById(p + "Target").textContent    = remaining > 0 ? (current + dailyTarget) : "✓";
-  document.getElementById(p + "TargetSub").textContent = remaining > 0 ? `${unitS} to reach (${dl} day${dl !== 1 ? "s" : ""} left this ${cycleWord})` : "finished";
+  const reqDaily = remainingAtStart > 0 ? Math.max(1, Math.ceil(remainingAtStart / dl)) : 0;
+  const targetPage = Math.min(item.pages, startOfDayPage + reqDaily);
+  const doneToday = current >= targetPage;
 
-  document.getElementById(p + "BarLeft").textContent  = `${pct}% read`;
-  document.getElementById(p + "BarRight").textContent = `${remaining} ${remaining !== 1 ? unitP : unitS} left`;
-  document.getElementById(p + "SegPrior").style.width = pct + "%";
-  document.getElementById(p + "SegRest").style.width  = (100 - pct) + "%";
+  document.getElementById(p + "Target").textContent    = doneToday ? "✓" : targetPage;
+  document.getElementById(p + "TargetSub").textContent = doneToday ? "target reached" : `${unitS} to reach (${dl} day${dl !== 1 ? "s" : ""} left this ${cycleWord})`;
+
+  // ── Segmented bar — same 4 zones as the tracker screen's Now Reading
+  // widget: dark green (read before today), bright green (read today,
+  // within target), red (still needed today), purple (beyond target) —
+  // plus the dim "rest" zone via CSS flex-grow.
+  const pagesRequired    = Math.max(0, targetPage - startOfDayPage);
+  const pagesReadToday   = Math.max(0, current - startOfDayPage);
+  const pagesOnTarget    = Math.min(pagesReadToday, pagesRequired);
+  const pagesStillNeeded = Math.max(0, pagesRequired - pagesReadToday);
+  const pagesBonus       = Math.max(0, current - targetPage);
+  const toW = n => (Math.max(0, n) / item.pages * 100).toFixed(2) + "%";
+
+  document.getElementById(p + "BarLeft").textContent  = doneToday
+    ? (pagesRequired === 0 ? `Target met — keep going!` : `${unitS} ${current} — done ✓`)
+    : pagesReadToday > 0
+      ? `${unitS} ${current} — ${pagesStillNeeded} more to target`
+      : `Reach ${unitS} ${targetPage} today`;
+  document.getElementById(p + "BarRight").textContent = `of ${item.pages}`;
+  document.getElementById(p + "SegPrior").style.width  = toW(startOfDayPage);
+  document.getElementById(p + "SegToday").style.width  = toW(pagesOnTarget);
+  document.getElementById(p + "SegNeeded").style.width = toW(pagesStillNeeded);
+  document.getElementById(p + "SegBonus").style.width  = toW(pagesBonus);
+
+  const countsEl = document.getElementById(p + "Counts");
+  if (countsEl) {
+    const items = [];
+    if (startOfDayPage > 0) items.push({ color: "#2d7a52", val: startOfDayPage, lbl: "prev" });
+    if (pagesOnTarget > 0)  items.push({ color: "var(--success)", val: "+" + pagesOnTarget, lbl: "today" });
+    if (pagesStillNeeded > 0) items.push({ color: "var(--danger)", val: pagesStillNeeded, lbl: "needed" });
+    if (pagesBonus > 0) items.push({ color: "#7b5ea7", val: "+" + pagesBonus, lbl: "bonus" });
+    countsEl.innerHTML = items.map(c => `<div class="nr-count-item"><span class="nr-count-dot" style="background:${c.color}"></span><span class="nr-count-val">${c.val}</span> ${c.lbl}</div>`).join("");
+  }
 
   const hint = document.getElementById(p + "LogHint");
   if (hint) hint.textContent = current > 0 ? `Currently on ${unitS} ${current}` : "Not started yet";
@@ -3293,6 +3381,61 @@ function logBookListQuick(type) {
 }
 
 function openBookList(type) { openWishlist(); }
+
+// v3.53 (MR-038): log history — view, add, and remove individual
+// reading-entries directly on a Book List item, same capability the
+// old tracker's per-book history gave, now available from the Book
+// List itself rather than needing a tracker at all.
+function renderHistoryEntriesHTML(w) {
+  const entries = (w.readingEntries || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
+  if (!entries.length) return `<div style="font-size:11px;color:var(--muted)">No reading history yet.</div>`;
+  const unitS = (w.type || "book") === "audiobook" ? "chapter" : "page";
+  return entries.map(e => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <span>${ukNumeric(e.date)} — ${unitS} ${e.pageTo}</span>
+      <button class="wl-search-clear" style="position:static;display:inline-block" onclick="deleteReadingEntry('${w.id}','${e.id}')" title="Delete entry">×</button>
+    </div>`).join("");
+}
+
+function deleteReadingEntry(itemId, entryId) {
+  const w = appState.wishlist.find(x => x.id === itemId);
+  if (!w) return;
+  if (!confirm("Delete this log entry? This can't be undone.")) return;
+  w.readingEntries = (w.readingEntries || []).filter(e => e.id !== entryId);
+  // If this entry was what pushed the book over its total, and nothing
+  // else remaining reaches it, un-complete it — only ever touches the
+  // auto-derived completedDate, never a manualComplete override.
+  const stillDone = w.pages > 0 && highestPageForItem(w) >= w.pages;
+  if (!stillDone && w.completedDate) w.completedDate = null;
+  w.updatedAt = new Date().toISOString();
+  save();
+  pushWishlistItemNow(w);
+  renderWishlistView();
+  renderMonthlyWidgets();
+  showToast("Entry deleted ✓");
+}
+
+function addReadingEntry(itemId) {
+  const w = appState.wishlist.find(x => x.id === itemId);
+  if (!w) return;
+  const dateEl = document.getElementById(`wlh-date-${itemId}`);
+  const pageEl = document.getElementById(`wlh-page-${itemId}`);
+  const date = dateEl ? dateEl.value : "";
+  const raw = parseInt(pageEl ? pageEl.value : "", 10);
+  if (!date) { showToast("Pick a date"); return; }
+  if (isNaN(raw) || raw <= 0) { showToast("Enter a valid page/chapter number"); return; }
+  if (w.pages && raw > w.pages) { showToast(`Only has ${w.pages} ${(w.type || "book") === "audiobook" ? "chapters" : "pages"}`); return; }
+  w.readingEntries = w.readingEntries || [];
+  w.readingEntries.push({ id: uid('t'), date, pageTo: raw });
+  if (w.pages > 0 && highestPageForItem(w) >= w.pages) w.completedDate = w.completedDate || date;
+  w.updatedAt = new Date().toISOString();
+  if (pageEl) pageEl.value = "";
+  save();
+  pushWishlistItemNow(w);
+  renderWishlistView();
+  renderMonthlyWidgets();
+  showToast("Entry added ✓");
+}
 
 // Populates the "Monthly targets & reading order" section's inputs from
 // appState.monthlyConfig, and lists existing reading-goal collections
@@ -6469,7 +6612,22 @@ function renderWishlistView() {
           <button class="collapsible-btn wl-edit-btn" onclick="toggleSection('wle-${w.id}')" title="Edit">
             <span class="caret" style="font-size:11px">▶</span> ✎ Edit
           </button>
+          <button class="collapsible-btn wl-edit-btn" onclick="toggleSection('wlh-${w.id}')" title="Reading history">
+            <span class="caret" style="font-size:11px">▶</span> 📜 History (${(w.readingEntries||[]).length})
+          </button>
           <button class="wi-del" onclick="deleteWishlistItem('${w.id}')">×</button>
+        </div>
+        <!-- v3.53 (MR-038): log history — view/add/remove individual
+             reading-entries for this item. Same collapsible pattern as
+             the Edit section above; add-entry inputs default to today
+             but any date can be back-filled for a missed log. -->
+        <div class="collapsible-body" id="wlh-${w.id}">
+          <div id="wlh-list-${w.id}">${renderHistoryEntriesHTML(w)}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-top:10px">
+            <input type="date" id="wlh-date-${w.id}" value="${todayISO()}">
+            <input type="number" id="wlh-page-${w.id}" placeholder="${wType==='audiobook'?'Chapter':'Page'}" min="1" ${w.pages?`max="${w.pages}"`:""}>
+            <button class="btn btn-primary btn-sm" onclick="addReadingEntry('${w.id}')">+ Add</button>
+          </div>
         </div>
         <!-- Inline edit -->
         <div class="collapsible-body" id="wle-${w.id}">
