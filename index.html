@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.74</title>
+<title>P Apps v10.75</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -652,7 +652,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.74</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.75</span></button>
       <div class="nav-icons-group">
         <!-- PET-065 v10.50: icon order reworked to match the new home-grid
              grouping (full-width pair, tracker pair, suite-tools pair,
@@ -1230,10 +1230,30 @@ function getDiagDeviceId() {
 // Timing-Allow-Origin header (Supabase doesn't send one) — but
 // duration is exactly what's needed to see whether the network round-
 // trip is the culprit, so that's not a real limitation here.
+// PET-082 v10.75: added sw_intercepted_ms + sw_controller, alongside the
+// existing PET-074/078 phase fields. Investigation into the suite-wide
+// 10-13s spikes (see PET-081 notes / MR-051 / FT-058) found that every
+// recorded spike had a multi-second gap none of the existing phases
+// accounted for, and traced the likely cause to two apps (Reading
+// Tracker, Fortnight Tracker) each registering a root-scoped service
+// worker with no timeout on its own internal fetch — which, once
+// active, silently intercepts every app's requests on the origin, not
+// just its own. Both of those service workers are removed as of this
+// release (MR-051/FT-058), but this instrumentation stays: it's the
+// only way to directly confirm whether a given load was served through
+// a service worker at all, for this or any future one. A resource
+// entry's `workerStart` is populated only when that request was
+// intercepted by an active worker (0/absent otherwise) — same
+// same-origin/cross-origin caveats as the existing script_pal_*_ms
+// fields apply. sw_controller records which worker (if any) actually
+// controlled the frame at capture time, straight from the iframe's own
+// navigator.serviceWorker.controller — null once MR-051/FT-058 have
+// fully rolled out and any stale worker has unregistered itself, which
+// is itself a useful thing to see confirmed in the data over time.
 function capturePhaseBreakdown(frame) {
   const out = { dns_ms: null, connect_ms: null, ttfb_ms: null, download_ms: null, dom_ms: null,
                 script_pal_config_ms: null, script_pal_utils_ms: null, script_pal_sync_ms: null,
-                supabase_ms: null };
+                supabase_ms: null, sw_intercepted_ms: null, sw_controller: null };
   try {
     const perf = frame.contentWindow.performance;
     const nav = perf.getEntriesByType('navigation')[0];
@@ -1243,6 +1263,9 @@ function capturePhaseBreakdown(frame) {
       out.ttfb_ms     = round(nav.responseStart - nav.requestStart);
       out.download_ms = round(nav.responseEnd - nav.responseStart);
       out.dom_ms      = round(nav.domContentLoadedEventEnd - nav.responseEnd);
+      // workerStart is 0 when the navigation wasn't served through a
+      // service worker; only set sw_intercepted_ms when it genuinely was.
+      if (nav.workerStart > 0) out.sw_intercepted_ms = round(nav.responseEnd - nav.workerStart);
     }
     let supabaseTotal = 0, sawSupabase = false;
     perf.getEntriesByType('resource').forEach(r => {
@@ -1252,6 +1275,10 @@ function capturePhaseBreakdown(frame) {
       else if (r.name.indexOf(window.PAL_CONFIG.SB_URL) !== -1) { supabaseTotal += r.duration; sawSupabase = true; }
     });
     if (sawSupabase) out.supabase_ms = round(supabaseTotal);
+    try {
+      const ctrl = frame.contentWindow.navigator.serviceWorker && frame.contentWindow.navigator.serviceWorker.controller;
+      if (ctrl) out.sw_controller = ctrl.scriptURL;
+    } catch (e2) { /* same-origin access blocked — leave sw_controller null */ }
   } catch (e) { /* cross-origin/iframe access blocked in this browser — total_ms is still logged */ }
   return out;
 }
@@ -1834,6 +1861,13 @@ function setCardStat(id, text, mode) {
 }
 
 
+// PET-082 v10.75: Load Speed diagnostics extended with sw_intercepted_ms
+// and sw_controller (see capturePhaseBreakdown()'s own comment for full
+// reasoning) — the direct follow-up to the PET-074/081 investigation
+// into suite-wide 10-13s load spikes, shipped alongside MR-051 and
+// FT-058 removing the two root-scoped service workers identified as the
+// likely cause. Additive only — no existing field, behaviour, or stored
+// record shape changes.
 // PET-081 v10.74: colour scheme fix — the card's bar used a generic
 // green/amber "met or not" fill that doesn't exist anywhere in Reading
 // Tracker's own palette (it's never used amber). Rebuilt as the same
