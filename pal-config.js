@@ -31,7 +31,7 @@ window.PAL_CONFIG = {
   // Edge Function. Edit this one value here, once — you do NOT
   // need to re-enter it every time a new fantasy-football-tracker.html
   // is delivered.
-  FF_PROXY_KEY: zarsor-0tUsma-vamboj,
+  FF_PROXY_KEY: 'zarsor-0tUsma-vamboj',
 
   // ── Known users ───────────────────────────────────────────
   // Maps Supabase Auth user_id → display info.
