@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.6</title>
+<title>Fantasy Football Tracker v1.7</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -209,7 +209,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.6</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.7</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -279,13 +279,49 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.6"></script>
-<script src="pal-sync.js?v=1.6"></script>
-<script src="pal-utils.js?v=1.6"></script>
+<script src="pal-config.js?v=1.7"></script>
+<script src="pal-sync.js?v=1.7"></script>
+<script src="pal-utils.js?v=1.7"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.7 (reported: still suggesting an injured player to start; captain
+ * reasoning not verifiable; wanted value out of lineup decisions;
+ * wanted caching, generation time, and gameweek deadline visible):
+ *
+ * - v1.6's availability fix was incomplete. It deprioritised
+ *   unavailable players WITHIN a fixed formation slot but didn't stop
+ *   the algorithm choosing a DIFFERENT formation specifically because
+ *   an unavailable player's leftover score raised that formation's
+ *   raw total (e.g. preferring 3 forwards over 2 because "unavailable
+ *   3rd forward + 2 others" scored more than "2 forwards + 1 extra
+ *   defender"). findOptimalXI() now compares totals only WITHIN the
+ *   same fallback-tier — an all-available formation always beats one
+ *   that needed a fallback, regardless of raw score. This is the same
+ *   class of mistake as before (a good-but-unavailable player's score
+ *   outweighing the actual constraint), just one level higher up than
+ *   where v1.6 fixed it.
+ * - Added a Value-free startScore (Form 30% / Fixtures 25% /
+ *   Reliability 25% / Availability 20%) used only by findOptimalXI —
+ *   Value (price-efficiency) is irrelevant to who should start, since
+ *   you already own every squad player regardless of price. The full
+ *   composite score (with Value) is unchanged and still used for
+ *   Transfer watch's buy-target ranking, where budget is genuinely in
+ *   play.
+ * - Captain reasoning made verifiable: ep_next now shown explicitly
+ *   (previously only implied by the selection), plus next-opponent/
+ *   home-away/FDR for both captain and vice-captain, and for every
+ *   player in the breakdown section.
+ * - Added vice-captain recommendation (previously missing entirely) —
+ *   same ep_next ranking, same availability exclusion, among actual
+ *   starting XI.
+ * - Added Advice caching (localStorage + new ff_advice_cache table),
+ *   same pattern as ff_squad_cache — survives a refresh instead of
+ *   requiring Analyse Squad every time.
+ * - adviceMeta now shows the gameweek's deadline_time alongside
+ *   generation/cache age, so it's clear how much time remains to act.
  *
  * v1.6 (reported: "advising bring Elanga in whilst telling me Elanga
  * is injured"): genuine logic bug, not a display issue. Suggested-XI
@@ -479,7 +515,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.6',
+    appVersion: '1.7',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -766,6 +802,21 @@ const VALID_FORMATIONS = (function () {
   return out;
 })();
 
+// For each team, their single next fixture (the immediate next
+// gameweek, not the 4-week window used for difficulty averaging) —
+// opponent, home/away, and that specific match's difficulty rating.
+// Used so captain/vice/breakdown can show "who are they actually
+// playing", not just an abstract difficulty number.
+function buildNextFixtureByTeam(fixtures, teamsById, nextGW) {
+  const byTeam = {};
+  (fixtures || []).filter(f => f.event === nextGW && !f.finished).forEach(f => {
+    const homeTeam = teamsById[f.team_h], awayTeam = teamsById[f.team_a];
+    byTeam[f.team_h] = { opponentId: f.team_a, opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true, difficulty: f.team_h_difficulty };
+    byTeam[f.team_a] = { opponentId: f.team_h, opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false, difficulty: f.team_a_difficulty };
+  });
+  return byTeam;
+}
+
 function buildFixtureDifficultyMap(fixtures, fromGW, windowSize) {
   windowSize = windowSize || 4;
   const upcoming = (fixtures || []).filter(f =>
@@ -830,8 +881,22 @@ function computeAllScores(bootstrap, fixtures) {
       reliabilityScore * 0.20 +
       availabilityScore * 0.20;
 
+    // Value (price-efficiency) matters for deciding what to BUY —
+    // it's irrelevant to deciding who to START, since you already own
+    // every player in your squad regardless of price. startScore drops
+    // it and redistributes the weight across the other four, for use
+    // by findOptimalXI specifically. The full composite (with Value)
+    // remains the general-purpose "score" — used for transfer-target
+    // ranking and shown in the Player breakdown.
+    const startScore =
+      formScore * 0.30 +
+      fixtureScore * 0.25 +
+      reliabilityScore * 0.25 +
+      availabilityScore * 0.20;
+
     scores[el.id] = {
       score: Math.round(composite * 10) / 10,
+      startScore: Math.round(startScore * 10) / 10,
       components: { formScore, fixtureScore, valueScore, reliabilityScore, availabilityScore }
     };
   });
@@ -860,40 +925,60 @@ function findOptimalXI(picks, elementsById, scoresById) {
     if (el && byType[el.element_type]) {
       byType[el.element_type].push({
         el, pick: p,
-        score: (scoresById[el.id] || {}).score || 0,
+        score: (scoresById[el.id] || {}).startScore || 0,
         available: !isEffectivelyUnavailable(el)
       });
     }
   });
-  // Available players always sort ahead of unavailable ones,
-  // regardless of score — unavailable players only end up selected
-  // below if a position group has too few available players to fill
-  // any legal formation without them (a last resort, flagged via
-  // hasUnavailable so the UI can call it out rather than presenting
-  // it as a normal recommendation).
-  Object.keys(byType).forEach(t => byType[t].sort((a, b) => {
-    if (a.available !== b.available) return a.available ? -1 : 1;
-    return b.score - a.score;
-  }));
 
-  if (!byType[1].length) return null;
-  const gk = byType[1].find(x => x.available) || byType[1][0];
+  // Two pools per position: available-only, and everyone (fallback).
+  // v1.6's bug: sorting unavailable players to the bottom of a
+  // FIXED-size slice stopped them displacing an available player in
+  // the SAME slot, but didn't stop the algorithm choosing a DIFFERENT
+  // formation specifically because an unavailable player's leftover
+  // score raised that formation's raw total (e.g. preferring 3
+  // forwards over 2 because "unavailable 3rd forward + 2 others"
+  // scored more than "2 forwards + 1 extra defender"). Comparing
+  // totals only within the same fallback-tier — never letting a
+  // fallback formation's total outscore an all-available one — closes
+  // that gap properly.
+  const availByType = {}, allByType = {};
+  Object.keys(byType).forEach(t => {
+    availByType[t] = byType[t].filter(x => x.available).sort((a, b) => b.score - a.score);
+    allByType[t] = byType[t].slice().sort((a, b) => b.score - a.score);
+  });
+
+  const gkPool = availByType[1].length ? availByType[1] : allByType[1];
+  if (!gkPool.length) return null;
+  const gk = gkPool[0];
 
   let best = null;
+  let bestUsedFallback = !gk.available;
   VALID_FORMATIONS.forEach(([d, m, f]) => {
-    if (byType[2].length < d || byType[3].length < m || byType[4].length < f) return;
-    const defs = byType[2].slice(0, d);
-    const mids = byType[3].slice(0, m);
-    const fwds = byType[4].slice(0, f);
-    const total = gk.score +
-      defs.reduce((s, x) => s + x.score, 0) +
-      mids.reduce((s, x) => s + x.score, 0) +
-      fwds.reduce((s, x) => s + x.score, 0);
-    if (!best || total > best.total) {
-      const starters = [gk, ...defs, ...mids, ...fwds];
-      best = { formation: d + '-' + m + '-' + f, total, starters, hasUnavailable: starters.some(s => !s.available) };
+    const defPool = availByType[2].length >= d ? availByType[2] : allByType[2];
+    const midPool = availByType[3].length >= m ? availByType[3] : allByType[3];
+    const fwdPool = availByType[4].length >= f ? availByType[4] : allByType[4];
+    if (defPool.length < d || midPool.length < m || fwdPool.length < f) return;
+
+    const defs = defPool.slice(0, d);
+    const mids = midPool.slice(0, m);
+    const fwds = fwdPool.slice(0, f);
+    const starters = [gk, ...defs, ...mids, ...fwds];
+    const usedFallback = starters.some(s => !s.available);
+    const total = starters.reduce((s, x) => s + x.score, 0);
+
+    // A formation that needs zero fallback players always beats one
+    // that needs any, regardless of raw total. Only within the same
+    // tier does the higher total win.
+    const better = !best ||
+      (!usedFallback && bestUsedFallback) ||
+      (usedFallback === bestUsedFallback && total > best.total);
+    if (better) {
+      best = { formation: d + '-' + m + '-' + f, total, starters };
+      bestUsedFallback = usedFallback;
     }
   });
+  if (best) best.hasUnavailable = bestUsedFallback;
   return best;
 }
 
@@ -906,16 +991,18 @@ function diffXI(actualPicks, suggestedStarters) {
   };
 }
 
-function recommendCaptain(picks, elementsById) {
+// Captain and vice-captain both come from the ACTUAL current starting
+// XI (not the suggested lineup — you can only captain someone you're
+// actually fielding), ranked by FPL's own ep_next projection. Both
+// exclude unavailable players from the candidate pool, falling back
+// only if genuinely no available starter exists.
+function recommendCaptainAndVice(picks, elementsById) {
   const starters = picks.filter(p => p.position <= 11).map(p => elementsById[p.element]).filter(Boolean);
-  if (!starters.length) return null;
+  if (!starters.length) return { captain: null, viceCaptain: null };
   const available = starters.filter(el => !isEffectivelyUnavailable(el));
-  const pool = available.length ? available : starters; // fallback only if genuinely no available starter exists
-  let best = pool[0];
-  pool.forEach(el => {
-    if ((parseFloat(el.ep_next) || 0) > (parseFloat(best.ep_next) || 0)) best = el;
-  });
-  return best;
+  const pool = (available.length ? available : starters).slice()
+    .sort((a, b) => (parseFloat(b.ep_next) || 0) - (parseFloat(a.ep_next) || 0));
+  return { captain: pool[0] || null, viceCaptain: pool[1] || null };
 }
 
 function buildTransferAdvice(picks, elementsById, scoresById, allElements, bank, scoreHistory, currentGW) {
@@ -980,22 +1067,40 @@ function componentBreakdownHtml(components) {
   ).join('');
 }
 
+function fixtureLineHtml(el, nextFixtureByTeam) {
+  const fx = nextFixtureByTeam ? nextFixtureByTeam[el.team] : null;
+  if (!fx) return '<div class="sub" style="margin:2px 0 0">No fixture this gameweek</div>';
+  const diffLabel = fx.difficulty <= 2 ? 'easy' : fx.difficulty >= 4 ? 'hard' : 'medium';
+  return '<div class="sub" style="margin:2px 0 0">' +
+    (fx.isHome ? 'vs ' : '@ ') + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ') · FDR ' + fx.difficulty + '/5 (' + diffLabel + ')' +
+    '</div>';
+}
+
+function formatDeadline(iso) {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return null; }
+}
+
 function explainerHtml() {
   return '<details class="explainer"><summary>How this scoring works</summary>' +
-    '<p><strong>Overall score</strong> (0–100) is a weighted blend, normalised against every player in the same position league-wide: ' +
+    '<p><strong>Overall score</strong> (0–100, shown in Player breakdown and used for Transfer watch\'s buy-target ranking) is a weighted blend, normalised against every player in the same position league-wide: ' +
     '<code>Form 25%</code> + <code>Fixtures 20%</code> + <code>Value 15%</code> + <code>Reliability 20%</code> + <code>Availability 20%</code>.</p>' +
+    '<p><strong>Suggested lineup uses a different, Value-free score</strong> (<code>Form 30%</code> + <code>Fixtures 25%</code> + <code>Reliability 25%</code> + <code>Availability 20%</code>) — price-efficiency is irrelevant to who should start, since you already own every player in your squad regardless of price. Value only matters for buy decisions, where budget is genuinely in play.</p>' +
     '<p><strong>Form</strong> uses FPL\'s own <code>form</code> stat (a recency-weighted average), not a custom recalculation.</p>' +
     '<p><strong>Fixtures</strong> is the average difficulty rating (FPL\'s own 1–5 scale) of the player\'s team\'s next 4 fixtures, inverted so easier = higher.</p>' +
     '<p><strong>Value</strong> is points-per-game divided by price, normalised against same-position players.</p>' +
     '<p><strong>Reliability</strong> is minutes played this season as a share of maximum possible minutes so far.</p>' +
-    '<p><strong>Availability</strong> is 100 if fit, 55 if doubtful, 5 if injured/suspended/unavailable — but note this is only 20% of the score, so a strong player can still score reasonably even when unavailable. ' +
-    '<strong>Suggested lineup and captain pick apply a separate hard rule on top:</strong> an unavailable player is never suggested to start or captain unless there is literally no fit alternative in that position — that gate is what previously wasn\'t applied to the lineup suggestion specifically, and produced a bad recommendation.</p>' +
-    '<p><strong>Transfer watch</strong> combines that same immediate availability check with a trend check (score down &gt;15% over the last 2 gameweeks of history) — the trend part needs at least 2 gameweeks of accumulated data to activate.</p>' +
+    '<p><strong>Availability</strong> is 100 if fit, 55 if doubtful, 5 if injured/suspended/unavailable.</p>' +
+    '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — and any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
+    '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> (expected points next gameweek) among your actual current starting XI — not the overall score — since that figure already factors in fixture difficulty and expected minutes.</p>' +
+    '<p><strong>Transfer watch</strong> combines the immediate availability check with a trend check (overall score down &gt;15% over the last 2 gameweeks of history) — the trend part needs at least 2 gameweeks of accumulated data to activate.</p>' +
     '</details>';
 }
 
 function renderAdvice(data) {
-  const { picks, elementsById, scoresById, optimal, captain, flags } = data;
+  const { picks, elementsById, scoresById, optimal, captain, viceCaptain, flags, nextFixtureByTeam, gwId, deadline } = data;
   let html = '';
 
   html += explainerHtml();
@@ -1012,13 +1117,23 @@ function renderAdvice(data) {
     html += '<div class="advice-section"><h3>Captain pick</h3>' +
       '<div class="captain-pick"><div style="font-size:22px">🅲</div><div>' +
       '<div class="cname">' + safeEsc(captain.web_name) + '</div>' +
-      '<div class="creason">Highest projected points next gameweek (' + (captain.ep_next || '—') + ' pts)</div>' +
+      '<div class="creason">Highest projected points next gameweek — ep_next ' + (captain.ep_next || '—') + '</div>' +
+      fixtureLineHtml(captain, nextFixtureByTeam) +
+      '</div></div></div>';
+  }
+
+  if (viceCaptain) {
+    html += '<div class="advice-section"><h3>Vice-captain pick</h3>' +
+      '<div class="captain-pick" style="border-color:var(--border)"><div style="font-size:22px">🅥</div><div>' +
+      '<div class="cname">' + safeEsc(viceCaptain.web_name) + '</div>' +
+      '<div class="creason">Next-highest ep_next among your starting XI — ep_next ' + (viceCaptain.ep_next || '—') + '</div>' +
+      fixtureLineHtml(viceCaptain, nextFixtureByTeam) +
       '</div></div></div>';
   }
 
   if (optimal && optimal.diff && (optimal.diff.outIds.length || optimal.diff.inIds.length)) {
     html += '<div class="advice-section"><h3>Suggested lineup — ' + safeEsc(optimal.formation) + '</h3>' +
-      '<div class="sub">Based on player scores, this lineup edges out your current XI</div>';
+      '<div class="sub">Based on Value-free player scores, this lineup edges out your current XI</div>';
     if (optimal.hasUnavailable) {
       html += '<div class="lineup-warning">⚠️ This lineup includes a player who is currently unavailable — there wasn\'t a fit alternative in that position in your squad.</div>';
     }
@@ -1053,7 +1168,7 @@ function renderAdvice(data) {
   html += '</div>';
 
   html += '<div class="advice-section"><h3>Player breakdown</h3>' +
-    '<div class="sub">Every metric behind each player\'s score, so you can check the model\'s working</div>';
+    '<div class="sub">Every metric behind each player\'s score, plus their next fixture, so you can check the model\'s working</div>';
   picks.slice().sort((a, b) => a.position - b.position).forEach(p => {
     const el = elementsById[p.element];
     const s = scoresById[p.element];
@@ -1064,7 +1179,7 @@ function renderAdvice(data) {
       '<div class="breakdown-head"><span class="breakdown-name">' + safeEsc(el.web_name) +
       ' <span style="color:var(--ink2);font-weight:400;font-size:11px">(' + posLabel + benchNote + ')</span></span>' +
       '<span class="breakdown-overall">' + Math.round(s.score) + '</span></div>' +
-      componentBreakdownHtml(s.components) + '</div>';
+      componentBreakdownHtml(s.components) + fixtureLineHtml(el, nextFixtureByTeam) + '</div>';
   });
   html += '</div>';
 
@@ -1103,6 +1218,89 @@ async function pullRemoteScoreHistory() {
   } catch (e) { console.error('Score history pull from Supabase failed:', e); }
 }
 
+function buildAdviceCachePayload(data) {
+  const { picks, elementsById, scoresById, optimal, captain, viceCaptain, flags, nextFixtureByTeam, gwId, deadline } = data;
+
+  const referencedIds = new Set(picks.map(p => p.element));
+  flags.forEach(f => { referencedIds.add(f.el.id); f.targets.forEach(t => referencedIds.add(t.el.id)); });
+  if (captain) referencedIds.add(captain.id);
+  if (viceCaptain) referencedIds.add(viceCaptain.id);
+
+  const elements = [...referencedIds].map(id => elementsById[id]).filter(Boolean);
+  const scores = {};
+  referencedIds.forEach(id => { if (scoresById[id]) scores[id] = scoresById[id]; });
+
+  return {
+    gwId, deadline,
+    generatedAt: Date.now(),
+    picks, elements, scores,
+    optimal: optimal ? { formation: optimal.formation, diff: optimal.diff, hasUnavailable: !!optimal.hasUnavailable } : null,
+    captainId: captain ? captain.id : null,
+    viceCaptainId: viceCaptain ? viceCaptain.id : null,
+    flags: flags.map(f => ({
+      elId: f.el.id, severity: f.severity, reasons: f.reasons,
+      targetIds: f.targets.map(t => t.el.id), targetScores: f.targets.map(t => t.score)
+    })),
+    nextFixtureByTeam
+  };
+}
+
+function renderAdviceFromCache(cache, label) {
+  const elementsById = {}; cache.elements.forEach(e => elementsById[e.id] = e);
+  const scoresById = cache.scores;
+  const captain = cache.captainId != null ? elementsById[cache.captainId] : null;
+  const viceCaptain = cache.viceCaptainId != null ? elementsById[cache.viceCaptainId] : null;
+  const flags = (cache.flags || []).map(f => ({
+    el: elementsById[f.elId], severity: f.severity, reasons: f.reasons,
+    targets: (f.targetIds || []).map((id, i) => ({ el: elementsById[id], score: f.targetScores[i] })).filter(t => t.el)
+  })).filter(f => f.el);
+
+  renderAdvice({
+    picks: cache.picks, elementsById, scoresById,
+    optimal: cache.optimal, captain, viceCaptain, flags,
+    nextFixtureByTeam: cache.nextFixtureByTeam || {}, gwId: cache.gwId, deadline: cache.deadline
+  });
+
+  const ageMin = Math.round((Date.now() - cache.generatedAt) / 60000);
+  document.getElementById('adviceMeta').textContent =
+    'Gameweek ' + cache.gwId + (cache.deadline ? ' · Deadline: ' + formatDeadline(cache.deadline) : '') +
+    ' · ' + label + ' ' + ageMin + 'm ago — tap 🔄 to refresh';
+}
+
+function persistAdviceCache(cache) {
+  try { localStorage.setItem('ff_advice_cache', JSON.stringify(cache)); } catch (e) {}
+  if (window.PalSync && PalSync.hasSession()) {
+    PalSync.table('ff_advice_cache').upsert('main', cache).catch(() => {
+      console.error('Advice cache saved locally but failed to sync to Supabase.');
+    });
+  }
+}
+
+function loadAdviceFromCache() {
+  try {
+    const raw = localStorage.getItem('ff_advice_cache');
+    if (!raw) return;
+    renderAdviceFromCache(JSON.parse(raw), 'cached');
+  } catch (e) { /* corrupt cache — ignore, user can just click Analyse Squad */ }
+}
+
+async function pullRemoteAdviceCache() {
+  try {
+    const result = await PalSync.table('ff_advice_cache').pull([], 'id', 'updated_at');
+    const remote = result.rows && result.rows.find(r => r.record_key === 'main');
+    if (!remote || !remote.data) return;
+    const remoteCache = remote.data;
+
+    let localCache = null;
+    try { const raw = localStorage.getItem('ff_advice_cache'); if (raw) localCache = JSON.parse(raw); } catch (e) {}
+
+    if (!localCache || (remoteCache.generatedAt || 0) > (localCache.generatedAt || 0)) {
+      renderAdviceFromCache(remoteCache, 'synced');
+      try { localStorage.setItem('ff_advice_cache', JSON.stringify(remoteCache)); } catch (e) {}
+    }
+  } catch (e) { console.error('Advice cache pull from Supabase failed:', e); }
+}
+
 async function loadAdvice() {
   if (!FF_PROXY_URL) { safeToast('pal-config.js did not load — cannot reach the proxy', 'err'); return; }
   if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') {
@@ -1127,6 +1325,7 @@ async function loadAdvice() {
     const currentEvent = (bootstrap.events || []).find(e => e.is_current) ||
                           (bootstrap.events || []).slice().reverse().find(e => e.finished);
     const gwId = currentEvent ? currentEvent.id : 1;
+    const deadline = currentEvent ? currentEvent.deadline_time : null;
 
     const picksRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/picks/' + gwId,
       { headers: { 'x-pal-key': FF_PROXY_KEY } });
@@ -1135,13 +1334,17 @@ async function loadAdvice() {
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
 
     const elementsById = {}; bootstrap.elements.forEach(e => elementsById[e.id] = e);
+    const teamsById = {}; bootstrap.teams.forEach(t => teamsById[t.id] = t);
 
     const { scores } = computeAllScores(bootstrap, fixtures);
+    const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, gwId);
 
     const optimalRaw = findOptimalXI(picksData.picks, elementsById, scores);
-    const optimal = optimalRaw ? { formation: optimalRaw.formation, diff: diffXI(picksData.picks, optimalRaw.starters) } : null;
+    const optimal = optimalRaw
+      ? { formation: optimalRaw.formation, diff: diffXI(picksData.picks, optimalRaw.starters), hasUnavailable: optimalRaw.hasUnavailable }
+      : null;
 
-    const captain = recommendCaptain(picksData.picks, elementsById);
+    const { captain, viceCaptain } = recommendCaptainAndVice(picksData.picks, elementsById);
 
     const squadScoreSnapshot = {};
     picksData.picks.forEach(p => { if (scores[p.element]) squadScoreSnapshot[p.element] = scores[p.element].score; });
@@ -1154,8 +1357,12 @@ async function loadAdvice() {
     const bank = picksData.entry_history ? picksData.entry_history.bank : 0;
     const flags = buildTransferAdvice(picksData.picks, elementsById, scores, bootstrap.elements, bank, _scoreHistory, gwId);
 
-    renderAdvice({ picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, flags });
-    document.getElementById('adviceMeta').textContent = 'Gameweek ' + gwId + ' · Analysed just now';
+    const renderData = { picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, viceCaptain, flags, nextFixtureByTeam, gwId, deadline };
+    renderAdvice(renderData);
+    document.getElementById('adviceMeta').textContent =
+      'Gameweek ' + gwId + (deadline ? ' · Deadline: ' + formatDeadline(deadline) : '') + ' · Analysed just now';
+
+    persistAdviceCache(buildAdviceCachePayload(renderData));
     safeToast('Squad analysed');
   } catch (e) {
     document.getElementById('adviceBody').innerHTML =
@@ -1171,6 +1378,7 @@ async function loadAdvice() {
 loadLocalSettings();
 loadSquadFromCache();
 loadScoreHistoryLocal();
+loadAdviceFromCache();
 
 if (window.PalSync) {
   PalSync.initSession({
@@ -1184,6 +1392,7 @@ if (window.PalSync) {
       });
       pullRemoteSquadCache();
       pullRemoteScoreHistory();
+      pullRemoteAdviceCache();
     },
     onNoSession: function () {
       safeToast('Not connected — showing local data only', 'err');
