@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.3</title>
+<title>Fantasy Football Tracker v1.4</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -155,7 +155,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.3</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.4</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -210,13 +210,28 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.3"></script>
-<script src="pal-sync.js?v=1.3"></script>
-<script src="pal-utils.js?v=1.3"></script>
+<script src="pal-config.js?v=1.4"></script>
+<script src="pal-sync.js?v=1.4"></script>
+<script src="pal-utils.js?v=1.4"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.4 (reported "squad resets on every refresh"): the FF-003 squad
+ * cache only ever went to localStorage, which some browsers (Safari
+ * in particular) restrict or don't reliably persist for content
+ * running inside an iframe — which every app in this suite always
+ * does when opened through the launcher. Added ff_squad_cache
+ * (Supabase, same generic shape as ff_settings) and now sync a
+ * trimmed squad snapshot (only the ~15 picked players, not the full
+ * ~700-player bootstrap list) there on every successful load.
+ * localStorage stays as the instant-paint fast path; a Supabase pull
+ * on session arrival now self-heals it if localStorage came back
+ * empty. renderSquad()'s signature changed from (bootstrap, picksData,
+ * gwId) to (elements, teams, picksData, gwId) so the same renderer
+ * works for both a fresh full-bootstrap load and a trimmed
+ * cached/synced one.
  *
  * v1.3 (FF-003): Squad view. Pulls bootstrap-static (for player names,
  * teams, prices, status) and the current gameweek's picks through
@@ -347,7 +362,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.3',
+    appVersion: '1.4',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -461,9 +476,9 @@ function playerCardHtml(el, team, pick, isBench) {
     </div>`;
 }
 
-function renderSquad(bootstrap, picksData, gwId) {
-  const elementsById = {}; bootstrap.elements.forEach(e => elementsById[e.id] = e);
-  const teamsById = {}; bootstrap.teams.forEach(t => teamsById[t.id] = t);
+function renderSquad(elements, teams, picksData, gwId) {
+  const elementsById = {}; elements.forEach(e => elementsById[e.id] = e);
+  const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
 
   const picks = picksData.picks.slice().sort((a, b) => a.position - b.position);
   const starting = picks.filter(p => p.position <= 11);
@@ -501,6 +516,35 @@ function renderSquad(bootstrap, picksData, gwId) {
   document.getElementById('squadMeta').textContent = meta;
 }
 
+// Trims bootstrap's ~700-player list down to just the ~15 players
+// actually in this squad, so what gets cached (locally and synced to
+// Supabase) is small — a few KB instead of the full bootstrap payload.
+function buildTrimmedSquadCache(bootstrap, picksData, gwId) {
+  const pickedIds = new Set(picksData.picks.map(p => p.element));
+  const elements = bootstrap.elements.filter(e => pickedIds.has(e.id));
+  const teamIds = new Set(elements.map(e => e.team));
+  const teams = bootstrap.teams.filter(t => teamIds.has(t.id));
+  return { elements, teams, picksData, gwId, cachedAt: Date.now() };
+}
+
+function persistSquadCache(cache) {
+  try { localStorage.setItem('ff_squad_cache', JSON.stringify(cache)); } catch (e) {}
+  // Also sync to Supabase (ff_squad_cache table) so the squad survives
+  // a refresh even if this browser's localStorage inside the launcher's
+  // iframe doesn't reliably persist — same reasoning as ff_settings.
+  if (window.PalSync && PalSync.hasSession()) {
+    PalSync.table('ff_squad_cache').upsert('main', cache).catch(() => {
+      console.error('Squad cache saved locally but failed to sync to Supabase.');
+    });
+  }
+}
+
+function renderFromCacheObject(cache, label) {
+  renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId);
+  const ageMin = Math.round((Date.now() - cache.cachedAt) / 60000);
+  document.getElementById('squadMeta').textContent += ` (${label} ${ageMin}m ago — tap 🔄 to refresh)`;
+}
+
 async function loadSquad() {
   if (_squadLoading) return;
   if (!FF_PROXY_URL) { safeToast('pal-config.js did not load — cannot reach the proxy', 'err'); return; }
@@ -531,10 +575,9 @@ async function loadSquad() {
 
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
 
-    renderSquad(bootstrap, picksData, gwId);
-    try {
-      localStorage.setItem('ff_squad_cache', JSON.stringify({ bootstrap, picksData, gwId, cachedAt: Date.now() }));
-    } catch (e) {}
+    const cache = buildTrimmedSquadCache(bootstrap, picksData, gwId);
+    renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId);
+    persistSquadCache(cache);
     safeToast('Squad loaded');
   } catch (e) {
     document.getElementById('squadBody').innerHTML =
@@ -551,11 +594,32 @@ function loadSquadFromCache() {
   try {
     const raw = localStorage.getItem('ff_squad_cache');
     if (!raw) return;
-    const cached = JSON.parse(raw);
-    renderSquad(cached.bootstrap, cached.picksData, cached.gwId);
-    const ageMin = Math.round((Date.now() - cached.cachedAt) / 60000);
-    document.getElementById('squadMeta').textContent += ` (cached ${ageMin}m ago — tap 🔄 to refresh)`;
+    renderFromCacheObject(JSON.parse(raw), 'cached');
   } catch (e) { /* corrupt cache — ignore, user can just click Load Squad */ }
+}
+
+// Called once a Supabase session arrives — pulls ff_squad_cache and,
+// if it's present and newer than whatever's currently on screen (or
+// nothing is on screen yet), renders it and refreshes the local copy
+// to match. This is what makes the squad survive a refresh even when
+// localStorage inside the iframe doesn't.
+async function pullRemoteSquadCache() {
+  try {
+    const result = await PalSync.table('ff_squad_cache').pull([], 'id', 'updated_at');
+    const remote = result.rows && result.rows.find(r => r.record_key === 'main');
+    if (!remote || !remote.data) return;
+    const remoteCache = remote.data;
+
+    let localCache = null;
+    try { const raw = localStorage.getItem('ff_squad_cache'); if (raw) localCache = JSON.parse(raw); } catch (e) {}
+
+    if (!localCache || (remoteCache.cachedAt || 0) > (localCache.cachedAt || 0)) {
+      renderFromCacheObject(remoteCache, 'synced');
+      try { localStorage.setItem('ff_squad_cache', JSON.stringify(remoteCache)); } catch (e) {}
+    }
+  } catch (e) {
+    console.error('Squad cache pull from Supabase failed:', e);
+  }
 }
 
 // ── Boot ───────────────────────────────────────────────────────
@@ -572,6 +636,7 @@ if (window.PalSync) {
           document.getElementById('entryIdInput').value = _settings.entryId || '';
         }
       });
+      pullRemoteSquadCache();
     },
     onNoSession: function () {
       safeToast('Not connected — showing local data only', 'err');
