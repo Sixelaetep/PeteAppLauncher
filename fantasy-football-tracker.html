@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.5</title>
+<title>Fantasy Football Tracker v1.6</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -155,6 +155,29 @@
   .flag-targets strong { color: var(--ink); }
   .no-flags { font-size: 12px; color: var(--ink2); padding: 8px 0; }
 
+  .lineup-warning {
+    font-size: 11px; color: var(--accent3); background: rgba(247,129,102,0.1);
+    border: 1px solid var(--accent3); border-radius: 6px; padding: 6px 10px; margin-bottom: 10px;
+  }
+  .breakdown-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .breakdown-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .breakdown-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .breakdown-overall { font-size: 13px; font-weight: 700; color: var(--accent); }
+  .breakdown-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--ink2); margin-top: 3px; }
+  .breakdown-row .blabel { width: 68px; flex-shrink: 0; }
+  .breakdown-row .score-bar-track { height: 4px; margin: 0 6px; }
+  .breakdown-row .score-num { width: 20px; font-size: 10px; }
+  details.explainer {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 14px; font-size: 12px; color: var(--ink2); line-height: 1.6;
+  }
+  details.explainer summary { font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
+  details.explainer p { margin-top: 8px; }
+  details.explainer code { background: var(--neutral-bg); padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+
   label { display: block; font-size: 12px; color: var(--ink2); margin-bottom: 4px; }
   input[type="text"] {
     width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--ink);
@@ -186,7 +209,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.5</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.6</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -256,13 +279,34 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.5"></script>
-<script src="pal-sync.js?v=1.5"></script>
-<script src="pal-utils.js?v=1.5"></script>
+<script src="pal-config.js?v=1.6"></script>
+<script src="pal-sync.js?v=1.6"></script>
+<script src="pal-utils.js?v=1.6"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.6 (reported: "advising bring Elanga in whilst telling me Elanga
+ * is injured"): genuine logic bug, not a display issue. Suggested-XI
+ * and captain pick ranked by the blended composite score alone —
+ * availabilityScore is only 20% of that score, so a player who was
+ * excellent before an injury could still outscore a mediocre fit
+ * bench option and get suggested to start. Added
+ * isEffectivelyUnavailable() (status i/s/u/n, or status d with
+ * chance_of_playing_next_round <= 25) as a hard gate ON TOP of the
+ * score for findOptimalXI() and recommendCaptain() specifically —
+ * unavailable players now only get selected as an explicit last
+ * resort when a position genuinely has no fit alternative, flagged
+ * via hasUnavailable in the UI rather than presented as a normal
+ * pick. The composite score itself is unchanged (still used for
+ * Transfer watch's buy-target ranking, where factoring in some
+ * availability weight alongside other stats is legitimate). Also
+ * added: a "Player breakdown" section showing every squad player's
+ * full component scores (form/fixtures/value/reliability/
+ * availability) and overall score, and a "How this works" explainer
+ * — both requested so the model's reasoning is checkable rather than
+ * a black box.
  *
  * v1.5 (FF-004 through FF-007): the scoring/advice engine. New
  * Advice tab: composite 0-100 player score (form 25% / fixture run
@@ -435,7 +479,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.5',
+    appVersion: '1.6',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -522,6 +566,7 @@ async function testConnection() {
 
 // ── Squad (FF-003) ───────────────────────────────────────────────
 const POSITION_NAMES = { 1: 'Goalkeeper', 2: 'Defenders', 3: 'Midfielders', 4: 'Forwards' };
+const POSITION_SHORT = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
 let _squadLoading = false;
 
 function formatPrice(now_cost) { return '£' + (now_cost / 10).toFixed(1) + 'm'; }
@@ -793,18 +838,46 @@ function computeAllScores(bootstrap, fixtures) {
   return { scores, nextGW, fdrByTeam };
 }
 
+// A player who cannot physically play this gameweek should never be
+// suggested as a starter or captain purely because their season-long
+// stats are otherwise strong — availabilityScore being only 20% of
+// the composite score means a good-but-injured player can still
+// outscore a mediocre-but-fit one. This is a genuine correctness
+// gate, separate from the blended score, for "can this player
+// actually play" specifically. 'd' (doubtful) is only excluded here
+// if chance_of_playing_next_round is known and low — doubtful
+// players regularly do play, so status alone isn't a reliable signal.
+function isEffectivelyUnavailable(el) {
+  if (el.status === 'i' || el.status === 's' || el.status === 'u' || el.status === 'n') return true;
+  if (el.status === 'd' && el.chance_of_playing_next_round != null && el.chance_of_playing_next_round <= 25) return true;
+  return false;
+}
+
 function findOptimalXI(picks, elementsById, scoresById) {
   const byType = { 1: [], 2: [], 3: [], 4: [] };
   picks.forEach(p => {
     const el = elementsById[p.element];
     if (el && byType[el.element_type]) {
-      byType[el.element_type].push({ el, pick: p, score: (scoresById[el.id] || {}).score || 0 });
+      byType[el.element_type].push({
+        el, pick: p,
+        score: (scoresById[el.id] || {}).score || 0,
+        available: !isEffectivelyUnavailable(el)
+      });
     }
   });
-  Object.keys(byType).forEach(t => byType[t].sort((a, b) => b.score - a.score));
+  // Available players always sort ahead of unavailable ones,
+  // regardless of score — unavailable players only end up selected
+  // below if a position group has too few available players to fill
+  // any legal formation without them (a last resort, flagged via
+  // hasUnavailable so the UI can call it out rather than presenting
+  // it as a normal recommendation).
+  Object.keys(byType).forEach(t => byType[t].sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    return b.score - a.score;
+  }));
 
   if (!byType[1].length) return null;
-  const gk = byType[1][0];
+  const gk = byType[1].find(x => x.available) || byType[1][0];
 
   let best = null;
   VALID_FORMATIONS.forEach(([d, m, f]) => {
@@ -817,7 +890,8 @@ function findOptimalXI(picks, elementsById, scoresById) {
       mids.reduce((s, x) => s + x.score, 0) +
       fwds.reduce((s, x) => s + x.score, 0);
     if (!best || total > best.total) {
-      best = { formation: d + '-' + m + '-' + f, total, starters: [gk, ...defs, ...mids, ...fwds] };
+      const starters = [gk, ...defs, ...mids, ...fwds];
+      best = { formation: d + '-' + m + '-' + f, total, starters, hasUnavailable: starters.some(s => !s.available) };
     }
   });
   return best;
@@ -835,8 +909,10 @@ function diffXI(actualPicks, suggestedStarters) {
 function recommendCaptain(picks, elementsById) {
   const starters = picks.filter(p => p.position <= 11).map(p => elementsById[p.element]).filter(Boolean);
   if (!starters.length) return null;
-  let best = starters[0];
-  starters.forEach(el => {
+  const available = starters.filter(el => !isEffectivelyUnavailable(el));
+  const pool = available.length ? available : starters; // fallback only if genuinely no available starter exists
+  let best = pool[0];
+  pool.forEach(el => {
     if ((parseFloat(el.ep_next) || 0) > (parseFloat(best.ep_next) || 0)) best = el;
   });
   return best;
@@ -891,9 +967,38 @@ function scoreBarHtml(score) {
     '<div class="score-num">' + Math.round(score) + '</div>';
 }
 
+function componentBreakdownHtml(components) {
+  const rows = [
+    ['Form', components.formScore],
+    ['Fixtures', components.fixtureScore],
+    ['Value', components.valueScore],
+    ['Reliability', components.reliabilityScore],
+    ['Availability', components.availabilityScore]
+  ];
+  return rows.map(([label, val]) =>
+    '<div class="breakdown-row"><span class="blabel">' + label + '</span>' + scoreBarHtml(val) + '</div>'
+  ).join('');
+}
+
+function explainerHtml() {
+  return '<details class="explainer"><summary>How this scoring works</summary>' +
+    '<p><strong>Overall score</strong> (0–100) is a weighted blend, normalised against every player in the same position league-wide: ' +
+    '<code>Form 25%</code> + <code>Fixtures 20%</code> + <code>Value 15%</code> + <code>Reliability 20%</code> + <code>Availability 20%</code>.</p>' +
+    '<p><strong>Form</strong> uses FPL\'s own <code>form</code> stat (a recency-weighted average), not a custom recalculation.</p>' +
+    '<p><strong>Fixtures</strong> is the average difficulty rating (FPL\'s own 1–5 scale) of the player\'s team\'s next 4 fixtures, inverted so easier = higher.</p>' +
+    '<p><strong>Value</strong> is points-per-game divided by price, normalised against same-position players.</p>' +
+    '<p><strong>Reliability</strong> is minutes played this season as a share of maximum possible minutes so far.</p>' +
+    '<p><strong>Availability</strong> is 100 if fit, 55 if doubtful, 5 if injured/suspended/unavailable — but note this is only 20% of the score, so a strong player can still score reasonably even when unavailable. ' +
+    '<strong>Suggested lineup and captain pick apply a separate hard rule on top:</strong> an unavailable player is never suggested to start or captain unless there is literally no fit alternative in that position — that gate is what previously wasn\'t applied to the lineup suggestion specifically, and produced a bad recommendation.</p>' +
+    '<p><strong>Transfer watch</strong> combines that same immediate availability check with a trend check (score down &gt;15% over the last 2 gameweeks of history) — the trend part needs at least 2 gameweeks of accumulated data to activate.</p>' +
+    '</details>';
+}
+
 function renderAdvice(data) {
   const { picks, elementsById, scoresById, optimal, captain, flags } = data;
   let html = '';
+
+  html += explainerHtml();
 
   const starters = picks.filter(p => p.position <= 11);
   const startersTotal = starters.reduce((s, p) => s + ((scoresById[p.element] || {}).score || 0), 0);
@@ -914,6 +1019,9 @@ function renderAdvice(data) {
   if (optimal && optimal.diff && (optimal.diff.outIds.length || optimal.diff.inIds.length)) {
     html += '<div class="advice-section"><h3>Suggested lineup — ' + safeEsc(optimal.formation) + '</h3>' +
       '<div class="sub">Based on player scores, this lineup edges out your current XI</div>';
+    if (optimal.hasUnavailable) {
+      html += '<div class="lineup-warning">⚠️ This lineup includes a player who is currently unavailable — there wasn\'t a fit alternative in that position in your squad.</div>';
+    }
     optimal.diff.outIds.forEach(id => {
       const el = elementsById[id];
       if (el) html += '<div class="xi-diff-row"><span class="xi-out">⬇ Bench</span> ' + safeEsc(el.web_name) + '</div>';
@@ -942,6 +1050,22 @@ function renderAdvice(data) {
       html += '</div>';
     });
   }
+  html += '</div>';
+
+  html += '<div class="advice-section"><h3>Player breakdown</h3>' +
+    '<div class="sub">Every metric behind each player\'s score, so you can check the model\'s working</div>';
+  picks.slice().sort((a, b) => a.position - b.position).forEach(p => {
+    const el = elementsById[p.element];
+    const s = scoresById[p.element];
+    if (!el || !s) return;
+    const posLabel = POSITION_SHORT[el.element_type] || '';
+    const benchNote = p.position > 11 ? ' · bench' : '';
+    html += '<div class="breakdown-card">' +
+      '<div class="breakdown-head"><span class="breakdown-name">' + safeEsc(el.web_name) +
+      ' <span style="color:var(--ink2);font-weight:400;font-size:11px">(' + posLabel + benchNote + ')</span></span>' +
+      '<span class="breakdown-overall">' + Math.round(s.score) + '</span></div>' +
+      componentBreakdownHtml(s.components) + '</div>';
+  });
   html += '</div>';
 
   document.getElementById('adviceBody').innerHTML = html;
