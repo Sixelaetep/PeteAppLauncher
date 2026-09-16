@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.19</title>
+<title>Fantasy Football Tracker v1.20</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -230,6 +230,31 @@
     font-size: 10px; background: var(--neutral-bg); border: 1px solid var(--neutral-border);
     color: var(--ink2); border-radius: 6px; padding: 3px 8px; cursor: pointer;
   }
+
+  .player-picker-results {
+    margin: -6px 0 12px; max-height: 160px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--surface2);
+  }
+  .player-picker-results:empty { display: none; border: none; }
+  .player-picker-row {
+    padding: 7px 10px; font-size: 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+  }
+  .player-picker-row:last-child { border-bottom: none; }
+  .player-picker-row:hover { background: var(--neutral-bg); }
+
+  .mode-toggle { display: flex; gap: 6px; padding: 10px 16px 0; }
+  .mode-btn {
+    flex: 1; background: var(--neutral-bg); border: 1px solid var(--neutral-border); color: var(--ink2);
+    border-radius: 8px; padding: 7px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .mode-btn.active { background: var(--accent); color: #06210f; border-color: var(--accent); }
+
+  .projection-banner {
+    background: rgba(255,166,87,.08); border: 1px dashed var(--accent5); border-radius: 8px;
+    padding: 10px 12px; margin: 14px 16px 0; font-size: 12px; color: var(--accent5); font-weight: 600;
+  }
+  .projection-banner .sub { color: var(--ink2); font-weight: 400; margin-top: 4px; }
+
   details.explainer {
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; margin-bottom: 14px; font-size: 12px; color: var(--ink2); line-height: 1.6;
@@ -269,7 +294,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.19</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.20</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -287,6 +312,10 @@
       <div class="squad-meta" id="squadMeta">Not loaded yet</div>
       <button class="btn secondary" id="squadRefreshBtn" onclick="loadSquad()">🔄 Load Squad</button>
     </div>
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="squadModeLiveBtn" onclick="switchSquadViewMode('live')">Live (FPL)</button>
+      <button class="mode-btn" id="squadModePlannedBtn" onclick="switchSquadViewMode('planned')">Planned</button>
+    </div>
     <div id="squadBody">
       <div class="placeholder">
         <div class="emoji">🏗️</div>
@@ -299,6 +328,10 @@
     <div class="squad-header">
       <div class="squad-meta" id="adviceMeta">Not loaded yet</div>
       <button class="btn secondary" id="adviceRefreshBtn" onclick="loadAdvice()">🔄 Analyse Squad</button>
+    </div>
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="adviceModeLiveBtn" onclick="switchAdviceViewMode('live')">Live (FPL)</button>
+      <button class="mode-btn" id="adviceModePlannedBtn" onclick="switchAdviceViewMode('planned')">Planned</button>
     </div>
     <div id="adviceBody">
       <div class="placeholder">
@@ -317,10 +350,12 @@
     <div class="card">
       <h2>Add a planned transfer</h2>
       <p style="margin-bottom:10px">For moves you're considering but haven't made yet — real transfers you've already made on FPL are picked up automatically by Sync.</p>
-      <label for="txfOutInput">Player out</label>
-      <input type="text" id="txfOutInput" placeholder="Player name">
-      <label for="txfInInput">Player in</label>
-      <input type="text" id="txfInInput" placeholder="Player name">
+      <label for="txfOutSearch">Player out</label>
+      <input type="text" id="txfOutSearch" placeholder="Search player name…" autocomplete="off" oninput="filterPlayerPicker('out', this.value)">
+      <div id="txfOutResults" class="player-picker-results"></div>
+      <label for="txfInSearch">Player in</label>
+      <input type="text" id="txfInSearch" placeholder="Search player name…" autocomplete="off" oninput="filterPlayerPicker('in', this.value)">
+      <div id="txfInResults" class="player-picker-results"></div>
       <label for="txfCostInput">Cost delta (£m, negative if cheaper)</label>
       <input type="text" id="txfCostInput" inputmode="decimal" placeholder="0.0">
       <label for="txfNoteInput">Note (optional)</label>
@@ -366,13 +401,46 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.19"></script>
-<script src="pal-sync.js?v=1.19"></script>
-<script src="pal-utils.js?v=1.19"></script>
+<script src="pal-config.js?v=1.20"></script>
+<script src="pal-sync.js?v=1.20"></script>
+<script src="pal-utils.js?v=1.20"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.20 — planning workspace. Confirmed the "squad looks a gameweek
+ * behind" report was genuinely FPL mechanics (their picks endpoint
+ * hides a gameweek's data until its deadline passes, for every
+ * manager including yourself — not a caching issue, nothing to fix
+ * there). Since FPL won't say what you're planning, the app now does:
+ *
+ * - Player picker: the transfer form's free-text inputs are now a
+ *   real search-and-select against the full player list
+ *   (ensurePlayersLoaded/filterPlayerPicker/selectPlayerPickerFromRow),
+ *   giving every new transfer entry real player ids. Side benefit:
+ *   extractTransferPlayerIds now checks for explicit ids first before
+ *   falling back to parsing an auto entry's id string — manual
+ *   entries can get a rating too now, once marked as made.
+ * - buildProjectedSquad: applies your own PLANNED transfers (status
+ *   'planned', both ids resolved) to the last-known LIVE squad,
+ *   producing a hypothetical squad in the same shape the renderer
+ *   already knows how to draw. Matches by current slot occupant, so
+ *   two plans targeting the same original player apply only the
+ *   first and report the second as skipped rather than double-
+ *   applying silently.
+ * - Live/Planned toggle on both Squad and Advice tabs. Squad's toggle
+ *   is instant (pure re-render, no fetch) since the projection is
+ *   built from data already in hand. Advice's toggle doesn't auto-run
+ *   (a real multi-fetch analysis, not a cheap re-render) — user hits
+ *   Analyse Squad again for the newly-selected mode. A projected run
+ *   NEVER writes to score history or the advice cache — those track
+ *   real state, and a hypothetical squad's numbers must never leak
+ *   into what momentum tracking or the next passive load sees.
+ * - Distinct amber-dashed "PROJECTED" banner on both tabs when
+ *   showing planned data, visually different from the purple "TOP
+ *   SCORER" reference styling so the two "not really your data"
+ *   concepts never get confused with each other or with real data.
  *
  * v1.19 (reported: squad not reflecting a just-made transfer, looked
  * like it was a gameweek behind): two distinct possible causes here,
@@ -761,7 +829,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.19';
+const FF_VERSION = '1.20';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -842,7 +910,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.19',
+    appVersion: '1.20',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -931,6 +999,16 @@ async function testConnection() {
 const POSITION_NAMES = { 1: 'Goalkeeper', 2: 'Defenders', 3: 'Midfielders', 4: 'Forwards' };
 const POSITION_SHORT = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
 let _squadLoading = false;
+
+// 'live' shows whatever FPL actually says (via renderFromCacheObject/
+// renderSquad against _lastLiveSquadCache). 'planned' shows a
+// projection: the same live squad with your own PLANNED transfers
+// (not yet made) applied as hypothetical swaps. _lastLiveSquadCache
+// always holds the most recent known-good live squad regardless of
+// which mode is currently displayed, so switching modes never needs
+// a fresh fetch — only the projection itself is computed on the fly.
+let _lastLiveSquadCache = null;
+let _squadViewMode = 'live';
 
 function formatPrice(now_cost) { return '£' + (now_cost / 10).toFixed(1) + 'm'; }
 
@@ -1235,9 +1313,111 @@ function persistSquadCache(cache) {
 }
 
 function renderFromCacheObject(cache, label) {
+  _lastLiveSquadCache = cache;
   renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam || {}, cache.maxPointsByPos || {}, cache.topPlayerIdByPos || {});
   const ageMin = Math.round((Date.now() - cache.cachedAt) / 60000);
   document.getElementById('squadMeta').textContent += ` (${label} ${ageMin}m ago — tap 🔄 to refresh)`;
+}
+
+// Applies planned (not yet made) transfers with a resolved player id
+// on both sides to the last-known live squad, producing a hypothetical
+// squad object in the same shape renderSquad already knows how to
+// draw. allPlayers is the FULL player list (not the squad-trimmed
+// one) — needed to resolve full stats for a newly-added player who
+// almost certainly isn't among the squad's own 15.
+function buildProjectedSquad(baseCache, allPlayers) {
+  if (!baseCache) return null;
+  const allPlayersById = {}; (allPlayers || []).forEach(p => { allPlayersById[p.id] = p; });
+  const elementsById = {}; baseCache.elements.forEach(e => { elementsById[e.id] = e; });
+
+  const plannedEntries = (_transferLog || []).filter(t =>
+    t.status === 'planned' && t.playerInId != null && t.playerOutId != null);
+
+  const picks = baseCache.picksData.picks.map(p => Object.assign({}, p));
+  const appliedSwaps = [];
+  const skippedSwaps = [];
+
+  plannedEntries.forEach(t => {
+    // Matches by the CURRENT element in that slot, so two planned
+    // transfers both targeting the same original player correctly
+    // apply only the first — the second has nothing left to swap out,
+    // and is reported as skipped rather than silently double-applied.
+    const pickIdx = picks.findIndex(p => p.element === t.playerOutId);
+    if (pickIdx === -1) { skippedSwaps.push(t); return; }
+    const inPlayer = allPlayersById[t.playerInId];
+    if (!inPlayer) { skippedSwaps.push(t); return; }
+    picks[pickIdx] = Object.assign({}, picks[pickIdx], { element: t.playerInId });
+    if (!elementsById[inPlayer.id]) elementsById[inPlayer.id] = inPlayer;
+    appliedSwaps.push({ out: t.playerOutName, in: t.playerInName });
+  });
+
+  return {
+    elements: Object.values(elementsById),
+    teams: baseCache.teams,
+    picksData: { picks, entry_history: baseCache.picksData.entry_history },
+    gwId: baseCache.gwId,
+    nextFixtureByTeam: baseCache.nextFixtureByTeam,
+    maxPointsByPos: baseCache.maxPointsByPos,
+    topPlayerIdByPos: baseCache.topPlayerIdByPos,
+    appliedSwaps, skippedSwaps
+  };
+}
+
+async function renderPlannedSquadView() {
+  const container = document.getElementById('squadBody');
+  if (!_lastLiveSquadCache) {
+    container.innerHTML = '<div class="placeholder"><div class="emoji">📋</div>' +
+      '<p>Load your live squad first (switch back to <strong>Live</strong> and click <strong>Load Squad</strong>), then switch to Planned.</p></div>';
+    document.getElementById('squadMeta').textContent = 'No live squad loaded yet';
+    return;
+  }
+  const plannedCount = (_transferLog || []).filter(t => t.status === 'planned' && t.playerInId != null && t.playerOutId != null).length;
+  if (!plannedCount) {
+    container.innerHTML = '<div class="placeholder"><div class="emoji">📋</div>' +
+      '<p>No planned transfers with a selected player yet. Add one in the Transfers tab — search and select a real player so it can be projected here.</p></div>';
+    document.getElementById('squadMeta').textContent = 'No planned transfers';
+    return;
+  }
+
+  container.innerHTML = '<div class="sub" style="padding:16px">Building projected squad…</div>';
+  let allPlayers;
+  try { allPlayers = await ensurePlayersLoaded(); } catch (e) {
+    container.innerHTML = '<div class="placeholder"><div class="emoji">⚠️</div><p>Couldn\'t load player data: ' + safeEsc(e.message) + '</p></div>';
+    return;
+  }
+
+  const projected = buildProjectedSquad(_lastLiveSquadCache, allPlayers);
+  renderSquad(projected.elements, projected.teams, projected.picksData, projected.gwId, projected.nextFixtureByTeam, projected.maxPointsByPos, projected.topPlayerIdByPos);
+
+  let banner = '<div class="projection-banner">📋 PROJECTED — ' + projected.appliedSwaps.length +
+    ' planned swap' + (projected.appliedSwaps.length === 1 ? '' : 's') + ' applied. Not live on FPL yet.';
+  if (projected.skippedSwaps.length) {
+    banner += '<div class="sub">' + projected.skippedSwaps.length + ' planned swap' + (projected.skippedSwaps.length === 1 ? '' : 's') +
+      ' skipped — the player being swapped out isn\'t currently in your live squad (already transferred, or another plan already swapped them).</div>';
+  }
+  banner += '</div>';
+  document.getElementById('squadBody').insertAdjacentHTML('afterbegin', banner);
+
+  document.getElementById('squadMeta').textContent =
+    'PROJECTED · Gameweek ' + projected.gwId + ' · based on ' + projected.appliedSwaps.length + ' planned swap' + (projected.appliedSwaps.length === 1 ? '' : 's');
+}
+
+function refreshSquadDisplay(cachedLabel) {
+  if (_squadViewMode === 'planned') { renderPlannedSquadView(); return; }
+  if (!_lastLiveSquadCache) return;
+  if (cachedLabel) {
+    renderFromCacheObject(_lastLiveSquadCache, cachedLabel);
+  } else {
+    renderSquad(_lastLiveSquadCache.elements, _lastLiveSquadCache.teams, _lastLiveSquadCache.picksData, _lastLiveSquadCache.gwId,
+      _lastLiveSquadCache.nextFixtureByTeam, _lastLiveSquadCache.maxPointsByPos, _lastLiveSquadCache.topPlayerIdByPos);
+  }
+}
+
+function switchSquadViewMode(mode) {
+  _squadViewMode = mode;
+  document.getElementById('squadModeLiveBtn').classList.toggle('active', mode === 'live');
+  document.getElementById('squadModePlannedBtn').classList.toggle('active', mode === 'planned');
+  refreshSquadDisplay(mode === 'live' && _lastLiveSquadCache ? 'cached' : null);
 }
 
 async function loadSquad() {
@@ -1275,7 +1455,8 @@ async function loadSquad() {
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
 
     const cache = buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId);
-    renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam, cache.maxPointsByPos, cache.topPlayerIdByPos);
+    _lastLiveSquadCache = cache;
+    refreshSquadDisplay();
     persistSquadCache(cache);
     safeToast('Squad loaded');
   } catch (e) {
@@ -1338,6 +1519,7 @@ async function pullRemoteSquadCache() {
       try { localStorage.setItem('ff_squad_cache', JSON.stringify(remoteCache)); } catch (e) {}
       maybeAutoRefreshStaleSquadCache(remoteCache, 'synced');
     } else {
+      _lastLiveSquadCache = localCache;
       maybeAutoRefreshStaleSquadCache(localCache, 'local');
     }
   } catch (e) {
@@ -1354,6 +1536,54 @@ async function pullRemoteSquadCache() {
 // can't exist in FPL's data — that's the one thing sync can never do.
 // Advisory only: nothing here executes a transfer on FPL itself.
 let _transferLog = [];
+
+// Full player list, fetched once per session (not just for the
+// picker — the "planned squad" projection also needs it, to resolve
+// full stats for a newly-added player who isn't in the trimmed squad
+// cache). Same session-only-cache reasoning as _playerHistoryCache.
+let _allPlayersCache = null;
+let _txfOutSelected = null; // {id, name} once a search result is clicked
+let _txfInSelected = null;
+
+async function ensurePlayersLoaded() {
+  if (_allPlayersCache) return _allPlayersCache;
+  if (!FF_PROXY_URL) throw new Error('pal-config.js did not load');
+  if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') throw new Error('FF_PROXY_KEY is not set');
+  const res = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(false) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  _allPlayersCache = data.elements || [];
+  return _allPlayersCache;
+}
+
+async function filterPlayerPicker(which, query) {
+  const resultsEl = document.getElementById(which === 'out' ? 'txfOutResults' : 'txfInResults');
+  if (which === 'out') _txfOutSelected = null; else _txfInSelected = null;
+  if (!query || query.trim().length < 2) { resultsEl.innerHTML = ''; return; }
+  resultsEl.innerHTML = '<div class="sub" style="padding:8px">Searching…</div>';
+  let players;
+  try { players = await ensurePlayersLoaded(); } catch (e) {
+    resultsEl.innerHTML = '<div class="sub" style="padding:8px">Couldn\'t load players: ' + safeEsc(e.message) + '</div>';
+    return;
+  }
+  const q = query.trim().toLowerCase();
+  const matches = players.filter(p => p.web_name.toLowerCase().includes(q)).slice(0, 8);
+  if (!matches.length) { resultsEl.innerHTML = '<div class="sub" style="padding:8px">No matches</div>'; return; }
+  resultsEl.innerHTML = matches.map(p =>
+    '<div class="player-picker-row" data-id="' + p.id + '" data-name="' + safeEsc(p.web_name) + '" onclick="selectPlayerPickerFromRow(this, \'' + which + '\')">' +
+    safeEsc(p.web_name) + ' <span class="sub" style="display:inline;font-size:11px">' + (POSITION_SHORT[p.element_type] || '') + ' · ' + formatPrice(p.now_cost) + '</span></div>'
+  ).join('');
+}
+
+function selectPlayerPickerFromRow(rowEl, which) {
+  const id = parseInt(rowEl.dataset.id, 10);
+  const name = rowEl.dataset.name;
+  const inputEl = document.getElementById(which === 'out' ? 'txfOutSearch' : 'txfInSearch');
+  const resultsEl = document.getElementById(which === 'out' ? 'txfOutResults' : 'txfInResults');
+  inputEl.value = name;
+  resultsEl.innerHTML = '';
+  if (which === 'out') _txfOutSelected = { id, name }; else _txfInSelected = { id, name };
+}
 
 function formatCostDelta(delta) {
   const sign = delta > 0 ? '+' : delta < 0 ? '−' : '';
@@ -1392,20 +1622,28 @@ async function pullRemoteTransferLog() {
 }
 
 // Transfer rating: how has the player brought IN performed since the
-// transfer, against the player let GO, over the same window. Only
-// possible for 'auto' (synced) entries — the real FPL player ids are
-// recoverable from the entry's own id string (auto_<in>_<out>_<gw>_
-// <time>), so this works retroactively on entries synced before this
-// feature existed too, no data migration needed. Manual/planned
-// entries have no player ids (free-text names only) and never show
-// a rating.
+// transfer, against the player let GO, over the same window. Player
+// ids come either directly off the entry (playerOutId/playerInId —
+// present on every entry created since the player picker existed,
+// both auto and manual) or, for older auto entries that predate that
+// field, recovered from the entry's own id string
+// (auto_<in>_<out>_<gw>_<time>) — works retroactively, no migration
+// needed. Manual entries created before the picker existed (free-text
+// names, no ids at all) still can't show a rating — nothing to
+// compute it from.
 function extractTransferPlayerIds(entry) {
-  if (!entry || entry.source !== 'auto' || !entry.id || entry.id.indexOf('auto_') !== 0) return null;
-  const parts = entry.id.split('_');
-  if (parts.length < 4) return null;
-  const inId = parseInt(parts[1], 10), outId = parseInt(parts[2], 10);
-  if (isNaN(inId) || isNaN(outId)) return null;
-  return { inId, outId };
+  if (!entry) return null;
+  if (entry.playerInId != null && entry.playerOutId != null) {
+    return { inId: entry.playerInId, outId: entry.playerOutId };
+  }
+  if (entry.source === 'auto' && entry.id && entry.id.indexOf('auto_') === 0) {
+    const parts = entry.id.split('_');
+    if (parts.length >= 4) {
+      const inId = parseInt(parts[1], 10), outId = parseInt(parts[2], 10);
+      if (!isNaN(inId) && !isNaN(outId)) return { inId, outId };
+    }
+  }
+  return null;
 }
 
 function pointsSinceGW(history, fromGW) {
@@ -1468,7 +1706,7 @@ function renderTransferList() {
   const sorted = _transferLog.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   let html = '';
   sorted.forEach(t => {
-    const canRate = t.source === 'auto' && !!t.gwId;
+    const canRate = !!t.gwId && !!extractTransferPlayerIds(t);
     html += '<div class="transfer-entry">' +
       '<div class="txf-head"><span class="txf-move"><span class="txf-out">' + safeEsc(t.playerOutName) + '</span> → <span class="txf-in">' + safeEsc(t.playerInName) + '</span></span>' +
       '<span class="txf-badge ' + (t.status === 'made' ? 'made' : 'planned') + '">' + (t.status === 'made' ? 'MADE' : 'PLANNED') + '</span></div>' +
@@ -1490,25 +1728,31 @@ function renderTransferList() {
 }
 
 function addManualTransfer() {
-  const outName = document.getElementById('txfOutInput').value.trim();
-  const inName = document.getElementById('txfInInput').value.trim();
+  if (!_txfOutSelected || !_txfInSelected) {
+    safeToast('Search and select both a player out and a player in from the list', 'err'); return;
+  }
   const costRaw = document.getElementById('txfCostInput').value.trim();
   const note = document.getElementById('txfNoteInput').value.trim();
-  if (!outName || !inName) { safeToast('Enter both a player out and a player in', 'err'); return; }
   const costDelta = parseFloat(costRaw) || 0;
   const entry = {
     id: (typeof uid === 'function' ? uid('txf') : 'txf_' + Date.now() + Math.random().toString(36).slice(2, 8)),
     date: (typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10)),
-    playerOutName: outName, playerInName: inName, costDelta, note,
-    status: 'planned', source: 'manual', gwId: null
+    playerOutName: _txfOutSelected.name, playerInName: _txfInSelected.name,
+    playerOutId: _txfOutSelected.id, playerInId: _txfInSelected.id,
+    costDelta, note, status: 'planned', source: 'manual', gwId: null
   };
   _transferLog.push(entry);
   persistTransferLog();
   renderTransferList();
-  document.getElementById('txfOutInput').value = '';
-  document.getElementById('txfInInput').value = '';
+  document.getElementById('txfOutSearch').value = '';
+  document.getElementById('txfInSearch').value = '';
   document.getElementById('txfCostInput').value = '';
   document.getElementById('txfNoteInput').value = '';
+  _txfOutSelected = null; _txfInSelected = null;
+  // A newly-added planned transfer changes what the "Planned" view
+  // would project — if it's currently being shown, refresh it so it
+  // doesn't look stale relative to what was just added.
+  if (_squadViewMode === 'planned') refreshSquadDisplay();
   safeToast('Planned transfer added');
 }
 
@@ -1516,14 +1760,24 @@ function deleteTransferEntry(id) {
   _transferLog = _transferLog.filter(t => t.id !== id);
   persistTransferLog();
   renderTransferList();
+  if (_squadViewMode === 'planned') refreshSquadDisplay();
 }
 
 function markTransferMade(id) {
   const entry = _transferLog.find(t => t.id === id);
   if (!entry) return;
   entry.status = 'made';
+  // Best-effort gwId so a rating becomes possible from here on — the
+  // gameweek this genuinely took effect in isn't knowable for a
+  // manual entry (that's real FPL data we don't have), so this uses
+  // the gameweek your last-loaded live squad was on as the closest
+  // available approximation, not a claim of exact accuracy.
+  if (!entry.gwId && _lastLiveSquadCache && _lastLiveSquadCache.gwId) {
+    entry.gwId = _lastLiveSquadCache.gwId;
+  }
   persistTransferLog();
   renderTransferList();
+  if (_squadViewMode === 'planned') refreshSquadDisplay();
   safeToast('Marked as made');
 }
 
@@ -2392,6 +2646,21 @@ async function pullRemoteAdviceCache() {
   } catch (e) { console.error('Advice cache pull from Supabase failed:', e); }
 }
 
+let _adviceViewMode = 'live';
+
+function switchAdviceViewMode(mode) {
+  _adviceViewMode = mode;
+  document.getElementById('adviceModeLiveBtn').classList.toggle('active', mode === 'live');
+  document.getElementById('adviceModePlannedBtn').classList.toggle('active', mode === 'planned');
+  // Analysis is a real multi-fetch operation, not a cheap re-render —
+  // unlike Squad's toggle, this deliberately doesn't auto-run; the
+  // user clicks Analyse Squad again for the newly-selected mode.
+  document.getElementById('adviceBody').innerHTML =
+    '<div class="placeholder"><div class="emoji">📊</div><p>Click <strong>Analyse Squad</strong> to analyse your ' +
+    (mode === 'planned' ? 'planned' : 'live') + ' squad.</p></div>';
+  document.getElementById('adviceMeta').textContent = 'Not loaded yet';
+}
+
 async function loadAdvice() {
   if (!FF_PROXY_URL) { safeToast('pal-config.js did not load — cannot reach the proxy', 'err'); return; }
   if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') {
@@ -2413,16 +2682,31 @@ async function loadAdvice() {
     if (!fixturesRes.ok) throw new Error('fixtures fetch failed (HTTP ' + fixturesRes.status + ')');
     const fixtures = await fixturesRes.json();
 
-    const currentEvent = (bootstrap.events || []).find(e => e.is_current) ||
-                          (bootstrap.events || []).slice().reverse().find(e => e.finished);
-    const gwId = currentEvent ? currentEvent.id : 1;
-    const deadline = currentEvent ? currentEvent.deadline_time : null;
+    let picksData, gwId, deadline, projectionInfo = null;
 
-    const picksRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/picks/' + gwId,
-      { headers: proxyHeaders(true) });
-    if (!picksRes.ok) throw new Error('picks fetch failed (HTTP ' + picksRes.status + ')');
-    const picksData = await picksRes.json();
-    if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
+    if (_adviceViewMode === 'planned') {
+      if (!_lastLiveSquadCache) throw new Error('Load your live squad first (Squad tab → Load Squad) before analysing a planned one.');
+      const plannedCount = (_transferLog || []).filter(t => t.status === 'planned' && t.playerInId != null && t.playerOutId != null).length;
+      if (!plannedCount) throw new Error('No planned transfers with a selected player yet — add one in the Transfers tab.');
+      // bootstrap.elements is the FULL player list here (unlike the
+      // squad tab's trimmed cache), so any newly-projected-in player
+      // is already resolvable without a separate fetch.
+      projectionInfo = buildProjectedSquad(_lastLiveSquadCache, bootstrap.elements);
+      picksData = projectionInfo.picksData;
+      gwId = projectionInfo.gwId;
+      deadline = null;
+    } else {
+      const currentEvent = (bootstrap.events || []).find(e => e.is_current) ||
+                            (bootstrap.events || []).slice().reverse().find(e => e.finished);
+      gwId = currentEvent ? currentEvent.id : 1;
+      deadline = currentEvent ? currentEvent.deadline_time : null;
+
+      const picksRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/picks/' + gwId,
+        { headers: proxyHeaders(true) });
+      if (!picksRes.ok) throw new Error('picks fetch failed (HTTP ' + picksRes.status + ')');
+      picksData = await picksRes.json();
+      if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
+    }
 
     const elementsById = {}; bootstrap.elements.forEach(e => elementsById[e.id] = e);
     const teamsById = {}; bootstrap.teams.forEach(t => teamsById[t.id] = t);
@@ -2452,14 +2736,18 @@ async function loadAdvice() {
 
     // Score history is updated FIRST so momentum reflects the trend
     // up to and including this gameweek's just-computed scores, not
-    // the trend as of the previous load.
-    const squadScoreSnapshot = {};
-    picksData.picks.forEach(p => { if (scores[p.element]) squadScoreSnapshot[p.element] = scores[p.element].score; });
-    _scoreHistory = (_scoreHistory || []).filter(h => h.gwId !== gwId);
-    _scoreHistory.push({ gwId, scores: squadScoreSnapshot, savedAt: Date.now() });
-    _scoreHistory.sort((a, b) => a.gwId - b.gwId);
-    if (_scoreHistory.length > 6) _scoreHistory = _scoreHistory.slice(-6);
-    persistScoreHistory(_scoreHistory);
+    // the trend as of the previous load. Skipped entirely for a
+    // planned/projected run — a hypothetical squad's scores must never
+    // be written into the real momentum-tracking history.
+    if (_adviceViewMode !== 'planned') {
+      const squadScoreSnapshot = {};
+      picksData.picks.forEach(p => { if (scores[p.element]) squadScoreSnapshot[p.element] = scores[p.element].score; });
+      _scoreHistory = (_scoreHistory || []).filter(h => h.gwId !== gwId);
+      _scoreHistory.push({ gwId, scores: squadScoreSnapshot, savedAt: Date.now() });
+      _scoreHistory.sort((a, b) => a.gwId - b.gwId);
+      if (_scoreHistory.length > 6) _scoreHistory = _scoreHistory.slice(-6);
+      persistScoreHistory(_scoreHistory);
+    }
 
     const decisions = {};
     picksData.picks.forEach(p => {
@@ -2485,10 +2773,24 @@ async function loadAdvice() {
       watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline
     };
     renderAdvice(renderData);
-    document.getElementById('adviceMeta').textContent =
-      'Gameweek ' + gwId + (deadline ? ' · Deadline: ' + formatDeadline(deadline) : '') + ' · Analysed just now';
 
-    persistAdviceCache(buildAdviceCachePayload(renderData));
+    if (_adviceViewMode === 'planned' && projectionInfo) {
+      let banner = '<div class="projection-banner">📋 PROJECTED — analysing ' + projectionInfo.appliedSwaps.length +
+        ' planned swap' + (projectionInfo.appliedSwaps.length === 1 ? '' : 's') + ' applied on top of your live squad. Not live on FPL yet.';
+      if (projectionInfo.skippedSwaps.length) {
+        banner += '<div class="sub">' + projectionInfo.skippedSwaps.length + ' planned swap' + (projectionInfo.skippedSwaps.length === 1 ? '' : 's') + ' skipped — see the Squad tab\'s Planned view for details.</div>';
+      }
+      banner += '</div>';
+      document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', banner);
+      document.getElementById('adviceMeta').textContent = 'PROJECTED · Gameweek ' + gwId + ' · Analysed just now';
+    } else {
+      document.getElementById('adviceMeta').textContent =
+        'Gameweek ' + gwId + (deadline ? ' · Deadline: ' + formatDeadline(deadline) : '') + ' · Analysed just now';
+      // Only a LIVE analysis is cached/synced — a hypothetical
+      // projected run must never overwrite the real cached advice
+      // that reflects your actual current squad.
+      persistAdviceCache(buildAdviceCachePayload(renderData));
+    }
     safeToast('Squad analysed');
   } catch (e) {
     document.getElementById('adviceBody').innerHTML =
