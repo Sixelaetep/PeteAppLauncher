@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.17</title>
+<title>Fantasy Football Tracker v1.18</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -269,7 +269,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.17</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.18</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -366,13 +366,27 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.17"></script>
-<script src="pal-sync.js?v=1.17"></script>
-<script src="pal-utils.js?v=1.17"></script>
+<script src="pal-config.js?v=1.18"></script>
+<script src="pal-sync.js?v=1.18"></script>
+<script src="pal-utils.js?v=1.18"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.18: transfer rating — how has the player brought IN performed
+ * since the swap, against the player let GO, over the same window
+ * (points since the transfer gameweek, both sides). Only possible for
+ * 'auto' (FPL-synced) entries: the real player ids are recovered from
+ * the entry's own id string (auto_<in>_<out>_<gw>_<time>, already
+ * embedded since v1.16) rather than needing new stored fields — works
+ * retroactively on entries already synced before this existed, no
+ * migration needed. Manual/planned entries have no player ids (free-
+ * text names only) and never show a rating — nothing to compute it
+ * from. Reuses the same per-player history fetch + cache built for
+ * FF-012's score graph (refactored into fetchPlayerHistoryCached, one
+ * shared cache either feature can hit); lazy-loaded the same way,
+ * only fetches when a specific transfer's rating is actually expanded.
  *
  * v1.17 (reported: FPL transfer sync failed, 404 then 502 after
  * redeploy): the 404 was the client correctly hitting the newly-
@@ -728,7 +742,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.17';
+const FF_VERSION = '1.18';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 let FF_PROXY_URL = null;
@@ -797,7 +811,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.17',
+    appVersion: '1.18',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1011,27 +1025,29 @@ function scoreGraphSvg(history) {
 // on open (not close), only once per player per session (subsequent
 // opens reuse _playerHistoryCache), and only for the player actually
 // being expanded.
+// Reused by both the score graph (above) and the transfer rating
+// (below) — one shared session cache, one fetch per player no matter
+// how many places want to look at their gameweek history.
+async function fetchPlayerHistoryCached(playerId) {
+  if (_playerHistoryCache[playerId]) return _playerHistoryCache[playerId];
+  if (!FF_PROXY_URL) throw new Error('pal-config.js did not load');
+  if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') throw new Error('FF_PROXY_KEY is not set');
+  const res = await fetch(FF_PROXY_URL + '/element-summary/' + playerId, { headers: { 'x-pal-key': FF_PROXY_KEY } });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  _playerHistoryCache[playerId] = data.history || [];
+  return _playerHistoryCache[playerId];
+}
+
 async function handlePlayerHistoryToggle(detailsEl, playerId) {
   if (!detailsEl.open) return;
   const slot = detailsEl.querySelector('.score-graph-slot');
   if (!slot || slot.dataset.loaded === '1') return;
   slot.dataset.loaded = '1';
   slot.innerHTML = '<div class="sub">Loading score history…</div>';
-
-  if (_playerHistoryCache[playerId]) {
-    slot.innerHTML = scoreGraphSvg(_playerHistoryCache[playerId]);
-    return;
-  }
-  if (!FF_PROXY_URL) { slot.innerHTML = '<div class="sub">pal-config.js did not load.</div>'; slot.dataset.loaded = '0'; return; }
-  if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') {
-    slot.innerHTML = '<div class="sub">FF_PROXY_KEY is not set — see Diagnostics.</div>'; slot.dataset.loaded = '0'; return;
-  }
   try {
-    const res = await fetch(FF_PROXY_URL + '/element-summary/' + playerId, { headers: { 'x-pal-key': FF_PROXY_KEY } });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    _playerHistoryCache[playerId] = data.history || [];
-    slot.innerHTML = scoreGraphSvg(_playerHistoryCache[playerId]);
+    const history = await fetchPlayerHistoryCached(playerId);
+    slot.innerHTML = scoreGraphSvg(history);
   } catch (e) {
     slot.innerHTML = '<div class="sub">Couldn\'t load score history: ' + safeEsc(e.message) + '</div>';
     slot.dataset.loaded = '0';
@@ -1344,6 +1360,72 @@ async function pullRemoteTransferLog() {
   } catch (e) { console.error('Transfer log pull from Supabase failed:', e); }
 }
 
+// Transfer rating: how has the player brought IN performed since the
+// transfer, against the player let GO, over the same window. Only
+// possible for 'auto' (synced) entries — the real FPL player ids are
+// recoverable from the entry's own id string (auto_<in>_<out>_<gw>_
+// <time>), so this works retroactively on entries synced before this
+// feature existed too, no data migration needed. Manual/planned
+// entries have no player ids (free-text names only) and never show
+// a rating.
+function extractTransferPlayerIds(entry) {
+  if (!entry || entry.source !== 'auto' || !entry.id || entry.id.indexOf('auto_') !== 0) return null;
+  const parts = entry.id.split('_');
+  if (parts.length < 4) return null;
+  const inId = parseInt(parts[1], 10), outId = parseInt(parts[2], 10);
+  if (isNaN(inId) || isNaN(outId)) return null;
+  return { inId, outId };
+}
+
+function pointsSinceGW(history, fromGW) {
+  return (history || []).filter(h => h.round >= fromGW).reduce((s, h) => s + (h.total_points || 0), 0);
+}
+
+function transferRatingLabel(delta) {
+  if (delta >= 10) return { label: 'PAID OFF', color: 'var(--accent2)' };
+  if (delta <= -10) return { label: 'COST YOU POINTS', color: 'var(--accent3)' };
+  return { label: 'ROUGHLY EVEN', color: 'var(--ink2)' };
+}
+
+async function handleTransferRatingToggle(detailsEl, entryId) {
+  if (!detailsEl.open) return;
+  const slot = detailsEl.querySelector('.txf-rating-slot');
+  if (!slot || slot.dataset.loaded === '1') return;
+  slot.dataset.loaded = '1';
+  slot.innerHTML = '<div class="sub">Loading rating…</div>';
+
+  const entry = _transferLog.find(t => t.id === entryId);
+  if (!entry || !entry.gwId) {
+    slot.innerHTML = '<div class="sub">No gameweek recorded for this transfer — can\'t compute a rating.</div>';
+    return;
+  }
+  const ids = extractTransferPlayerIds(entry);
+  if (!ids) {
+    slot.innerHTML = '<div class="sub">Rating needs real player IDs, only available for transfers synced from FPL.</div>';
+    return;
+  }
+
+  try {
+    const [inHistory, outHistory] = await Promise.all([
+      fetchPlayerHistoryCached(ids.inId),
+      fetchPlayerHistoryCached(ids.outId)
+    ]);
+    const inPoints = pointsSinceGW(inHistory, entry.gwId);
+    const outPoints = pointsSinceGW(outHistory, entry.gwId);
+    const delta = inPoints - outPoints;
+    const rating = transferRatingLabel(delta);
+    slot.innerHTML =
+      '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:11px;color:var(--ink2)">' +
+      '<span>' + safeEsc(entry.playerInName) + ': ' + inPoints + ' pts since GW' + entry.gwId + '</span>' +
+      '<span>' + safeEsc(entry.playerOutName) + ': ' + outPoints + ' pts since GW' + entry.gwId + '</span></div>' +
+      '<div style="margin-top:4px;font-weight:700;font-size:11px;color:' + rating.color + '">' +
+      rating.label + ' (' + (delta > 0 ? '+' : '') + delta + ' pts)</div>';
+  } catch (e) {
+    slot.innerHTML = '<div class="sub">Couldn\'t load rating: ' + safeEsc(e.message) + '</div>';
+    slot.dataset.loaded = '0';
+  }
+}
+
 function renderTransferList() {
   const body = document.getElementById('transferListBody');
   if (!_transferLog.length) {
@@ -1355,11 +1437,16 @@ function renderTransferList() {
   const sorted = _transferLog.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   let html = '';
   sorted.forEach(t => {
+    const canRate = t.source === 'auto' && !!t.gwId;
     html += '<div class="transfer-entry">' +
       '<div class="txf-head"><span class="txf-move"><span class="txf-out">' + safeEsc(t.playerOutName) + '</span> → <span class="txf-in">' + safeEsc(t.playerInName) + '</span></span>' +
       '<span class="txf-badge ' + (t.status === 'made' ? 'made' : 'planned') + '">' + (t.status === 'made' ? 'MADE' : 'PLANNED') + '</span></div>' +
       '<div class="txf-meta">' + safeEsc(t.date) + ' · ' + formatCostDelta(t.costDelta || 0) + (t.gwId ? ' · GW' + t.gwId : '') + ' · ' + (t.source === 'auto' ? 'synced from FPL' : 'manual') + '</div>' +
       (t.note ? '<div class="txf-note">' + safeEsc(t.note) + '</div>' : '') +
+      (canRate
+        ? '<details class="pts-breakdown" ontoggle="handleTransferRatingToggle(this, \'' + t.id + '\')"><summary class="player-sub">How has this swap gone? <span style="color:var(--ink3)">(rating)</span></summary>' +
+          '<div class="txf-rating-slot" data-loaded="0"><div class="sub">Tap to load…</div></div></details>'
+        : '') +
       '<div class="txf-actions">' +
       (t.status === 'planned' ? '<button onclick="markTransferMade(\'' + t.id + '\')">Mark as made</button>' : '') +
       (t.source === 'manual' ? '<button onclick="deleteTransferEntry(\'' + t.id + '\')">Delete</button>' : '') +
