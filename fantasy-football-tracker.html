@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.9</title>
+<title>Fantasy Football Tracker v1.10</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -217,7 +217,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.9</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.10</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -287,13 +287,26 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.9"></script>
-<script src="pal-sync.js?v=1.9"></script>
-<script src="pal-utils.js?v=1.9"></script>
+<script src="pal-config.js?v=1.10"></script>
+<script src="pal-sync.js?v=1.10"></script>
+<script src="pal-utils.js?v=1.10"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.10 (reported: Squad view shows no fixture data for any player):
+ * root cause was gwId reuse. gwId answers "what squad did you have"
+ * and correctly falls back to the latest FINISHED gameweek when
+ * nothing is flagged is_current — right for fetching picks, wrong for
+ * fixture lookups, whose fixtures for that same GW would then all be
+ * finished:true and match nothing against buildNextFixtureByTeam's
+ * !finished filter. New findNextFixtureGW() (is_next → is_current →
+ * smallest unfinished event → computed fallback) decouples "next
+ * fixture" from "which squad", fixed at all four call sites this
+ * affected: Squad's buildTrimmedSquadCache, and Advice's
+ * nextFixtureByTeam, per-player fixtureSwing, and buy-opportunity
+ * fixtureSwing scan. All four previously shared the same wrong value.
  *
  * v1.9: Squad tab now shows next opponent + FDR for every player,
  * reusing buildNextFixtureByTeam/the fixture-swing infrastructure
@@ -579,7 +592,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.9',
+    appVersion: '1.10',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -751,7 +764,8 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
   const teamIds = new Set(elements.map(e => e.team));
   const teams = bootstrap.teams.filter(t => teamIds.has(t.id));
   const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
-  const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, gwId);
+  const fixtureGW = findNextFixtureGW(bootstrap.events);
+  const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, fixtureGW);
   return { elements, teams, picksData, gwId, nextFixtureByTeam, cachedAt: Date.now() };
 }
 
@@ -885,6 +899,25 @@ const VALID_FORMATIONS = (function () {
 // opponent, home/away, and that specific match's difficulty rating.
 // Used so captain/vice/breakdown can show "who are they actually
 // playing", not just an abstract difficulty number.
+// Picks/squad-value gwId answers "what squad did you have" and
+// correctly falls back to the latest FINISHED gameweek when nothing
+// is flagged current. Fixture lookups need a genuinely different
+// answer — "what's the next unplayed gameweek" — so this is kept
+// separate rather than reusing gwId, which previously caused every
+// fixture lookup to come back empty whenever gwId pointed at an
+// already-finished gameweek (its fixtures are all finished:true, so
+// the !finished filter found nothing for anyone).
+function findNextFixtureGW(events) {
+  const evts = events || [];
+  const flaggedNext = evts.find(e => e.is_next);
+  if (flaggedNext) return flaggedNext.id;
+  const flaggedCurrent = evts.find(e => e.is_current);
+  if (flaggedCurrent) return flaggedCurrent.id;
+  const unplayed = evts.filter(e => !e.finished).sort((a, b) => a.id - b.id)[0];
+  if (unplayed) return unplayed.id;
+  return evts.filter(e => e.finished).length + 1;
+}
+
 function buildNextFixtureByTeam(fixtures, teamsById, nextGW) {
   const byTeam = {};
   (fixtures || []).filter(f => f.event === nextGW && !f.finished).forEach(f => {
@@ -1611,8 +1644,15 @@ async function loadAdvice() {
     const elementsById = {}; bootstrap.elements.forEach(e => elementsById[e.id] = e);
     const teamsById = {}; bootstrap.teams.forEach(t => teamsById[t.id] = t);
 
+    // gwId (above) answers "what squad did you have" and correctly
+    // falls back to the latest FINISHED gameweek — wrong basis for
+    // fixture lookups, whose fixtures would then all be finished:true
+    // and match nothing. fixtureGW is the separate, correct answer to
+    // "what's the next unplayed gameweek".
+    const fixtureGW = findNextFixtureGW(bootstrap.events);
+
     const { scores } = computeAllScores(bootstrap, fixtures);
-    const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, gwId);
+    const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, fixtureGW);
 
     const optimalRaw = findOptimalXI(picksData.picks, elementsById, scores);
     const optimal = optimalRaw
@@ -1639,7 +1679,7 @@ async function loadAdvice() {
       const s = scores[p.element];
       if (!el || !s) return;
       const momentum = calculateMomentum(_scoreHistory, p.element);
-      const fixtureSwing = calculateFixtureSwing(fixtures, el.team, gwId);
+      const fixtureSwing = calculateFixtureSwing(fixtures, el.team, fixtureGW);
       const minutesRisk = calculateMinutesRisk(s.components.reliabilityScore);
       const evald = evaluatePlayerDecision(el, momentum, fixtureSwing, minutesRisk, p.position > 11);
       decisions[p.element] = Object.assign({ el, momentum, fixtureSwing, minutesRisk }, evald);
@@ -1649,7 +1689,7 @@ async function loadAdvice() {
     const squadIds = new Set(picksData.picks.map(p => p.element));
     const squadDecisionsList = Object.values(decisions);
     const transferOpportunities = buildTransferOpportunities(squadDecisionsList, scores, bootstrap.elements, bank, squadIds);
-    const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, gwId, squadIds, 2);
+    const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, fixtureGW, squadIds, 2);
     const watchItems = generateWatchItems(squadDecisionsList, buyOpportunities);
 
     const renderData = {
