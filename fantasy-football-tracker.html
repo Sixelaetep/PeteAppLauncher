@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.18</title>
+<title>Fantasy Football Tracker v1.19</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -269,7 +269,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.18</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.19</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -366,13 +366,32 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.18"></script>
-<script src="pal-sync.js?v=1.18"></script>
-<script src="pal-utils.js?v=1.18"></script>
+<script src="pal-config.js?v=1.19"></script>
+<script src="pal-sync.js?v=1.19"></script>
+<script src="pal-utils.js?v=1.19"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.19 (reported: squad not reflecting a just-made transfer, looked
+ * like it was a gameweek behind): two distinct possible causes here,
+ * only one of which is actually a bug I can fix. (1) The proxy's own
+ * 15-minute server-side picks cache — a real gap: clicking Load Squad
+ * always refreshed the APP's cache, but could still be served the
+ * PROXY's stale cached copy underneath if checked soon after making a
+ * transfer. Fixed with pal-fpl-proxy v1.4's x-pal-force-fresh header,
+ * sent by every explicit user-triggered fetch (Load Squad, Analyse
+ * Squad, Sync from FPL — new proxyHeaders() helper) — bypasses the
+ * cache-freshness check for that one request, still writes the fresh
+ * result back to cache for subsequent passive loads. (2) Real FPL
+ * mechanics: a transfer set for an upcoming gameweek before its
+ * deadline genuinely doesn't apply until that deadline passes —
+ * is_current correctly still points at the live gameweek in that
+ * window. That's not a bug and this release doesn't change it — but
+ * eliminating (1) means if the squad still looks a gameweek behind
+ * after this update, that confirms it's (2), not a data-fetching
+ * problem.
  *
  * v1.18: transfer rating — how has the player brought IN performed
  * since the swap, against the player let GO, over the same window
@@ -742,9 +761,21 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.18';
+const FF_VERSION = '1.19';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
+
+// Passive/boot-time loads use normal proxy caching. Explicit
+// user-triggered refreshes (Load Squad, Analyse Squad, Sync from FPL)
+// pass forceFresh so a just-made real change (a transfer, in
+// particular) isn't hidden behind the proxy's own 15-minute
+// server-side cache even after the user has deliberately asked for
+// current data.
+function proxyHeaders(forceFresh) {
+  const h = { 'x-pal-key': FF_PROXY_KEY };
+  if (forceFresh) h['x-pal-force-fresh'] = '1';
+  return h;
+}
 let FF_PROXY_URL = null;
 if (window.PAL_CONFIG && window.PAL_CONFIG.SB_URL) {
   FF_PROXY_URL = window.PAL_CONFIG.SB_URL + '/functions/v1/pal-fpl-proxy';
@@ -811,7 +842,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.18',
+    appVersion: '1.19',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1224,11 +1255,11 @@ async function loadSquad() {
   document.getElementById('squadMeta').textContent = 'Loading…';
 
   try {
-    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: { 'x-pal-key': FF_PROXY_KEY } });
+    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(true) });
     if (!bootRes.ok) throw new Error('bootstrap fetch failed (HTTP ' + bootRes.status + ')');
     const bootstrap = await bootRes.json();
 
-    const fixturesRes = await fetch(FF_PROXY_URL + '/fixtures', { headers: { 'x-pal-key': FF_PROXY_KEY } });
+    const fixturesRes = await fetch(FF_PROXY_URL + '/fixtures', { headers: proxyHeaders(true) });
     if (!fixturesRes.ok) throw new Error('fixtures fetch failed (HTTP ' + fixturesRes.status + ')');
     const fixtures = await fixturesRes.json();
 
@@ -1237,7 +1268,7 @@ async function loadSquad() {
     const gwId = currentEvent ? currentEvent.id : 1;
 
     const picksRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/picks/' + gwId,
-      { headers: { 'x-pal-key': FF_PROXY_KEY } });
+      { headers: proxyHeaders(true) });
     if (!picksRes.ok) throw new Error('picks fetch failed (HTTP ' + picksRes.status + ') — check the entry ID in Settings');
     const picksData = await picksRes.json();
 
@@ -1522,12 +1553,12 @@ async function syncTransfersFromFPL() {
   btn.disabled = true; btn.textContent = 'Syncing…';
 
   try {
-    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: { 'x-pal-key': FF_PROXY_KEY } });
+    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(true) });
     if (!bootRes.ok) throw new Error('bootstrap fetch failed: ' + await proxyErrorDetail(bootRes));
     const bootstrap = await bootRes.json();
     const elementsById = {}; bootstrap.elements.forEach(e => elementsById[e.id] = e);
 
-    const xferRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/transfers', { headers: { 'x-pal-key': FF_PROXY_KEY } });
+    const xferRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/transfers', { headers: proxyHeaders(true) });
     if (!xferRes.ok) throw new Error('transfers fetch failed: ' + await proxyErrorDetail(xferRes));
     const realTransfers = await xferRes.json();
 
@@ -2374,11 +2405,11 @@ async function loadAdvice() {
   document.getElementById('adviceMeta').textContent = 'Loading…';
 
   try {
-    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: { 'x-pal-key': FF_PROXY_KEY } });
+    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(true) });
     if (!bootRes.ok) throw new Error('bootstrap fetch failed (HTTP ' + bootRes.status + ')');
     const bootstrap = await bootRes.json();
 
-    const fixturesRes = await fetch(FF_PROXY_URL + '/fixtures', { headers: { 'x-pal-key': FF_PROXY_KEY } });
+    const fixturesRes = await fetch(FF_PROXY_URL + '/fixtures', { headers: proxyHeaders(true) });
     if (!fixturesRes.ok) throw new Error('fixtures fetch failed (HTTP ' + fixturesRes.status + ')');
     const fixtures = await fixturesRes.json();
 
@@ -2388,7 +2419,7 @@ async function loadAdvice() {
     const deadline = currentEvent ? currentEvent.deadline_time : null;
 
     const picksRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/picks/' + gwId,
-      { headers: { 'x-pal-key': FF_PROXY_KEY } });
+      { headers: proxyHeaders(true) });
     if (!picksRes.ok) throw new Error('picks fetch failed (HTTP ' + picksRes.status + ')');
     const picksData = await picksRes.json();
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
