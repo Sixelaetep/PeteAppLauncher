@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.11</title>
+<title>Fantasy Football Tracker v1.12</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -230,7 +230,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.11</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.12</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -300,13 +300,22 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.11"></script>
-<script src="pal-sync.js?v=1.11"></script>
-<script src="pal-utils.js?v=1.11"></script>
+<script src="pal-config.js?v=1.12"></script>
+<script src="pal-sync.js?v=1.12"></script>
+<script src="pal-utils.js?v=1.12"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.12: Squad view now shows each player's season total points
+ * alongside the highest total_points among all players in the same
+ * position league-wide. total_points is already in bootstrap — no
+ * new proxy calls. The position-wide max has to be computed from the
+ * FULL ~700-player list before it gets trimmed down to the squad's 15
+ * for caching, so buildMaxPointsByPos runs first and only the 4
+ * resulting numbers (one per position) get carried into the cache,
+ * not the full list.
  *
  * v1.11: new "Recommended team" section — consolidates who to keep,
  * who's moving in/out of the starting XI, and who to transfer (with
@@ -617,7 +626,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.11',
+    appVersion: '1.12',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -722,7 +731,14 @@ function fdrChipHtml(el, nextFixtureByTeam) {
   return '<span class="fdr-chip ' + cls + '">' + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ') ' + fx.difficulty + '</span>';
 }
 
-function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam) {
+function pointsLineHtml(el, maxPointsByPos) {
+  const max = maxPointsByPos ? maxPointsByPos[el.element_type] : null;
+  const pts = el.total_points != null ? el.total_points : 0;
+  if (!max) return '';
+  return `<div class="player-sub">${pts} pts <span style="color:var(--ink3)">· ${POSITION_SHORT[el.element_type]} best: ${max}</span></div>`;
+}
+
+function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByPos) {
   const dotClass = statusDotClass(el.status);
   const badge = pick.is_captain ? '<span class="cap-badge">C</span>'
               : pick.is_vice_captain ? '<span class="cap-badge vc">VC</span>' : '';
@@ -734,13 +750,14 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam) {
       <div class="player-info">
         <div class="player-name">${safeEsc(el.web_name)} ${badge}</div>
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}${statusNote}${multiplierNote}</div>
+        ${pointsLineHtml(el, maxPointsByPos)}
       </div>
       ${fdrChipHtml(el, nextFixtureByTeam)}
       <div class="player-price">${formatPrice(el.now_cost)}</div>
     </div>`;
 }
 
-function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam) {
+function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos) {
   const elementsById = {}; elements.forEach(e => elementsById[e.id] = e);
   const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
 
@@ -759,7 +776,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam) {
     if (!byPosType[type].length) return;
     html += `<div class="position-label">${POSITION_NAMES[type]}</div><div class="player-row">`;
     byPosType[type].forEach(({ el, pick }) => {
-      html += playerCardHtml(el, teamsById[el.team], pick, false, nextFixtureByTeam);
+      html += playerCardHtml(el, teamsById[el.team], pick, false, nextFixtureByTeam, maxPointsByPos);
     });
     html += `</div>`;
   });
@@ -767,7 +784,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam) {
   html += `<div class="bench-divider">Bench</div><div class="player-row">`;
   bench.forEach(p => {
     const el = elementsById[p.element];
-    if (el) html += playerCardHtml(el, teamsById[el.team], p, true, nextFixtureByTeam);
+    if (el) html += playerCardHtml(el, teamsById[el.team], p, true, nextFixtureByTeam, maxPointsByPos);
   });
   html += `</div>`;
 
@@ -780,10 +797,23 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam) {
   document.getElementById('squadMeta').textContent = meta;
 }
 
+function buildMaxPointsByPos(allElements) {
+  const max = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  (allElements || []).forEach(e => {
+    if (max[e.element_type] != null && (e.total_points || 0) > max[e.element_type]) {
+      max[e.element_type] = e.total_points || 0;
+    }
+  });
+  return max;
+}
+
 // Trims bootstrap's ~700-player list down to just the ~15 players
 // actually in this squad, so what gets cached (locally and synced to
 // Supabase) is small — a few KB instead of the full bootstrap payload.
+// maxPointsByPos is computed from the FULL list first (only 4 numbers,
+// cheap to keep) since that comparison is lost once elements is trimmed.
 function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
+  const maxPointsByPos = buildMaxPointsByPos(bootstrap.elements);
   const pickedIds = new Set(picksData.picks.map(p => p.element));
   const elements = bootstrap.elements.filter(e => pickedIds.has(e.id));
   const teamIds = new Set(elements.map(e => e.team));
@@ -791,7 +821,7 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
   const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
   const fixtureGW = findNextFixtureGW(bootstrap.events);
   const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, fixtureGW);
-  return { elements, teams, picksData, gwId, nextFixtureByTeam, cachedAt: Date.now() };
+  return { elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, cachedAt: Date.now() };
 }
 
 function persistSquadCache(cache) {
@@ -807,7 +837,7 @@ function persistSquadCache(cache) {
 }
 
 function renderFromCacheObject(cache, label) {
-  renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam || {});
+  renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam || {}, cache.maxPointsByPos || {});
   const ageMin = Math.round((Date.now() - cache.cachedAt) / 60000);
   document.getElementById('squadMeta').textContent += ` (${label} ${ageMin}m ago — tap 🔄 to refresh)`;
 }
@@ -847,7 +877,7 @@ async function loadSquad() {
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
 
     const cache = buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId);
-    renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam);
+    renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam, cache.maxPointsByPos);
     persistSquadCache(cache);
     safeToast('Squad loaded');
   } catch (e) {
