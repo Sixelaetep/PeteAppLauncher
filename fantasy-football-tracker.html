@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.10</title>
+<title>Fantasy Football Tracker v1.11</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -126,6 +126,19 @@
     background: var(--accent); color: #06210f; letter-spacing: .02em;
   }
   .cap-badge.vc { background: var(--neutral-bg); color: var(--ink2); border: 1px solid var(--neutral-border); }
+  .tag-in { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: var(--accent2); color: #06210f; letter-spacing: .02em; }
+  .tag-out { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: var(--neutral-bg); color: var(--accent3); border: 1px solid var(--accent3); letter-spacing: .02em; }
+  .transfer-summary-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px; font-size: 12px;
+  }
+  .transfer-summary-card .ts-out { color: var(--accent3); font-weight: 600; }
+  .transfer-summary-card .ts-budget { font-size: 11px; color: var(--ink2); margin: 4px 0 6px; }
+  .transfer-summary-card .ts-candidate {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 0; border-top: 1px solid var(--border);
+  }
+  .transfer-summary-card .ts-candidate:first-of-type { border-top: none; }
   .bench-divider {
     display: flex; align-items: center; gap: 8px; margin: 18px 0 10px;
     font-size: 11px; color: var(--ink2); text-transform: uppercase; letter-spacing: .04em;
@@ -217,7 +230,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.10</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.11</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -287,13 +300,25 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.10"></script>
-<script src="pal-sync.js?v=1.10"></script>
-<script src="pal-utils.js?v=1.10"></script>
+<script src="pal-config.js?v=1.11"></script>
+<script src="pal-sync.js?v=1.11"></script>
+<script src="pal-utils.js?v=1.11"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.11: new "Recommended team" section — consolidates who to keep,
+ * who's moving in/out of the starting XI, and who to transfer (with
+ * priced alternatives against actual available budget) into one view,
+ * replacing the old terse "Suggested lineup" diff. Pure presentation
+ * layer over existing data (findOptimalXI's starters, buildTransfer
+ * Opportunities' candidates) — nothing new computed. Full reasoning/
+ * confidence detail stays in the Transfer opportunities section
+ * further down, which this new section summarises rather than
+ * duplicates. optimal now carries starterIds through render and the
+ * cache payload so the full suggested XI (not just the diff) can be
+ * displayed.
  *
  * v1.10 (reported: Squad view shows no fixture data for any player):
  * root cause was gwId reuse. gwId answers "what squad did you have"
@@ -592,7 +617,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.10',
+    appVersion: '1.11',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1229,7 +1254,7 @@ function buildTransferOpportunities(squadDecisions, scoresById, allElements, ban
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
     const opportunity = candidates.length ? evaluateTransferOpportunity(outScore, candidates[0].score) : null;
-    opportunities.push({ el, outScore, decision: d.decision, confidence: d.confidence, reasons: d.reasons, candidates, opportunity });
+    opportunities.push({ el, outScore, decision: d.decision, confidence: d.confidence, reasons: d.reasons, candidates, opportunity, budget });
   });
   return opportunities;
 }
@@ -1354,6 +1379,84 @@ function captainBulletsFor(player, scoresById) {
   return bullets;
 }
 
+// Consolidates data already computed elsewhere (suggested XI, actual
+// picks, transfer opportunities) into one "what to actually do" view —
+// who to keep, who's moving in/out, and transfer alternatives with
+// their price against your actual available budget. Nothing here is
+// computed fresh; it's purely a presentation layer over
+// findOptimalXI's and buildTransferOpportunities' existing output.
+function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId) {
+  const actualStartingIds = new Set(picks.filter(p => p.position <= 11).map(p => p.element));
+  const suggestedIds = (optimal && optimal.starterIds) ? new Set(optimal.starterIds) : actualStartingIds;
+  const allSquadIds = picks.map(p => p.element);
+  const benchIds = allSquadIds.filter(id => !suggestedIds.has(id));
+
+  let html = '<div class="advice-section"><h3>Recommended team — Gameweek ' + gwId + '</h3>';
+  html += '<div class="sub">' +
+    (optimal ? 'Starting XI in ' + safeEsc(optimal.formation) + ', based on Value-free scores and current availability' : 'Based on your current picks') +
+    '</div>';
+  if (optimal && optimal.hasUnavailable) {
+    html += '<div class="lineup-warning">⚠️ Includes a player who is currently unavailable — no fit alternative in that position.</div>';
+  }
+
+  const byPosType = { 1: [], 2: [], 3: [], 4: [] };
+  [...suggestedIds].forEach(id => {
+    const el = elementsById[id];
+    if (el && byPosType[el.element_type]) byPosType[el.element_type].push(el);
+  });
+
+  [1, 2, 3, 4].forEach(type => {
+    if (!byPosType[type].length) return;
+    html += '<div class="position-label">' + POSITION_NAMES[type] + '</div><div class="player-row">';
+    byPosType[type].forEach(el => {
+      const isNew = !actualStartingIds.has(el.id);
+      html += '<div class="player-card"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
+        '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
+        (isNew ? ' <span class="tag-in">IN</span>' : '') + '</div></div>' +
+        '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
+    });
+    html += '</div>';
+  });
+
+  html += '<div class="bench-divider">Bench</div><div class="player-row">';
+  benchIds.forEach(id => {
+    const el = elementsById[id];
+    if (!el) return;
+    const movedDown = actualStartingIds.has(id);
+    html += '<div class="player-card bench"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
+      '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
+      (movedDown ? ' <span class="tag-out">OUT</span>' : '') + '</div></div>' +
+      '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
+  });
+  html += '</div>';
+
+  html += '<div class="sub" style="margin-top:14px"><strong>Transfers to consider</strong></div>';
+  if (!transferOpportunities.length) {
+    html += '<div class="no-flags">None this week — every squad player is HOLD or below the CONSIDER SELL threshold.</div>';
+  } else {
+    transferOpportunities.forEach(o => {
+      html += '<div class="transfer-summary-card">' +
+        '<div class="ts-out">OUT: ' + safeEsc(o.el.web_name) + ' (' + formatPrice(o.el.now_cost) + ', score ' + Math.round(o.outScore) + ')</div>' +
+        '<div class="ts-budget">Budget available: ' + formatPrice(o.budget) + ' (bank + selling price)</div>';
+      if (o.candidates.length) {
+        o.candidates.forEach((c, i) => {
+          html += '<div class="ts-candidate"><span>' + (i === 0 ? '<strong>IN: </strong>' : '') + safeEsc(c.el.web_name) + '</span>' +
+            '<span>' + formatPrice(c.el.now_cost) + ' · score ' + Math.round(c.score) + '</span></div>';
+        });
+        if (o.opportunity) {
+          html += '<div class="flag-targets" style="margin-top:6px"><strong>Opportunity: ' + o.opportunity.level + '</strong> (+' + o.opportunity.delta + ' vs. ' + safeEsc(o.el.web_name) + ')</div>';
+        }
+      } else {
+        html += '<div class="sub">No affordable same-position alternative found within budget.</div>';
+      }
+      html += '</div>';
+    });
+  }
+
+  html += '</div>';
+  return html;
+}
+
 function gameweekSummaryHtml(watchItems, avgScore, gwId) {
   const red = watchItems.filter(w => w.severity === 'RED').length;
   const amber = watchItems.filter(w => w.severity === 'AMBER').length;
@@ -1392,7 +1495,13 @@ function renderAdvice(data) {
   }
   html += '</div>';
 
-  // 3. CAPTAIN / VICE-CAPTAIN
+
+  // 3. RECOMMENDED TEAM (keep/in/out/bench + transfer summary --
+  // consolidates what Captain/Vice and the full Transfer opportunities
+  // detail below show separately)
+  html += recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId);
+
+  // 4. CAPTAIN / VICE-CAPTAIN
   if (captain) {
     html += '<div class="advice-section"><h3>Captain pick</h3>' +
       '<div class="captain-pick"><div style="font-size:22px">🅲</div><div>' +
@@ -1410,28 +1519,6 @@ function renderAdvice(data) {
       '<div class="creason">Next-highest ep_next among your starting XI (' + (viceCaptain.ep_next || '—') + ')</div>' +
       fixtureLineHtml(viceCaptain, nextFixtureByTeam) +
       '</div></div></div>';
-  }
-
-  // 4. SUGGESTED XI
-  if (optimal && optimal.diff && (optimal.diff.outIds.length || optimal.diff.inIds.length)) {
-    html += '<div class="advice-section"><h3>Suggested lineup — ' + safeEsc(optimal.formation) + '</h3>' +
-      '<div class="sub">Based on Value-free player scores, this lineup edges out your current XI</div>';
-    if (optimal.hasUnavailable) {
-      html += '<div class="lineup-warning">⚠️ This lineup includes a player who is currently unavailable — there wasn\'t a fit alternative in that position in your squad.</div>';
-    }
-    optimal.diff.outIds.forEach(id => {
-      const el = elementsById[id];
-      if (el) html += '<div class="xi-diff-row"><span class="xi-out">⬇ Bench</span> ' + safeEsc(el.web_name) + '</div>';
-    });
-    optimal.diff.inIds.forEach(id => {
-      const el = elementsById[id];
-      if (el) html += '<div class="xi-diff-row"><span class="xi-in">⬆ Start</span> ' + safeEsc(el.web_name) + '</div>';
-    });
-    html += '<div class="sub" style="margin-top:6px">This reflects a formation change (' + safeEsc(optimal.formation) + '), not necessarily a direct one-for-one swap — see each player\'s own score further down the page.</div>';
-    html += '</div>';
-  } else if (optimal) {
-    html += '<div class="advice-section"><h3>Suggested lineup</h3>' +
-      '<div class="sub">Your current XI (' + safeEsc(optimal.formation) + ') already matches the highest-scoring lineup available from your squad.</div></div>';
   }
 
   // 5. TRANSFERS
@@ -1529,14 +1616,14 @@ function buildAdviceCachePayload(data) {
     gwId, deadline,
     generatedAt: Date.now(),
     picks, elements, scores,
-    optimal: optimal ? { formation: optimal.formation, diff: optimal.diff, hasUnavailable: !!optimal.hasUnavailable } : null,
+    optimal: optimal ? { formation: optimal.formation, diff: optimal.diff, hasUnavailable: !!optimal.hasUnavailable, starterIds: optimal.starterIds } : null,
     captainId: captain ? captain.id : null,
     viceCaptainId: viceCaptain ? viceCaptain.id : null,
     captainConfidence,
     watchItems,
     transferOpportunities: transferOpportunities.map(o => ({
       elId: o.el.id, decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
-      candidateIds: o.candidates.map(c => c.el.id), candidateScores: o.candidates.map(c => c.score), opportunity: o.opportunity
+      candidateIds: o.candidates.map(c => c.el.id), candidateScores: o.candidates.map(c => c.score), opportunity: o.opportunity, budget: o.budget
     })),
     decisions: Object.keys(decisions).reduce((acc, id) => {
       acc[id] = { decision: decisions[id].decision, confidence: decisions[id].confidence, reasons: decisions[id].reasons, momentum: decisions[id].momentum };
@@ -1554,7 +1641,7 @@ function renderAdviceFromCache(cache, label) {
   const transferOpportunities = (cache.transferOpportunities || []).map(o => ({
     el: elementsById[o.elId], decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
     candidates: (o.candidateIds || []).map((id, i) => ({ el: elementsById[id], score: o.candidateScores[i] })).filter(c => c.el),
-    opportunity: o.opportunity
+    opportunity: o.opportunity, budget: o.budget
   })).filter(o => o.el);
   const decisions = {};
   Object.keys(cache.decisions || {}).forEach(id => {
@@ -1656,7 +1743,12 @@ async function loadAdvice() {
 
     const optimalRaw = findOptimalXI(picksData.picks, elementsById, scores);
     const optimal = optimalRaw
-      ? { formation: optimalRaw.formation, diff: diffXI(picksData.picks, optimalRaw.starters), hasUnavailable: optimalRaw.hasUnavailable }
+      ? {
+          formation: optimalRaw.formation,
+          diff: diffXI(picksData.picks, optimalRaw.starters),
+          hasUnavailable: optimalRaw.hasUnavailable,
+          starterIds: optimalRaw.starters.map(s => s.el.id)
+        }
       : null;
 
     const { captain, viceCaptain, pool: captainPool } = recommendCaptainAndVice(picksData.picks, elementsById);
