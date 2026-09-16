@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.12</title>
+<title>Fantasy Football Tracker v1.13</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -191,6 +191,23 @@
   .breakdown-row .blabel { width: 68px; flex-shrink: 0; }
   .breakdown-row .score-bar-track { height: 4px; margin: 0 6px; }
   .breakdown-row .score-num { width: 20px; font-size: 10px; }
+
+  .pts-breakdown { margin-top: 2px; }
+  .pts-breakdown summary { cursor: pointer; list-style: none; }
+  .pts-breakdown summary::-webkit-details-marker { display: none; }
+
+  .position-best-card {
+    background: rgba(210,168,255,0.08); border: 1px dashed var(--accent4); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .pb-tag {
+    font-size: 9px; font-weight: 800; letter-spacing: .04em; color: var(--accent4);
+    text-transform: uppercase; margin-bottom: 6px;
+  }
+  .pb-head { display: flex; align-items: center; justify-content: space-between; }
+  .pb-name { font-size: 13px; font-weight: 700; color: var(--ink); }
+  .pb-team { font-size: 11px; font-weight: 400; color: var(--ink2); margin-left: 4px; }
+  .pb-pts { font-size: 13px; font-weight: 700; color: var(--accent4); }
   details.explainer {
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; margin-bottom: 14px; font-size: 12px; color: var(--ink2); line-height: 1.6;
@@ -230,7 +247,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.12</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.13</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -300,13 +317,33 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.12"></script>
-<script src="pal-sync.js?v=1.12"></script>
-<script src="pal-utils.js?v=1.12"></script>
+<script src="pal-config.js?v=1.13"></script>
+<script src="pal-sync.js?v=1.13"></script>
+<script src="pal-utils.js?v=1.13"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.13: per-player points breakdown (expandable <details>, keeps
+ * cards compact by default) plus a visually distinct "top scorer at
+ * this position" reference card per position group, with its own
+ * breakdown, styled with a dashed purple border and TOP SCORER tag so
+ * it's unmistakable it's not one of the user's own players. All
+ * breakdown rows (goals/assists/clean sheets/goals conceded/saves/
+ * pen saves+misses/own goals/cards/bonus) are exact count x fixed-
+ * value calculations off season totals already in bootstrap — no new
+ * proxy calls. Appearance points and defensive contribution CANNOT be
+ * derived exactly from season aggregates (both are per-match
+ * threshold-based; a season total doesn't say how many individual
+ * matches crossed the threshold) — bundled into one labelled
+ * "Appearances & defensive actions*" remainder row, computed as
+ * total_points minus everything computed exactly, so the breakdown
+ * always sums to the real total rather than silently guessing. Squad
+ * cache extended with topPlayerIdByPos; the 4 position-best players'
+ * full element objects are merged into the cached elements list
+ * (alongside the squad's own 15) so their breakdowns survive a
+ * refresh too.
  *
  * v1.12: Squad view now shows each player's season total points
  * alongside the highest total_points among all players in the same
@@ -626,7 +663,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.12',
+    appVersion: '1.13',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -731,11 +768,102 @@ function fdrChipHtml(el, nextFixtureByTeam) {
   return '<span class="fdr-chip ' + cls + '">' + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ') ' + fx.difficulty + '</span>';
 }
 
+// Goal and clean-sheet point values are position-dependent; everything
+// else in the breakdown below is flat across positions.
+const GOAL_VALUE = { 1: 6, 2: 6, 3: 5, 4: 4 };
+const CS_VALUE = { 1: 4, 2: 4, 3: 1, 4: 0 };
+
+// Every row here is an exact count x fixed-value calculation off season
+// totals already in bootstrap — no ambiguity. Appearance points (1 or 2
+// depends on whether EACH match crossed 60 minutes, not total minutes)
+// and defensive contribution (2 points per match that crosses a CBIT/
+// CBIRT threshold, capped — a season-total action count doesn't say how
+// many individual matches crossed it) can't be derived exactly from
+// season aggregates without per-gameweek data this app doesn't fetch.
+// Rather than guess, both are folded into one labelled remainder line,
+// computed as total_points minus everything computed exactly above —
+// so the breakdown always sums to the real total, and the one bundled
+// line is honest about being a bundle rather than disguised as precise.
+function computePointsBreakdown(el) {
+  const type = el.element_type;
+  const rows = [];
+  let known = 0;
+
+  const goalsPts = (el.goals_scored || 0) * (GOAL_VALUE[type] || 0);
+  rows.push(['Goals', goalsPts]); known += goalsPts;
+
+  const assistsPts = (el.assists || 0) * 3;
+  rows.push(['Assists', assistsPts]); known += assistsPts;
+
+  if (type === 1 || type === 2 || type === 3) {
+    const csPts = (el.clean_sheets || 0) * (CS_VALUE[type] || 0);
+    rows.push(['Clean sheets', csPts]); known += csPts;
+  }
+
+  if (type === 1 || type === 2) {
+    const gcPts = -Math.floor((el.goals_conceded || 0) / 2);
+    rows.push(['Goals conceded', gcPts]); known += gcPts;
+  }
+
+  if (type === 1) {
+    const savesPts = Math.floor((el.saves || 0) / 3);
+    rows.push(['Saves (approx)', savesPts]); known += savesPts;
+    const penSavePts = (el.penalties_saved || 0) * 5;
+    if (penSavePts) { rows.push(['Penalty saves', penSavePts]); known += penSavePts; }
+  }
+
+  const penMissPts = -(el.penalties_missed || 0) * 2;
+  if (penMissPts) { rows.push(['Penalties missed', penMissPts]); known += penMissPts; }
+
+  const ownGoalPts = -(el.own_goals || 0) * 2;
+  if (ownGoalPts) { rows.push(['Own goals', ownGoalPts]); known += ownGoalPts; }
+
+  const cardPts = -(el.yellow_cards || 0) - (el.red_cards || 0) * 3;
+  if (cardPts) { rows.push(['Cards', cardPts]); known += cardPts; }
+
+  const bonusPts = el.bonus || 0;
+  rows.push(['Bonus', bonusPts]); known += bonusPts;
+
+  const remainder = (el.total_points || 0) - known;
+  rows.push(['Appearances & defensive actions*', remainder]);
+
+  return rows;
+}
+
+function breakdownRowsHtml(rows) {
+  return rows.map(([label, pts]) =>
+    '<div class="breakdown-row"><span class="blabel" style="width:auto;flex:1">' + label + '</span>' +
+    '<span style="font-size:11px;font-weight:600;color:' + (pts > 0 ? 'var(--accent2)' : pts < 0 ? 'var(--accent3)' : 'var(--ink2)') + '">' +
+    (pts > 0 ? '+' : '') + pts + '</span></div>'
+  ).join('') + '<div class="sub" style="margin-top:4px;font-size:10px">*bundled — exact split needs per-gameweek data this app doesn\'t fetch</div>';
+}
+
 function pointsLineHtml(el, maxPointsByPos) {
   const max = maxPointsByPos ? maxPointsByPos[el.element_type] : null;
   const pts = el.total_points != null ? el.total_points : 0;
-  if (!max) return '';
-  return `<div class="player-sub">${pts} pts <span style="color:var(--ink3)">· ${POSITION_SHORT[el.element_type]} best: ${max}</span></div>`;
+  const summaryLine = max
+    ? `${pts} pts <span style="color:var(--ink3)">· ${POSITION_SHORT[el.element_type]} best: ${max}</span>`
+    : `${pts} pts`;
+  return `<details class="pts-breakdown"><summary class="player-sub">${summaryLine} <span style="color:var(--ink3)">(breakdown)</span></summary>
+    <div style="margin-top:6px">${breakdownRowsHtml(computePointsBreakdown(el))}</div>
+  </details>`;
+}
+
+// Distinctly styled so it's unmistakable this is NOT one of the user's
+// own players — a reference card for the actual highest scorer at this
+// position, league-wide, with the same breakdown shown the same way.
+function positionBestCardHtml(el, team) {
+  if (!el) return '';
+  return `<div class="position-best-card">
+    <div class="pb-tag">TOP SCORER · ${POSITION_SHORT[el.element_type]}</div>
+    <div class="pb-head">
+      <span class="pb-name">${safeEsc(el.web_name)} <span class="pb-team">${safeEsc(team ? team.short_name : '?')}</span></span>
+      <span class="pb-pts">${el.total_points || 0} pts</span>
+    </div>
+    <details class="pts-breakdown"><summary class="player-sub" style="color:var(--accent4)">View breakdown</summary>
+      <div style="margin-top:6px">${breakdownRowsHtml(computePointsBreakdown(el))}</div>
+    </details>
+  </div>`;
 }
 
 function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByPos) {
@@ -757,7 +885,7 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByP
     </div>`;
 }
 
-function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos) {
+function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos) {
   const elementsById = {}; elements.forEach(e => elementsById[e.id] = e);
   const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
 
@@ -774,7 +902,12 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   let html = '';
   [1, 2, 3, 4].forEach(type => {
     if (!byPosType[type].length) return;
-    html += `<div class="position-label">${POSITION_NAMES[type]}</div><div class="player-row">`;
+    html += `<div class="position-label">${POSITION_NAMES[type]}</div>`;
+    if (topPlayerIdByPos && topPlayerIdByPos[type] != null) {
+      const topEl = elementsById[topPlayerIdByPos[type]];
+      if (topEl) html += positionBestCardHtml(topEl, teamsById[topEl.team]);
+    }
+    html += `<div class="player-row">`;
     byPosType[type].forEach(({ el, pick }) => {
       html += playerCardHtml(el, teamsById[el.team], pick, false, nextFixtureByTeam, maxPointsByPos);
     });
@@ -797,31 +930,42 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   document.getElementById('squadMeta').textContent = meta;
 }
 
-function buildMaxPointsByPos(allElements) {
-  const max = { 1: 0, 2: 0, 3: 0, 4: 0 };
+// Returns both the max points per position (kept for the compact
+// inline comparison text) and the actual top-scoring element per
+// position (for the reference card with its own full breakdown).
+function buildPositionBests(allElements) {
+  const best = { 1: null, 2: null, 3: null, 4: null };
   (allElements || []).forEach(e => {
-    if (max[e.element_type] != null && (e.total_points || 0) > max[e.element_type]) {
-      max[e.element_type] = e.total_points || 0;
+    if (!best[e.element_type] || (e.total_points || 0) > (best[e.element_type].total_points || 0)) {
+      best[e.element_type] = e;
     }
   });
-  return max;
+  const maxPointsByPos = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  [1, 2, 3, 4].forEach(t => { maxPointsByPos[t] = best[t] ? (best[t].total_points || 0) : 0; });
+  return { best, maxPointsByPos };
 }
 
 // Trims bootstrap's ~700-player list down to just the ~15 players
 // actually in this squad, so what gets cached (locally and synced to
 // Supabase) is small — a few KB instead of the full bootstrap payload.
-// maxPointsByPos is computed from the FULL list first (only 4 numbers,
-// cheap to keep) since that comparison is lost once elements is trimmed.
+// The 4 position-best elements are computed from the FULL list first
+// (before trimming) and merged into the kept set so their full stats
+// (needed for their own breakdown) survive into the cache too.
 function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
-  const maxPointsByPos = buildMaxPointsByPos(bootstrap.elements);
+  const { best, maxPointsByPos } = buildPositionBests(bootstrap.elements);
   const pickedIds = new Set(picksData.picks.map(p => p.element));
-  const elements = bootstrap.elements.filter(e => pickedIds.has(e.id));
+  const keepIds = new Set(pickedIds);
+  const topPlayerIdByPos = {};
+  [1, 2, 3, 4].forEach(t => {
+    if (best[t]) { keepIds.add(best[t].id); topPlayerIdByPos[t] = best[t].id; }
+  });
+  const elements = bootstrap.elements.filter(e => keepIds.has(e.id));
   const teamIds = new Set(elements.map(e => e.team));
   const teams = bootstrap.teams.filter(t => teamIds.has(t.id));
   const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
   const fixtureGW = findNextFixtureGW(bootstrap.events);
   const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, fixtureGW);
-  return { elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, cachedAt: Date.now() };
+  return { elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now() };
 }
 
 function persistSquadCache(cache) {
@@ -837,7 +981,7 @@ function persistSquadCache(cache) {
 }
 
 function renderFromCacheObject(cache, label) {
-  renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam || {}, cache.maxPointsByPos || {});
+  renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam || {}, cache.maxPointsByPos || {}, cache.topPlayerIdByPos || {});
   const ageMin = Math.round((Date.now() - cache.cachedAt) / 60000);
   document.getElementById('squadMeta').textContent += ` (${label} ${ageMin}m ago — tap 🔄 to refresh)`;
 }
@@ -877,7 +1021,7 @@ async function loadSquad() {
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
 
     const cache = buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId);
-    renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam, cache.maxPointsByPos);
+    renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam, cache.maxPointsByPos, cache.topPlayerIdByPos);
     persistSquadCache(cache);
     safeToast('Squad loaded');
   } catch (e) {
