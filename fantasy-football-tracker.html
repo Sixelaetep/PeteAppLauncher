@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.16</title>
+<title>Fantasy Football Tracker v1.17</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -269,7 +269,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.16</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.17</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -366,13 +366,28 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.16"></script>
-<script src="pal-sync.js?v=1.16"></script>
-<script src="pal-utils.js?v=1.16"></script>
+<script src="pal-config.js?v=1.17"></script>
+<script src="pal-sync.js?v=1.17"></script>
+<script src="pal-utils.js?v=1.17"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.17 (reported: FPL transfer sync failed, 404 then 502 after
+ * redeploy): the 404 was the client correctly hitting the newly-
+ * deployed route for the first time (expected, resolved itself once
+ * redeployed). The 502 was real: FPL's entry-level endpoints return a
+ * 404 for "no data yet" rather than an empty array — confirmed
+ * against public FPL API references — so a manager with zero
+ * transfers this season made the transfers route 404, which the
+ * proxy's generic retry-then-502 logic treated as a real failure.
+ * pal-fpl-proxy v1.3 now treats a 404 specifically on the transfers
+ * route as a successful empty result. Also added proxyErrorDetail()
+ * client-side, which reads the proxy's actual {error, detail} JSON
+ * body on any failure instead of just showing the bare HTTP status —
+ * this class of "what's the real cause" question should be answerable
+ * from the app's own error message next time, not a Supabase log dive.
  *
  * v1.16 (FF-012 + FF-008):
  *
@@ -713,7 +728,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.16';
+const FF_VERSION = '1.17';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 let FF_PROXY_URL = null;
@@ -782,7 +797,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.16',
+    appVersion: '1.17',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1394,6 +1409,20 @@ function markTransferMade(id) {
   safeToast('Marked as made');
 }
 
+// pal-fpl-proxy returns a JSON body on failure — {error, detail,
+// route} — with the real underlying reason (e.g. FPL's own HTTP
+// status, or a network-level failure) in `detail`. Reading it here
+// means a failure is diagnosable from the app itself instead of
+// needing a trip to the Supabase function logs every time.
+async function proxyErrorDetail(res) {
+  try {
+    const body = await res.json();
+    return 'HTTP ' + res.status + (body && body.detail ? ' — ' + body.detail : (body && body.error ? ' — ' + body.error : ''));
+  } catch (e) {
+    return 'HTTP ' + res.status;
+  }
+}
+
 async function syncTransfersFromFPL() {
   if (!FF_PROXY_URL) { safeToast('pal-config.js did not load — cannot reach the proxy', 'err'); return; }
   if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') {
@@ -1407,12 +1436,12 @@ async function syncTransfersFromFPL() {
 
   try {
     const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: { 'x-pal-key': FF_PROXY_KEY } });
-    if (!bootRes.ok) throw new Error('bootstrap fetch failed (HTTP ' + bootRes.status + ')');
+    if (!bootRes.ok) throw new Error('bootstrap fetch failed: ' + await proxyErrorDetail(bootRes));
     const bootstrap = await bootRes.json();
     const elementsById = {}; bootstrap.elements.forEach(e => elementsById[e.id] = e);
 
     const xferRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/transfers', { headers: { 'x-pal-key': FF_PROXY_KEY } });
-    if (!xferRes.ok) throw new Error('transfers fetch failed (HTTP ' + xferRes.status + ')');
+    if (!xferRes.ok) throw new Error('transfers fetch failed: ' + await proxyErrorDetail(xferRes));
     const realTransfers = await xferRes.json();
 
     const existingIds = new Set(_transferLog.map(t => t.id));
