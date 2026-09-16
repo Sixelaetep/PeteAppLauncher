@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.20</title>
+<title>Fantasy Football Tracker v1.21</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -224,6 +224,7 @@
   }
   .txf-badge.made { background: rgba(63,185,80,.15); color: var(--accent2); }
   .txf-badge.planned { background: rgba(255,166,87,.15); color: var(--accent5); }
+  .txf-badge.hit { background: rgba(247,129,102,.15); color: var(--accent3); }
   .txf-note { font-size: 11px; color: var(--ink2); margin-top: 4px; font-style: italic; }
   .txf-actions { margin-top: 6px; display: flex; gap: 8px; }
   .txf-actions button {
@@ -294,7 +295,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.20</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.21</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -380,6 +381,16 @@
       <button class="btn" onclick="saveSettings()">Save</button>
     </div>
     <div class="card">
+      <h2>Free transfers</h2>
+      <p style="margin-bottom:10px">FPL doesn't expose this via the API (it's not a stored value, it's derived from your whole
+      season's history and chip usage) — enter what the FPL site shows you. Used to flag which planned transfers are free vs. a hit.</p>
+      <label for="freeTransfersCountInput">How many free transfers you have</label>
+      <input type="text" id="freeTransfersCountInput" inputmode="numeric" placeholder="1">
+      <label for="freeTransfersGwInput">For which gameweek</label>
+      <input type="text" id="freeTransfersGwInput" inputmode="numeric" placeholder="4">
+      <button class="btn" onclick="saveSettings()">Save</button>
+    </div>
+    <div class="card">
       <h2>Backup</h2>
       <p style="margin-bottom:10px">Export/import your settings as JSON, same as the rest of the suite.</p>
       <button class="btn secondary" onclick="exportData()">⬇️ Export</button>
@@ -401,13 +412,41 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.20"></script>
-<script src="pal-sync.js?v=1.20"></script>
-<script src="pal-utils.js?v=1.20"></script>
+<script src="pal-config.js?v=1.21"></script>
+<script src="pal-sync.js?v=1.21"></script>
+<script src="pal-utils.js?v=1.21"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.21 — free transfers, sync-merge, and hit-aware advice. Continues
+ * the Settings free-transfer count that already existed (entered
+ * manually — see that card's own reasoning for why this isn't
+ * simulated) with the logic to actually use it:
+ *
+ * - computeTransferSlotUsage: assigns each PLANNED transfer a slot in
+ *   date order — FREE while the entered count has slots left, a −4
+ *   HIT once they run out. One function, used everywhere a FREE/HIT
+ *   label appears, so the Transfers tab and Advice can never disagree
+ *   with each other about which slot a given transfer occupies.
+ * - Staleness warning: if the free-transfer count's recorded gameweek
+ *   doesn't match the squad's current one, a clear banner says so
+ *   rather than silently using a number that's likely wrong by now —
+ *   the count needs manual updating each week, same reasoning as why
+ *   it's not simulated in the first place.
+ * - Sync-merge: syncTransfersFromFPL now matches a real synced
+ *   transfer against any existing PLANNED entry for the same player
+ *   swap and upgrades it in place (same array slot, note preserved)
+ *   instead of creating a second entry alongside it — one entry per
+ *   real-world transfer, not two different statuses to reconcile.
+ * - annotateTransferOpportunitiesWithSlots: Advice's suggested
+ *   transfers now carry the same FREE/−4 HIT label, continuing the
+ *   count from existing planned transfers, plus a warning when a
+ *   hit's projected gain doesn't clearly clear −4. New Gameweek
+ *   Summary line gives an explicit verdict either way — "worth using
+ *   on X → Y" or "nothing flagged is clearly worth using it on this
+ *   week" — rather than requiring the user to infer it from the list.
  *
  * v1.20 — planning workspace. Confirmed the "squad looks a gameweek
  * behind" report was genuinely FPL mechanics (their picks endpoint
@@ -829,7 +868,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.20';
+const FF_VERSION = '1.21';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -851,7 +890,7 @@ if (window.PAL_CONFIG && window.PAL_CONFIG.SB_URL) {
   console.error('pal-config.js did not load — PAL_CONFIG is missing. Diagnostics and sync will be unavailable until this is fixed.');
 }
 
-let _settings = { entryId: '2510199' };
+let _settings = { entryId: '2510199', freeTransfersCount: null, freeTransfersGw: null };
 
 function safeToast(msg, type) {
   if (typeof toast === 'function') toast(msg, type);
@@ -892,10 +931,16 @@ function loadLocalSettings() {
     if (raw) _settings = Object.assign(_settings, JSON.parse(raw));
   } catch (e) {}
   document.getElementById('entryIdInput').value = _settings.entryId || '';
+  document.getElementById('freeTransfersCountInput').value = _settings.freeTransfersCount != null ? _settings.freeTransfersCount : '';
+  document.getElementById('freeTransfersGwInput').value = _settings.freeTransfersGw != null ? _settings.freeTransfersGw : '';
 }
 
 function saveSettings() {
   _settings.entryId = document.getElementById('entryIdInput').value.trim() || _settings.entryId;
+  const ftCountRaw = document.getElementById('freeTransfersCountInput').value.trim();
+  const ftGwRaw = document.getElementById('freeTransfersGwInput').value.trim();
+  _settings.freeTransfersCount = ftCountRaw === '' ? null : Math.max(0, parseInt(ftCountRaw, 10) || 0);
+  _settings.freeTransfersGw = ftGwRaw === '' ? null : (parseInt(ftGwRaw, 10) || null);
   try { localStorage.setItem('ff_settings_local', JSON.stringify(_settings)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_settings').upsert('main', _settings)
@@ -904,13 +949,15 @@ function saveSettings() {
   } else {
     safeToast('Settings saved locally');
   }
+  if (_squadViewMode === 'planned') refreshSquadDisplay();
+  renderTransferList();
 }
 
 // ── Backup / export (matches suite wrapper convention) ─────────
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.20',
+    appVersion: '1.21',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1695,21 +1742,92 @@ async function handleTransferRatingToggle(detailsEl, entryId) {
   }
 }
 
+// Free transfers are entered manually in Settings — FPL's API has no
+// field for this; it's genuinely derived from a manager's whole
+// season history and chip usage, and FPL has done at least one
+// mid-season adjustment to the rule that no formula could predict, so
+// simulating it risks a confidently wrong number. Assigns each
+// PLANNED transfer a slot in date order (oldest first): FREE while
+// slots remain, a −4 HIT once they run out. One source of truth for
+// "how many free transfers do I have" and "would this planned move
+// cost a hit", rather than tracking them separately.
+function computeTransferSlotUsage() {
+  const available = _settings.freeTransfersCount;
+  const gw = _settings.freeTransfersGw;
+  const planned = (_transferLog || []).filter(t => t.status === 'planned').slice()
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  let remaining = available != null ? available : null;
+  const entries = planned.map(t => {
+    let isFree = null;
+    if (remaining != null) { isFree = remaining > 0; if (isFree) remaining--; }
+    return { id: t.id, isFree };
+  });
+  const liveGwId = _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null;
+  return {
+    available, gw, entries,
+    usedCount: planned.length,
+    remaining: available != null ? Math.max(0, available - planned.length) : null,
+    isStale: gw != null && liveGwId != null && gw !== liveGwId,
+    liveGwId
+  };
+}
+
+// Labels each Advice-suggested transfer opportunity as FREE or a −4
+// HIT, continuing the SAME slot count computeTransferSlotUsage uses
+// (existing planned transfers consume slots first, in date order —
+// a NEW suggestion is evaluated as the next one after those). When a
+// suggestion would cost a hit, also flags whether the projected gain
+// clearly outweighs it. 8 points (double the hit cost) is a simple,
+// deliberately conservative bar — not a claim of the exact optimal
+// threshold, which would need modelling how many future gameweeks
+// the improvement compounds over, and this doesn't attempt that.
+function annotateTransferOpportunitiesWithSlots(transferOpportunities) {
+  const slotUsage = computeTransferSlotUsage();
+  let remaining = slotUsage.remaining;
+  return transferOpportunities.map(o => {
+    let slotLabel = null, hitWarning = null;
+    if (remaining != null) {
+      if (remaining > 0) { slotLabel = 'FREE'; remaining--; }
+      else {
+        slotLabel = '−4 HIT';
+        if (o.opportunity && o.opportunity.delta < 8) {
+          hitWarning = 'Projected gain (+' + o.opportunity.delta + ' pts) likely doesn\'t clear a −4 hit this week — probably not worth it yet.';
+        }
+      }
+    }
+    return Object.assign({}, o, { slotLabel, hitWarning });
+  });
+}
+
 function renderTransferList() {
   const body = document.getElementById('transferListBody');
+  const slotUsage = computeTransferSlotUsage();
+  const slotById = {}; slotUsage.entries.forEach(e => { slotById[e.id] = e.isFree; });
+
   if (!_transferLog.length) {
     body.innerHTML = '<div class="placeholder"><div class="emoji">🔁</div>' +
       '<p>No transfers logged yet. Click <strong>Sync from FPL</strong> to pull in transfers you\'ve already made, or add a planned one above.</p></div>';
     document.getElementById('transferMeta').textContent = 'No transfers logged';
     return;
   }
-  const sorted = _transferLog.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+
   let html = '';
+  if (slotUsage.isStale) {
+    html += '<div class="projection-banner">⚠️ Free transfer count was set for Gameweek ' + slotUsage.gw +
+      ', but your squad is now on Gameweek ' + slotUsage.liveGwId +
+      '. FREE/HIT labels below may be wrong until you update it in Settings.</div>';
+  }
+
+  const sorted = _transferLog.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   sorted.forEach(t => {
     const canRate = !!t.gwId && !!extractTransferPlayerIds(t);
+    const slotBadge = (t.status === 'planned' && slotById[t.id] != null)
+      ? '<span class="txf-badge ' + (slotById[t.id] ? 'made' : 'hit') + '">' + (slotById[t.id] ? 'FREE' : '−4 HIT') + '</span>'
+      : '';
     html += '<div class="transfer-entry">' +
       '<div class="txf-head"><span class="txf-move"><span class="txf-out">' + safeEsc(t.playerOutName) + '</span> → <span class="txf-in">' + safeEsc(t.playerInName) + '</span></span>' +
-      '<span class="txf-badge ' + (t.status === 'made' ? 'made' : 'planned') + '">' + (t.status === 'made' ? 'MADE' : 'PLANNED') + '</span></div>' +
+      '<span style="display:flex;gap:6px;align-items:center">' + slotBadge +
+      '<span class="txf-badge ' + (t.status === 'made' ? 'made' : 'planned') + '">' + (t.status === 'made' ? 'MADE' : 'PLANNED') + '</span></span></div>' +
       '<div class="txf-meta">' + safeEsc(t.date) + ' · ' + formatCostDelta(t.costDelta || 0) + (t.gwId ? ' · GW' + t.gwId : '') + ' · ' + (t.source === 'auto' ? 'synced from FPL' : 'manual') + '</div>' +
       (t.note ? '<div class="txf-note">' + safeEsc(t.note) + '</div>' : '') +
       (canRate
@@ -1722,9 +1840,16 @@ function renderTransferList() {
       '</div></div>';
   });
   body.innerHTML = html;
+
   const madeCount = _transferLog.filter(t => t.status === 'made').length;
   const plannedCount = _transferLog.filter(t => t.status === 'planned').length;
-  document.getElementById('transferMeta').textContent = madeCount + ' made · ' + plannedCount + ' planned';
+  let meta = madeCount + ' made · ' + plannedCount + ' planned';
+  if (slotUsage.available != null) {
+    meta += ' · ' + slotUsage.available + ' free for GW' + slotUsage.gw + ' (' + slotUsage.usedCount + ' used, ' + slotUsage.remaining + ' remaining)';
+  } else {
+    meta += ' · set free transfers in Settings for FREE/HIT labelling';
+  }
+  document.getElementById('transferMeta').textContent = meta;
 }
 
 function addManualTransfer() {
@@ -1817,25 +1942,48 @@ async function syncTransfersFromFPL() {
     const realTransfers = await xferRes.json();
 
     const existingIds = new Set(_transferLog.map(t => t.id));
-    let added = 0;
+    let added = 0, matched = 0;
     (realTransfers || []).forEach(t => {
       const id = 'auto_' + t.element_in + '_' + t.element_out + '_' + t.event + '_' + t.time;
       if (existingIds.has(id)) return;
       const inEl = elementsById[t.element_in], outEl = elementsById[t.element_out];
-      _transferLog.push({
+
+      // A planned entry for this exact swap (same player out, same
+      // player in) is upgraded in place to the confirmed real one —
+      // same slot in the array, note preserved — rather than living
+      // alongside a separate 'made' entry for the same move. Matches
+      // on player ids only (not date), since a plan is usually logged
+      // before the real transfer's exact timestamp is known.
+      const matchIdx = _transferLog.findIndex(e =>
+        e.status === 'planned' && e.playerOutId === t.element_out && e.playerInId === t.element_in);
+
+      const upgraded = {
         id,
         date: (t.time || '').slice(0, 10) || (typeof todayISO === 'function' ? todayISO() : ''),
         playerOutName: outEl ? outEl.web_name : ('#' + t.element_out),
         playerInName: inEl ? inEl.web_name : ('#' + t.element_in),
+        playerOutId: t.element_out, playerInId: t.element_in,
         costDelta: ((t.element_in_cost || 0) - (t.element_out_cost || 0)) / 10,
-        note: '', status: 'made', source: 'auto', gwId: t.event
-      });
-      added++;
+        note: matchIdx > -1 ? (_transferLog[matchIdx].note || '') : '',
+        status: 'made', source: 'auto', gwId: t.event
+      };
+
+      if (matchIdx > -1) {
+        _transferLog[matchIdx] = upgraded;
+        matched++;
+      } else {
+        _transferLog.push(upgraded);
+        added++;
+      }
     });
 
     persistTransferLog();
     renderTransferList();
-    safeToast(added ? ('Synced — ' + added + ' new transfer' + (added === 1 ? '' : 's') + ' added') : 'Synced — already up to date');
+    if (_squadViewMode === 'planned') refreshSquadDisplay();
+    const parts = [];
+    if (matched) parts.push(matched + ' planned transfer' + (matched === 1 ? '' : 's') + ' confirmed');
+    if (added) parts.push(added + ' new transfer' + (added === 1 ? '' : 's') + ' added');
+    safeToast(parts.length ? ('Synced — ' + parts.join(', ')) : 'Synced — already up to date');
   } catch (e) {
     safeToast('Sync failed: ' + e.message, 'err');
   } finally {
@@ -2292,8 +2440,9 @@ function explainerHtml() {
     '<p><strong>Momentum</strong> (RISING/STABLE/FALLING/CONCERN) compares this gameweek\'s score to the earliest point in your last 3 loads. Needs at least 2 gameweeks of accumulated history for THIS player — shows "Insufficient data" otherwise rather than guessing. History is only kept for your 15 squad players.</p>' +
     '<p><strong>Fixture swing</strong> compares the next 4 fixtures\' average difficulty against the 4 after that — only flagged (IMPROVING/WORSENING) when the difference is at least 1 point on FPL\'s 1–5 scale.</p>' +
     '<p><strong>Minutes risk</strong> is a season-to-date reliability band (SECURE/ROTATION RISK/BENCH RISK) — not a detected recent trend, since that would need a per-gameweek minutes call this app doesn\'t make. Labelled as season-to-date deliberately.</p>' +
-    '<p><strong>Decisions</strong> (HOLD/MONITOR/CONSIDER SELL/SELL) require multiple independent negative signals before escalating — one bad signal alone (e.g. a single tough fixture run) only ever produces MONITOR. Immediate unavailability (injured/suspended) is SELL directly; doubtful is MONITOR directly. Bench players only get the availability check — low bench minutes is often by design (a backup keeper, a cheap enabler), not a risk signal. SELL/CONSIDER SELL here means "worth evaluating transfer alternatives" — not an instruction to make a transfer this instant; free transfers, hit cost and squad structure aren\'t modelled.</p>' +
+    '<p><strong>Decisions</strong> (HOLD/MONITOR/CONSIDER SELL/SELL) require multiple independent negative signals before escalating — one bad signal alone (e.g. a single tough fixture run) only ever produces MONITOR. Immediate unavailability (injured/suspended) is SELL directly; doubtful is MONITOR directly. Bench players only get the availability check — low bench minutes is often by design (a backup keeper, a cheap enabler), not a risk signal. SELL/CONSIDER SELL here means "worth evaluating transfer alternatives" — not an instruction to make a transfer this instant; squad structure isn\'t modelled.</p>' +
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
+    '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. Existing planned transfers consume free slots first, in date order; a suggested transfer beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The count is tied to a specific gameweek — if your squad has since moved past it, a staleness warning appears until you update it.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
     '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
     '</details>';
@@ -2386,7 +2535,8 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
   } else {
     transferOpportunities.forEach(o => {
       html += '<div class="transfer-summary-card">' +
-        '<div class="ts-out">OUT: ' + safeEsc(o.el.web_name) + ' (' + formatPrice(o.el.now_cost) + ', score ' + Math.round(o.outScore) + ')</div>' +
+        '<div class="ts-out">OUT: ' + safeEsc(o.el.web_name) + ' (' + formatPrice(o.el.now_cost) + ', score ' + Math.round(o.outScore) + ')' +
+        (o.slotLabel ? ' <span class="txf-badge ' + (o.slotLabel === 'FREE' ? 'made' : 'hit') + '">' + o.slotLabel + '</span>' : '') + '</div>' +
         '<div class="ts-budget">Budget available: ' + formatPrice(o.budget) + ' (bank + selling price)</div>';
       if (o.candidates.length) {
         o.candidates.forEach((c, i) => {
@@ -2395,6 +2545,9 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
         });
         if (o.opportunity) {
           html += '<div class="flag-targets" style="margin-top:6px"><strong>Opportunity: ' + o.opportunity.level + '</strong> (+' + o.opportunity.delta + ' vs. ' + safeEsc(o.el.web_name) + ')</div>';
+        }
+        if (o.hitWarning) {
+          html += '<div class="sub" style="color:var(--accent3);margin-top:4px">⚠️ ' + safeEsc(o.hitWarning) + '</div>';
         }
       } else {
         html += '<div class="sub">No affordable same-position alternative found within budget.</div>';
@@ -2407,7 +2560,20 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
   return html;
 }
 
-function gameweekSummaryHtml(watchItems, avgScore, gwId) {
+function transferVerdictLine(transferOpportunities) {
+  const slotUsage = computeTransferSlotUsage();
+  if (slotUsage.available == null || slotUsage.remaining == null || slotUsage.remaining <= 0) return '';
+  const n = slotUsage.remaining;
+  const goodFree = transferOpportunities.find(o => o.slotLabel === 'FREE' && o.opportunity && (o.opportunity.level === 'HIGH' || o.opportunity.level === 'MEDIUM') && o.candidates.length);
+  if (goodFree) {
+    return ' You have ' + n + ' free transfer' + (n === 1 ? '' : 's') + ' for GW' + slotUsage.gw + ' — worth using on ' +
+      safeEsc(goodFree.el.web_name) + ' → ' + safeEsc(goodFree.candidates[0].el.web_name) + '.';
+  }
+  return ' You have ' + n + ' free transfer' + (n === 1 ? '' : 's') + ' for GW' + slotUsage.gw +
+    ' — nothing flagged is clearly worth using ' + (n === 1 ? 'it' : 'them') + ' on this week.';
+}
+
+function gameweekSummaryHtml(watchItems, avgScore, gwId, transferOpportunities) {
   const red = watchItems.filter(w => w.severity === 'RED').length;
   const amber = watchItems.filter(w => w.severity === 'AMBER').length;
   const green = watchItems.filter(w => w.severity === 'GREEN').length;
@@ -2415,6 +2581,7 @@ function gameweekSummaryHtml(watchItems, avgScore, gwId) {
     ? 'Squad looks settled — nothing urgent this gameweek.'
     : (red + amber) + ' player' + (red + amber === 1 ? '' : 's') + ' need attention' + (red ? ' (' + red + ' urgent)' : '') + '.';
   if (green) line += ' ' + green + ' opportunit' + (green === 1 ? 'y' : 'ies') + ' worth watching.';
+  line += transferVerdictLine(transferOpportunities || []);
   return '<div class="advice-section"><h3>Gameweek ' + gwId + ' summary</h3>' +
     '<div class="sub">' + line + '</div>' +
     '<div class="player-card" style="align-items:center">' + scoreBarHtml(avgScore) + '</div></div>';
@@ -2430,7 +2597,7 @@ function renderAdvice(data) {
   const avgScore = starters.length ? startersTotal / starters.length : 0;
 
   // 1. GAMEWEEK SUMMARY
-  html += gameweekSummaryHtml(watchItems, avgScore, gwId);
+  html += gameweekSummaryHtml(watchItems, avgScore, gwId, transferOpportunities);
 
   // 2. THINGS TO WATCH
   html += '<div class="advice-section"><h3>Things to watch</h3>';
@@ -2479,6 +2646,7 @@ function renderAdvice(data) {
   } else {
     transferOpportunities.forEach(o => {
       html += '<div class="flag-card"><div class="fname">' + decisionBadgeHtml(o.decision) + ' ' + safeEsc(o.el.web_name) +
+        (o.slotLabel ? ' <span class="txf-badge ' + (o.slotLabel === 'FREE' ? 'made' : 'hit') + '">' + o.slotLabel + '</span>' : '') +
         ' <span style="font-size:10px;color:var(--ink2)">Confidence: ' + o.confidence + '</span></div>' +
         '<div class="flag-reason">' + o.reasons.map(safeEsc).join(' · ') + '</div>';
       if (o.candidates.length) {
@@ -2486,6 +2654,9 @@ function renderAdvice(data) {
         html += '<div class="flag-targets">' +
           (o.opportunity ? '<strong>Opportunity: ' + o.opportunity.level + '</strong> (score ' + Math.round(o.outScore) + ' → ' + Math.round(best.score) + ', +' + o.opportunity.delta + ') — ' : '<strong>Consider:</strong> ') +
           o.candidates.map(t => safeEsc(t.el.web_name) + ' (' + Math.round(t.score) + ')').join(', ') + '</div>';
+        if (o.hitWarning) {
+          html += '<div class="sub" style="color:var(--accent3);margin-top:4px">⚠️ ' + safeEsc(o.hitWarning) + '</div>';
+        }
       }
       html += '</div>';
     });
@@ -2573,7 +2744,8 @@ function buildAdviceCachePayload(data) {
     watchItems,
     transferOpportunities: transferOpportunities.map(o => ({
       elId: o.el.id, decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
-      candidateIds: o.candidates.map(c => c.el.id), candidateScores: o.candidates.map(c => c.score), opportunity: o.opportunity, budget: o.budget
+      candidateIds: o.candidates.map(c => c.el.id), candidateScores: o.candidates.map(c => c.score), opportunity: o.opportunity, budget: o.budget,
+      slotLabel: o.slotLabel, hitWarning: o.hitWarning
     })),
     decisions: Object.keys(decisions).reduce((acc, id) => {
       acc[id] = { decision: decisions[id].decision, confidence: decisions[id].confidence, reasons: decisions[id].reasons, momentum: decisions[id].momentum };
@@ -2591,7 +2763,7 @@ function renderAdviceFromCache(cache, label) {
   const transferOpportunities = (cache.transferOpportunities || []).map(o => ({
     el: elementsById[o.elId], decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
     candidates: (o.candidateIds || []).map((id, i) => ({ el: elementsById[id], score: o.candidateScores[i] })).filter(c => c.el),
-    opportunity: o.opportunity, budget: o.budget
+    opportunity: o.opportunity, budget: o.budget, slotLabel: o.slotLabel, hitWarning: o.hitWarning
   })).filter(o => o.el);
   const decisions = {};
   Object.keys(cache.decisions || {}).forEach(id => {
@@ -2764,7 +2936,8 @@ async function loadAdvice() {
     const bank = picksData.entry_history ? picksData.entry_history.bank : 0;
     const squadIds = new Set(picksData.picks.map(p => p.element));
     const squadDecisionsList = Object.values(decisions);
-    const transferOpportunities = buildTransferOpportunities(squadDecisionsList, scores, bootstrap.elements, bank, squadIds);
+    const transferOpportunitiesRaw = buildTransferOpportunities(squadDecisionsList, scores, bootstrap.elements, bank, squadIds);
+    const transferOpportunities = annotateTransferOpportunitiesWithSlots(transferOpportunitiesRaw);
     const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, fixtureGW, squadIds, 2);
     const watchItems = generateWatchItems(squadDecisionsList, buyOpportunities);
 
