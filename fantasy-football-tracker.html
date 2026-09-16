@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.7</title>
+<title>Fantasy Football Tracker v1.8</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -209,7 +209,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.7</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.8</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -279,13 +279,60 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.7"></script>
-<script src="pal-sync.js?v=1.7"></script>
-<script src="pal-utils.js?v=1.7"></script>
+<script src="pal-config.js?v=1.8"></script>
+<script src="pal-sync.js?v=1.8"></script>
+<script src="pal-utils.js?v=1.8"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.8 — Priority 1 of the v1.8 brief: the analyst/decision layer.
+ * Deliberately staged (brief section 26 recommends this sequence
+ * itself) — Priority 2 (pitch-view squad redesign), Priority 3 (full
+ * Gameweek Summary widget + squad health stats), and Priority 4
+ * (Player watchlist filtering/sorting) are follow-up releases, not
+ * done here.
+ *
+ * New pure functions, deliberately separate from rendering per the
+ * brief's architecture requirement: calculateMomentum,
+ * calculateFixtureSwing, calculateMinutesRisk, evaluatePlayerDecision,
+ * evaluateTransferOpportunity, buildTransferOpportunities,
+ * findBuyOpportunities, generateWatchItems, evaluateCaptainConfidence.
+ *
+ * Decisions (HOLD/MONITOR/CONSIDER_SELL/SELL) require multiple
+ * independent negative signals before escalating — momentum alone
+ * (or fixtures alone, or minutes alone) only ever produces MONITOR;
+ * two signals → CONSIDER_SELL; three → SELL. Immediate unavailability
+ * bypasses signal-counting entirely (SELL directly); doubtful → MONITOR
+ * directly. Explicitly labelled as "worth evaluating alternatives",
+ * not an instruction to transfer immediately, per the brief's
+ * explicit distinction.
+ *
+ * Two honest data-limitation calls, both flagged in the explainer:
+ * (1) momentum needs 2+ gameweeks of history for THAT player — shows
+ * "Insufficient data" rather than fabricating a trend, and since
+ * history is only kept for the 15 squad players, GREEN buy-opportunity
+ * watch items use fixture swing + score only, not momentum, for
+ * non-owned players. (2) "minutes risk" is a season-to-date
+ * reliability band, not a detected recent trend — true GW-by-GW
+ * minutes would need a per-player element-summary call this app
+ * deliberately doesn't make (the same call-count tradeoff documented
+ * back in v1.5).
+ *
+ * Advice tab reordered per the brief's page order: Gameweek Summary,
+ * Things to Watch, Captain/Vice (now with explicit confidence + bullet
+ * reasons + "close call" note when confidence is LOW), Suggested XI,
+ * Transfer opportunities (opportunity-indicator language, not a
+ * forecast), Player watchlist (decision + momentum badges added),
+ * Model Detail (the old explainer, moved to the bottom and rewritten
+ * to describe the new layer).
+ *
+ * Cache payload/render-from-cache updated to carry the new fields
+ * (decisions, watchItems, transferOpportunities, captainConfidence) —
+ * existing localStorage/Supabase caching behaviour otherwise
+ * unchanged. Diagnostics, Settings, Squad tab, theme, and the FF-002
+ * proxy are all untouched.
  *
  * v1.7 (reported: still suggesting an injured player to start; captain
  * reasoning not verifiable; wanted value out of lineup decisions;
@@ -515,7 +562,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.7',
+    appVersion: '1.8',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -998,54 +1045,168 @@ function diffXI(actualPicks, suggestedStarters) {
 // only if genuinely no available starter exists.
 function recommendCaptainAndVice(picks, elementsById) {
   const starters = picks.filter(p => p.position <= 11).map(p => elementsById[p.element]).filter(Boolean);
-  if (!starters.length) return { captain: null, viceCaptain: null };
+  if (!starters.length) return { captain: null, viceCaptain: null, pool: [] };
   const available = starters.filter(el => !isEffectivelyUnavailable(el));
   const pool = (available.length ? available : starters).slice()
     .sort((a, b) => (parseFloat(b.ep_next) || 0) - (parseFloat(a.ep_next) || 0));
-  return { captain: pool[0] || null, viceCaptain: pool[1] || null };
+  return { captain: pool[0] || null, viceCaptain: pool[1] || null, pool };
 }
 
-function buildTransferAdvice(picks, elementsById, scoresById, allElements, bank, scoreHistory, currentGW) {
-  const squadIds = new Set(picks.map(p => p.element));
-  const flags = [];
-  const oldEntry = (scoreHistory || [])
-    .filter(h => h.gwId <= currentGW - 2)
-    .sort((a, b) => b.gwId - a.gwId)[0];
+// ── Analyst layer (v1.8) ───────────────────────────────────────────
+// Pure functions only — no DOM, no rendering. Raw data in, decisions
+// out. Rendering functions further down read these results; they
+// never compute them.
 
-  picks.forEach(p => {
-    const el = elementsById[p.element];
-    if (!el) return;
-    const cur = scoresById[el.id];
-    if (!cur) return;
-    const reasons = [];
-    let severity = null;
+// Momentum needs at least 2 history points for THIS player. We only
+// ever store history for the 15 squad players (see loadAdvice), so a
+// player who just entered the squad, or before GW2 of using this
+// app, correctly gets INSUFFICIENT_DATA rather than a fabricated
+// trend — per the brief's "no fake precision" principle.
+function calculateMomentum(scoreHistory, elementId) {
+  const points = (scoreHistory || [])
+    .filter(h => h.scores && h.scores[elementId] != null)
+    .sort((a, b) => a.gwId - b.gwId)
+    .map(h => h.scores[elementId]);
+  if (points.length < 2) return { state: 'INSUFFICIENT_DATA', delta: null };
+  const recent = points.slice(-3);
+  const delta = Math.round((recent[recent.length - 1] - recent[0]) * 10) / 10;
+  let state;
+  if (delta >= 8) state = 'RISING';
+  else if (delta <= -15) state = 'CONCERN';
+  else if (delta <= -8) state = 'FALLING';
+  else state = 'STABLE';
+  return { state, delta };
+}
 
-    if (el.status !== 'a') {
-      severity = 'immediate';
-      reasons.push((el.status === 'd' ? 'Doubtful' : 'Unavailable') + (el.news ? ' — ' + el.news : ''));
-    }
+// Compares the next-4-fixture difficulty window (already used for
+// scoring) against the FOLLOWING 4 gameweeks, flagging only a
+// meaningful swing (>=1 point average FDR difference on FPL's 1-5
+// scale) rather than noise.
+function calculateFixtureSwing(fixtures, teamId, nextGW) {
+  const nearAvg = buildFixtureDifficultyMap(fixtures, nextGW, 4)[teamId];
+  const farAvg = buildFixtureDifficultyMap(fixtures, nextGW + 4, 4)[teamId];
+  if (nearAvg == null || farAvg == null) return { state: 'UNKNOWN', delta: null, nearAvg, farAvg };
+  const delta = Math.round((farAvg - nearAvg) * 10) / 10;
+  let state;
+  if (delta <= -1) state = 'IMPROVING';
+  else if (delta >= 1) state = 'WORSENING';
+  else state = 'STABLE';
+  return { state, delta, nearAvg, farAvg };
+}
 
-    if (oldEntry && oldEntry.scores[el.id] != null) {
-      const oldScore = oldEntry.scores[el.id];
-      const drop = oldScore > 0 ? (oldScore - cur.score) / oldScore : 0;
-      if (drop > 0.15 && (cur.components.fixtureScore < 40 || el.status !== 'a')) {
-        severity = severity || 'trend';
-        reasons.push('Score down ' + Math.round(drop * 100) + '% since GW' + oldEntry.gwId +
-          (cur.components.fixtureScore < 40 ? ' · tough fixture run' : ''));
-      }
-    }
+// Season-to-date reliability BAND, not a detected recent trend — this
+// app doesn't fetch per-gameweek minutes (would need an
+// element-summary call per player, which we've deliberately avoided
+// for load-time reasons). Labelled as season-to-date everywhere it's
+// shown, per the brief's "no fake precision" principle applied
+// honestly to our own data constraint.
+function calculateMinutesRisk(reliabilityScore) {
+  if (reliabilityScore >= 70) return 'SECURE';
+  if (reliabilityScore >= 40) return 'ROTATION_RISK';
+  return 'BENCH_RISK';
+}
 
-    if (reasons.length) {
-      const budget = (bank || 0) + el.now_cost;
-      const targets = allElements
-        .filter(e => e.element_type === el.element_type && !squadIds.has(e.id) && e.now_cost <= budget && e.status === 'a')
-        .map(e => ({ el: e, score: (scoresById[e.id] || {}).score || 0 }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
-      flags.push({ el, severity, reasons, targets });
-    }
+// Multiple independent negative signals required before CONSIDER_SELL
+// or SELL — a single bad signal (e.g. one tough fixture run) only
+// ever produces MONITOR, per the brief's "do not overreact" principle.
+function evaluatePlayerDecision(el, momentum, fixtureSwing, minutesRisk, isBench) {
+  if (isEffectivelyUnavailable(el)) {
+    const reason = (el.status === 's' ? 'Suspended' : 'Unavailable') + (el.news ? ' — ' + el.news : '');
+    return { decision: 'SELL', confidence: 'HIGH', reasons: [reason] };
+  }
+  if (el.status === 'd') {
+    const chanceNote = el.chance_of_playing_next_round != null ? ' (' + el.chance_of_playing_next_round + '% chance of playing)' : '';
+    return { decision: 'MONITOR', confidence: 'MEDIUM', reasons: ['Doubtful' + (el.news ? ' — ' + el.news : '') + chanceNote] };
+  }
+
+  // Bench players are only evaluated on availability — a bench player
+  // having low/no minutes is frequently by design (a backup keeper, a
+  // cheap enabler), not a risk signal the way it would be for someone
+  // you're actually starting. Applying the same momentum/fixture/
+  // minutes signal-counting to them just produces noise.
+  if (isBench) return { decision: 'HOLD', confidence: 'HIGH', reasons: [] };
+
+  const reasons = [];
+  if (momentum.state === 'FALLING' || momentum.state === 'CONCERN') {
+    reasons.push('Form ' + (momentum.state === 'CONCERN' ? 'declining sharply' : 'declining') +
+      ' (score ' + (momentum.delta > 0 ? '+' : '') + momentum.delta + ' over recent gameweeks)');
+  }
+  if (fixtureSwing.state === 'WORSENING') {
+    reasons.push('Fixtures worsening (FDR ' + fixtureSwing.nearAvg.toFixed(1) + ' → ' + fixtureSwing.farAvg.toFixed(1) + ')');
+  }
+  if (minutesRisk !== 'SECURE') {
+    reasons.push(minutesRisk === 'BENCH_RISK' ? 'Minutes low this season — bench risk' : 'Minutes inconsistent this season — rotation risk');
+  }
+
+  if (reasons.length === 0) return { decision: 'HOLD', confidence: 'HIGH', reasons: [] };
+  if (reasons.length === 1) return { decision: 'MONITOR', confidence: 'MEDIUM', reasons };
+  if (reasons.length === 2) return { decision: 'CONSIDER_SELL', confidence: 'MEDIUM', reasons };
+  return { decision: 'SELL', confidence: 'HIGH', reasons };
+}
+
+// "Opportunity indicator", explicitly not a forecast — the brief is
+// clear these are two different claims.
+function evaluateTransferOpportunity(outScore, candidateScore) {
+  const delta = Math.round((candidateScore - outScore) * 10) / 10;
+  const level = delta >= 15 ? 'HIGH' : delta >= 8 ? 'MEDIUM' : 'LOW';
+  return { level, delta };
+}
+
+function buildTransferOpportunities(squadDecisions, scoresById, allElements, bank, squadIds) {
+  const opportunities = [];
+  squadDecisions.forEach(d => {
+    if (d.decision !== 'SELL' && d.decision !== 'CONSIDER_SELL') return;
+    const el = d.el;
+    const outScore = (scoresById[el.id] || {}).score || 0;
+    const budget = (bank || 0) + el.now_cost;
+    const candidates = allElements
+      .filter(e => e.element_type === el.element_type && !squadIds.has(e.id) && e.now_cost <= budget && e.status === 'a')
+      .map(e => ({ el: e, score: (scoresById[e.id] || {}).score || 0 }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    const opportunity = candidates.length ? evaluateTransferOpportunity(outScore, candidates[0].score) : null;
+    opportunities.push({ el, outScore, decision: d.decision, confidence: d.confidence, reasons: d.reasons, candidates, opportunity });
   });
-  return flags;
+  return opportunities;
+}
+
+// Positive watch items for players NOT owned. We can't compute
+// momentum for them (history is only kept for the 15 squad players),
+// so this only uses fixture swing + overall score — deliberately not
+// claiming a form trend we don't have data for.
+function findBuyOpportunities(allElements, scoresById, fixtures, gwId, squadIds, limit) {
+  limit = limit || 2;
+  return allElements
+    .filter(e => !squadIds.has(e.id) && e.status === 'a')
+    .map(e => ({ el: e, score: (scoresById[e.id] || {}).score || 0, swing: calculateFixtureSwing(fixtures, e.team, gwId) }))
+    .filter(c => c.swing.state === 'IMPROVING' && c.score >= 70)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+function generateWatchItems(squadDecisions, buyOpportunities) {
+  const items = [];
+  squadDecisions.forEach(d => {
+    if (d.decision === 'SELL') items.push({ severity: 'RED', name: d.el.web_name, text: d.reasons.join(' · ') || 'Sell candidate' });
+    else if (d.decision === 'CONSIDER_SELL' || d.decision === 'MONITOR') items.push({ severity: 'AMBER', name: d.el.web_name, text: d.reasons.join(' · ') });
+  });
+  buyOpportunities.forEach(o => {
+    items.push({ severity: 'GREEN', name: o.el.web_name, text: 'Improving fixture run (FDR ' + o.swing.nearAvg.toFixed(1) + ' → ' + o.swing.farAvg.toFixed(1) + '), score ' + Math.round(o.score) + ' — worth monitoring as a buy target' });
+  });
+  const order = { RED: 0, AMBER: 1, GREEN: 2 };
+  items.sort((a, b) => order[a.severity] - order[b.severity]);
+  return items;
+}
+
+// HIGH/MEDIUM/LOW based on the gap to the next-best candidate —
+// two closely-matched candidates should produce LOW/MEDIUM
+// confidence, not artificial certainty either way.
+function evaluateCaptainConfidence(pool) {
+  if (pool.length < 2) return 'HIGH';
+  const gap = (parseFloat(pool[0].ep_next) || 0) - (parseFloat(pool[1].ep_next) || 0);
+  if (gap >= 1.5) return 'HIGH';
+  if (gap >= 0.5) return 'MEDIUM';
+  return 'LOW';
 }
 
 function scoreBarHtml(score) {
@@ -1084,53 +1245,110 @@ function formatDeadline(iso) {
 }
 
 function explainerHtml() {
-  return '<details class="explainer"><summary>How this scoring works</summary>' +
-    '<p><strong>Overall score</strong> (0–100, shown in Player breakdown and used for Transfer watch\'s buy-target ranking) is a weighted blend, normalised against every player in the same position league-wide: ' +
+  return '<details class="explainer"><summary>Model detail — how this works</summary>' +
+    '<p><strong>Overall score</strong> (0–100, shown in the Player watchlist and used for transfer-target ranking) is a weighted blend, normalised against every player in the same position league-wide: ' +
     '<code>Form 25%</code> + <code>Fixtures 20%</code> + <code>Value 15%</code> + <code>Reliability 20%</code> + <code>Availability 20%</code>.</p>' +
-    '<p><strong>Suggested lineup uses a different, Value-free score</strong> (<code>Form 30%</code> + <code>Fixtures 25%</code> + <code>Reliability 25%</code> + <code>Availability 20%</code>) — price-efficiency is irrelevant to who should start, since you already own every player in your squad regardless of price. Value only matters for buy decisions, where budget is genuinely in play.</p>' +
-    '<p><strong>Form</strong> uses FPL\'s own <code>form</code> stat (a recency-weighted average), not a custom recalculation.</p>' +
-    '<p><strong>Fixtures</strong> is the average difficulty rating (FPL\'s own 1–5 scale) of the player\'s team\'s next 4 fixtures, inverted so easier = higher.</p>' +
-    '<p><strong>Value</strong> is points-per-game divided by price, normalised against same-position players.</p>' +
-    '<p><strong>Reliability</strong> is minutes played this season as a share of maximum possible minutes so far.</p>' +
-    '<p><strong>Availability</strong> is 100 if fit, 55 if doubtful, 5 if injured/suspended/unavailable.</p>' +
-    '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — and any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
-    '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> (expected points next gameweek) among your actual current starting XI — not the overall score — since that figure already factors in fixture difficulty and expected minutes.</p>' +
-    '<p><strong>Transfer watch</strong> combines the immediate availability check with a trend check (overall score down &gt;15% over the last 2 gameweeks of history) — the trend part needs at least 2 gameweeks of accumulated data to activate.</p>' +
+    '<p><strong>Suggested lineup uses a different, Value-free score</strong> (<code>Form 30%</code> + <code>Fixtures 25%</code> + <code>Reliability 25%</code> + <code>Availability 20%</code>) — price-efficiency is irrelevant to who should start, since you already own every player in your squad regardless of price.</p>' +
+    '<p><strong>Form</strong> uses FPL\'s own <code>form</code> stat. <strong>Fixtures</strong> is the average FPL difficulty rating (1–5) of the next 4 fixtures, inverted so easier = higher. <strong>Value</strong> is points-per-game per £m, normalised against same-position players. <strong>Reliability</strong> is minutes played this season as a share of maximum possible so far. <strong>Availability</strong> is 100 if fit, 55 if doubtful, 5 if injured/suspended/unavailable.</p>' +
+    '<p><strong>Momentum</strong> (RISING/STABLE/FALLING/CONCERN) compares this gameweek\'s score to the earliest point in your last 3 loads. Needs at least 2 gameweeks of accumulated history for THIS player — shows "Insufficient data" otherwise rather than guessing. History is only kept for your 15 squad players.</p>' +
+    '<p><strong>Fixture swing</strong> compares the next 4 fixtures\' average difficulty against the 4 after that — only flagged (IMPROVING/WORSENING) when the difference is at least 1 point on FPL\'s 1–5 scale.</p>' +
+    '<p><strong>Minutes risk</strong> is a season-to-date reliability band (SECURE/ROTATION RISK/BENCH RISK) — not a detected recent trend, since that would need a per-gameweek minutes call this app doesn\'t make. Labelled as season-to-date deliberately.</p>' +
+    '<p><strong>Decisions</strong> (HOLD/MONITOR/CONSIDER SELL/SELL) require multiple independent negative signals before escalating — one bad signal alone (e.g. a single tough fixture run) only ever produces MONITOR. Immediate unavailability (injured/suspended) is SELL directly; doubtful is MONITOR directly. Bench players only get the availability check — low bench minutes is often by design (a backup keeper, a cheap enabler), not a risk signal. SELL/CONSIDER SELL here means "worth evaluating transfer alternatives" — not an instruction to make a transfer this instant; free transfers, hit cost and squad structure aren\'t modelled.</p>' +
+    '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
+    '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
+    '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
     '</details>';
 }
 
-function renderAdvice(data) {
-  const { picks, elementsById, scoresById, optimal, captain, viceCaptain, flags, nextFixtureByTeam, gwId, deadline } = data;
-  let html = '';
+function decisionBadgeHtml(decision) {
+  const styles = {
+    HOLD: 'var(--accent2)', MONITOR: 'var(--accent5)',
+    CONSIDER_SELL: 'var(--accent5)', SELL: 'var(--accent3)'
+  };
+  const color = styles[decision] || 'var(--ink2)';
+  return '<span style="font-size:10px;font-weight:700;color:' + color + ';border:1px solid ' + color + ';border-radius:4px;padding:1px 5px;white-space:nowrap">' +
+    decision.replace('_', ' ') + '</span>';
+}
 
-  html += explainerHtml();
+function momentumBadgeHtml(momentum) {
+  const map = {
+    RISING: ['▲ Rising', 'var(--accent2)'], STABLE: ['— Stable', 'var(--ink2)'],
+    FALLING: ['▼ Falling', 'var(--accent5)'], CONCERN: ['▼ Concern', 'var(--accent3)'],
+    INSUFFICIENT_DATA: ['Insufficient data', 'var(--ink3)']
+  };
+  const [label, color] = map[momentum.state] || ['—', 'var(--ink2)'];
+  return '<span style="font-size:10px;color:' + color + '">' + label + '</span>';
+}
+
+function captainBulletsFor(player, scoresById) {
+  const s = scoresById[player.id];
+  const bullets = ['Highest ep_next among starters (' + (player.ep_next || '—') + ')'];
+  if (s) {
+    bullets.push('Form score ' + Math.round(s.components.formScore) + '/100');
+    bullets.push('Reliability ' + Math.round(s.components.reliabilityScore) + '/100 this season');
+  }
+  return bullets;
+}
+
+function gameweekSummaryHtml(watchItems, avgScore, gwId) {
+  const red = watchItems.filter(w => w.severity === 'RED').length;
+  const amber = watchItems.filter(w => w.severity === 'AMBER').length;
+  const green = watchItems.filter(w => w.severity === 'GREEN').length;
+  let line = (red === 0 && amber === 0)
+    ? 'Squad looks settled — nothing urgent this gameweek.'
+    : (red + amber) + ' player' + (red + amber === 1 ? '' : 's') + ' need attention' + (red ? ' (' + red + ' urgent)' : '') + '.';
+  if (green) line += ' ' + green + ' opportunit' + (green === 1 ? 'y' : 'ies') + ' worth watching.';
+  return '<div class="advice-section"><h3>Gameweek ' + gwId + ' summary</h3>' +
+    '<div class="sub">' + line + '</div>' +
+    '<div class="player-card" style="align-items:center">' + scoreBarHtml(avgScore) + '</div></div>';
+}
+
+function renderAdvice(data) {
+  const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
+          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId } = data;
+  let html = '';
 
   const starters = picks.filter(p => p.position <= 11);
   const startersTotal = starters.reduce((s, p) => s + ((scoresById[p.element] || {}).score || 0), 0);
   const avgScore = starters.length ? startersTotal / starters.length : 0;
 
-  html += '<div class="advice-section"><h3>Squad strength</h3>' +
-    '<div class="sub">Average score across your starting XI (0-100, higher is better)</div>' +
-    '<div class="player-card" style="align-items:center">' + scoreBarHtml(avgScore) + '</div></div>';
+  // 1. GAMEWEEK SUMMARY
+  html += gameweekSummaryHtml(watchItems, avgScore, gwId);
 
+  // 2. THINGS TO WATCH
+  html += '<div class="advice-section"><h3>Things to watch</h3>';
+  if (!watchItems.length) {
+    html += '<div class="no-flags">Nothing needs attention this week.</div>';
+  } else {
+    watchItems.forEach(it => {
+      const dot = it.severity === 'RED' ? '🔴' : it.severity === 'AMBER' ? '🟠' : '🟢';
+      html += '<div class="flag-card"><div class="fname">' + dot + ' ' + safeEsc(it.name) + '</div>' +
+        '<div class="flag-reason">' + safeEsc(it.text) + '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  // 3. CAPTAIN / VICE-CAPTAIN
   if (captain) {
     html += '<div class="advice-section"><h3>Captain pick</h3>' +
       '<div class="captain-pick"><div style="font-size:22px">🅲</div><div>' +
-      '<div class="cname">' + safeEsc(captain.web_name) + '</div>' +
-      '<div class="creason">Highest projected points next gameweek — ep_next ' + (captain.ep_next || '—') + '</div>' +
-      fixtureLineHtml(captain, nextFixtureByTeam) +
+      '<div class="cname">' + safeEsc(captain.web_name) + ' <span style="font-size:11px;color:var(--ink2)">Confidence: ' + captainConfidence + '</span></div>' +
+      '<ul style="margin:4px 0 0 16px;padding:0;font-size:11px;color:var(--ink2)">' +
+      captainBulletsFor(captain, scoresById).map(b => '<li>' + safeEsc(b) + '</li>').join('') +
+      (captainConfidence === 'LOW' && viceCaptain ? '<li>Close call — ' + safeEsc(viceCaptain.web_name) + ' is a very similar projection</li>' : '') +
+      '</ul>' + fixtureLineHtml(captain, nextFixtureByTeam) +
       '</div></div></div>';
   }
-
   if (viceCaptain) {
     html += '<div class="advice-section"><h3>Vice-captain pick</h3>' +
       '<div class="captain-pick" style="border-color:var(--border)"><div style="font-size:22px">🅥</div><div>' +
       '<div class="cname">' + safeEsc(viceCaptain.web_name) + '</div>' +
-      '<div class="creason">Next-highest ep_next among your starting XI — ep_next ' + (viceCaptain.ep_next || '—') + '</div>' +
+      '<div class="creason">Next-highest ep_next among your starting XI (' + (viceCaptain.ep_next || '—') + ')</div>' +
       fixtureLineHtml(viceCaptain, nextFixtureByTeam) +
       '</div></div></div>';
   }
 
+  // 4. SUGGESTED XI
   if (optimal && optimal.diff && (optimal.diff.outIds.length || optimal.diff.inIds.length)) {
     html += '<div class="advice-section"><h3>Suggested lineup — ' + safeEsc(optimal.formation) + '</h3>' +
       '<div class="sub">Based on Value-free player scores, this lineup edges out your current XI</div>';
@@ -1145,33 +1363,41 @@ function renderAdvice(data) {
       const el = elementsById[id];
       if (el) html += '<div class="xi-diff-row"><span class="xi-in">⬆ Start</span> ' + safeEsc(el.web_name) + '</div>';
     });
+    html += '<div class="sub" style="margin-top:6px">This reflects a formation change (' + safeEsc(optimal.formation) + '), not necessarily a direct one-for-one swap — see each player\'s own score further down the page.</div>';
     html += '</div>';
   } else if (optimal) {
     html += '<div class="advice-section"><h3>Suggested lineup</h3>' +
       '<div class="sub">Your current XI (' + safeEsc(optimal.formation) + ') already matches the highest-scoring lineup available from your squad.</div></div>';
   }
 
-  html += '<div class="advice-section"><h3>Transfer watch</h3>';
-  if (!flags.length) {
-    html += '<div class="no-flags">No players flagged this week.</div>';
+  // 5. TRANSFERS
+  html += '<div class="advice-section"><h3>Transfer opportunities</h3>' +
+    '<div class="sub">An opportunity indicator, not a forecast of actual points</div>';
+  if (!transferOpportunities.length) {
+    html += '<div class="no-flags">No transfer opportunities flagged this week.</div>';
   } else {
-    flags.forEach(f => {
-      html += '<div class="flag-card"><div class="fname">' + (f.severity === 'immediate' ? '🔴' : '🟠') + ' ' + safeEsc(f.el.web_name) + '</div>' +
-        '<div class="flag-reason">' + f.reasons.map(safeEsc).join(' · ') + '</div>';
-      if (f.targets.length) {
-        html += '<div class="flag-targets"><strong>Consider:</strong> ' +
-          f.targets.map(t => safeEsc(t.el.web_name) + ' (' + Math.round(t.score) + ')').join(', ') + '</div>';
+    transferOpportunities.forEach(o => {
+      html += '<div class="flag-card"><div class="fname">' + decisionBadgeHtml(o.decision) + ' ' + safeEsc(o.el.web_name) +
+        ' <span style="font-size:10px;color:var(--ink2)">Confidence: ' + o.confidence + '</span></div>' +
+        '<div class="flag-reason">' + o.reasons.map(safeEsc).join(' · ') + '</div>';
+      if (o.candidates.length) {
+        const best = o.candidates[0];
+        html += '<div class="flag-targets">' +
+          (o.opportunity ? '<strong>Opportunity: ' + o.opportunity.level + '</strong> (score ' + Math.round(o.outScore) + ' → ' + Math.round(best.score) + ', +' + o.opportunity.delta + ') — ' : '<strong>Consider:</strong> ') +
+          o.candidates.map(t => safeEsc(t.el.web_name) + ' (' + Math.round(t.score) + ')').join(', ') + '</div>';
       }
       html += '</div>';
     });
   }
   html += '</div>';
 
-  html += '<div class="advice-section"><h3>Player breakdown</h3>' +
-    '<div class="sub">Every metric behind each player\'s score, plus their next fixture, so you can check the model\'s working</div>';
+  // 6. PLAYER WATCHLIST (breakdown)
+  html += '<div class="advice-section"><h3>Player watchlist</h3>' +
+    '<div class="sub">Every metric, decision and next fixture, so you can check the model\'s working</div>';
   picks.slice().sort((a, b) => a.position - b.position).forEach(p => {
     const el = elementsById[p.element];
     const s = scoresById[p.element];
+    const d = decisions[p.element];
     if (!el || !s) return;
     const posLabel = POSITION_SHORT[el.element_type] || '';
     const benchNote = p.position > 11 ? ' · bench' : '';
@@ -1179,9 +1405,13 @@ function renderAdvice(data) {
       '<div class="breakdown-head"><span class="breakdown-name">' + safeEsc(el.web_name) +
       ' <span style="color:var(--ink2);font-weight:400;font-size:11px">(' + posLabel + benchNote + ')</span></span>' +
       '<span class="breakdown-overall">' + Math.round(s.score) + '</span></div>' +
+      (d ? '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">' + decisionBadgeHtml(d.decision) + momentumBadgeHtml(d.momentum) + '</div>' : '') +
       componentBreakdownHtml(s.components) + fixtureLineHtml(el, nextFixtureByTeam) + '</div>';
   });
   html += '</div>';
+
+  // 7. MODEL DETAIL
+  html += explainerHtml();
 
   document.getElementById('adviceBody').innerHTML = html;
 }
@@ -1219,10 +1449,11 @@ async function pullRemoteScoreHistory() {
 }
 
 function buildAdviceCachePayload(data) {
-  const { picks, elementsById, scoresById, optimal, captain, viceCaptain, flags, nextFixtureByTeam, gwId, deadline } = data;
+  const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
+          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline } = data;
 
   const referencedIds = new Set(picks.map(p => p.element));
-  flags.forEach(f => { referencedIds.add(f.el.id); f.targets.forEach(t => referencedIds.add(t.el.id)); });
+  transferOpportunities.forEach(o => { referencedIds.add(o.el.id); o.candidates.forEach(c => referencedIds.add(c.el.id)); });
   if (captain) referencedIds.add(captain.id);
   if (viceCaptain) referencedIds.add(viceCaptain.id);
 
@@ -1237,10 +1468,16 @@ function buildAdviceCachePayload(data) {
     optimal: optimal ? { formation: optimal.formation, diff: optimal.diff, hasUnavailable: !!optimal.hasUnavailable } : null,
     captainId: captain ? captain.id : null,
     viceCaptainId: viceCaptain ? viceCaptain.id : null,
-    flags: flags.map(f => ({
-      elId: f.el.id, severity: f.severity, reasons: f.reasons,
-      targetIds: f.targets.map(t => t.el.id), targetScores: f.targets.map(t => t.score)
+    captainConfidence,
+    watchItems,
+    transferOpportunities: transferOpportunities.map(o => ({
+      elId: o.el.id, decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
+      candidateIds: o.candidates.map(c => c.el.id), candidateScores: o.candidates.map(c => c.score), opportunity: o.opportunity
     })),
+    decisions: Object.keys(decisions).reduce((acc, id) => {
+      acc[id] = { decision: decisions[id].decision, confidence: decisions[id].confidence, reasons: decisions[id].reasons, momentum: decisions[id].momentum };
+      return acc;
+    }, {}),
     nextFixtureByTeam
   };
 }
@@ -1250,14 +1487,21 @@ function renderAdviceFromCache(cache, label) {
   const scoresById = cache.scores;
   const captain = cache.captainId != null ? elementsById[cache.captainId] : null;
   const viceCaptain = cache.viceCaptainId != null ? elementsById[cache.viceCaptainId] : null;
-  const flags = (cache.flags || []).map(f => ({
-    el: elementsById[f.elId], severity: f.severity, reasons: f.reasons,
-    targets: (f.targetIds || []).map((id, i) => ({ el: elementsById[id], score: f.targetScores[i] })).filter(t => t.el)
-  })).filter(f => f.el);
+  const transferOpportunities = (cache.transferOpportunities || []).map(o => ({
+    el: elementsById[o.elId], decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
+    candidates: (o.candidateIds || []).map((id, i) => ({ el: elementsById[id], score: o.candidateScores[i] })).filter(c => c.el),
+    opportunity: o.opportunity
+  })).filter(o => o.el);
+  const decisions = {};
+  Object.keys(cache.decisions || {}).forEach(id => {
+    const el = elementsById[id];
+    if (el) decisions[id] = Object.assign({ el }, cache.decisions[id]);
+  });
 
   renderAdvice({
     picks: cache.picks, elementsById, scoresById,
-    optimal: cache.optimal, captain, viceCaptain, flags,
+    optimal: cache.optimal, captain, viceCaptain, captainConfidence: cache.captainConfidence,
+    watchItems: cache.watchItems || [], transferOpportunities, decisions,
     nextFixtureByTeam: cache.nextFixtureByTeam || {}, gwId: cache.gwId, deadline: cache.deadline
   });
 
@@ -1344,8 +1588,12 @@ async function loadAdvice() {
       ? { formation: optimalRaw.formation, diff: diffXI(picksData.picks, optimalRaw.starters), hasUnavailable: optimalRaw.hasUnavailable }
       : null;
 
-    const { captain, viceCaptain } = recommendCaptainAndVice(picksData.picks, elementsById);
+    const { captain, viceCaptain, pool: captainPool } = recommendCaptainAndVice(picksData.picks, elementsById);
+    const captainConfidence = evaluateCaptainConfidence(captainPool);
 
+    // Score history is updated FIRST so momentum reflects the trend
+    // up to and including this gameweek's just-computed scores, not
+    // the trend as of the previous load.
     const squadScoreSnapshot = {};
     picksData.picks.forEach(p => { if (scores[p.element]) squadScoreSnapshot[p.element] = scores[p.element].score; });
     _scoreHistory = (_scoreHistory || []).filter(h => h.gwId !== gwId);
@@ -1354,10 +1602,29 @@ async function loadAdvice() {
     if (_scoreHistory.length > 6) _scoreHistory = _scoreHistory.slice(-6);
     persistScoreHistory(_scoreHistory);
 
-    const bank = picksData.entry_history ? picksData.entry_history.bank : 0;
-    const flags = buildTransferAdvice(picksData.picks, elementsById, scores, bootstrap.elements, bank, _scoreHistory, gwId);
+    const decisions = {};
+    picksData.picks.forEach(p => {
+      const el = elementsById[p.element];
+      const s = scores[p.element];
+      if (!el || !s) return;
+      const momentum = calculateMomentum(_scoreHistory, p.element);
+      const fixtureSwing = calculateFixtureSwing(fixtures, el.team, gwId);
+      const minutesRisk = calculateMinutesRisk(s.components.reliabilityScore);
+      const evald = evaluatePlayerDecision(el, momentum, fixtureSwing, minutesRisk, p.position > 11);
+      decisions[p.element] = Object.assign({ el, momentum, fixtureSwing, minutesRisk }, evald);
+    });
 
-    const renderData = { picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, viceCaptain, flags, nextFixtureByTeam, gwId, deadline };
+    const bank = picksData.entry_history ? picksData.entry_history.bank : 0;
+    const squadIds = new Set(picksData.picks.map(p => p.element));
+    const squadDecisionsList = Object.values(decisions);
+    const transferOpportunities = buildTransferOpportunities(squadDecisionsList, scores, bootstrap.elements, bank, squadIds);
+    const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, gwId, squadIds, 2);
+    const watchItems = generateWatchItems(squadDecisionsList, buyOpportunities);
+
+    const renderData = {
+      picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, viceCaptain, captainConfidence,
+      watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline
+    };
     renderAdvice(renderData);
     document.getElementById('adviceMeta').textContent =
       'Gameweek ' + gwId + (deadline ? ' · Deadline: ' + formatDeadline(deadline) : '') + ' · Analysed just now';
