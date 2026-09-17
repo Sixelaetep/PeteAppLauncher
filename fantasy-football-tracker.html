@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.21</title>
+<title>Fantasy Football Tracker v1.22</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -225,6 +225,7 @@
   .txf-badge.made { background: rgba(63,185,80,.15); color: var(--accent2); }
   .txf-badge.planned { background: rgba(255,166,87,.15); color: var(--accent5); }
   .txf-badge.hit { background: rgba(247,129,102,.15); color: var(--accent3); }
+  .txf-badge.locked { background: rgba(56,189,248,.15); color: #38bdf8; }
   .txf-note { font-size: 11px; color: var(--ink2); margin-top: 4px; font-style: italic; }
   .txf-actions { margin-top: 6px; display: flex; gap: 8px; }
   .txf-actions button {
@@ -295,7 +296,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.21</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.22</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -349,8 +350,9 @@
       <button class="btn secondary" id="transferSyncBtn" onclick="syncTransfersFromFPL()">🔄 Sync from FPL</button>
     </div>
     <div class="card">
-      <h2>Add a planned transfer</h2>
-      <p style="margin-bottom:10px">For moves you're considering but haven't made yet — real transfers you've already made on FPL are picked up automatically by Sync.</p>
+      <h2>Add a transfer</h2>
+      <p style="margin-bottom:10px">Real transfers you've already made and FPL has confirmed are picked up automatically by Sync. Use the two buttons below for anything Sync can't see yet:
+      <strong>Add as planned</strong> for a move you're still considering, or <strong>I've done this on FPL</strong> if you've actually confirmed it on FPL but the API won't show it until the gameweek deadline passes.</p>
       <label for="txfOutSearch">Player out</label>
       <input type="text" id="txfOutSearch" placeholder="Search player name…" autocomplete="off" oninput="filterPlayerPicker('out', this.value)">
       <div id="txfOutResults" class="player-picker-results"></div>
@@ -361,7 +363,8 @@
       <input type="text" id="txfCostInput" inputmode="decimal" placeholder="0.0">
       <label for="txfNoteInput">Note (optional)</label>
       <input type="text" id="txfNoteInput" placeholder="Why you're considering this">
-      <button class="btn" onclick="addManualTransfer()">Add planned transfer</button>
+      <button class="btn secondary" onclick="addManualTransfer('planned')">Add as planned</button>
+      <button class="btn" onclick="addManualTransfer('locked')">✅ I've done this on FPL</button>
     </div>
     <div id="transferListBody">
       <div class="placeholder">
@@ -383,12 +386,12 @@
     <div class="card">
       <h2>Free transfers</h2>
       <p style="margin-bottom:10px">FPL doesn't expose this via the API (it's not a stored value, it's derived from your whole
-      season's history and chip usage) — enter what the FPL site shows you. Used to flag which planned transfers are free vs. a hit.</p>
+      season's history and chip usage) — enter what the FPL site shows you. Used to flag which planned/locked-in transfers are free vs. a hit.</p>
       <label for="freeTransfersCountInput">How many free transfers you have</label>
       <input type="text" id="freeTransfersCountInput" inputmode="numeric" placeholder="1">
-      <label for="freeTransfersGwInput">For which gameweek</label>
-      <input type="text" id="freeTransfersGwInput" inputmode="numeric" placeholder="4">
+      <div class="sub" id="freeTransfersGwDisplay" style="margin-bottom:12px">Gameweek: load your squad first</div>
       <button class="btn" onclick="saveSettings()">Save</button>
+      <div id="freeTransfersStalePrompt"></div>
     </div>
     <div class="card">
       <h2>Backup</h2>
@@ -412,13 +415,45 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.21"></script>
-<script src="pal-sync.js?v=1.21"></script>
-<script src="pal-utils.js?v=1.21"></script>
+<script src="pal-config.js?v=1.22"></script>
+<script src="pal-sync.js?v=1.22"></script>
+<script src="pal-utils.js?v=1.22"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.22 — gameweek clarity, "Locked in" transfers, plan-aware advice.
+ *
+ * - Advice now states explicitly which gameweek the shown squad is
+ *   LOCKED for versus which gameweek any transfer suggestion actually
+ *   applies to (the next one, since that's the only gameweek a
+ *   transfer made now can take effect for) — this distinction existed
+ *   before but was never said outright.
+ * - New annotateTransferOpportunitiesWithPlanStatus(): every suggested
+ *   transfer is checked against the Transfer log for an existing
+ *   active (planned/locked) entry on the same OUT player. Three
+ *   states, not silence: already recorded and matching, recorded but
+ *   for a DIFFERENT player in (flagged as a genuine conflict, not
+ *   hidden), or nothing recorded yet. Gameweek Summary's verdict line
+ *   now says "already covered by your recorded transfer" instead of
+ *   suggesting something already decided as if it were new.
+ * - New transfer status: LOCKED IN (own cyan badge, distinct from
+ *   amber PLANNED and green MADE) — for a transfer you've actually
+ *   confirmed on FPL that the API can't show yet. New
+ *   isActiveTransferStatus() helper (planned OR locked) threaded
+ *   through buildProjectedSquad, computeTransferSlotUsage (locked
+ *   entries take slot priority over merely-planned ones, since
+ *   they're certain), and the sync-matcher (upgrades either to MADE).
+ *   Transfer form now has two buttons — "Add as planned" vs "I've
+ *   done this on FPL" — same picker, different resulting status.
+ * - Settings' free-transfer gameweek is no longer typed. New
+ *   currentPlanningGw() reads it from the live squad (buildTrimmed
+ *   SquadCache now carries nextGwId); freeTransfersSavedForGw is
+ *   captured silently at save time and compared against the live
+ *   value to prompt a reconfirm only when they've actually diverged —
+ *   same protection the old manual field gave, without the failure
+ *   mode of the user having to keep it in sync themselves.
  *
  * v1.21 — free transfers, sync-merge, and hit-aware advice. Continues
  * the Settings free-transfer count that already existed (entered
@@ -868,7 +903,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.21';
+const FF_VERSION = '1.22';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -890,7 +925,7 @@ if (window.PAL_CONFIG && window.PAL_CONFIG.SB_URL) {
   console.error('pal-config.js did not load — PAL_CONFIG is missing. Diagnostics and sync will be unavailable until this is fixed.');
 }
 
-let _settings = { entryId: '2510199', freeTransfersCount: null, freeTransfersGw: null };
+let _settings = { entryId: '2510199', freeTransfersCount: null, freeTransfersSavedForGw: null };
 
 function safeToast(msg, type) {
   if (typeof toast === 'function') toast(msg, type);
@@ -900,6 +935,37 @@ function safeToast(msg, type) {
 function safeEsc(s) {
   if (typeof esc === 'function') return esc(s);
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// The gameweek a transfer made right now would take effect for — the
+// single source every "for GWn" label in Settings/Transfers/Advice
+// reads from, so they can never independently drift out of sync with
+// each other the way a manually-typed value could.
+function currentPlanningGw() {
+  return _lastLiveSquadCache ? _lastLiveSquadCache.nextGwId : null;
+}
+
+// Called after loading settings, saving them, or whenever the live
+// squad updates — keeps the read-only gameweek label and the
+// staleness nudge current without ever asking the user to type a
+// gameweek number.
+function updateFreeTransfersGwDisplay() {
+  const gwEl = document.getElementById('freeTransfersGwDisplay');
+  const promptEl = document.getElementById('freeTransfersStalePrompt');
+  if (!gwEl || !promptEl) return;
+  const gw = currentPlanningGw();
+  if (gw == null) {
+    gwEl.textContent = 'Gameweek: load your squad first';
+    promptEl.innerHTML = '';
+    return;
+  }
+  gwEl.textContent = 'Gameweek: ' + gw + ' (from your live squad, not set manually)';
+  if (_settings.freeTransfersCount != null && _settings.freeTransfersSavedForGw != null && _settings.freeTransfersSavedForGw !== gw) {
+    promptEl.innerHTML = '<div class="sub" style="color:var(--accent5);margin-top:8px">⚠️ Your free transfer count was confirmed for GW' +
+      _settings.freeTransfersSavedForGw + ', but you\'re now planning for GW' + gw + '. Please check the FPL site and re-save.</div>';
+  } else {
+    promptEl.innerHTML = '';
+  }
 }
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -932,15 +998,22 @@ function loadLocalSettings() {
   } catch (e) {}
   document.getElementById('entryIdInput').value = _settings.entryId || '';
   document.getElementById('freeTransfersCountInput').value = _settings.freeTransfersCount != null ? _settings.freeTransfersCount : '';
-  document.getElementById('freeTransfersGwInput').value = _settings.freeTransfersGw != null ? _settings.freeTransfersGw : '';
+  updateFreeTransfersGwDisplay();
 }
 
 function saveSettings() {
   _settings.entryId = document.getElementById('entryIdInput').value.trim() || _settings.entryId;
   const ftCountRaw = document.getElementById('freeTransfersCountInput').value.trim();
-  const ftGwRaw = document.getElementById('freeTransfersGwInput').value.trim();
-  _settings.freeTransfersCount = ftCountRaw === '' ? null : Math.max(0, parseInt(ftCountRaw, 10) || 0);
-  _settings.freeTransfersGw = ftGwRaw === '' ? null : (parseInt(ftGwRaw, 10) || null);
+  const newCount = ftCountRaw === '' ? null : Math.max(0, parseInt(ftCountRaw, 10) || 0);
+  // Snapshot which gameweek this count is being confirmed for, taken
+  // automatically from live data — not typed, so it can't be entered
+  // wrong, only become stale if the user doesn't come back to re-save
+  // after the squad moves on to a new gameweek (which the prompt below
+  // then catches).
+  if (newCount !== _settings.freeTransfersCount || _settings.freeTransfersSavedForGw == null) {
+    _settings.freeTransfersSavedForGw = currentPlanningGw();
+  }
+  _settings.freeTransfersCount = newCount;
   try { localStorage.setItem('ff_settings_local', JSON.stringify(_settings)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_settings').upsert('main', _settings)
@@ -949,6 +1022,7 @@ function saveSettings() {
   } else {
     safeToast('Settings saved locally');
   }
+  updateFreeTransfersGwDisplay();
   if (_squadViewMode === 'planned') refreshSquadDisplay();
   renderTransferList();
 }
@@ -957,7 +1031,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.21',
+    appVersion: '1.22',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1344,7 +1418,11 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
   const teamsById = {}; teams.forEach(t => teamsById[t.id] = t);
   const fixtureGW = findNextFixtureGW(bootstrap.events);
   const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, fixtureGW);
-  return { elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION };
+  // nextGwId is the gameweek a transfer made NOW would take effect for —
+  // the same value already computed here for fixture lookups, reused so
+  // Settings and computeTransferSlotUsage can show/use it without their
+  // own fetch or their own (possibly different) derivation.
+  return { elements, teams, picksData, gwId, nextGwId: fixtureGW, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION };
 }
 
 function persistSquadCache(cache) {
@@ -1364,6 +1442,17 @@ function renderFromCacheObject(cache, label) {
   renderSquad(cache.elements, cache.teams, cache.picksData, cache.gwId, cache.nextFixtureByTeam || {}, cache.maxPointsByPos || {}, cache.topPlayerIdByPos || {});
   const ageMin = Math.round((Date.now() - cache.cachedAt) / 60000);
   document.getElementById('squadMeta').textContent += ` (${label} ${ageMin}m ago — tap 🔄 to refresh)`;
+  updateFreeTransfersGwDisplay();
+}
+
+// 'planned' (still deciding) and 'locked' (done on FPL, just not yet
+// visible via the API) both need to feed the projected squad, free-
+// transfer slot usage, and sync matching — anywhere that's really
+// asking "is this an active transfer FPL's API doesn't know about
+// yet", not "is it merely hypothetical". One helper, so every call
+// site asks the same question the same way.
+function isActiveTransferStatus(status) {
+  return status === 'planned' || status === 'locked';
 }
 
 // Applies planned (not yet made) transfers with a resolved player id
@@ -1378,7 +1467,7 @@ function buildProjectedSquad(baseCache, allPlayers) {
   const elementsById = {}; baseCache.elements.forEach(e => { elementsById[e.id] = e; });
 
   const plannedEntries = (_transferLog || []).filter(t =>
-    t.status === 'planned' && t.playerInId != null && t.playerOutId != null);
+    isActiveTransferStatus(t.status) && t.playerInId != null && t.playerOutId != null);
 
   const picks = baseCache.picksData.picks.map(p => Object.assign({}, p));
   const appliedSwaps = [];
@@ -1418,11 +1507,11 @@ async function renderPlannedSquadView() {
     document.getElementById('squadMeta').textContent = 'No live squad loaded yet';
     return;
   }
-  const plannedCount = (_transferLog || []).filter(t => t.status === 'planned' && t.playerInId != null && t.playerOutId != null).length;
+  const plannedCount = (_transferLog || []).filter(t => isActiveTransferStatus(t.status) && t.playerInId != null && t.playerOutId != null).length;
   if (!plannedCount) {
     container.innerHTML = '<div class="placeholder"><div class="emoji">📋</div>' +
-      '<p>No planned transfers with a selected player yet. Add one in the Transfers tab — search and select a real player so it can be projected here.</p></div>';
-    document.getElementById('squadMeta').textContent = 'No planned transfers';
+      '<p>No planned or locked-in transfers with a selected player yet. Add one in the Transfers tab — search and select a real player so it can be projected here.</p></div>';
+    document.getElementById('squadMeta').textContent = 'No planned or locked-in transfers';
     return;
   }
 
@@ -1505,6 +1594,7 @@ async function loadSquad() {
     _lastLiveSquadCache = cache;
     refreshSquadDisplay();
     persistSquadCache(cache);
+    updateFreeTransfersGwDisplay();
     safeToast('Squad loaded');
   } catch (e) {
     document.getElementById('squadBody').innerHTML =
@@ -1746,30 +1836,66 @@ async function handleTransferRatingToggle(detailsEl, entryId) {
 // field for this; it's genuinely derived from a manager's whole
 // season history and chip usage, and FPL has done at least one
 // mid-season adjustment to the rule that no formula could predict, so
-// simulating it risks a confidently wrong number. Assigns each
-// PLANNED transfer a slot in date order (oldest first): FREE while
-// slots remain, a −4 HIT once they run out. One source of truth for
-// "how many free transfers do I have" and "would this planned move
-// cost a hit", rather than tracking them separately.
+// simulating it risks a confidently wrong number. Assigns each active
+// (LOCKED IN or PLANNED) transfer a slot: FREE while the entered count
+// has room, a −4 HIT once it runs out. Locked-in entries — ones you've
+// actually made on FPL, just not yet visible via the API — take
+// priority over merely-planned ones regardless of date, since they're
+// certain; within each tier, oldest first. One source of truth, used
+// everywhere a FREE/HIT label appears, so nothing can disagree with
+// itself about which slot a given transfer occupies.
 function computeTransferSlotUsage() {
   const available = _settings.freeTransfersCount;
-  const gw = _settings.freeTransfersGw;
+  const gw = currentPlanningGw();
+  const locked = (_transferLog || []).filter(t => t.status === 'locked').slice()
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
   const planned = (_transferLog || []).filter(t => t.status === 'planned').slice()
     .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const ordered = locked.concat(planned);
   let remaining = available != null ? available : null;
-  const entries = planned.map(t => {
+  const entries = ordered.map(t => {
     let isFree = null;
     if (remaining != null) { isFree = remaining > 0; if (isFree) remaining--; }
     return { id: t.id, isFree };
   });
-  const liveGwId = _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null;
   return {
     available, gw, entries,
-    usedCount: planned.length,
-    remaining: available != null ? Math.max(0, available - planned.length) : null,
-    isStale: gw != null && liveGwId != null && gw !== liveGwId,
-    liveGwId
+    usedCount: ordered.length,
+    remaining: available != null ? Math.max(0, available - ordered.length) : null,
+    isStale: gw != null && _settings.freeTransfersSavedForGw != null && _settings.freeTransfersSavedForGw !== gw,
+    liveGwId: _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null
   };
+}
+
+// Cross-references each suggested transfer opportunity against the
+// Transfer log: is this OUT player already covered by an active
+// (planned or locked-in) entry, and if so, does it agree with what's
+// actually recorded? Distinguishes three states rather than just
+// silently repeating a suggestion the user has already acted on:
+// already recorded and matching, recorded but for a DIFFERENT player
+// in (a genuine conflict worth flagging), or nothing recorded yet.
+function annotateTransferOpportunitiesWithPlanStatus(transferOpportunities) {
+  return transferOpportunities.map(o => {
+    const existing = (_transferLog || []).find(t => isActiveTransferStatus(t.status) && t.playerOutId === o.el.id);
+    let planStatus = 'none';
+    if (existing) {
+      const bestCandidateId = o.candidates.length ? o.candidates[0].el.id : null;
+      planStatus = (existing.playerInId === bestCandidateId) ? 'matches' : 'conflicts';
+    }
+    return Object.assign({}, o, { planStatus, existingEntry: existing || null });
+  });
+}
+
+function planStatusNoteHtml(o) {
+  if (o.planStatus === 'matches') {
+    return '<div class="sub" style="color:var(--accent2);margin-top:4px">✅ Already ' +
+      (o.existingEntry.status === 'locked' ? 'locked in' : 'planned') + ': ' + safeEsc(o.existingEntry.playerOutName) + ' → ' + safeEsc(o.existingEntry.playerInName) + '.</div>';
+  }
+  if (o.planStatus === 'conflicts') {
+    return '<div class="sub" style="color:var(--accent5);margin-top:4px">⚠️ You have ' + safeEsc(o.existingEntry.playerOutName) + ' → ' + safeEsc(o.existingEntry.playerInName) +
+      ' (' + (o.existingEntry.status === 'locked' ? 'locked in' : 'planned') + '), but this analysis currently rates a different player in higher.</div>';
+  }
+  return '<div class="sub" style="margin-top:4px">No transfer recorded for this yet — currently the top option.</div>';
 }
 
 // Labels each Advice-suggested transfer opportunity as FREE or a −4
@@ -1806,28 +1932,31 @@ function renderTransferList() {
 
   if (!_transferLog.length) {
     body.innerHTML = '<div class="placeholder"><div class="emoji">🔁</div>' +
-      '<p>No transfers logged yet. Click <strong>Sync from FPL</strong> to pull in transfers you\'ve already made, or add a planned one above.</p></div>';
+      '<p>No transfers logged yet. Click <strong>Sync from FPL</strong> to pull in transfers you\'ve already made, or add one above.</p></div>';
     document.getElementById('transferMeta').textContent = 'No transfers logged';
     return;
   }
 
   let html = '';
   if (slotUsage.isStale) {
-    html += '<div class="projection-banner">⚠️ Free transfer count was set for Gameweek ' + slotUsage.gw +
-      ', but your squad is now on Gameweek ' + slotUsage.liveGwId +
-      '. FREE/HIT labels below may be wrong until you update it in Settings.</div>';
+    html += '<div class="projection-banner">⚠️ Your free transfer count was confirmed for Gameweek ' + _settings.freeTransfersSavedForGw +
+      ', but you\'re now planning for Gameweek ' + slotUsage.gw +
+      '. FREE/HIT labels below may be wrong until you check the FPL site and re-save it in Settings.</div>';
   }
+
+  const statusBadge = { made: ['MADE', 'made'], locked: ['LOCKED IN', 'locked'], planned: ['PLANNED', 'planned'] };
 
   const sorted = _transferLog.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   sorted.forEach(t => {
     const canRate = !!t.gwId && !!extractTransferPlayerIds(t);
-    const slotBadge = (t.status === 'planned' && slotById[t.id] != null)
+    const slotBadge = (isActiveTransferStatus(t.status) && slotById[t.id] != null)
       ? '<span class="txf-badge ' + (slotById[t.id] ? 'made' : 'hit') + '">' + (slotById[t.id] ? 'FREE' : '−4 HIT') + '</span>'
       : '';
+    const [statusLabel, statusClass] = statusBadge[t.status] || statusBadge.planned;
     html += '<div class="transfer-entry">' +
       '<div class="txf-head"><span class="txf-move"><span class="txf-out">' + safeEsc(t.playerOutName) + '</span> → <span class="txf-in">' + safeEsc(t.playerInName) + '</span></span>' +
       '<span style="display:flex;gap:6px;align-items:center">' + slotBadge +
-      '<span class="txf-badge ' + (t.status === 'made' ? 'made' : 'planned') + '">' + (t.status === 'made' ? 'MADE' : 'PLANNED') + '</span></span></div>' +
+      '<span class="txf-badge ' + statusClass + '">' + statusLabel + '</span></span></div>' +
       '<div class="txf-meta">' + safeEsc(t.date) + ' · ' + formatCostDelta(t.costDelta || 0) + (t.gwId ? ' · GW' + t.gwId : '') + ' · ' + (t.source === 'auto' ? 'synced from FPL' : 'manual') + '</div>' +
       (t.note ? '<div class="txf-note">' + safeEsc(t.note) + '</div>' : '') +
       (canRate
@@ -1835,16 +1964,17 @@ function renderTransferList() {
           '<div class="txf-rating-slot" data-loaded="0"><div class="sub">Tap to load…</div></div></details>'
         : '') +
       '<div class="txf-actions">' +
-      (t.status === 'planned' ? '<button onclick="markTransferMade(\'' + t.id + '\')">Mark as made</button>' : '') +
+      (isActiveTransferStatus(t.status) ? '<button onclick="markTransferMade(\'' + t.id + '\')">Mark as made</button>' : '') +
       (t.source === 'manual' ? '<button onclick="deleteTransferEntry(\'' + t.id + '\')">Delete</button>' : '') +
       '</div></div>';
   });
   body.innerHTML = html;
 
   const madeCount = _transferLog.filter(t => t.status === 'made').length;
+  const lockedCount = _transferLog.filter(t => t.status === 'locked').length;
   const plannedCount = _transferLog.filter(t => t.status === 'planned').length;
-  let meta = madeCount + ' made · ' + plannedCount + ' planned';
-  if (slotUsage.available != null) {
+  let meta = madeCount + ' made · ' + lockedCount + ' locked in · ' + plannedCount + ' planned';
+  if (slotUsage.available != null && slotUsage.gw != null) {
     meta += ' · ' + slotUsage.available + ' free for GW' + slotUsage.gw + ' (' + slotUsage.usedCount + ' used, ' + slotUsage.remaining + ' remaining)';
   } else {
     meta += ' · set free transfers in Settings for FREE/HIT labelling';
@@ -1852,7 +1982,8 @@ function renderTransferList() {
   document.getElementById('transferMeta').textContent = meta;
 }
 
-function addManualTransfer() {
+function addManualTransfer(status) {
+  status = status === 'locked' ? 'locked' : 'planned';
   if (!_txfOutSelected || !_txfInSelected) {
     safeToast('Search and select both a player out and a player in from the list', 'err'); return;
   }
@@ -1864,7 +1995,7 @@ function addManualTransfer() {
     date: (typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10)),
     playerOutName: _txfOutSelected.name, playerInName: _txfInSelected.name,
     playerOutId: _txfOutSelected.id, playerInId: _txfInSelected.id,
-    costDelta, note, status: 'planned', source: 'manual', gwId: null
+    costDelta, note, status: status, source: 'manual', gwId: null
   };
   _transferLog.push(entry);
   persistTransferLog();
@@ -1874,11 +2005,11 @@ function addManualTransfer() {
   document.getElementById('txfCostInput').value = '';
   document.getElementById('txfNoteInput').value = '';
   _txfOutSelected = null; _txfInSelected = null;
-  // A newly-added planned transfer changes what the "Planned" view
+  // A newly-added active transfer changes what the "Planned" view
   // would project — if it's currently being shown, refresh it so it
   // doesn't look stale relative to what was just added.
   if (_squadViewMode === 'planned') refreshSquadDisplay();
-  safeToast('Planned transfer added');
+  safeToast(status === 'locked' ? 'Locked-in transfer recorded' : 'Planned transfer added');
 }
 
 function deleteTransferEntry(id) {
@@ -1948,14 +2079,15 @@ async function syncTransfersFromFPL() {
       if (existingIds.has(id)) return;
       const inEl = elementsById[t.element_in], outEl = elementsById[t.element_out];
 
-      // A planned entry for this exact swap (same player out, same
-      // player in) is upgraded in place to the confirmed real one —
-      // same slot in the array, note preserved — rather than living
-      // alongside a separate 'made' entry for the same move. Matches
-      // on player ids only (not date), since a plan is usually logged
-      // before the real transfer's exact timestamp is known.
+      // A planned OR locked-in entry for this exact swap (same player
+      // out, same player in) is upgraded in place to the confirmed real
+      // one — same slot in the array, note preserved — rather than
+      // living alongside a separate 'made' entry for the same move.
+      // Matches on player ids only (not date), since a plan/lock-in is
+      // usually logged before the real transfer's exact timestamp is
+      // known.
       const matchIdx = _transferLog.findIndex(e =>
-        e.status === 'planned' && e.playerOutId === t.element_out && e.playerInId === t.element_in);
+        isActiveTransferStatus(e.status) && e.playerOutId === t.element_out && e.playerInId === t.element_in);
 
       const upgraded = {
         id,
@@ -1981,7 +2113,7 @@ async function syncTransfersFromFPL() {
     renderTransferList();
     if (_squadViewMode === 'planned') refreshSquadDisplay();
     const parts = [];
-    if (matched) parts.push(matched + ' planned transfer' + (matched === 1 ? '' : 's') + ' confirmed');
+    if (matched) parts.push(matched + ' planned/locked-in transfer' + (matched === 1 ? '' : 's') + ' confirmed');
     if (added) parts.push(added + ' new transfer' + (added === 1 ? '' : 's') + ' added');
     safeToast(parts.length ? ('Synced — ' + parts.join(', ')) : 'Synced — already up to date');
   } catch (e) {
@@ -2442,7 +2574,8 @@ function explainerHtml() {
     '<p><strong>Minutes risk</strong> is a season-to-date reliability band (SECURE/ROTATION RISK/BENCH RISK) — not a detected recent trend, since that would need a per-gameweek minutes call this app doesn\'t make. Labelled as season-to-date deliberately.</p>' +
     '<p><strong>Decisions</strong> (HOLD/MONITOR/CONSIDER SELL/SELL) require multiple independent negative signals before escalating — one bad signal alone (e.g. a single tough fixture run) only ever produces MONITOR. Immediate unavailability (injured/suspended) is SELL directly; doubtful is MONITOR directly. Bench players only get the availability check — low bench minutes is often by design (a backup keeper, a cheap enabler), not a risk signal. SELL/CONSIDER SELL here means "worth evaluating transfer alternatives" — not an instruction to make a transfer this instant; squad structure isn\'t modelled.</p>' +
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
-    '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. Existing planned transfers consume free slots first, in date order; a suggested transfer beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The count is tied to a specific gameweek — if your squad has since moved past it, a staleness warning appears until you update it.</p>' +
+    '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for.</p>' +
+    '<p><strong>"No transfer recorded" / "Already planned" / "Conflicts with a recorded plan"</strong> — every suggested transfer is checked against the Transfer log for an existing planned or locked-in entry on the same OUT player, so a suggestion never silently repeats something you\'ve already decided, and a genuine disagreement (you\'ve recorded a different IN player than this analysis currently rates highest) is flagged rather than hidden. The squad shown is always your last LOCKED gameweek; any transfer suggestion is for the NEXT one, since that\'s the only gameweek a transfer made now can actually take effect for — both are labelled explicitly when they differ.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
     '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
     '</details>';
@@ -2549,6 +2682,7 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
         if (o.hitWarning) {
           html += '<div class="sub" style="color:var(--accent3);margin-top:4px">⚠️ ' + safeEsc(o.hitWarning) + '</div>';
         }
+        html += planStatusNoteHtml(o);
       } else {
         html += '<div class="sub">No affordable same-position alternative found within budget.</div>';
       }
@@ -2562,15 +2696,28 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
 
 function transferVerdictLine(transferOpportunities) {
   const slotUsage = computeTransferSlotUsage();
-  if (slotUsage.available == null || slotUsage.remaining == null || slotUsage.remaining <= 0) return '';
+  if (slotUsage.available == null) return '';
   const n = slotUsage.remaining;
-  const goodFree = transferOpportunities.find(o => o.slotLabel === 'FREE' && o.opportunity && (o.opportunity.level === 'HIGH' || o.opportunity.level === 'MEDIUM') && o.candidates.length);
-  if (goodFree) {
-    return ' You have ' + n + ' free transfer' + (n === 1 ? '' : 's') + ' for GW' + slotUsage.gw + ' — worth using on ' +
-      safeEsc(goodFree.el.web_name) + ' → ' + safeEsc(goodFree.candidates[0].el.web_name) + '.';
+
+  if (n != null && n > 0) {
+    const goodFree = transferOpportunities.find(o => o.slotLabel === 'FREE' && o.opportunity && (o.opportunity.level === 'HIGH' || o.opportunity.level === 'MEDIUM') && o.candidates.length);
+    if (goodFree) {
+      return ' You have ' + n + ' free transfer' + (n === 1 ? '' : 's') + ' for GW' + slotUsage.gw + ' — worth using on ' +
+        safeEsc(goodFree.el.web_name) + ' → ' + safeEsc(goodFree.candidates[0].el.web_name) + '.';
+    }
+    return ' You have ' + n + ' free transfer' + (n === 1 ? '' : 's') + ' for GW' + slotUsage.gw +
+      ' — nothing flagged is clearly worth using ' + (n === 1 ? 'it' : 'them') + ' on this week.';
   }
-  return ' You have ' + n + ' free transfer' + (n === 1 ? '' : 's') + ' for GW' + slotUsage.gw +
-    ' — nothing flagged is clearly worth using ' + (n === 1 ? 'it' : 'them') + ' on this week.';
+
+  // remaining is 0 — worth distinguishing WHY rather than staying
+  // silent either way: already accounted for by recorded transfers
+  // (a positive confirmation) versus genuinely none available (nothing
+  // useful to say).
+  if (n === 0 && slotUsage.usedCount > 0) {
+    return ' Your free transfer' + (slotUsage.available === 1 ? '' : 's') + ' for GW' + slotUsage.gw + ' ' +
+      (slotUsage.available === 1 ? 'is' : 'are') + ' already covered by ' + (slotUsage.usedCount === 1 ? 'your recorded transfer' : slotUsage.usedCount + ' recorded transfers') + '.';
+  }
+  return '';
 }
 
 function gameweekSummaryHtml(watchItems, avgScore, gwId, transferOpportunities) {
@@ -2589,12 +2736,23 @@ function gameweekSummaryHtml(watchItems, avgScore, gwId, transferOpportunities) 
 
 function renderAdvice(data) {
   const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
-          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId } = data;
+          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, fixtureGW, isPlannedMode } = data;
   let html = '';
 
   const starters = picks.filter(p => p.position <= 11);
   const startersTotal = starters.reduce((s, p) => s + ((scoresById[p.element] || {}).score || 0), 0);
   const avgScore = starters.length ? startersTotal / starters.length : 0;
+
+  // Explicit FROM/TO framing so it's never ambiguous which squad this
+  // analysis is BASED ON versus which gameweek any transfer suggestion
+  // is actually FOR — the two are different gameweeks by definition
+  // (a transfer made now takes effect at the NEXT deadline, not the
+  // one already locked in), and that distinction was easy to miss
+  // without saying it outright.
+  if (!isPlannedMode && fixtureGW != null && gwId != null && fixtureGW !== gwId) {
+    html += '<div class="sub" style="padding:0 16px 10px">Squad shown is your locked <strong>Gameweek ' + gwId +
+      '</strong> team · any transfer suggestion below is for <strong>Gameweek ' + fixtureGW + '</strong>, the next one it can actually take effect for.</div>';
+  }
 
   // 1. GAMEWEEK SUMMARY
   html += gameweekSummaryHtml(watchItems, avgScore, gwId, transferOpportunities);
@@ -2658,6 +2816,7 @@ function renderAdvice(data) {
           html += '<div class="sub" style="color:var(--accent3);margin-top:4px">⚠️ ' + safeEsc(o.hitWarning) + '</div>';
         }
       }
+      html += planStatusNoteHtml(o);
       html += '</div>';
     });
   }
@@ -2722,7 +2881,7 @@ async function pullRemoteScoreHistory() {
 
 function buildAdviceCachePayload(data) {
   const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
-          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline } = data;
+          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline, fixtureGW, isPlannedMode } = data;
 
   const referencedIds = new Set(picks.map(p => p.element));
   transferOpportunities.forEach(o => { referencedIds.add(o.el.id); o.candidates.forEach(c => referencedIds.add(c.el.id)); });
@@ -2734,7 +2893,7 @@ function buildAdviceCachePayload(data) {
   referencedIds.forEach(id => { if (scoresById[id]) scores[id] = scoresById[id]; });
 
   return {
-    gwId, deadline,
+    gwId, deadline, fixtureGW, isPlannedMode,
     generatedAt: Date.now(),
     picks, elements, scores,
     optimal: optimal ? { formation: optimal.formation, diff: optimal.diff, hasUnavailable: !!optimal.hasUnavailable, starterIds: optimal.starterIds } : null,
@@ -2745,7 +2904,8 @@ function buildAdviceCachePayload(data) {
     transferOpportunities: transferOpportunities.map(o => ({
       elId: o.el.id, decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
       candidateIds: o.candidates.map(c => c.el.id), candidateScores: o.candidates.map(c => c.score), opportunity: o.opportunity, budget: o.budget,
-      slotLabel: o.slotLabel, hitWarning: o.hitWarning
+      slotLabel: o.slotLabel, hitWarning: o.hitWarning, planStatus: o.planStatus,
+      existingEntry: o.existingEntry ? { playerOutName: o.existingEntry.playerOutName, playerInName: o.existingEntry.playerInName, status: o.existingEntry.status } : null
     })),
     decisions: Object.keys(decisions).reduce((acc, id) => {
       acc[id] = { decision: decisions[id].decision, confidence: decisions[id].confidence, reasons: decisions[id].reasons, momentum: decisions[id].momentum };
@@ -2763,7 +2923,8 @@ function renderAdviceFromCache(cache, label) {
   const transferOpportunities = (cache.transferOpportunities || []).map(o => ({
     el: elementsById[o.elId], decision: o.decision, confidence: o.confidence, reasons: o.reasons, outScore: o.outScore,
     candidates: (o.candidateIds || []).map((id, i) => ({ el: elementsById[id], score: o.candidateScores[i] })).filter(c => c.el),
-    opportunity: o.opportunity, budget: o.budget, slotLabel: o.slotLabel, hitWarning: o.hitWarning
+    opportunity: o.opportunity, budget: o.budget, slotLabel: o.slotLabel, hitWarning: o.hitWarning,
+    planStatus: o.planStatus || 'none', existingEntry: o.existingEntry || null
   })).filter(o => o.el);
   const decisions = {};
   Object.keys(cache.decisions || {}).forEach(id => {
@@ -2775,7 +2936,8 @@ function renderAdviceFromCache(cache, label) {
     picks: cache.picks, elementsById, scoresById,
     optimal: cache.optimal, captain, viceCaptain, captainConfidence: cache.captainConfidence,
     watchItems: cache.watchItems || [], transferOpportunities, decisions,
-    nextFixtureByTeam: cache.nextFixtureByTeam || {}, gwId: cache.gwId, deadline: cache.deadline
+    nextFixtureByTeam: cache.nextFixtureByTeam || {}, gwId: cache.gwId, deadline: cache.deadline,
+    fixtureGW: cache.fixtureGW, isPlannedMode: !!cache.isPlannedMode
   });
 
   const ageMin = Math.round((Date.now() - cache.generatedAt) / 60000);
@@ -2858,8 +3020,8 @@ async function loadAdvice() {
 
     if (_adviceViewMode === 'planned') {
       if (!_lastLiveSquadCache) throw new Error('Load your live squad first (Squad tab → Load Squad) before analysing a planned one.');
-      const plannedCount = (_transferLog || []).filter(t => t.status === 'planned' && t.playerInId != null && t.playerOutId != null).length;
-      if (!plannedCount) throw new Error('No planned transfers with a selected player yet — add one in the Transfers tab.');
+      const plannedCount = (_transferLog || []).filter(t => isActiveTransferStatus(t.status) && t.playerInId != null && t.playerOutId != null).length;
+      if (!plannedCount) throw new Error('No planned or locked-in transfers with a selected player yet — add one in the Transfers tab.');
       // bootstrap.elements is the FULL player list here (unlike the
       // squad tab's trimmed cache), so any newly-projected-in player
       // is already resolvable without a separate fetch.
@@ -2937,13 +3099,15 @@ async function loadAdvice() {
     const squadIds = new Set(picksData.picks.map(p => p.element));
     const squadDecisionsList = Object.values(decisions);
     const transferOpportunitiesRaw = buildTransferOpportunities(squadDecisionsList, scores, bootstrap.elements, bank, squadIds);
-    const transferOpportunities = annotateTransferOpportunitiesWithSlots(transferOpportunitiesRaw);
+    const transferOpportunitiesSlotted = annotateTransferOpportunitiesWithSlots(transferOpportunitiesRaw);
+    const transferOpportunities = annotateTransferOpportunitiesWithPlanStatus(transferOpportunitiesSlotted);
     const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, fixtureGW, squadIds, 2);
     const watchItems = generateWatchItems(squadDecisionsList, buyOpportunities);
 
     const renderData = {
       picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, viceCaptain, captainConfidence,
-      watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline
+      watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline, fixtureGW,
+      isPlannedMode: _adviceViewMode === 'planned'
     };
     renderAdvice(renderData);
 
