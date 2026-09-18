@@ -3,12 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.27</title>
+<title>Fantasy Football Tracker v1.28</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
 // same pattern as every other app in the suite. v1.0
-(function(){try{var t=localStorage.getItem('pal_theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
+// Case/whitespace-tolerant on purpose — this only has to agree with
+// itself and whatever wrote pal_theme, so it costs nothing to be
+// forgiving about exact casing.
+(function(){try{var t=localStorage.getItem('pal_theme');if(t&&t.trim().toLowerCase()==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='16' fill='%2322c55e' text-anchor='middle'>%E2%9A%BD</text></svg>">
 <style>
@@ -136,6 +139,7 @@
   .cap-badge.vc { background: var(--neutral-bg); color: var(--ink2); border: 1px solid var(--neutral-border); }
   .tag-in { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: var(--accent2); color: #06210f; letter-spacing: .02em; }
   .tag-out { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: var(--neutral-bg); color: var(--accent3); border: 1px solid var(--accent3); letter-spacing: .02em; }
+  .tag-disagree { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: rgba(167,139,250,.15); color: #a78bfa; letter-spacing: .02em; }
   .transfer-summary-card {
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; margin-bottom: 8px; font-size: 12px;
@@ -330,7 +334,8 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.27</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.28</span></div>
+  <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
 <div class="tabs">
@@ -461,13 +466,46 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.27"></script>
-<script src="pal-sync.js?v=1.27"></script>
-<script src="pal-utils.js?v=1.27"></script>
+<script src="pal-config.js?v=1.28"></script>
+<script src="pal-sync.js?v=1.28"></script>
+<script src="pal-utils.js?v=1.28"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.28:
+ *
+ * - Per-player external disagreement labels in Recommended Team.
+ *   buildContradictionFlags' aggregate per-AI output already existed
+ *   (v1.26) but only ever surfaced in the summary banner —
+ *   recommendedTeamHtml even had an unused disagreementLabels
+ *   parameter sitting dead in its signature from an earlier
+ *   incomplete pass. New buildPerPlayerDisagreementLabels turns that
+ *   same data into a per-player lookup; wired all the way through
+ *   (loadAdvice → renderData → renderAdvice → recommendedTeamHtml,
+ *   and the advice cache read/write, so a cached reload shows it too)
+ *   so an individual player's card in Recommended Team now says
+ *   "🔀 ChatGPT would bench this" directly, naming which AI.
+ * - Bench order added to Recommended Team — was previously just an
+ *   unordered row of "whoever's not starting". Outfield reserves now
+ *   ranked by score (best fallback first) with explicit 1st/2nd/3rd
+ *   sub labels; bench GK placed last regardless of score, since a GK
+ *   sub is a materially rarer event than an outfield one. Stated
+ *   plainly as a suggested priority, not a claim of matching FPL's
+ *   own auto-sub logic exactly (which also depends on formation
+ *   validity at kickoff, not simulated here).
+ * - Reported: "fix the toggle" — v1.27 removed the per-app theme
+ *   button entirely on the theory that a passive boot-time read of
+ *   the shared pal_theme value was enough. In hindsight that left no
+ *   way to actually CHANGE theme from inside this app at all, which
+ *   is very plausibly what "not working" meant — there's nothing to
+ *   click anymore, not that the wrong thing happens when you do.
+ *   Restored a genuinely bidirectional toggle: reads AND writes the
+ *   same pal_theme key every app in the suite uses, so a change here
+ *   is visible to the others next load and vice versa. Also made the
+ *   shared-value read case/whitespace-tolerant, in case another app
+ *   in the suite writes it slightly differently.
  *
  * v1.27 — six pieces of work in one release:
  *
@@ -1127,7 +1165,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.27';
+const FF_VERSION = '1.28';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1193,18 +1231,34 @@ function updateFreeTransfersGwDisplay() {
 }
 
 // ── Theme ──────────────────────────────────────────────────────
-// No per-app toggle — this app reads the shared pal_theme value
-// (same key every app in the suite writes to) at boot, via the
-// inline anti-flash script in <head>, which sets data-theme directly
-// before pal-utils.js has even loaded. Once it HAS loaded (here),
-// applyThemeCore is called once to finish the sync — specifically the
-// meta theme-color tag (mobile browser chrome), which that early
-// inline script can't touch since pal-utils.js isn't available yet.
-// Without this, a page load would get the right CSS colours but a
-// stale status-bar colour until some other trigger updated it.
-(function syncThemeMeta() {
-  if (typeof applyThemeCore !== 'function') return;
-  applyThemeCore(document.documentElement.getAttribute('data-theme') !== 'light', { dark: '#0d1117', light: '#f4f6f8' });
+// Reads/writes the same pal_theme localStorage key every app in the
+// suite uses — toggling here updates what any other app sees next
+// time it loads, and vice versa, since they all share one origin.
+// v1.27 removed this button on the theory that a passive boot-time
+// read of the shared value was enough and a per-app toggle was
+// redundant — but that left no way to actually CHANGE theme from
+// inside this app at all, which is a worse outcome than a genuinely
+// synced toggle; restored.
+function toggleTheme() {
+  if (typeof applyThemeCore !== 'function') {
+    safeToast('Theme toggle unavailable — pal-utils.js did not load', 'err');
+    return;
+  }
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  applyThemeCore(!isDark, { dark: '#0d1117', light: '#f4f6f8' });
+  try { localStorage.setItem('pal_theme', !isDark ? 'dark' : 'light'); } catch (e) {}
+  document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
+}
+(function initThemeIcon() {
+  // Same call as toggleTheme's own sync, run once at boot so the meta
+  // theme-color tag (mobile browser chrome) matches immediately —
+  // the early anti-flash inline script in <head> can't do this
+  // itself since pal-utils.js isn't loaded that early.
+  if (typeof applyThemeCore === 'function') {
+    applyThemeCore(document.documentElement.getAttribute('data-theme') !== 'light', { dark: '#0d1117', light: '#f4f6f8' });
+  }
+  document.getElementById('themeBtn').textContent =
+    document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
 })();
 
 // ── Tabs ───────────────────────────────────────────────────────
@@ -1254,7 +1308,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.27',
+    appVersion: '1.28',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -3177,6 +3231,26 @@ function applyExternalOverridesToXI(optimalRaw, picks, elementsById, scoresById,
 // that's what's actually being shown. Names are matched case-
 // insensitively against the real squad; a name that doesn't resolve
 // to a squad player is silently skipped rather than guessed at.
+// Turns buildContradictionFlags' aggregate per-AI output into a
+// per-player lookup, so an individual player card in Recommended
+// Team can be labelled directly rather than only ever showing up in
+// the summary banner. Keyed by lowercased name (what's already
+// available at render time) rather than id, to avoid re-doing the
+// same name resolution buildContradictionFlags already did.
+function buildPerPlayerDisagreementLabels(contradictionFlags) {
+  const map = {};
+  const add = (name, text) => {
+    const key = String(name).toLowerCase().trim();
+    if (!map[key]) map[key] = [];
+    map[key].push(text);
+  };
+  (contradictionFlags || []).forEach(f => {
+    f.algoOnly.forEach(name => add(name, f.label + ' would bench this'));
+    f.extWantsIn.forEach(name => add(name, f.label + ' would start this instead'));
+  });
+  return map;
+}
+
 function buildContradictionFlags(picks, elementsById, optimalRaw, captain, externalChecks) {
   if (!optimalRaw || !externalChecks || !externalChecks.length) return [];
   const starterIds = new Set(optimalRaw.starters.map(s => s.el.id));
@@ -3724,7 +3798,8 @@ function explainerHtml() {
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
     '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for.</p>' +
     '<p><strong>"No transfer recorded" / "Already planned" / "Conflicts with a recorded plan"</strong> — every suggested transfer is checked against the Transfer log for an existing planned or locked-in entry on the same OUT player, so a suggestion never silently repeats something you\'ve already decided, and a genuine disagreement (you\'ve recorded a different IN player than this analysis currently rates highest) is flagged rather than hidden. The squad shown is always your last LOCKED gameweek; any transfer suggestion is for the NEXT one, since that\'s the only gameweek a transfer made now can actually take effect for — both are labelled explicitly when they differ.</p>' +
-    '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
+    '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
+    '<p><strong>Bench order</strong> in Recommended Team is a suggested fallback priority, not a claim of exactly matching FPL\'s own auto-substitution logic (which also depends on formation validity at kickoff, something this doesn\'t simulate). Outfield reserves are ranked by score — best fallback first — with the bench goalkeeper placed last regardless of score, since a bench GK only ever comes on if the starting keeper doesn\'t play, a materially rarer event than an outfield sub, so ranking it against outfield scores wouldn\'t mean much.</p>' +
     '<p><strong>Substitutions</strong> in the Locked In Squad view are a genuinely separate layer from transfers — transfers decide WHICH 15 players are in the squad, substitutions decide WHICH 11 of those 15 start, in what order the other 4 would come on, and who\'s captain/vice. Tap ⇄ on a starter then ⇄ on a bench player to swap them; C/V set the armband. A goalkeeper can only swap with the bench goalkeeper (a squad always needs exactly 1 starting one); an outfield swap can cross DEF/MID/FWD lines same as the real FPL app, but is checked against a legal formation (3-5 DEF, 2-5 MID, 1-3 FWD) first — an invalid swap is rejected outright, nothing partial happens. Advice\'s Locked In Squad analysis reads this exact lineup — not its own independent suggestion — for which captain and starting XI it\'s reporting on, so "Your captain" there always matches what\'s actually set in Squad; the separate "Recommended team" section still shows the algorithm\'s own best-XI-from-all-15 opinion alongside it, since comparing the two is the point, not replacing one with the other.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
     '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
@@ -3767,11 +3842,38 @@ function captainBulletsFor(player, scoresById) {
 // their price against your actual available budget. Nothing here is
 // computed fresh; it's purely a presentation layer over
 // findOptimalXI's and buildTransferOpportunities' existing output.
-function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId, fixtureGW) {
+// Per-player-name map of which AIs disagree with the algorithm's
+// placement of them, and how — used to label individual cards in
+// Recommended Team, in addition to (not instead of) the prose summary
+// in the "External advice considered" banner. Built from the same
+// contradictionFlags buildContradictionFlags already computes, so
+// there's one source of truth for "does this player have a
+// disagreement" — the label text and the summary can never say
+// different things about the same player.
+function buildDisagreementLabels(contradictionFlags) {
+  const map = {};
+  (contradictionFlags || []).forEach(f => {
+    f.algoOnly.forEach(name => {
+      (map[name] = map[name] || []).push(f.label + ": wouldn't start");
+    });
+    f.extWantsIn.forEach(name => {
+      (map[name] = map[name] || []).push(f.label + ': would start');
+    });
+  });
+  return map;
+}
+
+function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId, fixtureGW, scoresById, disagreementLabels) {
   const actualStartingIds = new Set(picks.filter(p => p.position <= 11).map(p => p.element));
   const suggestedIds = (optimal && optimal.starterIds) ? new Set(optimal.starterIds) : actualStartingIds;
   const allSquadIds = picks.map(p => p.element);
   const benchIds = allSquadIds.filter(id => !suggestedIds.has(id));
+
+  const disagreementLineHtml = (el) => {
+    const labels = disagreementLabels && disagreementLabels[el.web_name.toLowerCase().trim()];
+    if (!labels || !labels.length) return '';
+    return '<div class="sub" style="color:var(--accent5);margin-top:2px">🔀 ' + labels.map(safeEsc).join('; ') + '</div>';
+  };
 
   let html = '<div class="advice-section"><h3>Recommended team — Gameweek ' + gwId + '</h3>';
   html += '<div class="sub">' +
@@ -3794,20 +3896,37 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
       const isNew = !actualStartingIds.has(el.id);
       html += '<div class="player-card"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
         '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
-        (isNew ? ' <span class="tag-in">IN</span>' : '') + '</div></div>' +
+        (isNew ? ' <span class="tag-in">IN</span>' : '') + '</div>' + disagreementLineHtml(el) + '</div>' +
         '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
     });
     html += '</div>';
   });
 
-  html += '<div class="bench-divider">Bench</div><div class="player-row">';
-  benchIds.forEach(id => {
+  // Bench shown in actual fallback priority, not squad/id order — the
+  // whole point of showing it at all. Outfield reserves ranked by
+  // score (best fallback first); the bench GK is placed last, matching
+  // standard practice — a bench GK only ever comes on if the STARTING
+  // goalkeeper doesn't play, a materially rarer event than an
+  // outfield sub, so it's not usefully compared to them by score.
+  // This IS a suggested priority order, not a claim of exactly
+  // matching FPL's own auto-sub logic, which also depends on formation
+  // validity at kickoff — said plainly rather than implied.
+  const benchGk = benchIds.filter(id => elementsById[id] && elementsById[id].element_type === 1);
+  const benchOutfield = benchIds.filter(id => elementsById[id] && elementsById[id].element_type !== 1)
+    .sort((a, b) => ((scoresById && scoresById[b]) ? scoresById[b].startScore || 0 : 0) - ((scoresById && scoresById[a]) ? scoresById[a].startScore || 0 : 0));
+  const orderedBench = [...benchOutfield, ...benchGk];
+  const subLabels = ['1st sub', '2nd sub', '3rd sub', '4th sub'];
+
+  html += '<div class="bench-divider">Bench order (fallback if a starter doesn\'t play)</div><div class="player-row">';
+  orderedBench.forEach((id, idx) => {
     const el = elementsById[id];
     if (!el) return;
     const movedDown = actualStartingIds.has(id);
     html += '<div class="player-card bench"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
       '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
-      (movedDown ? ' <span class="tag-out">OUT</span>' : '') + '</div></div>' +
+      (movedDown ? ' <span class="tag-out">OUT</span>' : '') + '</div>' +
+      '<div class="sub">' + safeEsc(subLabels[idx] || ((idx + 1) + 'th sub')) + '</div>' +
+      disagreementLineHtml(el) + '</div>' +
       '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
   });
   html += '</div>';
@@ -3886,7 +4005,8 @@ function gameweekSummaryHtml(watchItems, avgScore, gwId, transferOpportunities) 
 
 function renderAdvice(data) {
   const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
-          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, fixtureGW, isPlannedMode } = data;
+          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, fixtureGW, isPlannedMode, contradictionFlags } = data;
+  const disagreementLabels = buildPerPlayerDisagreementLabels(contradictionFlags);
   let html = '';
 
   const starters = picks.filter(p => p.position <= 11);
@@ -3924,7 +4044,7 @@ function renderAdvice(data) {
   // 3. RECOMMENDED TEAM (keep/in/out/bench + transfer summary --
   // consolidates what Captain/Vice and the full Transfer opportunities
   // detail below show separately)
-  html += recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId, fixtureGW);
+  html += recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId, fixtureGW, scoresById, disagreementLabels);
 
   // 4. CAPTAIN / VICE-CAPTAIN
   // In Locked In Squad mode, "captain" here is still the algorithm's
@@ -4059,7 +4179,7 @@ async function pullRemoteScoreHistory() {
 
 function buildAdviceCachePayload(data) {
   const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
-          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline, fixtureGW, isPlannedMode } = data;
+          watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline, fixtureGW, isPlannedMode, contradictionFlags } = data;
 
   const referencedIds = new Set(picks.map(p => p.element));
   transferOpportunities.forEach(o => { referencedIds.add(o.el.id); o.candidates.forEach(c => referencedIds.add(c.el.id)); });
@@ -4089,7 +4209,7 @@ function buildAdviceCachePayload(data) {
       acc[id] = { decision: decisions[id].decision, confidence: decisions[id].confidence, reasons: decisions[id].reasons, momentum: decisions[id].momentum };
       return acc;
     }, {}),
-    nextFixtureByTeam
+    nextFixtureByTeam, contradictionFlags: contradictionFlags || []
   };
 }
 
@@ -4115,7 +4235,7 @@ function renderAdviceFromCache(cache, label) {
     optimal: cache.optimal, captain, viceCaptain, captainConfidence: cache.captainConfidence,
     watchItems: cache.watchItems || [], transferOpportunities, decisions,
     nextFixtureByTeam: cache.nextFixtureByTeam || {}, gwId: cache.gwId, deadline: cache.deadline,
-    fixtureGW: cache.fixtureGW, isPlannedMode: !!cache.isPlannedMode
+    fixtureGW: cache.fixtureGW, isPlannedMode: !!cache.isPlannedMode, contradictionFlags: cache.contradictionFlags || []
   });
 
   const ageMin = Math.round((Date.now() - cache.generatedAt) / 60000);
@@ -4296,14 +4416,14 @@ async function loadAdvice() {
     const transferOpportunities = annotateTransferOpportunitiesWithPlanStatus(transferOpportunitiesSlotted);
     const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, fixtureGW, squadIds, 2);
     const watchItems = generateWatchItems(squadDecisionsList, buyOpportunities);
+    const contradictionFlags = buildContradictionFlags(picksData.picks, elementsById, optimalRaw, captain, _externalChecks);
 
     const renderData = {
       picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, viceCaptain, captainConfidence,
       watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline, fixtureGW,
-      isPlannedMode: _adviceViewMode === 'planned'
+      isPlannedMode: _adviceViewMode === 'planned', contradictionFlags
     };
     renderAdvice(renderData);
-    const contradictionFlags = buildContradictionFlags(picksData.picks, elementsById, optimalRaw, captain, _externalChecks);
     const extSummary = externalAdviceSummaryHtml(_externalChecks, externalOverrides, externalUnresolvedFlags, contradictionFlags);
     if (extSummary) document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', extSummary);
     // Kept in memory (not persisted) so the export prompt can use
