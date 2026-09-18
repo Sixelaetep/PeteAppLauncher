@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.23</title>
+<title>Fantasy Football Tracker v1.24</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -226,6 +226,32 @@
   .txf-badge.planned { background: rgba(255,166,87,.15); color: var(--accent5); }
   .txf-badge.hit { background: rgba(247,129,102,.15); color: var(--accent3); }
   .txf-badge.locked { background: rgba(56,189,248,.15); color: #38bdf8; }
+
+  .copy-box {
+    width: 100%; min-height: 90px; max-height: 280px; resize: vertical;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--ink); font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 11px; line-height: 1.5; padding: 10px; margin-bottom: 8px;
+  }
+  .ext-check-banner {
+    background: rgba(167,139,250,.08); border: 1px dashed #a78bfa; border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 12px; font-size: 12px; color: #a78bfa; font-weight: 600;
+  }
+  .ext-check-banner .sub { color: var(--ink2); font-weight: 400; margin-top: 4px; }
+  .ext-player-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .ext-badge {
+    font-size: 9px; font-weight: 800; padding: 1px 6px; border-radius: 4px; letter-spacing: .02em;
+    margin-right: 4px; white-space: nowrap; display: inline-block;
+  }
+  .ext-badge.good { background: rgba(63,185,80,.15); color: var(--accent2); }
+  .ext-badge.warn { background: rgba(255,166,87,.15); color: var(--accent5); }
+  .ext-badge.bad { background: rgba(247,129,102,.15); color: var(--accent3); }
+  .ext-badge.unknown { background: var(--neutral-bg); color: var(--ink2); }
+  .ext-sources { font-size: 10px; color: var(--ink3); margin-top: 4px; }
+  .ext-sources a { color: var(--ink3); }
   .txf-note { font-size: 11px; color: var(--ink2); margin-top: 4px; font-style: italic; }
   .txf-actions { margin-top: 6px; display: flex; gap: 8px; }
   .txf-actions button {
@@ -296,7 +322,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.23</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.24</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -335,6 +361,19 @@
       <button class="mode-btn active" id="adviceModeLiveBtn" onclick="switchAdviceViewMode('live')">Live (FPL)</button>
       <button class="mode-btn" id="adviceModePlannedBtn" onclick="switchAdviceViewMode('planned')">Planned</button>
     </div>
+    <details class="explainer" style="margin:10px 16px 0">
+      <summary>🔎 External team news check (via chat)</summary>
+      <div style="padding-top:10px">
+        <p style="margin-bottom:8px">This app has no live source for team news or predicted lineups — FPL's API doesn't expose it, and the free websites that do don't offer a public API. Instead: generate a prompt below, paste it into a fresh Claude chat, let it search the web for current team news on your flagged players, then paste its JSON reply back in to import it here. Purely a reference layer — it never changes the scores or decisions above, only sits alongside them.</p>
+        <button class="btn secondary" onclick="generateExportPrompt()">Generate export prompt</button>
+        <textarea class="copy-box" id="exportPromptBox" readonly style="display:none" onclick="this.select()"></textarea>
+        <button class="btn secondary" id="copyExportBtn" onclick="copyExportPrompt()" style="display:none">📋 Copy to clipboard</button>
+        <label for="importCheckBox" style="margin-top:14px;display:block">Paste the JSON reply here</label>
+        <textarea class="copy-box" id="importCheckBox" placeholder="Paste the JSON code block from the chat…"></textarea>
+        <button class="btn" onclick="importExternalCheck()">Import</button>
+      </div>
+    </details>
+    <div id="extCheckSection"></div>
     <div id="adviceBody">
       <div class="placeholder">
         <div class="emoji">📊</div>
@@ -415,13 +454,44 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.23"></script>
-<script src="pal-sync.js?v=1.23"></script>
-<script src="pal-utils.js?v=1.23"></script>
+<script src="pal-config.js?v=1.24"></script>
+<script src="pal-sync.js?v=1.24"></script>
+<script src="pal-utils.js?v=1.24"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.24 — external team news check, via a chat round trip rather
+ * than any live data source (there isn't a free, public, structured
+ * one — checked and confirmed; the real APIs are paid commercial
+ * products, and the free sites that do this don't offer an API,
+ * scraping them isn't something this app is going to do).
+ *
+ * - buildPriorityPlayers derives WHO needs outside research from
+ *   decisions (SELL/CONSIDER_SELL/MONITOR — the only source with a
+ *   real element reference, unlike watchItems which is display
+ *   strings only), doubtful/injured FPL status, and top transfer
+ *   candidates — never all 15, so research stays focused.
+ * - generateExportPrompt/buildExportPromptText builds a fully self-
+ *   contained prompt (the receiving chat has no memory of this app)
+ *   with the squad and flagged players embedded as JSON, explicit
+ *   instructions steering toward primary/official sources over
+ *   paywalled predictors, a requested confidence rating per player
+ *   tied to source recency/directness as asked, and a self-check pass
+ *   before finalizing since first-draft confidence tends to run high.
+ * - importExternalCheck parses the JSON reply back in; new
+ *   ff_external_check table, same generic local+Supabase pattern as
+ *   everything else. Rendered in its own violet-bannered section,
+ *   visually distinct from both the amber PROJECTED styling and the
+ *   core advice — deliberately never merged into scores, decisions,
+ *   the advice cache, or score history. A staleness check compares
+ *   the imported gameweek against the current planning one, same
+ *   pattern as the free-transfer count.
+ * - _lastAdviceRenderData: a new in-memory (not persisted) reference
+ *   to whichever mode was most recently analyzed — needed because a
+ *   planned-mode run deliberately never writes to ff_advice_cache, so
+ *   that alone wasn't enough to find "the current advice" to export.
  *
  * v1.23 (reported: Planned squad/advice showed the wrong gameweek
  * number, and the Transfers tab mixed GW4 history with GW5 plans in
@@ -937,7 +1007,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.23';
+const FF_VERSION = '1.24';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1065,7 +1135,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.23',
+    appVersion: '1.24',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -2193,7 +2263,271 @@ async function syncTransfersFromFPL() {
   }
 }
 
+// ── External team news check (chat round-trip) ──────────────────────
+// This app has no live source for team news, injury updates, or
+// predicted lineups — FPL's API doesn't expose any of it, and the
+// free websites that do (Fantasy Football Scout, fpl.team, etc.)
+// don't offer a public API; the real ones (Sportmonks and similar)
+// are paid commercial products. Rather than scrape a site that's
+// giving its content away for people to read, not for tools to
+// ingest, this closes the loop through chat instead: export a
+// self-contained prompt (with the squad and flagged players embedded
+// as data), let a fresh Claude conversation do the actual web
+// research, then import its structured JSON reply back in. Purely a
+// reference layer — see importExternalCheck below for why it never
+// touches the scoring engine or any cached advice.
+
+// Which players most need outside research — not all 15, so the
+// research stays focused rather than burning search budget on
+// players nothing is actually uncertain about. Decisions is the
+// primary source since (unlike watchItems) each entry carries the
+// real element object, not just a display string.
+function buildPriorityPlayers(renderData) {
+  const priority = [];
+  const seen = new Set();
+  const add = (el, reason) => {
+    if (!el || seen.has(el.id)) return;
+    seen.add(el.id);
+    priority.push({ id: el.id, name: el.web_name, reason });
+  };
+  Object.values(renderData.decisions || {}).forEach(d => {
+    if (d.decision === 'SELL' || d.decision === 'CONSIDER_SELL' || d.decision === 'MONITOR') {
+      add(d.el, d.decision + ': ' + (d.reasons || []).join('; '));
+    }
+  });
+  (renderData.picks || []).forEach(p => {
+    const el = renderData.elementsById[p.element];
+    if (el && ['d', 'i', 's', 'u'].includes(el.status)) {
+      add(el, 'FPL status: ' + el.status + (el.news ? ' — ' + el.news : ''));
+    }
+  });
+  (renderData.transferOpportunities || []).forEach(o => {
+    if (o.candidates.length) add(o.candidates[0].el, 'Potential incoming transfer target');
+  });
+  return priority;
+}
+
+function teamShortNameFor(teamId) {
+  const teams = (_lastLiveSquadCache && _lastLiveSquadCache.teams) || [];
+  const t = teams.find(x => x.id === teamId);
+  return t ? t.short_name : '?';
+}
+
+function generateExportPrompt() {
+  if (!_lastAdviceRenderData) {
+    safeToast('Analyse Squad first (Live or Planned) before exporting a prompt', 'err');
+    return;
+  }
+  const rd = _lastAdviceRenderData;
+  const squad = rd.picks.map(p => {
+    const el = rd.elementsById[p.element];
+    return el ? { id: el.id, name: el.web_name, team: teamShortNameFor(el.team), position: POSITION_SHORT[el.element_type] } : null;
+  }).filter(Boolean);
+  const priorityPlayers = buildPriorityPlayers(rd);
+
+  const payload = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    forGameweek: rd.gwId,
+    squadIsPlanned: !!rd.isPlannedMode,
+    currentCaptain: rd.captain ? rd.captain.web_name : null,
+    squad,
+    priorityPlayers: priorityPlayers.map(p => ({ id: p.id, name: p.name, reason: p.reason }))
+  };
+
+  const prompt = buildExportPromptText(payload);
+  const box = document.getElementById('exportPromptBox');
+  box.value = prompt;
+  box.style.display = 'block';
+  document.getElementById('copyExportBtn').style.display = 'inline-block';
+  box.focus(); box.select();
+}
+
+// The prompt is written to be self-contained — it's read by a FRESH
+// Claude conversation with no memory of this app, so it has to
+// explain FPL, the task, and the output format from scratch. Steers
+// research toward primary/official sources (press conferences, club
+// statements, mainstream sports journalism) rather than paywalled
+// fantasy-specific predictor sites, in keeping with not scraping
+// those; asks for an explicit confidence rating per player, as
+// requested, tied to source recency and directness rather than left
+// to guesswork; and includes a self-check pass before finalizing,
+// since a model's first-draft confidence tends to run higher than a
+// second look justifies.
+function buildExportPromptText(payload) {
+  const schema = {
+    schemaVersion: 1,
+    generatedAt: 'ISO timestamp',
+    forGameweek: payload.forGameweek,
+    players: [{
+      id: 'number, must match an id from priorityPlayers above',
+      name: 'string',
+      fitnessStatus: 'fit | doubtful | injured | suspended | unknown',
+      startLikelihood: 'likely | uncertain | unlikely | unknown — about tactical rotation risk, separate from fitness',
+      confidence: 'high | medium | low',
+      summary: 'one or two sentences',
+      sources: [{ name: 'string', date: 'approximate date', url: 'string' }]
+    }],
+    playersChecked: 'array of every priorityPlayers id you actually researched, whether or not you found anything new',
+    notes: 'optional — anything about overall data quality worth flagging'
+  };
+
+  return [
+    'You are reviewing my Fantasy Premier League (FPL) squad ahead of a gameweek deadline.',
+    'I\'m giving you my squad and my own app\'s existing algorithmic analysis as JSON. Your job: research CURRENT team news for the flagged players using web search, and reply with a single JSON code block I can import back into my app.',
+    '',
+    '## My situation (JSON)',
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+    '',
+    '## What to do',
+    '1. For each entry in priorityPlayers above, search for genuinely current team news: press conference reports, official club statements, and mainstream sports journalism (BBC Sport, Sky Sports, The Athletic, the club\'s own site). Do NOT use paywalled fantasy-football-specific predicted-lineup services (Fantasy Football Scout and similar) even if you find references to them in search results — stick to primary/official reporting that anyone can verify.',
+    '2. For each, assess separately: fitnessStatus (are they actually fit) and startLikelihood (will they actually START — a fit player can still be rotated or tactically benched, so this is a genuinely different question from fitness).',
+    '3. Set confidence based on source quality and recency — an official team statement from the last 24-48h is HIGH; a vague pundit guess or anything more than 5 days old is LOW regardless of how it reads.',
+    '4. If sources disagree, say so explicitly rather than picking one confidently.',
+    '5. If you find nothing new for a player, still add their id to playersChecked (so I know they were actually checked, not skipped) but leave them out of the players array — don\'t guess just to fill a slot.',
+    '6. For gameweek matches happening on later days (Sunday/Monday), official team news may genuinely not exist yet this early — say "unknown" rather than inventing certainty a real predicted-lineup service wouldn\'t have either.',
+    '7. Before finalizing: re-read every summary and confidence rating you\'ve written. If a summary is based on anything you\'re not confident is from the last few days, lower its confidence to low, even if you already marked it otherwise.',
+    '',
+    '## Output format',
+    'Reply with ONLY a single JSON code block matching this exact shape, nothing else — no other prose before or after it:',
+    '```json',
+    JSON.stringify(schema, null, 2),
+    '```'
+  ].join('\n');
+}
+
+async function copyExportPrompt() {
+  const box = document.getElementById('exportPromptBox');
+  if (!box.value) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(box.value);
+    } else {
+      box.style.display = 'block'; box.focus(); box.select();
+      document.execCommand('copy');
+    }
+    safeToast('Prompt copied');
+  } catch (e) {
+    box.style.display = 'block'; box.focus(); box.select();
+    safeToast('Couldn\'t auto-copy — text is selected, use Ctrl/Cmd+C', 'err');
+  }
+}
+
+function extBadgeClass(value, kind) {
+  if (kind === 'fitness') {
+    if (value === 'fit') return 'good';
+    if (value === 'doubtful') return 'warn';
+    if (value === 'injured' || value === 'suspended') return 'bad';
+    return 'unknown';
+  }
+  if (kind === 'start') {
+    if (value === 'likely') return 'good';
+    if (value === 'uncertain') return 'warn';
+    if (value === 'unlikely') return 'bad';
+    return 'unknown';
+  }
+  if (value === 'high') return 'good';
+  if (value === 'medium') return 'warn';
+  if (value === 'low') return 'bad';
+  return 'unknown';
+}
+
+function importExternalCheck() {
+  const raw = document.getElementById('importCheckBox').value.trim();
+  if (!raw) { safeToast('Paste the JSON reply first', 'err'); return; }
+  let parsed;
+  try {
+    // Tolerate the reply being wrapped in a ```json fence, in case it
+    // gets pasted with the fence still attached.
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    safeToast('That doesn\'t look like valid JSON — paste only the code block', 'err');
+    return;
+  }
+  if (!Array.isArray(parsed.players)) {
+    safeToast('Missing a "players" array — check you pasted the whole reply', 'err');
+    return;
+  }
+  parsed.importedAt = Date.now();
+  _externalCheck = parsed;
+  persistExternalCheck();
+  document.getElementById('importCheckBox').value = '';
+  renderExternalCheckSection();
+  safeToast('Imported ' + parsed.players.length + ' player note' + (parsed.players.length === 1 ? '' : 's'));
+}
+
+function renderExternalCheckSection() {
+  const container = document.getElementById('extCheckSection');
+  if (!_externalCheck) { container.innerHTML = ''; return; }
+  const ec = _externalCheck;
+  const ageMin = Math.round((Date.now() - (ec.importedAt || 0)) / 60000);
+  const ageText = ageMin < 60 ? ageMin + 'm ago' : Math.round(ageMin / 60) + 'h ago';
+  const planningGw = currentPlanningGw();
+  const isStale = ec.forGameweek != null && planningGw != null && ec.forGameweek !== planningGw;
+
+  let html = '<div class="ext-check-banner">🔎 EXTERNAL TEAM NEWS — imported ' + ageText +
+    (ec.forGameweek != null ? ', for Gameweek ' + ec.forGameweek : '') + '. Reference only — not part of the scoring above.';
+  if (isStale) {
+    html += '<div class="sub">⚠️ This check was for Gameweek ' + ec.forGameweek + ', but you\'re now planning for Gameweek ' + planningGw + ' — it\'s likely out of date.</div>';
+  }
+  html += '</div>';
+
+  if (!ec.players.length) {
+    html += '<div class="sub">No new information was found for any flagged player at import time.</div>';
+  } else {
+    ec.players.forEach(p => {
+      html += '<div class="ext-player-card"><div style="font-weight:700;font-size:13px">' + safeEsc(p.name) + '</div>' +
+        '<div style="margin-top:4px">' +
+        '<span class="ext-badge ' + extBadgeClass(p.fitnessStatus, 'fitness') + '">' + safeEsc((p.fitnessStatus || 'unknown').toUpperCase()) + '</span>' +
+        '<span class="ext-badge ' + extBadgeClass(p.startLikelihood, 'start') + '">START: ' + safeEsc((p.startLikelihood || 'unknown').toUpperCase()) + '</span>' +
+        '<span class="ext-badge ' + extBadgeClass(p.confidence, 'confidence') + '">CONF: ' + safeEsc((p.confidence || 'unknown').toUpperCase()) + '</span>' +
+        '</div>' +
+        (p.summary ? '<div class="sub" style="margin-top:4px">' + safeEsc(p.summary) + '</div>' : '') +
+        (p.sources && p.sources.length
+          ? '<div class="ext-sources">' + p.sources.map(s => safeEsc(s.name || '') + (s.date ? ' (' + safeEsc(s.date) + ')' : '')).join(' · ') + '</div>'
+          : '') +
+        '</div>';
+    });
+  }
+  if (ec.notes) html += '<div class="sub" style="margin-top:6px;font-style:italic">' + safeEsc(ec.notes) + '</div>';
+  container.innerHTML = html;
+}
+
+function persistExternalCheck() {
+  try { localStorage.setItem('ff_external_check', JSON.stringify(_externalCheck)); } catch (e) {}
+  if (window.PalSync && PalSync.hasSession()) {
+    PalSync.table('ff_external_check').upsert('main', _externalCheck).catch(() => {
+      console.error('External check saved locally but failed to sync to Supabase.');
+    });
+  }
+}
+
+function loadExternalCheckFromCache() {
+  try {
+    const raw = localStorage.getItem('ff_external_check');
+    if (raw) _externalCheck = JSON.parse(raw);
+  } catch (e) {}
+  renderExternalCheckSection();
+}
+
+async function pullRemoteExternalCheck() {
+  try {
+    const result = await PalSync.table('ff_external_check').pull([], 'id', 'updated_at');
+    const remote = result.rows && result.rows.find(r => r.record_key === 'main');
+    if (!remote || !remote.data) return;
+    if (!_externalCheck || (remote.data.importedAt || 0) > (_externalCheck.importedAt || 0)) {
+      _externalCheck = remote.data;
+      try { localStorage.setItem('ff_external_check', JSON.stringify(_externalCheck)); } catch (e) {}
+      renderExternalCheckSection();
+    }
+  } catch (e) { console.error('External check pull from Supabase failed:', e); }
+}
+
 // ── Advice engine (FF-004 through FF-007) ─────────────────────────
+
 // Design notes:
 // - Form/reliability use FPL's own `form` and `points_per_game`
 //   fields rather than refetching per-gameweek history for all 15
@@ -2646,6 +2980,7 @@ function explainerHtml() {
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
     '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for.</p>' +
     '<p><strong>"No transfer recorded" / "Already planned" / "Conflicts with a recorded plan"</strong> — every suggested transfer is checked against the Transfer log for an existing planned or locked-in entry on the same OUT player, so a suggestion never silently repeats something you\'ve already decided, and a genuine disagreement (you\'ve recorded a different IN player than this analysis currently rates highest) is flagged rather than hidden. The squad shown is always your last LOCKED gameweek; any transfer suggestion is for the NEXT one, since that\'s the only gameweek a transfer made now can actually take effect for — both are labelled explicitly when they differ.</p>' +
+    '<p><strong>External team news check</strong> is a round trip through a separate chat conversation, not a live data source — this app has no way to fetch team news or predicted lineups (FPL\'s API doesn\'t expose it, and the sites that do don\'t offer a public API). "Generate export prompt" packages your flagged players into a self-contained prompt; paste it into a fresh chat, it searches the web and replies with structured JSON; paste that back in to import. Purely a reference layer, shown separately from everything above — it never changes a score, a decision, or a captain pick, and importing it never writes to the advice cache or score history.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
     '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
     '</details>';
@@ -3051,6 +3386,8 @@ async function pullRemoteAdviceCache() {
 }
 
 let _adviceViewMode = 'live';
+let _lastAdviceRenderData = null;
+let _externalCheck = null;
 
 function switchAdviceViewMode(mode) {
   _adviceViewMode = mode;
@@ -3180,6 +3517,11 @@ async function loadAdvice() {
       isPlannedMode: _adviceViewMode === 'planned'
     };
     renderAdvice(renderData);
+    // Kept in memory (not persisted) so the export prompt can use
+    // whichever mode was most recently analyzed — a planned-mode run
+    // deliberately never writes to ff_advice_cache, so that alone
+    // wouldn't be enough to find it again for exporting.
+    _lastAdviceRenderData = renderData;
 
     if (_adviceViewMode === 'planned' && projectionInfo) {
       let banner = '<div class="projection-banner">📋 PROJECTED FOR GAMEWEEK ' + projectionInfo.gwId + ' — built from your locked Gameweek ' + projectionInfo.baseGwId +
@@ -3215,6 +3557,7 @@ loadSquadFromCache();
 loadScoreHistoryLocal();
 loadAdviceFromCache();
 loadTransferLogFromCache();
+loadExternalCheckFromCache();
 
 if (window.PalSync) {
   PalSync.initSession({
@@ -3230,6 +3573,7 @@ if (window.PalSync) {
       pullRemoteScoreHistory();
       pullRemoteAdviceCache();
       pullRemoteTransferLog();
+      pullRemoteExternalCheck();
     },
     onNoSession: function () {
       safeToast('Not connected — showing local data only', 'err');
