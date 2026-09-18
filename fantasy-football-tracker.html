@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.22</title>
+<title>Fantasy Football Tracker v1.23</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -296,7 +296,7 @@
 <body>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.22</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.23</span></div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 </nav>
 
@@ -415,13 +415,47 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.22"></script>
-<script src="pal-sync.js?v=1.22"></script>
-<script src="pal-utils.js?v=1.22"></script>
+<script src="pal-config.js?v=1.23"></script>
+<script src="pal-sync.js?v=1.23"></script>
+<script src="pal-utils.js?v=1.23"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.23 (reported: Planned squad/advice showed the wrong gameweek
+ * number, and the Transfers tab mixed GW4 history with GW5 plans in
+ * one undifferentiated list): a real bug and a real clarity gap,
+ * checked and confirmed against the actual mechanics — GW4 is locked
+ * (deadline passed, real via the API, nothing left to decide there);
+ * a transfer made now can ONLY ever take effect at the NEXT deadline
+ * (GW5), never retroactively; free transfers are therefore always
+ * "for" GW5, never GW4.
+ *
+ * - THE BUG: buildProjectedSquad labeled its result with
+ *   baseCache.gwId (GW4, the locked squad it was built FROM) instead
+ *   of baseCache.nextGwId (GW5, the gameweek the projection is
+ *   actually FOR). A genuinely-correct GW5 projection was displaying
+ *   as "Gameweek 4" — not just unclear, actually wrong. Fixed; the
+ *   projection now also carries baseGwId alongside gwId so FROM/TO
+ *   framing ("built from your GW4 squad") stays available without
+ *   losing the gameweek it's actually for. Both the Squad tab's
+ *   Planned view and Advice's planned-mode banner/meta now say
+ *   "PROJECTED FOR GAMEWEEK 5 — built from your locked Gameweek 4
+ *   squad" instead of just a bare, wrong gameweek number.
+ * - Transfers tab split into two clearly headed sections instead of
+ *   one merged, date-sorted feed: "For your next deadline — Gameweek
+ *   5" (planned/locked-in, with the free-transfer summary now living
+ *   under THIS header, not a generic one) and "Already on FPL — your
+ *   Gameweek 4 squad" (made/history). transferEntryCardHtml extracted
+ *   so both sections render identically without duplicating markup.
+ * - Advice's "Recommended team" section mixes two genuinely different
+ *   gameweeks in one card (the starting XI is about the locked GW4
+ *   squad; "Transfers to consider" embedded in the same card is about
+ *   GW5) — was relying on the section's one GW4 heading for both.
+ *   "Transfers to consider" and the standalone "Transfer
+ *   opportunities" section now each carry their own explicit "for
+ *   Gameweek 5" tag rather than silently inheriting the wrong one.
  *
  * v1.22 — gameweek clarity, "Locked in" transfers, plan-aware advice.
  *
@@ -903,7 +937,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.22';
+const FF_VERSION = '1.23';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1031,7 +1065,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.22',
+    appVersion: '1.23',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1491,7 +1525,15 @@ function buildProjectedSquad(baseCache, allPlayers) {
     elements: Object.values(elementsById),
     teams: baseCache.teams,
     picksData: { picks, entry_history: baseCache.picksData.entry_history },
-    gwId: baseCache.gwId,
+    // A projected squad is FOR the gameweek the transfers actually take
+    // effect in — NOT the locked gameweek it was built from. Labeling
+    // it with baseCache.gwId (the old bug) meant a genuinely GW5
+    // projection displayed as "Gameweek 4", which is simply wrong, not
+    // just unclear. baseGwId is kept alongside so FROM/TO framing
+    // ("built from your GW4 squad") stays available without losing the
+    // gameweek this projection is actually FOR.
+    gwId: baseCache.nextGwId,
+    baseGwId: baseCache.gwId,
     nextFixtureByTeam: baseCache.nextFixtureByTeam,
     maxPointsByPos: baseCache.maxPointsByPos,
     topPlayerIdByPos: baseCache.topPlayerIdByPos,
@@ -1525,17 +1567,18 @@ async function renderPlannedSquadView() {
   const projected = buildProjectedSquad(_lastLiveSquadCache, allPlayers);
   renderSquad(projected.elements, projected.teams, projected.picksData, projected.gwId, projected.nextFixtureByTeam, projected.maxPointsByPos, projected.topPlayerIdByPos);
 
-  let banner = '<div class="projection-banner">📋 PROJECTED — ' + projected.appliedSwaps.length +
-    ' planned swap' + (projected.appliedSwaps.length === 1 ? '' : 's') + ' applied. Not live on FPL yet.';
+  let banner = '<div class="projection-banner">📋 PROJECTED FOR GAMEWEEK ' + projected.gwId + ' — built from your locked Gameweek ' + projected.baseGwId +
+    ' squad with ' + projected.appliedSwaps.length + ' transfer' + (projected.appliedSwaps.length === 1 ? '' : 's') + ' applied. Not live on FPL yet.';
   if (projected.skippedSwaps.length) {
-    banner += '<div class="sub">' + projected.skippedSwaps.length + ' planned swap' + (projected.skippedSwaps.length === 1 ? '' : 's') +
+    banner += '<div class="sub">' + projected.skippedSwaps.length + ' transfer' + (projected.skippedSwaps.length === 1 ? '' : 's') +
       ' skipped — the player being swapped out isn\'t currently in your live squad (already transferred, or another plan already swapped them).</div>';
   }
   banner += '</div>';
   document.getElementById('squadBody').insertAdjacentHTML('afterbegin', banner);
 
   document.getElementById('squadMeta').textContent =
-    'PROJECTED · Gameweek ' + projected.gwId + ' · based on ' + projected.appliedSwaps.length + ' planned swap' + (projected.appliedSwaps.length === 1 ? '' : 's');
+    'PROJECTED for Gameweek ' + projected.gwId + ' (from your live Gameweek ' + projected.baseGwId + ' squad) · ' +
+    projected.appliedSwaps.length + ' transfer' + (projected.appliedSwaps.length === 1 ? '' : 's') + ' applied';
 }
 
 function refreshSquadDisplay(cachedLabel) {
@@ -1925,10 +1968,44 @@ function annotateTransferOpportunitiesWithSlots(transferOpportunities) {
   });
 }
 
+const TXF_STATUS_BADGE = { made: ['MADE', 'made'], locked: ['LOCKED IN', 'locked'], planned: ['PLANNED', 'planned'] };
+
+function transferEntryCardHtml(t, slotById) {
+  const canRate = !!t.gwId && !!extractTransferPlayerIds(t);
+  const slotBadge = (isActiveTransferStatus(t.status) && slotById[t.id] != null)
+    ? '<span class="txf-badge ' + (slotById[t.id] ? 'made' : 'hit') + '">' + (slotById[t.id] ? 'FREE' : '−4 HIT') + '</span>'
+    : '';
+  const [statusLabel, statusClass] = TXF_STATUS_BADGE[t.status] || TXF_STATUS_BADGE.planned;
+  return '<div class="transfer-entry">' +
+    '<div class="txf-head"><span class="txf-move"><span class="txf-out">' + safeEsc(t.playerOutName) + '</span> → <span class="txf-in">' + safeEsc(t.playerInName) + '</span></span>' +
+    '<span style="display:flex;gap:6px;align-items:center">' + slotBadge +
+    '<span class="txf-badge ' + statusClass + '">' + statusLabel + '</span></span></div>' +
+    '<div class="txf-meta">' + safeEsc(t.date) + ' · ' + formatCostDelta(t.costDelta || 0) + (t.gwId ? ' · GW' + t.gwId : '') + ' · ' + (t.source === 'auto' ? 'synced from FPL' : 'manual') + '</div>' +
+    (t.note ? '<div class="txf-note">' + safeEsc(t.note) + '</div>' : '') +
+    (canRate
+      ? '<details class="pts-breakdown" ontoggle="handleTransferRatingToggle(this, \'' + t.id + '\')"><summary class="player-sub">How has this swap gone? <span style="color:var(--ink3)">(rating)</span></summary>' +
+        '<div class="txf-rating-slot" data-loaded="0"><div class="sub">Tap to load…</div></div></details>'
+      : '') +
+    '<div class="txf-actions">' +
+    (isActiveTransferStatus(t.status) ? '<button onclick="markTransferMade(\'' + t.id + '\')">Mark as made</button>' : '') +
+    (t.source === 'manual' ? '<button onclick="deleteTransferEntry(\'' + t.id + '\')">Delete</button>' : '') +
+    '</div></div>';
+}
+
+// Two sections, not one merged feed — these are fundamentally
+// different things. MADE transfers are history: they already shaped
+// the live squad shown in the Squad tab, nothing left to decide.
+// PLANNED/LOCKED IN transfers are the opposite — not real yet, and
+// specifically bound to the NEXT deadline (the only gameweek a
+// transfer made now can actually take effect for), never the current
+// locked one. Burying that distinction in a per-line "GW4"/"GW5"
+// fragment was easy to miss; a section header naming the actual
+// gameweek for each group is much harder to misread.
 function renderTransferList() {
   const body = document.getElementById('transferListBody');
   const slotUsage = computeTransferSlotUsage();
   const slotById = {}; slotUsage.entries.forEach(e => { slotById[e.id] = e.isFree; });
+  const liveGwId = _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null;
 
   if (!_transferLog.length) {
     body.innerHTML = '<div class="placeholder"><div class="emoji">🔁</div>' +
@@ -1937,6 +2014,9 @@ function renderTransferList() {
     return;
   }
 
+  const madeEntries = _transferLog.filter(t => t.status === 'made').sort((a, b) => new Date(b.date) - new Date(a.date));
+  const activeEntries = _transferLog.filter(t => isActiveTransferStatus(t.status)).sort((a, b) => new Date(b.date) - new Date(a.date));
+
   let html = '';
   if (slotUsage.isStale) {
     html += '<div class="projection-banner">⚠️ Your free transfer count was confirmed for Gameweek ' + _settings.freeTransfersSavedForGw +
@@ -1944,42 +2024,32 @@ function renderTransferList() {
       '. FREE/HIT labels below may be wrong until you check the FPL site and re-save it in Settings.</div>';
   }
 
-  const statusBadge = { made: ['MADE', 'made'], locked: ['LOCKED IN', 'locked'], planned: ['PLANNED', 'planned'] };
+  html += '<div class="position-label">For your next deadline' + (slotUsage.gw != null ? ' — Gameweek ' + slotUsage.gw : '') + '</div>';
+  if (slotUsage.available != null && slotUsage.gw != null) {
+    html += '<div class="sub" style="margin-bottom:8px">' + slotUsage.available + ' free transfer' + (slotUsage.available === 1 ? '' : 's') +
+      ' for GW' + slotUsage.gw + ' (' + slotUsage.usedCount + ' used, ' + slotUsage.remaining + ' remaining)</div>';
+  } else {
+    html += '<div class="sub" style="margin-bottom:8px">Set free transfers in Settings for FREE/HIT labelling</div>';
+  }
+  if (!activeEntries.length) {
+    html += '<div class="sub" style="margin-bottom:12px">Nothing planned or locked in yet.</div>';
+  } else {
+    activeEntries.forEach(t => { html += transferEntryCardHtml(t, slotById); });
+  }
 
-  const sorted = _transferLog.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-  sorted.forEach(t => {
-    const canRate = !!t.gwId && !!extractTransferPlayerIds(t);
-    const slotBadge = (isActiveTransferStatus(t.status) && slotById[t.id] != null)
-      ? '<span class="txf-badge ' + (slotById[t.id] ? 'made' : 'hit') + '">' + (slotById[t.id] ? 'FREE' : '−4 HIT') + '</span>'
-      : '';
-    const [statusLabel, statusClass] = statusBadge[t.status] || statusBadge.planned;
-    html += '<div class="transfer-entry">' +
-      '<div class="txf-head"><span class="txf-move"><span class="txf-out">' + safeEsc(t.playerOutName) + '</span> → <span class="txf-in">' + safeEsc(t.playerInName) + '</span></span>' +
-      '<span style="display:flex;gap:6px;align-items:center">' + slotBadge +
-      '<span class="txf-badge ' + statusClass + '">' + statusLabel + '</span></span></div>' +
-      '<div class="txf-meta">' + safeEsc(t.date) + ' · ' + formatCostDelta(t.costDelta || 0) + (t.gwId ? ' · GW' + t.gwId : '') + ' · ' + (t.source === 'auto' ? 'synced from FPL' : 'manual') + '</div>' +
-      (t.note ? '<div class="txf-note">' + safeEsc(t.note) + '</div>' : '') +
-      (canRate
-        ? '<details class="pts-breakdown" ontoggle="handleTransferRatingToggle(this, \'' + t.id + '\')"><summary class="player-sub">How has this swap gone? <span style="color:var(--ink3)">(rating)</span></summary>' +
-          '<div class="txf-rating-slot" data-loaded="0"><div class="sub">Tap to load…</div></div></details>'
-        : '') +
-      '<div class="txf-actions">' +
-      (isActiveTransferStatus(t.status) ? '<button onclick="markTransferMade(\'' + t.id + '\')">Mark as made</button>' : '') +
-      (t.source === 'manual' ? '<button onclick="deleteTransferEntry(\'' + t.id + '\')">Delete</button>' : '') +
-      '</div></div>';
-  });
+  html += '<div class="position-label" style="margin-top:16px">Already on FPL' + (liveGwId != null ? ' — your Gameweek ' + liveGwId + ' squad' : '') + '</div>';
+  if (!madeEntries.length) {
+    html += '<div class="sub">No confirmed transfers yet this season.</div>';
+  } else {
+    madeEntries.forEach(t => { html += transferEntryCardHtml(t, slotById); });
+  }
+
   body.innerHTML = html;
 
-  const madeCount = _transferLog.filter(t => t.status === 'made').length;
+  const madeCount = madeEntries.length;
   const lockedCount = _transferLog.filter(t => t.status === 'locked').length;
   const plannedCount = _transferLog.filter(t => t.status === 'planned').length;
-  let meta = madeCount + ' made · ' + lockedCount + ' locked in · ' + plannedCount + ' planned';
-  if (slotUsage.available != null && slotUsage.gw != null) {
-    meta += ' · ' + slotUsage.available + ' free for GW' + slotUsage.gw + ' (' + slotUsage.usedCount + ' used, ' + slotUsage.remaining + ' remaining)';
-  } else {
-    meta += ' · set free transfers in Settings for FREE/HIT labelling';
-  }
-  document.getElementById('transferMeta').textContent = meta;
+  document.getElementById('transferMeta').textContent = madeCount + ' made · ' + lockedCount + ' locked in · ' + plannedCount + ' planned';
 }
 
 function addManualTransfer(status) {
@@ -2617,7 +2687,7 @@ function captainBulletsFor(player, scoresById) {
 // their price against your actual available budget. Nothing here is
 // computed fresh; it's purely a presentation layer over
 // findOptimalXI's and buildTransferOpportunities' existing output.
-function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId) {
+function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId, fixtureGW) {
   const actualStartingIds = new Set(picks.filter(p => p.position <= 11).map(p => p.element));
   const suggestedIds = (optimal && optimal.starterIds) ? new Set(optimal.starterIds) : actualStartingIds;
   const allSquadIds = picks.map(p => p.element);
@@ -2662,7 +2732,7 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
   });
   html += '</div>';
 
-  html += '<div class="sub" style="margin-top:14px"><strong>Transfers to consider</strong></div>';
+  html += '<div class="sub" style="margin-top:14px"><strong>Transfers to consider' + (fixtureGW != null ? ' — for Gameweek ' + fixtureGW : '') + '</strong></div>';
   if (!transferOpportunities.length) {
     html += '<div class="no-flags">None this week — every squad player is HOLD or below the CONSIDER SELL threshold.</div>';
   } else {
@@ -2774,7 +2844,7 @@ function renderAdvice(data) {
   // 3. RECOMMENDED TEAM (keep/in/out/bench + transfer summary --
   // consolidates what Captain/Vice and the full Transfer opportunities
   // detail below show separately)
-  html += recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId);
+  html += recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities, gwId, fixtureGW);
 
   // 4. CAPTAIN / VICE-CAPTAIN
   if (captain) {
@@ -2797,7 +2867,7 @@ function renderAdvice(data) {
   }
 
   // 5. TRANSFERS
-  html += '<div class="advice-section"><h3>Transfer opportunities</h3>' +
+  html += '<div class="advice-section"><h3>Transfer opportunities' + (fixtureGW != null ? ' — Gameweek ' + fixtureGW : '') + '</h3>' +
     '<div class="sub">An opportunity indicator, not a forecast of actual points</div>';
   if (!transferOpportunities.length) {
     html += '<div class="no-flags">No transfer opportunities flagged this week.</div>';
@@ -3112,14 +3182,14 @@ async function loadAdvice() {
     renderAdvice(renderData);
 
     if (_adviceViewMode === 'planned' && projectionInfo) {
-      let banner = '<div class="projection-banner">📋 PROJECTED — analysing ' + projectionInfo.appliedSwaps.length +
-        ' planned swap' + (projectionInfo.appliedSwaps.length === 1 ? '' : 's') + ' applied on top of your live squad. Not live on FPL yet.';
+      let banner = '<div class="projection-banner">📋 PROJECTED FOR GAMEWEEK ' + projectionInfo.gwId + ' — built from your locked Gameweek ' + projectionInfo.baseGwId +
+        ' squad with ' + projectionInfo.appliedSwaps.length + ' transfer' + (projectionInfo.appliedSwaps.length === 1 ? '' : 's') + ' applied. Not live on FPL yet.';
       if (projectionInfo.skippedSwaps.length) {
-        banner += '<div class="sub">' + projectionInfo.skippedSwaps.length + ' planned swap' + (projectionInfo.skippedSwaps.length === 1 ? '' : 's') + ' skipped — see the Squad tab\'s Planned view for details.</div>';
+        banner += '<div class="sub">' + projectionInfo.skippedSwaps.length + ' transfer' + (projectionInfo.skippedSwaps.length === 1 ? '' : 's') + ' skipped — see the Squad tab\'s Planned view for details.</div>';
       }
       banner += '</div>';
       document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', banner);
-      document.getElementById('adviceMeta').textContent = 'PROJECTED · Gameweek ' + gwId + ' · Analysed just now';
+      document.getElementById('adviceMeta').textContent = 'PROJECTED for Gameweek ' + gwId + ' (from your live Gameweek ' + projectionInfo.baseGwId + ' squad) · Analysed just now';
     } else {
       document.getElementById('adviceMeta').textContent =
         'Gameweek ' + gwId + (deadline ? ' · Deadline: ' + formatDeadline(deadline) : '') + ' · Analysed just now';
