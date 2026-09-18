@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.28</title>
+<title>Fantasy Football Tracker v1.29</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -89,6 +89,15 @@
   .card p { font-size: 13px; color: var(--ink2); line-height: 1.5; }
 
   .placeholder { text-align: center; padding: 40px 20px; color: var(--ink2); }
+
+  .access-blocked-overlay {
+    position: fixed; inset: 0; background: var(--bg); z-index: 9999;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .access-blocked-overlay .box { text-align: center; max-width: 320px; }
+  .access-blocked-overlay .emoji { font-size: 40px; margin-bottom: 12px; }
+  .access-blocked-overlay h2 { font-size: 16px; margin-bottom: 8px; color: var(--ink); }
+  .access-blocked-overlay p { font-size: 13px; color: var(--ink2); line-height: 1.5; }
   .placeholder .emoji { font-size: 32px; margin-bottom: 10px; }
 
   .squad-header {
@@ -333,9 +342,16 @@
 </head>
 <body>
 
+<div class="access-blocked-overlay" id="accessBlockedOverlay" style="display:none">
+  <div class="box">
+    <div class="emoji">🔒</div>
+    <h2>Not set up for this account</h2>
+    <p>This Fantasy Football Tracker isn't configured for the account that just signed in. If this is unexpected, check with whoever manages the app suite.</p>
+  </div>
+</div>
+
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.28</span></div>
-  <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.29</span></div>
 </nav>
 
 <div class="tabs">
@@ -466,13 +482,41 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.28"></script>
-<script src="pal-sync.js?v=1.28"></script>
-<script src="pal-utils.js?v=1.28"></script>
+<script src="pal-config.js?v=1.29"></script>
+<script src="pal-sync.js?v=1.29"></script>
+<script src="pal-utils.js?v=1.29"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.29 — multi-user support, so this app works for Lex the same way
+ * it already does for Pete, plus a corrected theme fix (checked
+ * against real code this time, not guessed):
+ *
+ * - Removed the hardcoded entryId: '2510199' default (Pete's own FPL
+ *   ID) — was showing pre-filled for ANY new user with no ff_settings
+ *   row yet, not just Pete. A brand-new user now genuinely sees a
+ *   blank field, matching "she'll need to add her own FPL team
+ *   details" — fixed in both the normal settings load and the backup-
+ *   import path, which had the same hardcoded fallback.
+ * - New KNOWN_USERS allow-list check in onSession, matching reading-
+ *   tracker.html's own security-audited pattern exactly: RLS
+ *   (auth.uid()=user_id on every table) is the real security boundary
+ *   regardless — this is defense-in-depth against silently treating
+ *   any authenticated session as valid with no signal something
+ *   unexpected happened, versus failing clearly with a new blocking
+ *   overlay.
+ * - Theme: got this wrong twice running (v1.27 removed the app's own
+ *   toggle correctly, v1.28 then wrongly restored it on an unverified
+ *   guess). This time actually read the launcher's and reading-
+ *   tracker.html's real code before touching anything: confirmed the
+ *   ONE toggle lives in index.html only, no individual app has its
+ *   own. Reverted to no per-app toggle — but added the one thing both
+ *   earlier attempts missed: a live PAL_THEME postMessage listener
+ *   (reading-tracker.html has exactly this), so an already-open tab
+ *   updates instantly when the launcher's toggle is clicked, not just
+ *   on next load.
  *
  * v1.28:
  *
@@ -1165,7 +1209,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.28';
+const FF_VERSION = '1.29';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1187,7 +1231,15 @@ if (window.PAL_CONFIG && window.PAL_CONFIG.SB_URL) {
   console.error('pal-config.js did not load — PAL_CONFIG is missing. Diagnostics and sync will be unavailable until this is fixed.');
 }
 
-let _settings = { entryId: '2510199', freeTransfersCount: null, freeTransfersSavedForGw: null };
+// Multi-user (per PAL_CONFIG.KNOWN_USERS): entryId used to default to
+// Pete's own FPL entry ID hardcoded here, which meant a brand-new
+// second user (no ff_settings row of their own yet) would see PETE'S
+// entry ID pre-filled instead of a genuinely blank field — confusing,
+// and one accidental "Load Squad" away from pulling his data on
+// screen (though RLS means it was never actually saved under her
+// account either way). No default now — every user starts blank
+// until they enter their own.
+let _settings = { entryId: '', freeTransfersCount: null, freeTransfersSavedForGw: null };
 
 function safeToast(msg, type) {
   if (typeof toast === 'function') toast(msg, type);
@@ -1231,35 +1283,33 @@ function updateFreeTransfersGwDisplay() {
 }
 
 // ── Theme ──────────────────────────────────────────────────────
-// Reads/writes the same pal_theme localStorage key every app in the
-// suite uses — toggling here updates what any other app sees next
-// time it loads, and vice versa, since they all share one origin.
-// v1.27 removed this button on the theory that a passive boot-time
-// read of the shared value was enough and a per-app toggle was
-// redundant — but that left no way to actually CHANGE theme from
-// inside this app at all, which is a worse outcome than a genuinely
-// synced toggle; restored.
-function toggleTheme() {
-  if (typeof applyThemeCore !== 'function') {
-    safeToast('Theme toggle unavailable — pal-utils.js did not load', 'err');
-    return;
+// Checked against the actual launcher and reading-tracker.html rather
+// than assumed, after getting this wrong twice: the ONE toggle lives
+// in index.html (button explicitly labelled "Toggle light/dark theme
+// (all apps)"); every individual app — Reading Tracker included —
+// has NO toggle UI of its own, only a passive read of the shared
+// pal_theme key. v1.27 removed this app's toggle on that same
+// correct theory; v1.28 then wrongly restored it on an unverified
+// guess about what "fix the toggle" meant. Reverted, and this time
+// with the one real piece those two attempts both missed: the
+// launcher doesn't just set localStorage, it also postMessages
+// {type:'PAL_THEME', theme} to the currently-open iframe so an app
+// already sitting open updates immediately — reading-tracker.html
+// listens for exactly this. Added the same listener here.
+window.addEventListener('message', function (e) {
+  if (e.origin !== window.location.origin) return;
+  if (e.data && e.data.type === 'PAL_THEME' && e.data.theme && typeof applyThemeCore === 'function') {
+    applyThemeCore(e.data.theme !== 'light', { dark: '#0d1117', light: '#f4f6f8' });
   }
-  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-  applyThemeCore(!isDark, { dark: '#0d1117', light: '#f4f6f8' });
-  try { localStorage.setItem('pal_theme', !isDark ? 'dark' : 'light'); } catch (e) {}
-  document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
+});
+// Meta theme-color (mobile browser chrome) sync at boot — the early
+// anti-flash inline script in <head> sets the data-theme attribute
+// directly since it runs before pal-utils.js loads, but can't touch
+// the meta tag itself; this finishes that sync once applyThemeCore is
+// actually available.
+if (typeof applyThemeCore === 'function') {
+  applyThemeCore(document.documentElement.getAttribute('data-theme') !== 'light', { dark: '#0d1117', light: '#f4f6f8' });
 }
-(function initThemeIcon() {
-  // Same call as toggleTheme's own sync, run once at boot so the meta
-  // theme-color tag (mobile browser chrome) matches immediately —
-  // the early anti-flash inline script in <head> can't do this
-  // itself since pal-utils.js isn't loaded that early.
-  if (typeof applyThemeCore === 'function') {
-    applyThemeCore(document.documentElement.getAttribute('data-theme') !== 'light', { dark: '#0d1117', light: '#f4f6f8' });
-  }
-  document.getElementById('themeBtn').textContent =
-    document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
-})();
 
 // ── Tabs ───────────────────────────────────────────────────────
 function switchTab(id) {
@@ -1308,7 +1358,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.28',
+    appVersion: '1.29',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1329,7 +1379,7 @@ function importBackup(file) {
       const parsed = JSON.parse(ev.target.result);
       if (!parsed || !parsed.data || !parsed.data.settings) { safeToast('⚠ Invalid backup format', 'err'); return; }
       if (!confirm('This will replace current settings with the backup. Continue?')) return;
-      _settings = Object.assign({ entryId: '2510199' }, parsed.data.settings);
+      _settings = Object.assign({ entryId: '' }, parsed.data.settings);
       try { localStorage.setItem('ff_settings_local', JSON.stringify(_settings)); } catch (e) {}
       document.getElementById('entryIdInput').value = _settings.entryId || '';
       if (window.PalSync && PalSync.hasSession()) PalSync.table('ff_settings').upsert('main', _settings);
@@ -4479,7 +4529,21 @@ loadManualLineupFromCache();
 
 if (window.PalSync) {
   PalSync.initSession({
-    onSession: function () {
+    onSession: function (token, userId) {
+      // Matches reading-tracker.html's audited pattern (its own
+      // security-review comment explains the reasoning in full): RLS
+      // (auth.uid()=user_id on every table) is the REAL security
+      // boundary regardless of this check — a stray account would
+      // only ever see its own empty tables either way. This is
+      // defense-in-depth for a different failure mode: silently
+      // treating any authenticated session as valid, with no signal
+      // that something unexpected happened, versus failing clearly.
+      const known = window.PAL_CONFIG && window.PAL_CONFIG.KNOWN_USERS && window.PAL_CONFIG.KNOWN_USERS[userId];
+      if (!known) {
+        const overlay = document.getElementById('accessBlockedOverlay');
+        if (overlay) overlay.style.display = 'flex';
+        return;
+      }
       PalSync.table('ff_settings').pull([{ id: 'main', ..._settings }], 'id', 'updated_at').then(result => {
         const remote = result.merged && result.merged[0];
         if (remote) {
