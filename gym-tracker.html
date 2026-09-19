@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.102</title>
+<title>Gym Tracker v2.103</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.102</div></span>
+      <span>Gym Tracker<div class="ver">v2.103</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -947,9 +947,9 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-config.js?v=2.102"></script>
-<script src="pal-sync.js?v=2.102"></script>
-<script src="pal-utils.js?v=2.102"></script>
+<script src="pal-config.js?v=2.103"></script>
+<script src="pal-sync.js?v=2.103"></script>
+<script src="pal-utils.js?v=2.103"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1199,6 +1199,68 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.103 (GYM-091): build a circuit within a plan — group ≥2 exercises
+// to repeat together as rounds, instead of doing all sets of one
+// exercise before moving to the next. Two design decisions confirmed
+// before building: a circuit sets a single "rounds" count and each
+// member exercise defines just ONE set that repeats that many times
+// (not independent per-exercise multi-set lists); and live session
+// logging actually reflects round order (round 1 of every exercise,
+// then round 2, ...), not just planning/display — "so for example my
+// knee push, russian weight and fast feet... 1 of each being 1 round,
+// then repeat that 3 times... but have the usual controls on the
+// exercise."
+// Data model: plan.circuits: [{id, name, rounds}] (new, backfilled to
+// [] by migratePlans() for every plan that predates this). An item's
+// circuitId (new, optional — undefined/missing means standalone,
+// exactly as it always implicitly has, so every existing plan needs no
+// per-item migration at all) points at one of its plan's own circuits.
+// No new sync table — circuits live inside the plan record itself, so
+// they sync automatically whenever the plan does. Sessions get the same
+// treatment: session.circuits (copied from the plan at start time, not
+// kept live — same snapshot treatment referenceSets/planItemNote
+// already get) and item.circuitId, backfilled by migrateSessions() for
+// every session logged before this release.
+// Plan editor (renderPlanItemsList()/planItemBlockHtml(), rewritten):
+// each item gets a "Circuit" picker — join an existing circuit, "+ New
+// Circuit…" (prompts for rounds), or "Not in a circuit". Joining trims
+// the item down to exactly one target set (the one that repeats) and
+// recomputes its time estimate via rounds-aware autoEstimateMinutes().
+// Circuit members render grouped in a bordered block
+// (planCircuitBlockHtml()) with a shared rounds control that ripples to
+// every member's estimate when changed (updateCircuitRounds()); the
+// last member leaving empties the circuit out of plan.circuits entirely
+// (setPlanItemCircuit()/removeItemFromCircuit()/removePlanItem(), all
+// three) rather than leaving an orphaned 0-member record behind.
+// Reorder (▲▼) hidden for circuit members — reordering within a circuit
+// isn't supported yet, to avoid the array-position ambiguity that would
+// create; remove-from-plan (✕) still works.
+// Live session logging (renderSessionItems(), rewritten): the per-set
+// row template factored out into sessionSetRowHtml() so standalone
+// items (sessionExerciseCardHtml(), unchanged behaviour) and circuit
+// rounds (sessionCircuitBlockHtml(), new) share the exact same input
+// fields/done-check/timer/trend-arrow — "the usual controls" — rather
+// than two copies that could drift apart. Circuit items are expanded at
+// session-start (startSession()) from their one target set into
+// `rounds` actual/reference sets, then rendered round-interleaved: one
+// row per member per round, under a "Round N of M" heading. A member's
+// own "+Add Extra Set" still works, rendering as extras grouped under
+// that member's name below the rounds, same "extra" labelling already
+// used for any set beyond the reference count.
+// updatePlanFromSession() (the "🔄 Update targets" button) now only
+// pulls a circuit item's FIRST round's actual numbers back into the
+// plan, not every round's — otherwise it would silently re-inflate the
+// item back to a multi-set list, breaking the "exactly one set" circuit
+// invariant. The exercise type-switch handlers (both the primary one
+// and cascadeExerciseTypeToPlans(), which can touch other plans using
+// the same exercise) got the same trim-to-one-set guard, since
+// defaultTargetSetsForType() always returns a fresh multi-set default
+// regardless of circuit membership.
+// Plans-tab read-only card view (GYM-084) also updated
+// (planItemsSummaryHtml()/planCircuitSummaryHtml()) so a circuit's
+// members show grouped with their rounds count there too, rather than
+// looking like unrelated single-set exercises with no indication
+// they're linked.
 // v2.102 (GYM-090 — no formal build brief this time, a direct chat
 // request; assigned the next sequential id following GYM-089).
 // Plan editor now shows BOTH kinds of note for each exercise, clearly
@@ -2244,7 +2306,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.102';
+const VERSION = '2.103';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2347,6 +2409,14 @@ function migrateExercises(env) {
 function migratePlans(env) {
   const exById = {}; env.data.exercises.forEach(e => exById[e.id] = e);
   env.data.plans.forEach((p, idx) => {
+    // GYM-091: circuits — a group of plan items sharing a circuitId,
+    // repeated `rounds` times. Absent entirely on every plan before this
+    // release; backfilled to an empty array rather than left undefined
+    // so every other piece of code can assume `plan.circuits` is always
+    // a (possibly empty) array, no defensive `||[]` needed at each call
+    // site. Items themselves need no backfill — a missing item.circuitId
+    // already means "standalone", the same as it always implicitly has.
+    if (!Array.isArray(p.circuits)) p.circuits = [];
     (p.items||[]).forEach(item => {
       if (!item.trackType) item.trackType = item.type || (exById[item.exerciseId] ? exById[item.exerciseId].type : 'reps');
       // GYM-087: falsy (0 or undefined), not just undefined — this line
@@ -2354,7 +2424,7 @@ function migratePlans(env) {
       // migration under the old rule need the falsy check to actually
       // get backfilled with a real estimate rather than staying stuck
       // at the old "unset" value forever.
-      if (!item.estimatedMinutes) item.estimatedMinutes = autoEstimateMinutes(item);
+      if (!item.estimatedMinutes) item.estimatedMinutes = autoEstimateMinutes(item, item.circuitId ? (p.circuits.find(c=>c.id===item.circuitId)||{}).rounds : null);
       if (item.notes === undefined) item.notes = ''; // GYM-063: per-plan-item note, separate from the exercise's own global notes
     });
     // GYM-031: explicit order field rather than relying on array position —
@@ -2434,10 +2504,12 @@ function migrateSessions(env) {
   env.data.sessions.forEach(s => {
     if (s.planId === undefined) s.planId = s.templateId || null;
     if (!s.name) s.name = s.templateName || 'Session';
+    if (!Array.isArray(s.circuits)) s.circuits = []; // GYM-091: absent on every session logged before this release
     (s.items||[]).forEach(item => {
       if (!item.trackType) item.trackType = item.type || 'reps';
       if (item.referenceSets === undefined) item.referenceSets = item.plannedSets !== undefined ? item.plannedSets : null;
       if (item.referenceLabel === undefined) item.referenceLabel = item.referenceSets ? 'plan' : null;
+      if (item.circuitId === undefined) item.circuitId = null; // GYM-091
     });
   });
 }
@@ -2808,6 +2880,7 @@ let _exProgressBasis = 'distance';
 let _exTags = [];
 let _exAfterSave = null; // null | 'plan' -> where to route a newly-created exercise
 let _planItems = [];
+let _planCircuits = []; // GYM-091: [{id, name, rounds}] — draft, parallel to _planItems, same commit-on-Save-Plan lifecycle
 let _activeSession = null;
 let _activeTimer = null;   // { ii, si, endTime, durationSec, paused, remainingMs } — only one runs at a time
 let _timerInterval = null;
@@ -3836,6 +3909,47 @@ function planExerciseDetailsHtml(item) {
     ${item.notes ? `<div style="color:var(--ink3);margin-top:2px;font-style:italic">${escHtml(item.notes)}</div>` : ''}
   </div>`;
 }
+// GYM-091: read-only equivalent of planCircuitBlockHtml() — for the
+// Plans-tab's expanded card, so a circuit's members show grouped with
+// their rounds count instead of looking like unrelated single-set
+// exercises with no indication they're linked.
+function planCircuitSummaryHtml(circuit, members) {
+  return `<div style="padding:5px 0;border-bottom:1px solid var(--border)">
+    <div style="font-size:11px;font-weight:700;color:var(--accent5);margin-bottom:3px">🔁 ${escHtml(circuit ? circuit.name : 'Circuit')}${circuit?' — '+circuit.rounds+' rounds':''}</div>
+    ${members.map(item => {
+      const type = item.trackType || exerciseType(item.exerciseId);
+      const setsStr = (item.targetSets||[]).length ? summarizeSets(item.targetSets, type) : 'no sets set';
+      return `<div style="font-size:11.5px;padding-left:8px;margin-top:2px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <span>${escHtml(exerciseName(item.exerciseId))}</span>${typeBadge(type)}
+        </div>
+        <div style="color:var(--ink2)">${escHtml(setsStr)} per round</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+// GYM-091: groups circuit members before handing off to
+// planExerciseDetailsHtml()/planCircuitSummaryHtml() — same "gather by
+// circuitId regardless of position" approach used everywhere else this
+// grouping happens (the plan editor, the live session view).
+function planItemsSummaryHtml(plan) {
+  const items = plan.items||[];
+  const circuits = plan.circuits||[];
+  const rendered = new Set();
+  let html = '';
+  items.forEach((item, idx) => {
+    if (rendered.has(idx)) return;
+    if (item.circuitId) {
+      const memberIdxs = items.map((it,i)=>i).filter(i => items[i].circuitId === item.circuitId);
+      memberIdxs.forEach(i => rendered.add(i));
+      html += planCircuitSummaryHtml(circuits.find(c=>c.id===item.circuitId), memberIdxs.map(i=>items[i]));
+    } else {
+      rendered.add(idx);
+      html += planExerciseDetailsHtml(item);
+    }
+  });
+  return html;
+}
 let _expandedPlanCards = new Set();
 function togglePlanCard(planId) {
   if (_expandedPlanCards.has(planId)) _expandedPlanCards.delete(planId); else _expandedPlanCards.add(planId);
@@ -3863,7 +3977,7 @@ function renderPlanCard(p, idx, list, sessions) {
       </span>
     </div>
     ${expanded ? `<div style="margin-top:8px">
-      ${p.items.length ? p.items.map(planExerciseDetailsHtml).join('') : '<div class="empty-state" style="padding:6px 0">No exercises in this plan yet</div>'}
+      ${p.items.length ? planItemsSummaryHtml(p) : '<div class="empty-state" style="padding:6px 0">No exercises in this plan yet</div>'}
       <button class="btn btn-secondary btn-sm btn-block" style="margin-top:8px" onclick="openPlanEditor('${p.id}')">Edit</button>
     </div>` : ''}
     <div class="li-actions">
@@ -4066,102 +4180,203 @@ function openPlanEditor(id) {
     document.getElementById('planNotes').value = p.notes||'';
     renderPlanProgramOptions(p.programId||null);
     _planItems = JSON.parse(JSON.stringify(p.items||[]));
+    _planCircuits = JSON.parse(JSON.stringify(p.circuits||[])); // GYM-091
   } else {
     document.getElementById('planModalTitle').textContent = 'New Plan';
     document.getElementById('planName').value = '';
     document.getElementById('planNotes').value = '';
     renderPlanProgramOptions(null);
     _planItems = [];
+    _planCircuits = []; // GYM-091
   }
   renderPlanItemsList();
   openModal('modalPlan');
 }
 
+// GYM-091: circuits group ≥2 plan items to be repeated together for a
+// number of rounds, rather than each exercise's sets done back-to-back.
+// Members are gathered by matching circuitId regardless of their
+// position in _planItems (same approach the live session view uses),
+// not by requiring them to sit adjacent in the array.
 function renderPlanItemsList() {
   const el = document.getElementById('planItemsList');
   renderPlanTimeTotal();
   if (!_planItems.length) { el.innerHTML = '<p style="font-size:12px;color:var(--ink2);padding:6px 0">No exercises added yet.</p>'; return; }
-  el.innerHTML = _planItems.map((item, idx) => {
-    const type = item.trackType || exerciseType(item.exerciseId);
-    const setsHtml = item.targetSets.map((s, si) => {
-      if (type==='distance') {
-        const ms = secToMinSec(s.seconds);
-        return `<div class="set-block">
-          <span class="set-idx">Set ${si+1}</span>
-          <div class="set-row">
-            <input type="number" min="0" placeholder="metres" value="${s.metres||''}" oninput="updatePlanSet(${idx},${si},'metres',this.value)">
-            <select style="max-width:70px" title="Time (optional)" onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
-            <select style="max-width:70px" title="Time (optional)" onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
-            <input type="number" min="0" step="0.5" placeholder="kg (opt)" value="${s.weight||''}" oninput="updatePlanSet(${idx},${si},'weight',this.value)">
-            <button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>
-          </div>
-          <div style="font-size:10px;color:var(--ink3);margin-top:2px">metres required · min:sec optional</div>
-        </div>`;
-      }
-      if (type==='time') {
-        const ms = secToMinSec(s.seconds);
-        return `<div class="set-block">
-          <span class="set-idx">Set ${si+1}</span>
-          <div class="set-row">
-            <select onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
-            <select onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
-            <button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>
-          </div>
-        </div>`;
-      }
+  const rendered = new Set();
+  let html = '';
+  _planItems.forEach((item, idx) => {
+    if (rendered.has(idx)) return;
+    if (item.circuitId) {
+      const circuit = _planCircuits.find(c => c.id === item.circuitId);
+      const memberIdxs = _planItems.map((it,i)=>i).filter(i => _planItems[i].circuitId === item.circuitId);
+      memberIdxs.forEach(i => rendered.add(i));
+      html += planCircuitBlockHtml(circuit, memberIdxs);
+    } else {
+      rendered.add(idx);
+      html += planItemBlockHtml(item, idx);
+    }
+  });
+  el.innerHTML = html;
+}
+// GYM-091: wraps a circuit's member cards (planItemBlockHtml() below,
+// same function used for standalone items — "the usual controls",
+// unchanged either way) in a labelled, bordered block with the rounds
+// count front and centre.
+function planCircuitBlockHtml(circuit, memberIdxs) {
+  if (!circuit) return ''; // orphaned circuitId somehow pointing at nothing — nothing sane to render
+  const membersHtml = memberIdxs.map(idx => planItemBlockHtml(_planItems[idx], idx)).join('');
+  return `<div class="plan-circuit-block" style="border:1.5px solid var(--accent5);border-radius:var(--radius);padding:10px;margin-bottom:10px;background:rgba(210,168,255,0.05)">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <span style="font-weight:700;font-size:12.5px;color:var(--accent5)">🔁 ${escHtml(circuit.name)}</span>
+      <span style="font-size:11px;color:var(--ink2);display:flex;align-items:center;gap:4px">repeat
+        <input type="number" min="2" value="${circuit.rounds}" style="width:44px;padding:4px 6px" onchange="updateCircuitRounds('${circuit.id}',this.value)">
+        × rounds
+      </span>
+    </div>
+    ${membersHtml}
+  </div>`;
+}
+// GYM-091: creates/joins/leaves a circuit, then keeps this item's
+// targetSets down to exactly one set (the one that repeats every round —
+// see the comment on autoEstimateMinutes()) and its time estimate in
+// sync with the circuit's current round count.
+function setPlanItemCircuit(idx, value) {
+  const item = _planItems[idx];
+  if (value === '') { removeItemFromCircuit(idx); return; }
+  if (value === '__new__') {
+    const roundsStr = prompt('How many rounds should this circuit repeat?', '3');
+    if (roundsStr === null) return;
+    const rounds = Math.max(2, parseInt(roundsStr, 10) || 3);
+    const circuit = { id: uid('circ'), name: 'Circuit '+(_planCircuits.length+1), rounds };
+    _planCircuits.push(circuit);
+    item.circuitId = circuit.id;
+  } else {
+    item.circuitId = value;
+  }
+  if (item.targetSets.length > 1) item.targetSets = item.targetSets.slice(0,1);
+  const circuit = _planCircuits.find(c=>c.id===item.circuitId);
+  item.estimatedMinutes = autoEstimateMinutes(item, circuit ? circuit.rounds : null);
+  renderPlanItemsList();
+}
+function removeItemFromCircuit(idx) {
+  const item = _planItems[idx];
+  const circuitId = item.circuitId;
+  delete item.circuitId;
+  item.estimatedMinutes = autoEstimateMinutes(item, null);
+  if (circuitId && !_planItems.some(i => i.circuitId === circuitId)) {
+    _planCircuits = _planCircuits.filter(c => c.id !== circuitId);
+  }
+  renderPlanItemsList();
+}
+// GYM-091: every member's time estimate derives from rounds, so a
+// change here has to ripple to all of them, not just whichever item's
+// card the input happened to sit in.
+function updateCircuitRounds(circuitId, val) {
+  const circuit = _planCircuits.find(c => c.id === circuitId);
+  if (!circuit) return;
+  circuit.rounds = Math.max(2, parseInt(val, 10) || 2);
+  _planItems.filter(i => i.circuitId === circuitId).forEach(i => { i.estimatedMinutes = autoEstimateMinutes(i, circuit.rounds); });
+  renderPlanItemsList();
+}
+function circuitPickerOptionsHtml(item) {
+  const opts = ['<option value="">Not in a circuit</option>'];
+  _planCircuits.forEach(c => opts.push(`<option value="${c.id}" ${item.circuitId===c.id?'selected':''}>🔁 ${escHtml(c.name)} (×${c.rounds})</option>`));
+  opts.push('<option value="__new__">+ New Circuit…</option>');
+  return opts.join('');
+}
+function planItemBlockHtml(item, idx) {
+  const inCircuit = !!item.circuitId;
+  const type = item.trackType || exerciseType(item.exerciseId);
+  const setsHtml = item.targetSets.map((s, si) => {
+    // GYM-091: a circuit item only ever has one set (repeated by the
+    // circuit's own rounds count) — labelled "Per round" instead of
+    // "Set 1" so it's clear this isn't just a plan with one set planned,
+    // and the remove-set (✕) control is hidden since removing it would
+    // leave the item with zero sets and nothing to fall back to short
+    // of leaving the circuit via the picker above.
+    const setLabel = inCircuit ? 'Per round' : 'Set '+(si+1);
+    const removeBtn = inCircuit ? '' : `<button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>`;
+    if (type==='distance') {
+      const ms = secToMinSec(s.seconds);
       return `<div class="set-block">
-        <span class="set-idx">Set ${si+1}</span>
+        <span class="set-idx">${setLabel}</span>
         <div class="set-row">
-          <input type="number" min="0" placeholder="reps" value="${s.reps||''}" oninput="updatePlanSet(${idx},${si},'reps',this.value)">
-          <input type="number" min="0" step="0.5" placeholder="kg" value="${s.weight||''}" oninput="updatePlanSet(${idx},${si},'weight',this.value)">
-          <button class="set-remove" onclick="removePlanSet(${idx},${si})">✕</button>
+          <input type="number" min="0" placeholder="metres" value="${s.metres||''}" oninput="updatePlanSet(${idx},${si},'metres',this.value)">
+          <select style="max-width:70px" title="Time (optional)" onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
+          <select style="max-width:70px" title="Time (optional)" onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
+          <input type="number" min="0" step="0.5" placeholder="kg (opt)" value="${s.weight||''}" oninput="updatePlanSet(${idx},${si},'weight',this.value)">
+          ${removeBtn}
+        </div>
+        <div style="font-size:10px;color:var(--ink3);margin-top:2px">metres required · min:sec optional</div>
+      </div>`;
+    }
+    if (type==='time') {
+      const ms = secToMinSec(s.seconds);
+      return `<div class="set-block">
+        <span class="set-idx">${setLabel}</span>
+        <div class="set-row">
+          <select onchange="updatePlanSetTime(${idx},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>
+          <select onchange="updatePlanSetTime(${idx},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
+          ${removeBtn}
         </div>
       </div>`;
-    }).join('');
-    return `<div class="plan-item-block">
-      <div class="pib-head">
-        <span class="pib-name">${escHtml(exerciseName(item.exerciseId))} <span style="margin-left:6px">${typeBadge(type)}</span></span>
-        <span style="display:flex;align-items:center;gap:2px">
-          <button class="pib-reorder" onclick="movePlanItem(${idx},-1)" ${idx===0?'disabled':''} title="Move up">▲</button>
-          <button class="pib-reorder" onclick="movePlanItem(${idx},1)" ${idx===_planItems.length-1?'disabled':''} title="Move down">▼</button>
-          <button class="pib-remove" onclick="removePlanItem(${idx})">✕</button>
-        </span>
+    }
+    return `<div class="set-block">
+      <span class="set-idx">${setLabel}</span>
+      <div class="set-row">
+        <input type="number" min="0" placeholder="reps" value="${s.reps||''}" oninput="updatePlanSet(${idx},${si},'reps',this.value)">
+        <input type="number" min="0" step="0.5" placeholder="kg" value="${s.weight||''}" oninput="updatePlanSet(${idx},${si},'weight',this.value)">
+        ${removeBtn}
       </div>
-      <div class="type-row" style="grid-template-columns:repeat(3,1fr);margin:6px 0">
-        <button class="type-btn sm ${type==='reps'?'active':''}" onclick="setPlanItemType(${idx},'reps')">Reps</button>
-        <button class="type-btn sm ${type==='time'?'active':''}" onclick="setPlanItemType(${idx},'time')">Time</button>
-        <button class="type-btn sm ${type==='distance'?'active':''}" onclick="setPlanItemType(${idx},'distance')">Distance</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
-        <label style="margin:0;font-size:10.5px;white-space:nowrap">Est. time</label>
-        <select style="max-width:80px" onchange="updatePlanItemEstimate(${idx},this.value)">${estimateMinuteOptions(item.estimatedMinutes||0)}</select>
-        <span style="font-size:10.5px;color:var(--ink3)">min — auto-estimated (GYM-087), adjust as needed</span>
-      </div>
-      ${(() => {
-        const exRecord = exerciseById(item.exerciseId);
-        if (!exRecord) return '';
-        // GYM-090: the exercise's OWN note — form cues, injury care,
-        // whatever's true of this exercise everywhere it's used, not
-        // just this plan. Distinct colour/icon from the plan note below
-        // so the two are never confused for each other. Edits here
-        // write straight to the exercise record (updateExerciseNoteFromPlan()
-        // mutates in memory per keystroke, commitExerciseNoteFromPlan()
-        // on blur does the actual save()+sbUpsert()) — independent of
-        // this plan's own draft/Save Plan cycle, since it's a different
-        // entity: cancelling out of this plan edit shouldn't discard a
-        // fix to the exercise's note.
-        return `<div style="margin:6px 0">
-          <label style="font-size:10.5px;color:var(--accent3)">🏋️ Exercise Notes <span style="font-weight:400;color:var(--ink3)">(this exercise, everywhere it's used — saves immediately, not tied to Save Plan)</span></label>
-          <textarea rows="1" placeholder="e.g. watch shoulder positioning, previous injury care" oninput="autoGrow(this);updateExerciseNoteFromPlan('${item.exerciseId}', this.value)" onblur="commitExerciseNoteFromPlan('${item.exerciseId}')" style="margin-top:2px;resize:none;overflow:hidden;line-height:1.4">${escHtml(exRecord.notes||'')}</textarea>
-        </div>`;
-      })()}
-      <div style="margin:6px 0">
-        <label style="font-size:10.5px;color:var(--ink3)">📋 Note for this plan <span style="font-weight:400">(only here, not the exercise's own note above — saved when you hit Save Plan)</span></label>
-        <textarea rows="1" placeholder="e.g. superset with next exercise, go to failure here" oninput="autoGrow(this);updatePlanItemNote(${idx}, this.value)" style="margin-top:2px;resize:none;overflow:hidden;line-height:1.4">${escHtml(item.notes||'')}</textarea>
-      </div>
-      <div class="set-builder">${setsHtml}<button class="add-set-mini" onclick="addPlanSet(${idx})">+ Add Set</button></div>
     </div>`;
   }).join('');
+  return `<div class="plan-item-block">
+    <div class="pib-head">
+      <span class="pib-name">${escHtml(exerciseName(item.exerciseId))} <span style="margin-left:6px">${typeBadge(type)}</span></span>
+      <span style="display:flex;align-items:center;gap:2px">
+        ${inCircuit ? '' : `<button class="pib-reorder" onclick="movePlanItem(${idx},-1)" ${idx===0?'disabled':''} title="Move up">▲</button>
+        <button class="pib-reorder" onclick="movePlanItem(${idx},1)" ${idx===_planItems.length-1?'disabled':''} title="Move down">▼</button>`}
+        <button class="pib-remove" onclick="removePlanItem(${idx})">✕</button>
+      </span>
+    </div>
+    <div class="type-row" style="grid-template-columns:repeat(3,1fr);margin:6px 0">
+      <button class="type-btn sm ${type==='reps'?'active':''}" onclick="setPlanItemType(${idx},'reps')">Reps</button>
+      <button class="type-btn sm ${type==='time'?'active':''}" onclick="setPlanItemType(${idx},'time')">Time</button>
+      <button class="type-btn sm ${type==='distance'?'active':''}" onclick="setPlanItemType(${idx},'distance')">Distance</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
+      <label style="margin:0;font-size:10.5px;white-space:nowrap">Circuit</label>
+      <select style="max-width:170px" onchange="setPlanItemCircuit(${idx},this.value)">${circuitPickerOptionsHtml(item)}</select>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:6px 0">
+      <label style="margin:0;font-size:10.5px;white-space:nowrap">Est. time</label>
+      <select style="max-width:80px" onchange="updatePlanItemEstimate(${idx},this.value)">${estimateMinuteOptions(item.estimatedMinutes||0)}</select>
+      <span style="font-size:10.5px;color:var(--ink3)">min — auto-estimated (GYM-087${inCircuit?'/091':''}), adjust as needed</span>
+    </div>
+    ${(() => {
+      const exRecord = exerciseById(item.exerciseId);
+      if (!exRecord) return '';
+      // GYM-090: the exercise's OWN note — form cues, injury care,
+      // whatever's true of this exercise everywhere it's used, not
+      // just this plan. Distinct colour/icon from the plan note below
+      // so the two are never confused for each other. Edits here
+      // write straight to the exercise record (updateExerciseNoteFromPlan()
+      // mutates in memory per keystroke, commitExerciseNoteFromPlan()
+      // on blur does the actual save()+sbUpsert()) — independent of
+      // this plan's own draft/Save Plan cycle, since it's a different
+      // entity: cancelling out of this plan edit shouldn't discard a
+      // fix to the exercise's note.
+      return `<div style="margin:6px 0">
+        <label style="font-size:10.5px;color:var(--accent3)">🏋️ Exercise Notes <span style="font-weight:400;color:var(--ink3)">(this exercise, everywhere it's used — saves immediately, not tied to Save Plan)</span></label>
+        <textarea rows="1" placeholder="e.g. watch shoulder positioning, previous injury care" oninput="autoGrow(this);updateExerciseNoteFromPlan('${item.exerciseId}', this.value)" onblur="commitExerciseNoteFromPlan('${item.exerciseId}')" style="margin-top:2px;resize:none;overflow:hidden;line-height:1.4">${escHtml(exRecord.notes||'')}</textarea>
+      </div>`;
+    })()}
+    <div style="margin:6px 0">
+      <label style="font-size:10.5px;color:var(--ink3)">📋 Note for this plan <span style="font-weight:400">(only here, not the exercise's own note above — saved when you hit Save Plan)</span></label>
+      <textarea rows="1" placeholder="e.g. superset with next exercise, go to failure here" oninput="autoGrow(this);updatePlanItemNote(${idx}, this.value)" style="margin-top:2px;resize:none;overflow:hidden;line-height:1.4">${escHtml(item.notes||'')}</textarea>
+    </div>
+    <div class="set-builder">${setsHtml}${inCircuit ? '' : `<button class="add-set-mini" onclick="addPlanSet(${idx})">+ Add Set</button>`}</div>
+  </div>`;
 }
 // GYM-042: changing type here is a global change to the exercise, not a
 // local plan-item override — confirmed first (it resets target sets, and
@@ -4180,7 +4395,12 @@ function setPlanItemType(idx, newType) {
   if (ex) { ex.type = newType; ex.updatedAt = new Date().toISOString(); sbUpsert('exercise', ex, null); }
   item.trackType = newType;
   item.targetSets = defaultTargetSetsForType(newType);
-  item.estimatedMinutes = autoEstimateMinutes(item); // GYM-087: old estimate was based on the old type's data, doesn't carry over
+  // GYM-091: a circuit item must stay at exactly one target set (the one
+  // that repeats every round) — defaultTargetSetsForType() always
+  // returns a fresh multi-set default, so trim it back down here.
+  if (item.circuitId && item.targetSets.length > 1) item.targetSets = item.targetSets.slice(0,1);
+  const circuitForEstimate = item.circuitId ? _planCircuits.find(c=>c.id===item.circuitId) : null;
+  item.estimatedMinutes = autoEstimateMinutes(item, circuitForEstimate ? circuitForEstimate.rounds : null); // GYM-087/091: old estimate was based on the old type's data, doesn't carry over
   cascadeExerciseTypeToPlans(exerciseId, newType, currentPlanId);
   save(_env);
   renderPlanItemsList();
@@ -4255,7 +4475,17 @@ function updatePlanSetTime(idx, si, unit, val) {
   if (unit==='min') ms.min = val===''?0:Number(val); else ms.sec = val===''?0:Number(val);
   set.seconds = (ms.min*60) + ms.sec;
 }
-function removePlanItem(idx) { _planItems.splice(idx,1); renderPlanItemsList(); }
+// GYM-091: if this was the last member of its circuit, clean up the now-
+// empty circuit record too, rather than leaving an orphaned 0-member
+// circuit sitting in _planCircuits with nothing left to display it.
+function removePlanItem(idx) {
+  const circuitId = _planItems[idx].circuitId;
+  _planItems.splice(idx,1);
+  if (circuitId && !_planItems.some(i => i.circuitId === circuitId)) {
+    _planCircuits = _planCircuits.filter(c => c.id !== circuitId);
+  }
+  renderPlanItemsList();
+}
 
 function openExercisePicker(target) {
   document.getElementById('pickerSearch').value = '';
@@ -4289,12 +4519,17 @@ function renderExercisePickerList() {
 // brief. Always still just a *starting point* — the estimate dropdown
 // in the plan editor is exactly where "amend as you want" happens, and
 // nothing here ever overwrites a value someone's already set.
-function autoEstimateMinutes(item) {
+// GYM-091: optional `rounds` — a circuit item's single target set
+// happens `rounds` times, not once, so its estimate needs the same
+// multiplier or a 3-exercise circuit done 3× would show as if it only
+// took as long as one round.
+function autoEstimateMinutes(item, rounds) {
+  const multiplier = rounds > 0 ? rounds : 1;
   if (item.trackType === 'time' || item.trackType === 'distance') {
     const totalSeconds = (item.targetSets||[]).reduce((s,set)=>s+(set.seconds||0), 0);
-    if (totalSeconds > 0) return Math.max(1, Math.round(totalSeconds/60));
+    if (totalSeconds > 0) return Math.max(1, Math.round((totalSeconds*multiplier)/60));
   }
-  return 5;
+  return 5*multiplier;
 }
 // GYM-042: shared default-sets shape, also reused whenever a plan item's
 // type is switched (either from here or via the type switcher below) since
@@ -4330,7 +4565,11 @@ function cascadeExerciseTypeToPlans(exerciseId, newType, excludePlanId) {
       if (item.exerciseId===exerciseId && item.trackType!==newType) {
         item.trackType = newType;
         item.targetSets = defaultTargetSetsForType(newType);
-        item.estimatedMinutes = autoEstimateMinutes(item); // GYM-087: same reset as the primary plan's own type switch above
+        // GYM-091: same "circuit items stay at exactly one target set"
+        // guard as the primary plan's own type switch above.
+        if (item.circuitId && item.targetSets.length > 1) item.targetSets = item.targetSets.slice(0,1);
+        const circuitForEstimate = item.circuitId ? (p.circuits||[]).find(c=>c.id===item.circuitId) : null;
+        item.estimatedMinutes = autoEstimateMinutes(item, circuitForEstimate ? circuitForEstimate.rounds : null); // GYM-087/091: same reset as the primary plan's own type switch above
         touched = true;
       }
     });
@@ -4902,9 +5141,9 @@ function savePlan() {
     // deletion from another device. Without this guard the next line would
     // throw on a plain object access and leave the modal stuck.
     if (!record) { toast('This plan was deleted on another device'); closeModal('modalPlan'); renderPlanList(); return; }
-    record.name=name; record.notes=notes; record.items=_planItems; record.programId=programId; record.updatedAt=now;
+    record.name=name; record.notes=notes; record.items=_planItems; record.circuits=_planCircuits; record.programId=programId; record.updatedAt=now;
   }
-  else { record = { id: uid('plan'), name, notes, items:_planItems, programId, order: nextPlanOrder(), archived: false, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
+  else { record = { id: uid('plan'), name, notes, items:_planItems, circuits:_planCircuits, programId, order: nextPlanOrder(), archived: false, createdAt:now, updatedAt:now }; _env.data.plans.push(record); }
   save(_env);
   sbUpsert('plan', record, null);
   closeModal('modalPlan');
@@ -4932,9 +5171,14 @@ function updatePlanFromSession(planId, session) {
   if (!plan) return;
   const now = new Date().toISOString();
   session.items.forEach(si => {
-    const usableSets = si.actualSets.filter(hasAnyValue).map(stripDone);
+    let usableSets = si.actualSets.filter(hasAnyValue).map(stripDone);
     if (!usableSets.length) return;
     let pi = plan.items.find(x=>x.exerciseId===si.exerciseId);
+    // GYM-091: a circuit item's targetSets must stay exactly one set —
+    // it's "the set that repeats every round", not an independent
+    // multi-set list — so only the first round's actual numbers get
+    // pulled back in here, not every round's.
+    if ((pi && pi.circuitId) || si.circuitId) usableSets = usableSets.slice(0,1);
     if (pi) { pi.targetSets = usableSets; pi.trackType = si.trackType; }
     else { plan.items.push({ id: uid('pi'), exerciseId: si.exerciseId, trackType: si.trackType, targetSets: usableSets }); }
   });
@@ -5005,8 +5249,23 @@ function startSession(planId) {
     if (!plan) return;
     _activeSession = {
       id: uid('sess'), planId: plan.id, name: plan.name, date: todayISO(), startedAt: new Date().toISOString(), completedAt: null, notes: '',
+      // GYM-091: circuit definitions copied at session-start time, same
+      // "snapshot once, doesn't stay live" treatment as referenceSets and
+      // planItemNote just below — a circuit's rounds are part of how
+      // this session was built, not something that should silently
+      // reflow if the plan's own circuit is edited later.
+      circuits: JSON.parse(JSON.stringify(plan.circuits||[])),
       items: plan.items.map(pi => {
-        const ref = JSON.parse(JSON.stringify(pi.targetSets));
+        // GYM-091: a circuit item's single target set repeats `rounds`
+        // times — expand it into that many reference/actual sets here,
+        // once, at session-start, rather than the live logging screen
+        // having to reconstruct "how many rounds" from scratch on every
+        // render. A standalone item's ref is untouched (rounds=1, i.e.
+        // exactly what pi.targetSets already was).
+        const circuit = pi.circuitId ? (plan.circuits||[]).find(c=>c.id===pi.circuitId) : null;
+        const rounds = circuit ? Math.max(1, circuit.rounds||1) : 1;
+        const baseSet = JSON.parse(JSON.stringify(pi.targetSets[0] || buildDefaultSet(pi.trackType)));
+        const ref = circuit ? Array.from({length: rounds}, () => JSON.parse(JSON.stringify(baseSet))) : JSON.parse(JSON.stringify(pi.targetSets));
         const found = lastPerformedItem(pi.exerciseId);
         const contextNote = found ? '📅 Last actual ('+fmtDate(found.date)+'): '+summarizeSets(found.item.actualSets.filter(hasAnyValue), pi.trackType) : null;
         // GYM-059: exercise notes are resolved live from the exercise
@@ -5022,11 +5281,11 @@ function startSession(planId) {
         // are, since it's specific to this plan's build, not something
         // that needs to stay "live" the way exercise notes do.
         const planItemNote = pi.notes || null;
-        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote, exerciseNote, planItemNote };
+        return { id: uid('si'), exerciseId: pi.exerciseId, exerciseName: exerciseName(pi.exerciseId), trackType: pi.trackType, circuitId: pi.circuitId||null, referenceLabel:'plan', referenceSets: ref, actualSets: ref.map(s=>({...s,done:false})), status:'skipped', contextNote, exerciseNote, planItemNote };
       })
     };
   } else {
-    _activeSession = { id: uid('sess'), planId: null, name: 'Freestyle Session', date: todayISO(), startedAt: new Date().toISOString(), completedAt: null, notes: '', items: [] };
+    _activeSession = { id: uid('sess'), planId: null, name: 'Freestyle Session', date: todayISO(), startedAt: new Date().toISOString(), completedAt: null, notes: '', circuits: [], items: [] };
   }
   document.getElementById('sessionNameInput').value = _activeSession.name;
   document.getElementById('sessionDateInput').value = _activeSession.date;
@@ -5296,80 +5555,167 @@ function renderTimerControl(ii, si) {
   </div>`;
 }
 
+// GYM-091: one set-input row, factored out of what used to be inline
+// inside renderSessionItems()'s per-item .map() — reused unchanged for
+// standalone items AND for each round-row inside a circuit block, so
+// "the usual controls" (the actual input fields, done-check, remove,
+// trend arrow, timer) are identically the same code either way, not two
+// copies that could drift apart. labelOverride lets a circuit round-row
+// show "Round 2" instead of "Set 2" without changing what the row does.
+function sessionSetRowHtml(item, ii, si, labelOverride) {
+  const refLabel = item.referenceLabel==='plan' ? 'plan' : item.referenceLabel==='last' ? 'last' : item.referenceLabel==='target' ? 'target' : null;
+  const a = item.actualSets[si];
+  const ref = item.referenceSets ? item.referenceSets[si] : null;
+  const setLabel = labelOverride || ('Set '+(si+1));
+  if (item.trackType === 'distance') {
+    // GYM-056: time is now optional for distance sets, so trend/best is
+    // judged on metres (the mandatory/primary field) rather than pace —
+    // pace can no longer be assumed present.
+    const ms = secToMinSec(a.seconds);
+    const refText = ref ? refLabel+' '+(ref.metres||0)+'m'+(ref.seconds?'/'+mmss(ref.seconds):'') : 'extra';
+    return `<div class="track-set-block">
+      <div class="tsr-label">${setLabel} — ${refText}</div>
+      <div class="track-set-row">
+        <input type="number" class="tsr-input" value="${a.metres||''}" oninput="updateSessionSet(${ii},${si},'metres',this.value)"> m
+        <select class="tsr-input" style="width:52px !important" title="Time (optional)" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" title="Time (optional)" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
+        <span class="tsr-trend">${trendArrow(a.metres||0, ref?(ref.metres||0):null)}</span>
+        <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
+        <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
+      </div>
+      ${renderTimerControl(ii,si)}
+    </div>`;
+  }
+  if (item.trackType === 'time') {
+    const ms = secToMinSec(a.seconds);
+    return `<div class="track-set-block">
+      <div class="tsr-label">${setLabel} — ${ref?refLabel+' '+mmss(ref.seconds):'extra'}</div>
+      <div class="track-set-row">
+        <select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
+        <span class="tsr-trend">${trendArrow(a.seconds, ref?ref.seconds:null)}</span>
+        <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
+        <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
+      </div>
+      ${renderTimerControl(ii,si)}
+    </div>`;
+  }
+  return `<div class="track-set-block">
+    <div class="tsr-label">${setLabel} — ${ref?refLabel+' '+(ref.reps||0)+'×'+(ref.weight||0)+'kg':'extra'}</div>
+    <div class="track-set-row">
+      <input type="number" class="tsr-input" value="${a.reps||''}" oninput="updateSessionSet(${ii},${si},'reps',this.value)"> ×
+      <input type="number" class="tsr-input" step="0.5" value="${a.weight||''}" oninput="updateSessionSet(${ii},${si},'weight',this.value)"> kg
+      <span class="tsr-trend">${trendArrow((a.weight||0)*1000+(a.reps||0), ref?(ref.weight||0)*1000+(ref.reps||0):null)}</span>
+      <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
+      <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
+    </div>
+  </div>`;
+}
+// GYM-091: standalone item card — identical to what renderSessionItems()
+// used to build inline, just factored out so it can sit alongside
+// sessionCircuitBlockHtml() below as two things the top-level loop
+// dispatches between, rather than one thing changing shape depending on
+// data.
+function sessionExerciseCardHtml(item, ii) {
+  const rows = item.actualSets.map((a, si) => sessionSetRowHtml(item, ii, si)).join('');
+  const statusBadge = item.status==='completed' ? '<span class="li-badge badge-completed">Completed</span>'
+    : item.status==='partial' ? '<span class="li-badge badge-partial">Partial</span>' : '<span class="li-badge badge-skipped">Pending</span>';
+  const typeToggle = `<div class="type-row" style="grid-template-columns:repeat(3,1fr);margin-top:8px">
+    <button class="type-btn sm ${item.trackType==='reps'?'active':''}" onclick="setSessionItemType(${ii},'reps')">Reps</button>
+    <button class="type-btn sm ${item.trackType==='time'?'active':''}" onclick="setSessionItemType(${ii},'time')">Time</button>
+    <button class="type-btn sm ${item.trackType==='distance'?'active':''}" onclick="setSessionItemType(${ii},'distance')">Distance</button>
+  </div>`;
+  return `<div class="track-ex-card">
+    <div class="tec-head">
+      <span class="tec-name">${escHtml(item.exerciseName)}</span>${statusBadge}
+      <span style="display:flex;align-items:center;gap:2px">
+        <button class="pib-reorder" onclick="moveSessionItem(${ii},-1)" ${ii===0?'disabled':''} title="Move up">▲</button>
+        <button class="pib-reorder" onclick="moveSessionItem(${ii},1)" ${ii===_activeSession.items.length-1?'disabled':''} title="Move down">▼</button>
+        <button class="tec-remove" onclick="removeSessionItem(${ii})">✕</button>
+      </span>
+    </div>
+    ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
+    ${item.exerciseNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent3)">📝 ${escHtml(item.exerciseNote)}</div>` : ''}
+    ${item.planItemNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent2)">📌 ${escHtml(item.planItemNote)}</div>` : ''}
+    ${rows}
+    <button class="add-set-mini" onclick="addSessionSet(${ii})">+ Add Extra Set</button>
+    ${typeToggle}
+  </div>`;
+}
+// GYM-091: the live-logging equivalent of planCircuitBlockHtml() — round-
+// interleaved instead of exercise-by-exercise: for round r, one compact
+// row per member at si=r, so you log a full round (one of each exercise)
+// before moving to the next, matching how a circuit is actually
+// performed. Every row is still sessionSetRowHtml() — the same input
+// fields, done-check, timer, and update functions as a standalone
+// exercise, just laid out differently. Any "extra" sets beyond the
+// circuit's own round count (added via a member's own +Add Extra Set)
+// render afterward, grouped under that member's name, same as they
+// would on a standalone card.
+function sessionCircuitBlockHtml(circuit, memberIdxs) {
+  const rounds = circuit ? Math.max(1, circuit.rounds||1) : 1;
+  const roundBlocks = [];
+  for (let r=0; r<rounds; r++) {
+    const roundRows = memberIdxs.filter(ii => _activeSession.items[ii].actualSets.length > r).map(ii => {
+      const item = _activeSession.items[ii];
+      return `<div style="margin-bottom:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--ink2);margin-bottom:2px">${escHtml(item.exerciseName)}</div>
+        ${sessionSetRowHtml(item, ii, r, 'Round '+(r+1))}
+      </div>`;
+    }).join('');
+    roundBlocks.push(`<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:700;color:var(--accent5);margin-bottom:6px">Round ${r+1} of ${rounds}</div>${roundRows}</div>`);
+  }
+  // extra sets beyond the circuit's own round count — added ad hoc via a
+  // member's own "+Add Extra Set", so grouped per-member rather than
+  // per-round (there's no shared "round" for them to belong to).
+  const extrasHtml = memberIdxs.map(ii => {
+    const item = _activeSession.items[ii];
+    const extraRows = item.actualSets.map((a,si) => si).filter(si => si >= rounds).map(si => sessionSetRowHtml(item, ii, si)).join('');
+    return extraRows ? `<div style="margin-bottom:6px"><div style="font-size:11px;font-weight:600;color:var(--ink2);margin-bottom:2px">${escHtml(item.exerciseName)} — extra</div>${extraRows}</div>` : '';
+  }).join('');
+  const membersFooter = memberIdxs.map(ii => {
+    const item = _activeSession.items[ii];
+    const statusBadge = item.status==='completed' ? '<span class="li-badge badge-completed">Completed</span>'
+      : item.status==='partial' ? '<span class="li-badge badge-partial">Partial</span>' : '<span class="li-badge badge-skipped">Pending</span>';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid var(--border)">
+      <span style="font-size:11.5px">${escHtml(item.exerciseName)} ${statusBadge}</span>
+      <span style="display:flex;align-items:center;gap:6px">
+        <button class="add-set-mini" style="padding:3px 8px;font-size:10px" onclick="addSessionSet(${ii})">+ Extra</button>
+        <button class="tec-remove" onclick="removeSessionItem(${ii})">✕</button>
+      </span>
+    </div>`;
+  }).join('');
+  return `<div class="track-ex-card" style="border-color:var(--accent5)">
+    <div class="tec-head">
+      <span class="tec-name">🔁 ${escHtml(circuit ? circuit.name : 'Circuit')} <span style="font-weight:400;font-size:11px;color:var(--ink2)">— ${rounds} rounds</span></span>
+    </div>
+    ${roundBlocks.join('')}
+    ${extrasHtml}
+    ${membersFooter}
+  </div>`;
+}
+// GYM-091: groups circuit members together (round-interleaved, via
+// sessionCircuitBlockHtml()) and renders everything else exactly as
+// before (sessionExerciseCardHtml()) — same "gather by matching id
+// regardless of array position" approach the plan editor's own circuit
+// grouping uses.
 function renderSessionItems() {
   saveActiveSessionDraft();
   const el = document.getElementById('sessionItemsList');
   if (!_activeSession.items.length) { el.innerHTML = '<div class="empty-state"><div class="big">🔍</div>Search above to add your first exercise</div>'; return; }
-  el.innerHTML = _activeSession.items.map((item, ii) => {
-    const refLabel = item.referenceLabel==='plan' ? 'plan' : item.referenceLabel==='last' ? 'last' : item.referenceLabel==='target' ? 'target' : null;
-    const rows = item.actualSets.map((a, si) => {
-      const ref = item.referenceSets ? item.referenceSets[si] : null;
-      if (item.trackType === 'distance') {
-        // GYM-056: time is now optional for distance sets, so trend/best
-        // is judged on metres (the mandatory/primary field) rather than
-        // pace — pace can no longer be assumed present.
-        const ms = secToMinSec(a.seconds);
-        const refText = ref ? refLabel+' '+(ref.metres||0)+'m'+(ref.seconds?'/'+mmss(ref.seconds):'') : 'extra';
-        return `<div class="track-set-block">
-          <div class="tsr-label">Set ${si+1} — ${refText}</div>
-          <div class="track-set-row">
-            <input type="number" class="tsr-input" value="${a.metres||''}" oninput="updateSessionSet(${ii},${si},'metres',this.value)"> m
-            <select class="tsr-input" style="width:52px !important" title="Time (optional)" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" title="Time (optional)" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
-            <span class="tsr-trend">${trendArrow(a.metres||0, ref?(ref.metres||0):null)}</span>
-            <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
-            <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
-          </div>
-          ${renderTimerControl(ii,si)}
-        </div>`;
-      }
-      if (item.trackType === 'time') {
-        const ms = secToMinSec(a.seconds);
-        return `<div class="track-set-block">
-          <div class="tsr-label">Set ${si+1} — ${ref?refLabel+' '+mmss(ref.seconds):'extra'}</div>
-          <div class="track-set-row">
-            <select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'min',this.value)">${minSelectOptions(ms.min)}</select>:<select class="tsr-input" style="width:52px !important" onchange="updateSessionSetTime(${ii},${si},'sec',this.value)">${secSelectOptions(ms.sec)}</select>
-            <span class="tsr-trend">${trendArrow(a.seconds, ref?ref.seconds:null)}</span>
-            <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
-            <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
-          </div>
-          ${renderTimerControl(ii,si)}
-        </div>`;
-      }
-      return `<div class="track-set-block">
-        <div class="tsr-label">Set ${si+1} — ${ref?refLabel+' '+(ref.reps||0)+'×'+(ref.weight||0)+'kg':'extra'}</div>
-        <div class="track-set-row">
-          <input type="number" class="tsr-input" value="${a.reps||''}" oninput="updateSessionSet(${ii},${si},'reps',this.value)"> ×
-          <input type="number" class="tsr-input" step="0.5" value="${a.weight||''}" oninput="updateSessionSet(${ii},${si},'weight',this.value)"> kg
-          <span class="tsr-trend">${trendArrow((a.weight||0)*1000+(a.reps||0), ref?(ref.weight||0)*1000+(ref.reps||0):null)}</span>
-          <button class="tsr-check ${a.done?'done':''}" onclick="toggleSessionSetDone(${ii},${si})">✓</button>
-          <button class="tsr-remove" onclick="removeSessionSet(${ii},${si})">✕</button>
-        </div>
-      </div>`;
-    }).join('');
-    const statusBadge = item.status==='completed' ? '<span class="li-badge badge-completed">Completed</span>'
-      : item.status==='partial' ? '<span class="li-badge badge-partial">Partial</span>' : '<span class="li-badge badge-skipped">Pending</span>';
-    const typeToggle = `<div class="type-row" style="grid-template-columns:repeat(3,1fr);margin-top:8px">
-      <button class="type-btn sm ${item.trackType==='reps'?'active':''}" onclick="setSessionItemType(${ii},'reps')">Reps</button>
-      <button class="type-btn sm ${item.trackType==='time'?'active':''}" onclick="setSessionItemType(${ii},'time')">Time</button>
-      <button class="type-btn sm ${item.trackType==='distance'?'active':''}" onclick="setSessionItemType(${ii},'distance')">Distance</button>
-    </div>`;
-    return `<div class="track-ex-card">
-      <div class="tec-head">
-        <span class="tec-name">${escHtml(item.exerciseName)}</span>${statusBadge}
-        <span style="display:flex;align-items:center;gap:2px">
-          <button class="pib-reorder" onclick="moveSessionItem(${ii},-1)" ${ii===0?'disabled':''} title="Move up">▲</button>
-          <button class="pib-reorder" onclick="moveSessionItem(${ii},1)" ${ii===_activeSession.items.length-1?'disabled':''} title="Move down">▼</button>
-          <button class="tec-remove" onclick="removeSessionItem(${ii})">✕</button>
-        </span>
-      </div>
-      ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
-      ${item.exerciseNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent3)">📝 ${escHtml(item.exerciseNote)}</div>` : ''}
-      ${item.planItemNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent2)">📌 ${escHtml(item.planItemNote)}</div>` : ''}
-      ${rows}
-      <button class="add-set-mini" onclick="addSessionSet(${ii})">+ Add Extra Set</button>
-      ${typeToggle}
-    </div>`;
-  }).join('');
+  const rendered = new Set();
+  let html = '';
+  _activeSession.items.forEach((item, ii) => {
+    if (rendered.has(ii)) return;
+    if (item.circuitId) {
+      const circuit = (_activeSession.circuits||[]).find(c => c.id === item.circuitId);
+      const memberIdxs = _activeSession.items.map((it,i)=>i).filter(i => _activeSession.items[i].circuitId === item.circuitId);
+      memberIdxs.forEach(i => rendered.add(i));
+      html += sessionCircuitBlockHtml(circuit, memberIdxs);
+    } else {
+      rendered.add(ii);
+      html += sessionExerciseCardHtml(item, ii);
+    }
+  });
+  el.innerHTML = html;
 }
 function moveSessionItem(idx, dir) {
   const newIdx = idx + dir;
