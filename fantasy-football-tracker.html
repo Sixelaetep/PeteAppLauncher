@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.29</title>
+<title>Fantasy Football Tracker v1.30</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -351,7 +351,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.29</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.30</span></div>
 </nav>
 
 <div class="tabs">
@@ -482,13 +482,28 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.29"></script>
-<script src="pal-sync.js?v=1.29"></script>
-<script src="pal-utils.js?v=1.29"></script>
+<script src="pal-config.js?v=1.30"></script>
+<script src="pal-sync.js?v=1.30"></script>
+<script src="pal-utils.js?v=1.30"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.30 (PET-086, launcher dashcard follow-up): next gameweek's
+ * deadline surfaced, both in-app and (via the launcher's own
+ * statFantasy) on the dashcard. Confirmed available on every
+ * bootstrap.events entry as deadline_time — already used elsewhere in
+ * this app for the LIVE gameweek's own, already-passed deadline; this
+ * is the same field read for the UPCOMING gameweek instead, which is
+ * the one that actually still matters for a transfer decision.
+ * buildTrimmedSquadCache now captures nextGwDeadline alongside the
+ * already-existing nextGwId; new currentPlanningGwDeadline() reads it
+ * the same way currentPlanningGw() already does. Shown everywhere the
+ * planning gameweek already was: Settings' gameweek line, the
+ * Transfers tab's "For your next deadline" header (made literal —
+ * it's now an actual date, not just a label), both Locked In Squad
+ * banners (Squad and Advice), and Advice's live-mode FROM/TO header.
  *
  * v1.29 — multi-user support, so this app works for Lex the same way
  * it already does for Pete, plus a corrected theme fix (checked
@@ -1209,7 +1224,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.29';
+const FF_VERSION = '1.30';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1259,6 +1274,14 @@ function currentPlanningGw() {
   return _lastLiveSquadCache ? _lastLiveSquadCache.nextGwId : null;
 }
 
+// That gameweek's own deadline — when transfers for it actually lock.
+// PET-086: shown wherever currentPlanningGw() already is, so the
+// gameweek number and the date it locks are never split across
+// different places in the UI.
+function currentPlanningGwDeadline() {
+  return _lastLiveSquadCache ? _lastLiveSquadCache.nextGwDeadline : null;
+}
+
 // Called after loading settings, saving them, or whenever the live
 // squad updates — keeps the read-only gameweek label and the
 // staleness nudge current without ever asking the user to type a
@@ -1273,7 +1296,8 @@ function updateFreeTransfersGwDisplay() {
     promptEl.innerHTML = '';
     return;
   }
-  gwEl.textContent = 'Gameweek: ' + gw + ' (from your live squad, not set manually)';
+  const deadlineText = formatDeadline(currentPlanningGwDeadline());
+  gwEl.textContent = 'Gameweek: ' + gw + ' (from your live squad, not set manually)' + (deadlineText ? ' · Deadline: ' + deadlineText : '');
   if (_settings.freeTransfersCount != null && _settings.freeTransfersSavedForGw != null && _settings.freeTransfersSavedForGw !== gw) {
     promptEl.innerHTML = '<div class="sub" style="color:var(--accent5);margin-top:8px">⚠️ Your free transfer count was confirmed for GW' +
       _settings.freeTransfersSavedForGw + ', but you\'re now planning for GW' + gw + '. Please check the FPL site and re-save.</div>';
@@ -1358,7 +1382,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.29',
+    appVersion: '1.30',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1809,8 +1833,16 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
   // nextGwId is the gameweek a transfer made NOW would take effect for —
   // the same value already computed here for fixture lookups, reused so
   // Settings and computeTransferSlotUsage can show/use it without their
-  // own fetch or their own (possibly different) derivation.
-  return { elements, teams, picksData, gwId, nextGwId: fixtureGW, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION };
+  // own fetch or their own (possibly different) derivation. nextGwDeadline
+  // is that same gameweek's own deadline_time — confirmed available on
+  // every bootstrap.events entry (already used elsewhere in this app for
+  // the LIVE gameweek's own, already-passed deadline; this is the
+  // upcoming one that actually still matters for a transfer decision).
+  const nextGwEvent = (bootstrap.events || []).find(e => e.id === fixtureGW);
+  return {
+    elements, teams, picksData, gwId, nextGwId: fixtureGW, nextGwDeadline: nextGwEvent ? nextGwEvent.deadline_time : null,
+    nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION
+  };
 }
 
 function persistSquadCache(cache) {
@@ -2203,11 +2235,13 @@ async function renderPlannedSquadView() {
     projected.gwId, projected.nextFixtureByTeam, projected.maxPointsByPos, projected.topPlayerIdByPos, projected.picksData.picks);
 
   let banner;
+  const deadlineText = formatDeadline(currentPlanningGwDeadline());
+  const deadlineSuffix = deadlineText ? ' · Deadline: ' + deadlineText : '';
   if (!projected.appliedSwaps.length) {
-    banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projected.gwId +
+    banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projected.gwId + deadlineSuffix +
       ' — no transfers recorded yet, so this is your current Gameweek ' + projected.baseGwId + ' squad unchanged.</div>';
   } else {
-    banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projected.gwId + ' — built from your Gameweek ' + projected.baseGwId +
+    banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projected.gwId + deadlineSuffix + ' — built from your Gameweek ' + projected.baseGwId +
       ' squad with ' + projected.appliedSwaps.length + ' transfer' + (projected.appliedSwaps.length === 1 ? '' : 's') + ' applied. ' + projectionStatusNote(projected.appliedSwaps);
     if (projected.skippedSwaps.length) {
       banner += '<div class="sub">' + projected.skippedSwaps.length + ' transfer' + (projected.skippedSwaps.length === 1 ? '' : 's') +
@@ -2679,7 +2713,9 @@ function renderTransferList() {
       '. FREE/HIT labels below may be wrong until you check the FPL site and re-save it in Settings.</div>';
   }
 
-  html += '<div class="position-label">For your next deadline' + (slotUsage.gw != null ? ' — Gameweek ' + slotUsage.gw : '') + '</div>';
+  const nextDeadlineText = formatDeadline(currentPlanningGwDeadline());
+  html += '<div class="position-label">For your next deadline' + (slotUsage.gw != null ? ' — Gameweek ' + slotUsage.gw : '') +
+    (nextDeadlineText ? ' (' + nextDeadlineText + ')' : '') + '</div>';
   if (slotUsage.available != null && slotUsage.gw != null) {
     html += '<div class="sub" style="margin-bottom:8px">' + slotUsage.available + ' free transfer' + (slotUsage.available === 1 ? '' : 's') +
       ' for GW' + slotUsage.gw + ' (' + slotUsage.usedCount + ' used, ' + slotUsage.remaining + ' remaining)</div>';
@@ -4070,8 +4106,10 @@ function renderAdvice(data) {
   // one already locked in), and that distinction was easy to miss
   // without saying it outright.
   if (!isPlannedMode && fixtureGW != null && gwId != null && fixtureGW !== gwId) {
+    const headerDeadlineText = formatDeadline(currentPlanningGwDeadline());
     html += '<div class="sub" style="padding:0 16px 10px">Squad shown is your locked <strong>Gameweek ' + gwId +
-      '</strong> team · any transfer suggestion below is for <strong>Gameweek ' + fixtureGW + '</strong>, the next one it can actually take effect for.</div>';
+      '</strong> team · any transfer suggestion below is for <strong>Gameweek ' + fixtureGW + '</strong>, the next one it can actually take effect for' +
+      (headerDeadlineText ? ' (deadline: ' + headerDeadlineText + ')' : '') + '.</div>';
   }
 
   // 1. GAMEWEEK SUMMARY
@@ -4484,11 +4522,13 @@ async function loadAdvice() {
 
     if (_adviceViewMode === 'planned' && projectionInfo) {
       let banner;
+      const adviceDeadlineText = formatDeadline(currentPlanningGwDeadline());
+      const adviceDeadlineSuffix = adviceDeadlineText ? ' · Deadline: ' + adviceDeadlineText : '';
       if (!projectionInfo.appliedSwaps.length) {
-        banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projectionInfo.gwId +
+        banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projectionInfo.gwId + adviceDeadlineSuffix +
           ' — no transfers recorded yet, so this analyses your current Gameweek ' + projectionInfo.baseGwId + ' squad unchanged.</div>';
       } else {
-        banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projectionInfo.gwId + ' — built from your Gameweek ' + projectionInfo.baseGwId +
+        banner = '<div class="projection-banner">📋 LOCKED IN SQUAD FOR GAMEWEEK ' + projectionInfo.gwId + adviceDeadlineSuffix + ' — built from your Gameweek ' + projectionInfo.baseGwId +
           ' squad with ' + projectionInfo.appliedSwaps.length + ' transfer' + (projectionInfo.appliedSwaps.length === 1 ? '' : 's') + ' applied. ' + projectionStatusNote(projectionInfo.appliedSwaps);
         if (projectionInfo.skippedSwaps.length) {
           banner += '<div class="sub">' + projectionInfo.skippedSwaps.length + ' transfer' + (projectionInfo.skippedSwaps.length === 1 ? '' : 's') + ' skipped — see the Squad tab\'s Locked In Squad view for details.</div>';
