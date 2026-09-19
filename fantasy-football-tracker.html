@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.30</title>
+<title>Fantasy Football Tracker v1.31</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -148,6 +148,20 @@
   .cap-badge.vc { background: var(--neutral-bg); color: var(--ink2); border: 1px solid var(--neutral-border); }
   .tag-in { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: var(--accent2); color: #06210f; letter-spacing: .02em; }
   .tag-out { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: var(--neutral-bg); color: var(--accent3); border: 1px solid var(--accent3); letter-spacing: .02em; }
+
+  .gw-pts-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; margin-left: 4px; }
+  .gw-pts-badge.pos { background: rgba(63,185,80,.15); color: var(--accent2); }
+  .gw-pts-badge.zero { background: var(--neutral-bg); color: var(--ink3); }
+  .gw-pts-badge.neg { background: rgba(247,129,102,.15); color: var(--accent3); }
+
+  .stat-boxes-row { display: flex; gap: 8px; padding: 12px 16px 4px; flex-wrap: wrap; }
+  .stat-box {
+    flex: 1; min-width: 88px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; text-align: center;
+  }
+  .stat-box .stat-label { font-size: 10px; color: var(--ink2); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 4px; }
+  .stat-box .stat-value { font-size: 19px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .stat-box .stat-sub { font-size: 10px; color: var(--ink3); margin-top: 2px; }
   .tag-disagree { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: rgba(167,139,250,.15); color: #a78bfa; letter-spacing: .02em; }
   .transfer-summary-card {
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
@@ -351,7 +365,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.30</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.31</span></div>
 </nav>
 
 <div class="tabs">
@@ -372,7 +386,10 @@
       <button class="mode-btn active" id="squadModeLiveBtn" onclick="switchSquadViewMode('live')">Live (FPL)</button>
       <button class="mode-btn" id="squadModePlannedBtn" onclick="switchSquadViewMode('planned')">Locked In Squad</button>
     </div>
-    <div style="padding:10px 16px 0"><button class="btn secondary" onclick="exportSquadFile()">⬇️ Export squad (JSON)</button></div>
+    <div style="padding:10px 16px 0">
+      <button class="btn secondary" onclick="exportSquadFile()">⬇️ Export squad (JSON)</button>
+      <button class="sub-btn active" id="posBestToggleBtn" onclick="togglePositionBest()" style="padding:8px 10px;font-size:11px;vertical-align:middle">🟣 Top scorers</button>
+    </div>
     <div id="squadBody">
       <div class="placeholder">
         <div class="emoji">🏗️</div>
@@ -482,13 +499,43 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.30"></script>
-<script src="pal-sync.js?v=1.30"></script>
-<script src="pal-utils.js?v=1.30"></script>
+<script src="pal-config.js?v=1.31"></script>
+<script src="pal-sync.js?v=1.31"></script>
+<script src="pal-utils.js?v=1.31"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.31 — four pieces of work:
+ *
+ * - Live squad visibility: new stat-boxes row at the top (Gameweek,
+ *   GW Points, Total Points — confirmed entry_history.total_points is
+ *   a real field on the picks endpoint, distinct from the GW-only
+ *   points already shown) and a per-player GW-points badge on every
+ *   card (confirmed elements[].event_points is real too — the current
+ *   gameweek's points for that specific player, distinct from their
+ *   season total already shown lower in the card).
+ * - New toggle for the purple "TOP SCORER" position-best reference
+ *   cards — on by default, persisted to localStorage (a display
+ *   preference, not account data, so not Supabase-synced).
+ * - Locked In Squad gets its own stat-boxes row: next gameweek,
+ *   deadline (reusing currentPlanningGwDeadline() from the PET-086
+ *   work), and number of transfers applied.
+ * - Real correctness fix, not just a display change: external checks
+ *   were being used in the override/contradiction logic regardless of
+ *   which gameweek they were actually for — a check imported for GW5
+ *   kept silently influencing GW6's analysis with nothing newer
+ *   imported. Now filtered to activeExternalChecks (forGameweek ===
+ *   gwId) before touching buildExternalSignalMap or
+ *   buildContradictionFlags at all. The External tab itself is
+ *   unaffected — still shows every import, stale ones included, with
+ *   its own warning; this only governs what the ANALYSIS acts on.
+ *   externalAdviceSummaryHtml now also explicitly distinguishes
+ *   "nothing imported" from "something's imported but not for this
+ *   gameweek, being ignored" — the latter used to be indistinguishable
+ *   from the former, which risked looking like the app had simply
+ *   forgotten about it rather than deliberately excluding it.
  *
  * v1.30 (PET-086, launcher dashcard follow-up): next gameweek's
  * deadline surfaced, both in-app and (via the launcher's own
@@ -1224,7 +1271,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.30';
+const FF_VERSION = '1.31';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1382,7 +1429,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.30',
+    appVersion: '1.31',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1481,6 +1528,20 @@ let _squadLoading = false;
 // a fresh fetch — only the projection itself is computed on the fly.
 let _lastLiveSquadCache = null;
 let _squadViewMode = 'live';
+// Whether the purple "TOP SCORER" position-best reference cards show
+// in Squad — a simple display preference, not per-user account data,
+// so localStorage-only rather than Supabase-synced.
+let _showPositionBest = true;
+function loadPositionBestPref() {
+  try { if (localStorage.getItem('ff_show_position_best') === '0') _showPositionBest = false; } catch (e) {}
+}
+function togglePositionBest() {
+  _showPositionBest = !_showPositionBest;
+  try { localStorage.setItem('ff_show_position_best', _showPositionBest ? '1' : '0'); } catch (e) {}
+  const btn = document.getElementById('posBestToggleBtn');
+  if (btn) btn.classList.toggle('active', _showPositionBest);
+  refreshSquadDisplay();
+}
 
 function formatPrice(now_cost) { return '£' + (now_cost / 10).toFixed(1) + 'm'; }
 
@@ -1730,13 +1791,17 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByP
   const dotClass = statusDotClass(el.status);
   const badge = pick.is_captain ? '<span class="cap-badge">C</span>'
               : pick.is_vice_captain ? '<span class="cap-badge vc">VC</span>' : '';
+  const gwPts = el.event_points;
+  const gwBadge = gwPts != null
+    ? '<span class="gw-pts-badge ' + (gwPts > 0 ? 'pos' : gwPts < 0 ? 'neg' : 'zero') + '">' + (gwPts > 0 ? '+' : '') + gwPts + '</span>'
+    : '';
   const multiplierNote = pick.multiplier > 2 ? ` · ${pick.multiplier}x` : '';
   const statusNote = el.news ? ' · ' + safeEsc(el.news) : '';
   return `
     <div class="player-card${isBench ? ' bench' : ''}" title="${safeEsc(el.news || '')}">
       <div class="player-dot ${dotClass}"></div>
       <div class="player-info">
-        <div class="player-name">${safeEsc(el.web_name)} ${badge}</div>
+        <div class="player-name">${safeEsc(el.web_name)} ${badge}${gwBadge}</div>
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}${statusNote}${multiplierNote}</div>
         ${pointsLineHtml(el, maxPointsByPos)}
       </div>
@@ -1760,10 +1825,19 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   });
 
   let html = '';
+  const hist = picksData.entry_history;
+  if (hist) {
+    html += '<div class="stat-boxes-row">' +
+      '<div class="stat-box"><div class="stat-label">Gameweek</div><div class="stat-value">' + gwId + '</div></div>' +
+      '<div class="stat-box"><div class="stat-label">GW Points</div><div class="stat-value">' + hist.points + '</div></div>' +
+      '<div class="stat-box"><div class="stat-label">Total Points</div><div class="stat-value">' + (hist.total_points != null ? hist.total_points : '—') + '</div></div>' +
+      '</div>';
+  }
+
   [1, 2, 3, 4].forEach(type => {
     if (!byPosType[type].length) return;
     html += `<div class="position-label">${POSITION_NAMES[type]}</div>`;
-    if (topPlayerIdByPos && topPlayerIdByPos[type] != null) {
+    if (_showPositionBest && topPlayerIdByPos && topPlayerIdByPos[type] != null) {
       const topEl = elementsById[topPlayerIdByPos[type]];
       if (topEl) html += positionBestCardHtml(topEl, teamsById[topEl.team]);
     }
@@ -1783,7 +1857,6 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
 
   document.getElementById('squadBody').innerHTML = html;
 
-  const hist = picksData.entry_history;
   const meta = hist
     ? `Gameweek ${gwId} · Squad value ${formatPrice(hist.value)} · Bank ${formatPrice(hist.bank)} · ${hist.points} pts`
     : `Gameweek ${gwId}`;
@@ -2173,7 +2246,7 @@ function interactiveLockedInCardHtml(el, team, pick, isBench, nextFixtureByTeam,
 
 let _lastLockedInBasePicks = null;
 
-function renderInteractiveLockedInSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, basePicks) {
+function renderInteractiveLockedInSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, basePicks, transferCount) {
   const elementsById = {}; elements.forEach(e => elementsById[e.id] = e);
   _lastLockedInElementsById = elementsById;
   _lastLockedInBasePicks = basePicks;
@@ -2186,7 +2259,14 @@ function renderInteractiveLockedInSquad(elements, teams, picksData, gwId, nextFi
   const byPosType = { 1: [], 2: [], 3: [], 4: [] };
   starting.forEach(p => { const el = elementsById[p.element]; if (el) byPosType[el.element_type].push({ el, pick: p }); });
 
-  let html = '<div class="sub" style="padding:0 16px 8px">Tap ⇄ on a starter, then ⇄ on a bench player to bring them on. C/V set captaincy.' +
+  const deadlineText = formatDeadline(currentPlanningGwDeadline());
+  let html = '<div class="stat-boxes-row">' +
+    '<div class="stat-box"><div class="stat-label">Next Gameweek</div><div class="stat-value">' + gwId + '</div></div>' +
+    '<div class="stat-box"><div class="stat-label">Deadline</div><div class="stat-value" style="font-size:13px">' + (deadlineText || '—') + '</div></div>' +
+    '<div class="stat-box"><div class="stat-label">Transfers</div><div class="stat-value">' + (transferCount || 0) + '</div></div>' +
+    '</div>';
+
+  html += '<div class="sub" style="padding:0 16px 8px">Tap ⇄ on a starter, then ⇄ on a bench player to bring them on. C/V set captaincy.' +
     ' <button class="sub-btn" style="margin-left:6px" onclick="resetManualLineup(' + gwId + ', _lastLockedInBasePicks)">Reset to squad order</button></div>';
 
   [1, 2, 3, 4].forEach(type => {
@@ -2232,7 +2312,7 @@ async function renderPlannedSquadView() {
   const effectivePicks = getEffectiveLockedInPicks(projected);
   container.innerHTML = '';
   renderInteractiveLockedInSquad(projected.elements, projected.teams, { picks: effectivePicks, entry_history: projected.picksData.entry_history },
-    projected.gwId, projected.nextFixtureByTeam, projected.maxPointsByPos, projected.topPlayerIdByPos, projected.picksData.picks);
+    projected.gwId, projected.nextFixtureByTeam, projected.maxPointsByPos, projected.topPlayerIdByPos, projected.picksData.picks, projected.appliedSwaps.length);
 
   let banner;
   const deadlineText = formatDeadline(currentPlanningGwDeadline());
@@ -3385,11 +3465,26 @@ function buildContradictionFlags(picks, elementsById, optimalRaw, captain, exter
 // Summary shown in Advice: exactly what external input existed, and
 // exactly what (if anything) it changed — the explicit call-out
 // requested, so nothing here is a silent adjustment.
-function externalAdviceSummaryHtml(externalChecks, overrides, unresolvedFlags, contradictionFlags) {
-  if (!externalChecks || !externalChecks.length) return '';
+function externalAdviceSummaryHtml(activeExternalChecks, overrides, unresolvedFlags, contradictionFlags, allExternalChecks, gwId) {
+  const staleOnly = (!activeExternalChecks || !activeExternalChecks.length) && allExternalChecks && allExternalChecks.length;
+  if ((!activeExternalChecks || !activeExternalChecks.length) && !staleOnly) return '';
+
+  if (staleOnly) {
+    // Something IS imported, just not for the gameweek this run is
+    // actually analysing — say so explicitly rather than silently
+    // looking like nothing was ever imported at all, which would be
+    // indistinguishable from "never checked" and easy to misread as
+    // the app having forgotten about it.
+    const staleGws = [...new Set(allExternalChecks.map(c => c.forGameweek))].filter(g => g != null);
+    return '<div class="ext-check-banner">🔎 You have external check(s) imported for Gameweek' + (staleGws.length === 1 ? '' : 's') +
+      ' ' + staleGws.join(', ') + ', but this analysis is for Gameweek ' + gwId +
+      ' — they\'re being ignored until you import a fresh one for this gameweek.</div>';
+  }
+
+  const externalChecks = activeExternalChecks;
   const sources = externalChecks.map(c => AI_SOURCE_LABELS[c.aiSource] || AI_SOURCE_LABELS.other).join(', ');
   let html = '<div class="ext-check-banner">🔎 External advice considered — checked against ' + externalChecks.length +
-    ' import' + (externalChecks.length === 1 ? '' : 's') + ' (' + safeEsc(sources) + ').';
+    ' import' + (externalChecks.length === 1 ? '' : 's') + ' for this gameweek (' + safeEsc(sources) + ').';
   if (overrides.length) {
     html += '<div class="sub" style="margin-top:4px">Adjusted the starting XI for ' + overrides.length + ' player' + (overrides.length === 1 ? '' : 's') + ':</div>';
     overrides.forEach(o => {
@@ -3884,7 +3979,7 @@ function explainerHtml() {
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
     '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for.</p>' +
     '<p><strong>"No transfer recorded" / "Already planned" / "Conflicts with a recorded plan"</strong> — every suggested transfer is checked against the Transfer log for an existing planned or locked-in entry on the same OUT player, so a suggestion never silently repeats something you\'ve already decided, and a genuine disagreement (you\'ve recorded a different IN player than this analysis currently rates highest) is flagged rather than hidden. The squad shown is always your last LOCKED gameweek; any transfer suggestion is for the NEXT one, since that\'s the only gameweek a transfer made now can actually take effect for — both are labelled explicitly when they differ.</p>' +
-    '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
+    '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. Gameweek-scoped: only a check whose forGameweek exactly matches whatever THIS analysis run is actually for gets used — a check imported for Gameweek 5 is completely ignored once planning has moved to Gameweek 6, rather than silently continuing to influence an analysis it was never actually about. If nothing active exists but something older IS imported, the summary says so explicitly rather than looking indistinguishable from "nothing was ever imported" — the External tab itself still shows every import regardless, stale ones included, with their own staleness warning; the filtering only governs what the analysis acts on. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
     '<p><strong>Bench order</strong> in Recommended Team is a suggested fallback priority, not a claim of exactly matching FPL\'s own auto-substitution logic (which also depends on formation validity at kickoff, something this doesn\'t simulate). Outfield reserves are ranked by score — best fallback first — with the bench goalkeeper placed last regardless of score, since a bench GK only ever comes on if the starting keeper doesn\'t play, a materially rarer event than an outfield sub, so ranking it against outfield scores wouldn\'t mean much.</p>' +
     '<p><strong>Substitutions</strong> in the Locked In Squad view are a genuinely separate layer from transfers — transfers decide WHICH 15 players are in the squad, substitutions decide WHICH 11 of those 15 start, in what order the other 4 would come on, and who\'s captain/vice. Tap ⇄ on a starter then ⇄ on a bench player to swap them; C/V set the armband. A goalkeeper can only swap with the bench goalkeeper (a squad always needs exactly 1 starting one); an outfield swap can cross DEF/MID/FWD lines same as the real FPL app, but is checked against a legal formation (3-5 DEF, 2-5 MID, 1-3 FWD) first — an invalid swap is rejected outright, nothing partial happens. Advice\'s Locked In Squad analysis reads this exact lineup — not its own independent suggestion — for which captain and starting XI it\'s reporting on, so "Your captain" there always matches what\'s actually set in Squad; the separate "Recommended team" section still shows the algorithm\'s own best-XI-from-all-15 opinion alongside it, since comparing the two is the point, not replacing one with the other.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
@@ -4452,7 +4547,19 @@ async function loadAdvice() {
     const nextFixtureByTeam = buildNextFixtureByTeam(fixtures, teamsById, fixtureGW);
 
     const optimalRawBeforeExternal = findOptimalXI(picksData.picks, elementsById, scores);
-    const externalSignalByPlayerId = buildExternalSignalMap(_externalChecks);
+    // External checks are gameweek-specific by nature (team news from
+    // three weeks ago says nothing about next week) — a check imported
+    // for GW5 must not keep silently influencing GW6's analysis just
+    // because nothing newer has been imported yet. Filtered here, once,
+    // to whatever this SPECIFIC run is actually analysing (gwId — the
+    // live locked gameweek in Live mode, the planning gameweek in
+    // Locked In Squad mode) — everywhere below that used to read
+    // _externalChecks directly now reads this instead. The External
+    // tab itself is untouched by this filter — it still shows every
+    // import, stale ones included, with their own staleness warning;
+    // this only governs what the ANALYSIS acts on.
+    const activeExternalChecks = (_externalChecks || []).filter(ec => ec.forGameweek === gwId);
+    const externalSignalByPlayerId = buildExternalSignalMap(activeExternalChecks);
     const xiOverrideResult = applyExternalOverridesToXI(optimalRawBeforeExternal, picksData.picks, elementsById, scores, externalSignalByPlayerId);
     const optimalRaw = xiOverrideResult.optimal;
     const externalOverrides = xiOverrideResult.overrides;
@@ -4504,7 +4611,7 @@ async function loadAdvice() {
     const transferOpportunities = annotateTransferOpportunitiesWithPlanStatus(transferOpportunitiesSlotted);
     const buyOpportunities = findBuyOpportunities(bootstrap.elements, scores, fixtures, fixtureGW, squadIds, 2);
     const watchItems = generateWatchItems(squadDecisionsList, buyOpportunities);
-    const contradictionFlags = buildContradictionFlags(picksData.picks, elementsById, optimalRaw, captain, _externalChecks);
+    const contradictionFlags = buildContradictionFlags(picksData.picks, elementsById, optimalRaw, captain, activeExternalChecks);
 
     const renderData = {
       picks: picksData.picks, elementsById, scoresById: scores, optimal, captain, viceCaptain, captainConfidence,
@@ -4512,7 +4619,7 @@ async function loadAdvice() {
       isPlannedMode: _adviceViewMode === 'planned', contradictionFlags
     };
     renderAdvice(renderData);
-    const extSummary = externalAdviceSummaryHtml(_externalChecks, externalOverrides, externalUnresolvedFlags, contradictionFlags);
+    const extSummary = externalAdviceSummaryHtml(activeExternalChecks, externalOverrides, externalUnresolvedFlags, contradictionFlags, _externalChecks, gwId);
     if (extSummary) document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', extSummary);
     // Kept in memory (not persisted) so the export prompt can use
     // whichever mode was most recently analyzed — a planned-mode run
@@ -4559,6 +4666,11 @@ async function loadAdvice() {
 }
 
 // ── Boot ───────────────────────────────────────────────────────
+loadPositionBestPref();
+(function syncPosBestBtn() {
+  const btn = document.getElementById('posBestToggleBtn');
+  if (btn) btn.classList.toggle('active', _showPositionBest);
+})();
 loadLocalSettings();
 loadSquadFromCache();
 loadScoreHistoryLocal();
