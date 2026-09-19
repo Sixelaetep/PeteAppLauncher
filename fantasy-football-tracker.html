@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.32</title>
+<title>Fantasy Football Tracker v1.33</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -365,7 +365,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.32</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.33</span></div>
 </nav>
 
 <div class="tabs">
@@ -467,7 +467,7 @@
       <p style="margin-bottom:10px">The ID from your team URL, e.g.
       fantasy.premierleague.com/entry/<strong>1234567</strong>/event/6</p>
       <label for="entryIdInput">Entry ID</label>
-      <input type="text" id="entryIdInput" inputmode="numeric" placeholder="2510199">
+      <input type="text" id="entryIdInput" inputmode="numeric" placeholder="1234567">
       <button class="btn" onclick="saveSettings()">Save</button>
     </div>
     <div class="card">
@@ -499,13 +499,50 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.32"></script>
-<script src="pal-sync.js?v=1.32"></script>
-<script src="pal-utils.js?v=1.32"></script>
+<script src="pal-config.js?v=1.33"></script>
+<script src="pal-sync.js?v=1.33"></script>
+<script src="pal-utils.js?v=1.33"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.33 — reported directly: Lex's Settings tab showed Pete's real FPL
+ * entry ID. Root cause was architectural, not cosmetic: every per-user
+ * localStorage key (ff_settings_local, ff_squad_cache,
+ * ff_score_history, ff_advice_cache, ff_transfer_log,
+ * ff_external_check, ff_manual_lineup) was a plain shared-browser key
+ * with no per-user scoping at all — added when the app was still
+ * single-user, never revisited when multi-user support (KNOWN_USERS/
+ * RLS) was added. A second person using the SAME BROWSER inherited
+ * whichever local cache was already sitting there, regardless of
+ * which Supabase account they'd actually signed in as. Supabase itself
+ * was never at risk — RLS (auth.uid()=user_id on every table) means
+ * one person's session can never read or write another's row no
+ * matter what's cached locally — but the local DISPLAY could show one
+ * person's data to another, and a save from that state would write
+ * the wrong value into THEIR OWN row.
+ *
+ * Fixed: every one of those 7 keys is now suffixed with the signed-in
+ * user's id via a new scopedKey() helper (ff_show_position_best
+ * deliberately excluded — it's a shared display preference, not
+ * personal data). Boot sequence restructured: per-user cache loads,
+ * which used to run unconditionally before auth had even started
+ * resolving, are now deferred until the signed-in user is actually
+ * known (onSession, onNoSession, and the no-PalSync fallback all
+ * covered). One-time migration for Pete's own existing legacy data,
+ * scoped specifically to his known user id so it can never trigger for
+ * anyone else's sign-in — the legacy shared key is removed after
+ * migrating, closing the loop for any future browser sharing too.
+ * Entry ID placeholder also changed from a real ID to a generic
+ * example, matching the one already used in the help text above it.
+ *
+ * Tested by reproducing the actual scenario end-to-end: seeded a
+ * browser with Pete's real pre-fix legacy data, confirmed migration
+ * moves it to his scoped key and removes the legacy key, then signed
+ * Lex into that SAME browser's localStorage and confirmed she sees a
+ * genuinely empty field, his data is untouched under his own key, and
+ * her own save goes to her own key without affecting his.
  *
  * v1.32 — bug fix, reported directly: v1.31's gameweek filter worked
  * correctly for Locked In Squad but not Live. Root cause: the filter
@@ -1290,7 +1327,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.32';
+const FF_VERSION = '1.33';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1410,7 +1447,7 @@ function switchTab(id) {
 // ── Settings (local-first, synced via PalSync once a session exists) ──
 function loadLocalSettings() {
   try {
-    const raw = localStorage.getItem('ff_settings_local');
+    const raw = localStorage.getItem(scopedKey('ff_settings_local'));
     if (raw) _settings = Object.assign(_settings, JSON.parse(raw));
   } catch (e) {}
   document.getElementById('entryIdInput').value = _settings.entryId || '';
@@ -1431,7 +1468,7 @@ function saveSettings() {
     _settings.freeTransfersSavedForGw = currentPlanningGw();
   }
   _settings.freeTransfersCount = newCount;
-  try { localStorage.setItem('ff_settings_local', JSON.stringify(_settings)); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_settings_local'), JSON.stringify(_settings)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_settings').upsert('main', _settings)
       .then(() => safeToast('Settings saved'))
@@ -1448,7 +1485,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.32',
+    appVersion: '1.33',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1470,7 +1507,7 @@ function importBackup(file) {
       if (!parsed || !parsed.data || !parsed.data.settings) { safeToast('⚠ Invalid backup format', 'err'); return; }
       if (!confirm('This will replace current settings with the backup. Continue?')) return;
       _settings = Object.assign({ entryId: '' }, parsed.data.settings);
-      try { localStorage.setItem('ff_settings_local', JSON.stringify(_settings)); } catch (e) {}
+      try { localStorage.setItem(scopedKey('ff_settings_local'), JSON.stringify(_settings)); } catch (e) {}
       document.getElementById('entryIdInput').value = _settings.entryId || '';
       if (window.PalSync && PalSync.hasSession()) PalSync.table('ff_settings').upsert('main', _settings);
       safeToast('Backup imported');
@@ -1546,6 +1583,59 @@ let _squadLoading = false;
 // which mode is currently displayed, so switching modes never needs
 // a fresh fetch — only the projection itself is computed on the fly.
 let _lastLiveSquadCache = null;
+// ── Per-user local cache scoping ──────────────────────────────────
+// Every key below holds genuinely personal data (FPL entry ID, squad,
+// transfers, etc.). Before this, all of them were plain shared-browser
+// localStorage keys with NO per-user scoping — a second person using
+// the SAME browser (a shared family device, or one person setting the
+// app up on the other's device/browser profile) would see whichever
+// local cache was already sitting there, regardless of which Supabase
+// account they'd actually signed in as. Supabase itself was never at
+// risk — RLS (auth.uid()=user_id on every table) means one person's
+// session can never read or write another's ROW no matter what's
+// cached locally — but the local DISPLAY could show one person's data
+// to another, and if they then clicked Save without noticing, THEIR
+// OWN row would get saved with the wrong value. Every key here is now
+// suffixed with the signed-in user's id, so a shared browser keeps
+// each person's cache genuinely separate.
+//
+// ff_show_position_best is deliberately NOT in this list — it's a
+// display preference (purple top-scorer cards on/off), not personal
+// data, so there's no reason two people sharing a browser shouldn't
+// share that too.
+const FF_PER_USER_KEYS = ['ff_settings_local', 'ff_squad_cache', 'ff_score_history', 'ff_advice_cache', 'ff_transfer_log', 'ff_external_check', 'ff_manual_lineup'];
+
+function scopedKey(base) {
+  const uid = (window.PalSync && typeof PalSync.getUserId === 'function') ? PalSync.getUserId() : null;
+  return uid ? base + '_u_' + uid : base;
+}
+
+// One-time migration: Pete used this app solo, under the old shared
+// keys, long before Lex's account existed at all — his existing local
+// cache is real and worth keeping, not silently losing on this
+// upgrade (Supabase still has everything regardless, but there's no
+// reason to make him wait on a re-pull for something already sitting
+// right there). Deliberately scoped to his specific known id only:
+// nobody else's sign-in ever triggers this, so a browser Pete used
+// first and someone else signs into second never hands them his
+// cached data — that would just reopen the exact bug being fixed
+// here. The legacy shared key is removed after migrating, so it can
+// never leak to a future different user of this browser either.
+const FF_PETE_USER_ID = 'd3203136-833d-405b-9a48-13d7045df4fd';
+function migrateLegacyLocalCacheForPete(userId) {
+  if (userId !== FF_PETE_USER_ID) return;
+  FF_PER_USER_KEYS.forEach(base => {
+    const scoped = scopedKey(base);
+    if (localStorage.getItem(scoped) != null) return; // already migrated
+    const legacy = localStorage.getItem(base);
+    if (legacy == null) return;
+    try {
+      localStorage.setItem(scoped, legacy);
+      localStorage.removeItem(base);
+    } catch (e) {}
+  });
+}
+
 let _squadViewMode = 'live';
 // Whether the purple "TOP SCORER" position-best reference cards show
 // in Squad — a simple display preference, not per-user account data,
@@ -1938,7 +2028,7 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
 }
 
 function persistSquadCache(cache) {
-  try { localStorage.setItem('ff_squad_cache', JSON.stringify(cache)); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_squad_cache'), JSON.stringify(cache)); } catch (e) {}
   // Also sync to Supabase (ff_squad_cache table) so the squad survives
   // a refresh even if this browser's localStorage inside the launcher's
   // iframe doesn't reliably persist — same reasoning as ff_settings.
@@ -2159,7 +2249,7 @@ function setManualViceCaptain(gwId, playerId) {
 }
 
 function persistManualLineup() {
-  try { localStorage.setItem('ff_manual_lineup', JSON.stringify(_manualLineup)); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_manual_lineup'), JSON.stringify(_manualLineup)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_manual_lineup').upsert('main', _manualLineup).catch(() => {
       console.error('Manual lineup saved locally but failed to sync to Supabase.');
@@ -2169,7 +2259,7 @@ function persistManualLineup() {
 
 function loadManualLineupFromCache() {
   try {
-    const raw = localStorage.getItem('ff_manual_lineup');
+    const raw = localStorage.getItem(scopedKey('ff_manual_lineup'));
     if (raw) _manualLineup = JSON.parse(raw) || {};
   } catch (e) {}
 }
@@ -2180,7 +2270,7 @@ async function pullRemoteManualLineup() {
     const remote = result.rows && result.rows.find(r => r.record_key === 'main');
     if (!remote || !remote.data) return;
     _manualLineup = Object.assign({}, _manualLineup, remote.data);
-    try { localStorage.setItem('ff_manual_lineup', JSON.stringify(_manualLineup)); } catch (e) {}
+    try { localStorage.setItem(scopedKey('ff_manual_lineup'), JSON.stringify(_manualLineup)); } catch (e) {}
     if (_squadViewMode === 'planned') refreshSquadDisplay();
   } catch (e) { console.error('Manual lineup pull from Supabase failed:', e); }
 }
@@ -2426,7 +2516,7 @@ async function loadSquad() {
 
 function loadSquadFromCache() {
   try {
-    const raw = localStorage.getItem('ff_squad_cache');
+    const raw = localStorage.getItem(scopedKey('ff_squad_cache'));
     if (!raw) return;
     const cache = JSON.parse(raw);
     renderFromCacheObject(cache, 'cached');
@@ -2466,11 +2556,11 @@ async function pullRemoteSquadCache() {
     const remoteCache = remote.data;
 
     let localCache = null;
-    try { const raw = localStorage.getItem('ff_squad_cache'); if (raw) localCache = JSON.parse(raw); } catch (e) {}
+    try { const raw = localStorage.getItem(scopedKey('ff_squad_cache')); if (raw) localCache = JSON.parse(raw); } catch (e) {}
 
     if (!localCache || (remoteCache.cachedAt || 0) > (localCache.cachedAt || 0)) {
       renderFromCacheObject(remoteCache, 'synced');
-      try { localStorage.setItem('ff_squad_cache', JSON.stringify(remoteCache)); } catch (e) {}
+      try { localStorage.setItem(scopedKey('ff_squad_cache'), JSON.stringify(remoteCache)); } catch (e) {}
       maybeAutoRefreshStaleSquadCache(remoteCache, 'synced');
     } else {
       _lastLiveSquadCache = localCache;
@@ -2559,7 +2649,7 @@ function formatCostDelta(delta) {
 }
 
 function persistTransferLog() {
-  try { localStorage.setItem('ff_transfer_log', JSON.stringify(_transferLog)); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_transfer_log'), JSON.stringify(_transferLog)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_transfer_log').upsert('main', { entries: _transferLog }).catch(() => {
       console.error('Transfer log saved locally but failed to sync to Supabase.');
@@ -2569,7 +2659,7 @@ function persistTransferLog() {
 
 function loadTransferLogFromCache() {
   try {
-    const raw = localStorage.getItem('ff_transfer_log');
+    const raw = localStorage.getItem(scopedKey('ff_transfer_log'));
     if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) _transferLog = parsed; }
   } catch (e) {}
   renderTransferList();
@@ -2584,7 +2674,7 @@ async function pullRemoteTransferLog() {
     (_transferLog || []).forEach(t => { merged[t.id] = t; });
     remote.data.entries.forEach(t => { merged[t.id] = t; }); // remote wins on id conflict
     _transferLog = Object.values(merged);
-    try { localStorage.setItem('ff_transfer_log', JSON.stringify(_transferLog)); } catch (e) {}
+    try { localStorage.setItem(scopedKey('ff_transfer_log'), JSON.stringify(_transferLog)); } catch (e) {}
     renderTransferList();
   } catch (e) { console.error('Transfer log pull from Supabase failed:', e); }
 }
@@ -3302,7 +3392,7 @@ function renderExternalChecksSection() {
 }
 
 function persistExternalChecks() {
-  try { localStorage.setItem('ff_external_check', JSON.stringify({ checks: _externalChecks })); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_external_check'), JSON.stringify({ checks: _externalChecks })); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_external_check').upsert('main', { checks: _externalChecks }).catch(() => {
       console.error('External checks saved locally but failed to sync to Supabase.');
@@ -3312,7 +3402,7 @@ function persistExternalChecks() {
 
 function loadExternalChecksFromCache() {
   try {
-    const raw = localStorage.getItem('ff_external_check');
+    const raw = localStorage.getItem(scopedKey('ff_external_check'));
     if (raw) {
       const parsed = JSON.parse(raw);
       _externalChecks = Array.isArray(parsed.checks) ? parsed.checks : (Array.isArray(parsed) ? parsed : []);
@@ -3334,7 +3424,7 @@ async function pullRemoteExternalCheck() {
       if (!merged[c.aiSource] || (c.importedAt || 0) > (merged[c.aiSource].importedAt || 0)) merged[c.aiSource] = c;
     });
     _externalChecks = Object.values(merged);
-    try { localStorage.setItem('ff_external_check', JSON.stringify({ checks: _externalChecks })); } catch (e) {}
+    try { localStorage.setItem(scopedKey('ff_external_check'), JSON.stringify({ checks: _externalChecks })); } catch (e) {}
     renderExternalChecksSection();
   } catch (e) { console.error('External check pull from Supabase failed:', e); }
 }
@@ -4348,7 +4438,7 @@ function renderAdvice(data) {
 }
 
 function persistScoreHistory(history) {
-  try { localStorage.setItem('ff_score_history', JSON.stringify(history)); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_score_history'), JSON.stringify(history)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_score_history').upsert('main', { history: history }).catch(() => {
       console.error('Score history saved locally but failed to sync to Supabase.');
@@ -4358,7 +4448,7 @@ function persistScoreHistory(history) {
 
 function loadScoreHistoryLocal() {
   try {
-    const raw = localStorage.getItem('ff_score_history');
+    const raw = localStorage.getItem(scopedKey('ff_score_history'));
     if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) _scoreHistory = parsed; }
   } catch (e) {}
 }
@@ -4374,7 +4464,7 @@ async function pullRemoteScoreHistory() {
         if (!merged[h.gwId] || (h.savedAt || 0) > (merged[h.gwId].savedAt || 0)) merged[h.gwId] = h;
       });
       _scoreHistory = Object.values(merged).sort((a, b) => a.gwId - b.gwId).slice(-6);
-      try { localStorage.setItem('ff_score_history', JSON.stringify(_scoreHistory)); } catch (e) {}
+      try { localStorage.setItem(scopedKey('ff_score_history'), JSON.stringify(_scoreHistory)); } catch (e) {}
     }
   } catch (e) { console.error('Score history pull from Supabase failed:', e); }
 }
@@ -4447,7 +4537,7 @@ function renderAdviceFromCache(cache, label) {
 }
 
 function persistAdviceCache(cache) {
-  try { localStorage.setItem('ff_advice_cache', JSON.stringify(cache)); } catch (e) {}
+  try { localStorage.setItem(scopedKey('ff_advice_cache'), JSON.stringify(cache)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_advice_cache').upsert('main', cache).catch(() => {
       console.error('Advice cache saved locally but failed to sync to Supabase.');
@@ -4457,7 +4547,7 @@ function persistAdviceCache(cache) {
 
 function loadAdviceFromCache() {
   try {
-    const raw = localStorage.getItem('ff_advice_cache');
+    const raw = localStorage.getItem(scopedKey('ff_advice_cache'));
     if (!raw) return;
     renderAdviceFromCache(JSON.parse(raw), 'cached');
   } catch (e) { /* corrupt cache — ignore, user can just click Analyse Squad */ }
@@ -4471,11 +4561,11 @@ async function pullRemoteAdviceCache() {
     const remoteCache = remote.data;
 
     let localCache = null;
-    try { const raw = localStorage.getItem('ff_advice_cache'); if (raw) localCache = JSON.parse(raw); } catch (e) {}
+    try { const raw = localStorage.getItem(scopedKey('ff_advice_cache')); if (raw) localCache = JSON.parse(raw); } catch (e) {}
 
     if (!localCache || (remoteCache.generatedAt || 0) > (localCache.generatedAt || 0)) {
       renderAdviceFromCache(remoteCache, 'synced');
-      try { localStorage.setItem('ff_advice_cache', JSON.stringify(remoteCache)); } catch (e) {}
+      try { localStorage.setItem(scopedKey('ff_advice_cache'), JSON.stringify(remoteCache)); } catch (e) {}
     }
   } catch (e) { console.error('Advice cache pull from Supabase failed:', e); }
 }
@@ -4693,18 +4783,30 @@ async function loadAdvice() {
 }
 
 // ── Boot ───────────────────────────────────────────────────────
+// Per-user cache loaders are deliberately NOT called here, unlike
+// before. They used to run unconditionally, before auth had even
+// started resolving — meaning they read whatever was sitting in
+// plain shared-browser localStorage keys regardless of who was about
+// to sign in. Now they're bundled into loadAllPerUserLocalCaches()
+// and only ever called once the signed-in user is actually known
+// (inside onSession, after migration; inside onNoSession and the
+// no-PalSync fallback too, where scopedKey() naturally falls back to
+// the plain unscoped keys since there's no session to scope by).
 loadPositionBestPref();
 (function syncPosBestBtn() {
   const btn = document.getElementById('posBestToggleBtn');
   if (btn) btn.classList.toggle('active', _showPositionBest);
 })();
-loadLocalSettings();
-loadSquadFromCache();
-loadScoreHistoryLocal();
-loadAdviceFromCache();
-loadTransferLogFromCache();
-loadExternalChecksFromCache();
-loadManualLineupFromCache();
+
+function loadAllPerUserLocalCaches() {
+  loadLocalSettings();
+  loadSquadFromCache();
+  loadScoreHistoryLocal();
+  loadAdviceFromCache();
+  loadTransferLogFromCache();
+  loadExternalChecksFromCache();
+  loadManualLineupFromCache();
+}
 
 if (window.PalSync) {
   PalSync.initSession({
@@ -4723,6 +4825,8 @@ if (window.PalSync) {
         if (overlay) overlay.style.display = 'flex';
         return;
       }
+      migrateLegacyLocalCacheForPete(userId);
+      loadAllPerUserLocalCaches();
       PalSync.table('ff_settings').pull([{ id: 'main', ..._settings }], 'id', 'updated_at').then(result => {
         const remote = result.merged && result.merged[0];
         if (remote) {
@@ -4738,10 +4842,12 @@ if (window.PalSync) {
       pullRemoteManualLineup();
     },
     onNoSession: function () {
+      loadAllPerUserLocalCaches();
       safeToast('Not connected — showing local data only', 'err');
     }
   });
 } else {
+  loadAllPerUserLocalCaches();
   console.error('pal-sync.js did not load — PalSync is missing. Settings will work locally but will not sync.');
   safeToast('Sync unavailable — pal-sync.js did not load', 'err');
 }
