@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.35</title>
+<title>Fantasy Football Tracker v1.36</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -141,6 +141,13 @@
   .fdr-chip.medium { background: rgba(255,166,87,.15); color: var(--accent5); }
   .fdr-chip.hard { background: rgba(247,129,102,.15); color: var(--accent3); }
   .fdr-chip.none { background: var(--neutral-bg); color: var(--ink3); }
+  .match-chip {
+    display: block; font-size: 10px; font-weight: 600; margin-top: 2px;
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .match-chip.upcoming { color: var(--ink3); }
+  .match-chip.live { color: var(--accent3); font-weight: 800; }
+  .match-chip.finished { color: var(--ink2); }
   .cap-badge {
     font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px;
     background: var(--accent); color: #06210f; letter-spacing: .02em;
@@ -366,7 +373,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.35</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.36</span></div>
 </nav>
 
 <div class="tabs">
@@ -500,13 +507,39 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.35"></script>
-<script src="pal-sync.js?v=1.35"></script>
-<script src="pal-utils.js?v=1.35"></script>
+<script src="pal-config.js?v=1.36"></script>
+<script src="pal-sync.js?v=1.36"></script>
+<script src="pal-utils.js?v=1.36"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.36 — three pieces of work:
+ *
+ * - Live match scores on Live squad's player cards. Confirmed via
+ *   FPL's own fixture schema that started/finished/team_h_score/
+ *   team_a_score/minutes are all real, already-flowing fields — no
+ *   new proxy route needed, and no Edge Function redeploy either:
+ *   loadSquad() already force-freshes the fixtures fetch on every
+ *   explicit refresh, so this is already as current as the
+ *   architecture gets. New buildMatchStateByTeam()/matchStateChipHtml()
+ *   show 🔴 LIVE with the running score and minute, FT with the final
+ *   score, or the kickoff time and opponent if not yet started.
+ * - Fixed a real gameweek-mismatch bug, reported directly: Live squad
+ *   was showing NEXT gameweek's fixtures (fixtureGW) instead of its
+ *   own already-locked gameweek's (gwId) — the two are genuinely
+ *   different numbers and the wrong one was wired in. Live now builds
+ *   its own matchStateByTeam from gwId specifically; Locked In Squad
+ *   and Advice correctly continue using fixtureGW (the one being
+ *   planned for) as before — that half was already right. Added an
+ *   explicit label wherever fixtures show, in both places, so which
+ *   gameweek's fixtures are on screen is never ambiguous again.
+ * - Delete button added to each imported external check. No
+ *   confirmation dialog — matches the app's own precedent for
+ *   similarly low-stakes, reversible actions (Reset to squad order
+ *   works the same way); deleting only removes the local/synced copy,
+ *   and re-importing the same reply restores it instantly.
  *
  * v1.35 — two pieces of work:
  *
@@ -1383,7 +1416,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.35';
+const FF_VERSION = '1.36';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1541,7 +1574,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.35',
+    appVersion: '1.36',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1952,7 +1985,7 @@ function positionBestCardHtml(el, team) {
   </div>`;
 }
 
-function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByPos) {
+function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByPos, matchStateByTeam) {
   const dotClass = statusDotClass(el.status);
   const badge = pick.is_captain ? '<span class="cap-badge">C</span>'
               : pick.is_vice_captain ? '<span class="cap-badge vc">VC</span>' : '';
@@ -1968,6 +2001,7 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByP
       <div class="player-info">
         <div class="player-name">${safeEsc(el.web_name)} ${badge}${gwBadge}</div>
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}${statusNote}${multiplierNote}</div>
+        ${matchStateChipHtml(el, matchStateByTeam)}
         ${pointsLineHtml(el, maxPointsByPos)}
       </div>
       ${fdrChipHtml(el, nextFixtureByTeam)}
@@ -1993,6 +2027,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   if (_lastLiveSquadCache && _lastLiveSquadCache.teamName) {
     html += '<h2 class="squad-team-name">' + safeEsc(_lastLiveSquadCache.teamName) + '</h2>';
   }
+  const matchStateByTeam = _lastLiveSquadCache ? _lastLiveSquadCache.matchStateByTeam : null;
   const hist = picksData.entry_history;
   if (hist) {
     html += '<div class="stat-boxes-row">' +
@@ -2001,6 +2036,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
       '<div class="stat-box"><div class="stat-label">Total Points</div><div class="stat-value">' + (hist.total_points != null ? hist.total_points : '—') + '</div></div>' +
       '</div>';
   }
+  html += '<div class="sub" style="padding:0 16px 8px">⚽ Fixtures and scores below are for Gameweek ' + gwId + ' — this squad\'s own gameweek, not the one being planned next.</div>';
 
   [1, 2, 3, 4].forEach(type => {
     if (!byPosType[type].length) return;
@@ -2011,7 +2047,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
     }
     html += `<div class="player-row">`;
     byPosType[type].forEach(({ el, pick }) => {
-      html += playerCardHtml(el, teamsById[el.team], pick, false, nextFixtureByTeam, maxPointsByPos);
+      html += playerCardHtml(el, teamsById[el.team], pick, false, nextFixtureByTeam, maxPointsByPos, matchStateByTeam);
     });
     html += `</div>`;
   });
@@ -2019,7 +2055,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   html += `<div class="bench-divider">Bench</div><div class="player-row">`;
   bench.forEach(p => {
     const el = elementsById[p.element];
-    if (el) html += playerCardHtml(el, teamsById[el.team], p, true, nextFixtureByTeam, maxPointsByPos);
+    if (el) html += playerCardHtml(el, teamsById[el.team], p, true, nextFixtureByTeam, maxPointsByPos, matchStateByTeam);
   });
   html += `</div>`;
 
@@ -2080,9 +2116,16 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId, teamName) 
   // the LIVE gameweek's own, already-passed deadline; this is the
   // upcoming one that actually still matters for a transfer decision).
   const nextGwEvent = (bootstrap.events || []).find(e => e.id === fixtureGW);
+  // gwId's own match state (score/live/kickoff) — deliberately a
+  // separate lookup from nextFixtureByTeam above: that one is for
+  // fixtureGW (the NEXT/planning gameweek, used for FDR/difficulty
+  // when deciding transfers), this one is for gwId (the gameweek
+  // actually shown in Live squad — already locked, so what matters
+  // now is how it went, not how hard it looked in advance).
+  const matchStateByTeam = buildMatchStateByTeam(fixtures, teamsById, gwId);
   return {
     elements, teams, picksData, gwId, nextGwId: fixtureGW, nextGwDeadline: nextGwEvent ? nextGwEvent.deadline_time : null,
-    teamName: teamName || null,
+    teamName: teamName || null, matchStateByTeam,
     nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION
   };
 }
@@ -2444,6 +2487,7 @@ function renderInteractiveLockedInSquad(elements, teams, picksData, gwId, nextFi
     '<div class="stat-box"><div class="stat-label">Transfers</div><div class="stat-value">' + (transferCount || 0) + '</div></div>' +
     '</div>';
 
+  html += '<div class="sub" style="padding:0 16px 4px">⚽ Fixtures shown below are for Gameweek ' + gwId + ' — the one you\'re planning for, not the one already played.</div>';
   html += '<div class="sub" style="padding:0 16px 8px">Tap ⇄ on a starter, then ⇄ on a bench player to bring them on. C/V set captaincy.' +
     ' <button class="sub-btn" style="margin-left:6px" onclick="resetManualLineup(' + gwId + ', _lastLockedInBasePicks)">Reset to squad order</button></div>';
 
@@ -3461,6 +3505,20 @@ function importExternalCheck() {
   }
 }
 
+// No confirmation dialog — matches the app's own precedent for
+// similarly low-stakes, easily-reversible actions (Reset to squad
+// order works the same way). Deleting an import is never destructive
+// in any lasting sense: nothing but the local/synced copy of the
+// check itself is affected, and re-importing the same reply (still
+// sitting in the chat it came from) restores it instantly.
+function deleteExternalCheck(aiSource, event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  _externalChecks = (_externalChecks || []).filter(c => c.aiSource !== aiSource);
+  persistExternalChecks();
+  renderExternalChecksSection();
+  safeToast('Deleted');
+}
+
 function renderExternalChecksSection() {
   const container = document.getElementById('extCheckSection');
   if (!container) return;
@@ -3487,7 +3545,9 @@ function renderExternalChecksSection() {
     const isOpen = openState.hasOwnProperty(ec.aiSource) ? openState[ec.aiSource] : true;
 
     html += '<details class="explainer" style="margin-bottom:10px" data-ai-source="' + safeEsc(ec.aiSource) + '"' + (isOpen ? ' open' : '') + '>';
-    html += '<summary>🔎 ' + safeEsc(label) + ' — imported ' + ageText + (ec.forGameweek != null ? ', for Gameweek ' + ec.forGameweek : '') + '</summary>';
+    html += '<summary>🔎 ' + safeEsc(label) + ' — imported ' + ageText + (ec.forGameweek != null ? ', for Gameweek ' + ec.forGameweek : '') +
+      '<button class="sub-btn" style="float:right" onclick="deleteExternalCheck(\'' + safeEsc(ec.aiSource) + '\', event)" title="Delete this check">🗑️ Delete</button>' +
+      '</summary>';
     html += '<div style="padding-top:8px">';
     if (ec.confirmedSquadBasis) {
       html += '<div class="sub" style="margin-bottom:8px">Based on: <strong>' + safeEsc(ec.confirmedSquadBasis) + '</strong></div>';
@@ -3828,6 +3888,51 @@ function buildNextFixtureByTeam(fixtures, teamsById, nextGW) {
     byTeam[f.team_a] = { opponentId: f.team_h, opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false, difficulty: f.team_a_difficulty };
   });
   return byTeam;
+}
+
+// Confirmed via FPL's own fixture schema that started/finished/
+// team_h_score/team_a_score/minutes are all real fields — started
+// goes true at kickoff, team_*_score fills in and updates as the
+// match progresses, finished goes true at full time. loadSquad()
+// already force-freshes the fixtures fetch on every explicit refresh
+// (Load Squad / Sync from FPL), so this is already as current as the
+// architecture gets — "live" here means current as of your last
+// refresh, not auto-updating without one, matching the same on-load-
+// pull-is-sufficient approach already established for this app (no
+// background polling, same as Fortnight Tracker; see
+// architecture-principles.md). Unlike buildNextFixtureByTeam, this
+// deliberately does NOT filter out finished fixtures — showing the
+// final score after the fact is exactly the point.
+function buildMatchStateByTeam(fixtures, teamsById, targetGw) {
+  const byTeam = {};
+  (fixtures || []).filter(f => f.event === targetGw).forEach(f => {
+    const homeTeam = teamsById[f.team_h], awayTeam = teamsById[f.team_a];
+    byTeam[f.team_h] = {
+      opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true,
+      started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0,
+      ownScore: f.team_h_score, oppScore: f.team_a_score, kickoffTime: f.kickoff_time
+    };
+    byTeam[f.team_a] = {
+      opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false,
+      started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0,
+      ownScore: f.team_a_score, oppScore: f.team_h_score, kickoffTime: f.kickoff_time
+    };
+  });
+  return byTeam;
+}
+
+function matchStateChipHtml(el, matchStateByTeam) {
+  const m = matchStateByTeam ? matchStateByTeam[el.team] : null;
+  if (!m) return '';
+  const vsText = 'vs ' + safeEsc(m.opponentName) + ' (' + (m.isHome ? 'H' : 'A') + ')';
+  if (m.finished) {
+    return '<span class="match-chip finished">FT ' + m.ownScore + '-' + m.oppScore + ' ' + vsText + '</span>';
+  }
+  if (m.started) {
+    return '<span class="match-chip live">🔴 LIVE ' + m.ownScore + '-' + m.oppScore + ' ' + vsText + ' (' + m.minutes + '\')</span>';
+  }
+  const kickoffText = formatDeadline(m.kickoffTime);
+  return '<span class="match-chip upcoming">' + (kickoffText || 'Not yet scheduled') + ' ' + vsText + '</span>';
 }
 
 function buildFixtureDifficultyMap(fixtures, fromGW, windowSize) {
@@ -4232,6 +4337,7 @@ function explainerHtml() {
     '<p><strong>Export staleness prevention:</strong> generating an export prompt uses the gameweek from your most recent squad load, not just the last time Advice happened to be run — if those two have drifted apart (a deadline passed since you last analysed), generating a prompt is blocked with a one-click fix (re-run Analyse Squad) rather than silently baking in a stale gameweek the AI would then dutifully echo back. A separately old squad CACHE (you haven\'t synced from FPL in a while) gets a warning instead of a block, since that\'s a heuristic, not a certainty. The prompt itself also asks the AI to sanity-check today\'s date against the given deadline before doing anything else, and flag it if a newer gameweek looks like it\'s probably already current — surfaced both as an immediate message the moment you import, and persistently in that check\'s own section here, not just a one-time toast easy to miss.</p>' +
     '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. Gameweek-scoped: only a check whose forGameweek exactly matches the NEXT gameweek — the actionable one any transfer, captain or team-news decision is actually about, in both Live and Locked In Squad mode — gets used; a check imported for Gameweek 5 is completely ignored once planning has moved to Gameweek 6, rather than silently continuing to influence an analysis it was never actually about. This deliberately isn\'t the already-locked gameweek Live mode\'s squad display shows — that squad can\'t be changed any more, so team news about it isn\'t actionable either; the FROM/TO header above already makes this same distinction for transfer suggestions. If nothing active exists but something older IS imported, the summary says so explicitly rather than looking indistinguishable from "nothing was ever imported" — the External tab itself still shows every import regardless, stale ones included, with their own staleness warning; the filtering only governs what the analysis acts on. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
     '<p><strong>Bench order</strong> in Recommended Team is a suggested fallback priority, not a claim of exactly matching FPL\'s own auto-substitution logic (which also depends on formation validity at kickoff, something this doesn\'t simulate). Outfield reserves are ranked by score — best fallback first — with the bench goalkeeper placed last regardless of score, since a bench GK only ever comes on if the starting keeper doesn\'t play, a materially rarer event than an outfield sub, so ranking it against outfield scores wouldn\'t mean much.</p>' +
+    '<p><strong>Live match scores</strong> on Live squad\'s player cards are as current as your last refresh (Load Squad / Sync from FPL) — not auto-updating on their own, since this app doesn\'t poll in the background. 🔴 LIVE shows the running score and minute; FT shows the final score; anything not yet kicked off shows the time and opponent instead. These are specifically the already-LOCKED gameweek\'s own fixtures — Locked In Squad and Advice show the NEXT gameweek\'s fixtures instead (the one transfer and captain decisions actually affect), each labelled so which is which is never ambiguous.</p>' +
     '<p><strong>Substitutions</strong> in the Locked In Squad view are a genuinely separate layer from transfers — transfers decide WHICH 15 players are in the squad, substitutions decide WHICH 11 of those 15 start, in what order the other 4 would come on, and who\'s captain/vice. Tap ⇄ on a starter then ⇄ on a bench player to swap them; C/V set the armband. A goalkeeper can only swap with the bench goalkeeper (a squad always needs exactly 1 starting one); an outfield swap can cross DEF/MID/FWD lines same as the real FPL app, but is checked against a legal formation (3-5 DEF, 2-5 MID, 1-3 FWD) first — an invalid swap is rejected outright, nothing partial happens. Advice\'s Locked In Squad analysis reads this exact lineup — not its own independent suggestion — for which captain and starting XI it\'s reporting on, so "Your captain" there always matches what\'s actually set in Squad; the separate "Recommended team" section still shows the algorithm\'s own best-XI-from-all-15 opinion alongside it, since comparing the two is the point, not replacing one with the other.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
     '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
@@ -4454,7 +4560,7 @@ function renderAdvice(data) {
   if (!isPlannedMode && fixtureGW != null && gwId != null && fixtureGW !== gwId) {
     const headerDeadlineText = formatDeadline(currentPlanningGwDeadline());
     html += '<div class="sub" style="padding:0 16px 10px">Squad shown is your locked <strong>Gameweek ' + gwId +
-      '</strong> team · any transfer suggestion below is for <strong>Gameweek ' + fixtureGW + '</strong>, the next one it can actually take effect for' +
+      '</strong> team · any transfer suggestion — and any fixture shown — below is for <strong>Gameweek ' + fixtureGW + '</strong>, the next one it can actually take effect for' +
       (headerDeadlineText ? ' (deadline: ' + headerDeadlineText + ')' : '') + '.</div>';
   }
 
@@ -4901,7 +5007,8 @@ async function loadAdvice() {
         }
         banner += '</div>';
       }
-      document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', banner);
+      const fixtureNote = '<div class="sub" style="padding:0 16px 10px">⚽ Any fixture shown below is for Gameweek ' + projectionInfo.gwId + ' — the one being planned for.</div>';
+      document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', banner + fixtureNote);
       document.getElementById('adviceMeta').textContent = projectionInfo.appliedSwaps.length
         ? 'LOCKED IN SQUAD for Gameweek ' + gwId + ' (from Gameweek ' + projectionInfo.baseGwId + ') · Analysed just now'
         : 'Gameweek ' + projectionInfo.baseGwId + ' squad · no transfers recorded yet · Analysed just now';
