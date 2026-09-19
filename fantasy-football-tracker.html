@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.34</title>
+<title>Fantasy Football Tracker v1.35</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -154,6 +154,7 @@
   .gw-pts-badge.zero { background: var(--neutral-bg); color: var(--ink3); }
   .gw-pts-badge.neg { background: rgba(247,129,102,.15); color: var(--accent3); }
 
+  .squad-team-name { font-size: 17px; font-weight: 700; color: var(--ink); padding: 14px 16px 0; }
   .stat-boxes-row { display: flex; gap: 8px; padding: 12px 16px 4px; flex-wrap: wrap; }
   .stat-box {
     flex: 1; min-width: 88px; background: var(--surface); border: 1px solid var(--border);
@@ -365,7 +366,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.34</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.35</span></div>
 </nav>
 
 <div class="tabs">
@@ -499,13 +500,35 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.34"></script>
-<script src="pal-sync.js?v=1.34"></script>
-<script src="pal-utils.js?v=1.34"></script>
+<script src="pal-config.js?v=1.35"></script>
+<script src="pal-sync.js?v=1.35"></script>
+<script src="pal-utils.js?v=1.35"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.35 — two pieces of work:
+ *
+ * - Reported directly: Lex's launcher dashcard showed nothing, even
+ *   after opening the app. Root cause was in index.html, not this
+ *   file: v1.33's per-user cache scoping (ff_squad_cache became
+ *   ff_squad_cache_u_<uid>) fixed a real cross-user leak, but the
+ *   launcher's statFantasy() was never updated to match — it kept
+ *   reading the bare key, which nothing writes to any more, for
+ *   ANYONE, not just Lex. Fixed there. Also added an FF_DATA_UPDATED
+ *   broadcast on every squad save, matching the same pattern every
+ *   other app in the suite already uses (GYM_DATA_UPDATED etc.), so
+ *   the card updates the moment a squad loads rather than only on
+ *   next sign-in or home-screen return.
+ * - Team name pulled through as a header on the Squad section (both
+ *   Live and Locked In Squad views). Confirmed the /entry/:id proxy
+ *   route already existed (no Edge Function changes needed) and
+ *   confirmed via search that its name field is the actual FPL team
+ *   name, distinct from player_first_name/player_last_name (the
+ *   manager's own name), before building on it. Fetched fault-
+ *   tolerantly alongside the picks fetch — a failure here is cosmetic
+ *   (no header shows) and can never fail the squad load itself.
  *
  * v1.34 — reported directly: an imported external check came back
  * "for Gameweek 5" when planning had already moved to Gameweek 6.
@@ -1360,7 +1383,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.34';
+const FF_VERSION = '1.35';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1518,7 +1541,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.34',
+    appVersion: '1.35',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -1967,6 +1990,9 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   });
 
   let html = '';
+  if (_lastLiveSquadCache && _lastLiveSquadCache.teamName) {
+    html += '<h2 class="squad-team-name">' + safeEsc(_lastLiveSquadCache.teamName) + '</h2>';
+  }
   const hist = picksData.entry_history;
   if (hist) {
     html += '<div class="stat-boxes-row">' +
@@ -2032,7 +2058,7 @@ function buildPositionBests(allElements) {
 // buildNextFixtureByTeam unable to resolve some opponents' names
 // (showed "?"). The full team list is only 20 small objects, so
 // there's no real cost to keeping all of it.
-function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
+function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId, teamName) {
   const { best, maxPointsByPos } = buildPositionBests(bootstrap.elements);
   const pickedIds = new Set(picksData.picks.map(p => p.element));
   const keepIds = new Set(pickedIds);
@@ -2056,6 +2082,7 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId) {
   const nextGwEvent = (bootstrap.events || []).find(e => e.id === fixtureGW);
   return {
     elements, teams, picksData, gwId, nextGwId: fixtureGW, nextGwDeadline: nextGwEvent ? nextGwEvent.deadline_time : null,
+    teamName: teamName || null,
     nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION
   };
 }
@@ -2070,6 +2097,11 @@ function persistSquadCache(cache) {
       console.error('Squad cache saved locally but failed to sync to Supabase.');
     });
   }
+  // Tells the launcher (if this app is running inside it) to refresh
+  // its dashcard right now, same pattern every other app in the suite
+  // already uses (GYM_DATA_UPDATED, RT_DATA_UPDATED, etc.) — otherwise
+  // the card only updates on the next sign-in or home-screen return.
+  try { window.parent.postMessage({ type: 'FF_DATA_UPDATED' }, window.location.origin); } catch (e) {}
 }
 
 function renderFromCacheObject(cache, label) {
@@ -2402,7 +2434,11 @@ function renderInteractiveLockedInSquad(elements, teams, picksData, gwId, nextFi
   starting.forEach(p => { const el = elementsById[p.element]; if (el) byPosType[el.element_type].push({ el, pick: p }); });
 
   const deadlineText = formatDeadline(currentPlanningGwDeadline());
-  let html = '<div class="stat-boxes-row">' +
+  let html = '';
+  if (_lastLiveSquadCache && _lastLiveSquadCache.teamName) {
+    html += '<h2 class="squad-team-name">' + safeEsc(_lastLiveSquadCache.teamName) + '</h2>';
+  }
+  html += '<div class="stat-boxes-row">' +
     '<div class="stat-box"><div class="stat-label">Next Gameweek</div><div class="stat-value">' + gwId + '</div></div>' +
     '<div class="stat-box"><div class="stat-label">Deadline</div><div class="stat-value" style="font-size:13px">' + (deadlineText || '—') + '</div></div>' +
     '<div class="stat-box"><div class="stat-label">Transfers</div><div class="stat-value">' + (transferCount || 0) + '</div></div>' +
@@ -2530,7 +2566,20 @@ async function loadSquad() {
 
     if (!picksData.picks || !picksData.picks.length) throw new Error('No picks returned for gameweek ' + gwId);
 
-    const cache = buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId);
+    // Team name is cosmetic (a header, not anything the analysis
+    // depends on) — fetched fault-tolerantly so a hiccup here never
+    // fails the whole squad load; worst case, no header shows and
+    // everything else works exactly as before.
+    let teamName = null;
+    try {
+      const entryRes = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId), { headers: proxyHeaders(true) });
+      if (entryRes.ok) {
+        const entryData = await entryRes.json();
+        teamName = entryData && entryData.name ? entryData.name : null;
+      }
+    } catch (e) { /* cosmetic only — squad load continues regardless */ }
+
+    const cache = buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId, teamName);
     _lastLiveSquadCache = cache;
     refreshSquadDisplay();
     persistSquadCache(cache);
