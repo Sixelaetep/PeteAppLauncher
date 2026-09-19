@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.33</title>
+<title>Fantasy Football Tracker v1.34</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -365,7 +365,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.33</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.34</span></div>
 </nav>
 
 <div class="tabs">
@@ -499,13 +499,46 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.33"></script>
-<script src="pal-sync.js?v=1.33"></script>
-<script src="pal-utils.js?v=1.33"></script>
+<script src="pal-config.js?v=1.34"></script>
+<script src="pal-sync.js?v=1.34"></script>
+<script src="pal-utils.js?v=1.34"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.34 — reported directly: an imported external check came back
+ * "for Gameweek 5" when planning had already moved to Gameweek 6.
+ * Root cause: generateExportPrompt() used rd.gwId from the last
+ * Advice RUN, not the current squad state — if Pete generated an
+ * export without re-running Advice first, and a deadline had passed
+ * in between, the export silently baked in a stale gameweek number.
+ * The AI then correctly echoed back what it was told, and the v1.32
+ * fix correctly excluded it as stale on import — technically right,
+ * but a wasted round trip through an AI chat that should never have
+ * happened.
+ *
+ * Caught one instance of the exact v1.32 bug pattern recurring in this
+ * fix's own first draft: compared rd.gwId (mode-dependent — the
+ * already-locked gameweek in Live mode) against currentPlanningGw()
+ * (always the planning gameweek), which would have wrongly blocked
+ * every single Live-mode export. Fixed to compare against rd.fixtureGW
+ * instead, the same consistent-across-both-modes field v1.32 already
+ * established, caught before shipping by the same kind of end-to-end
+ * test that caught the original bug.
+ *
+ * Fixed with three layers: generateExportPrompt() now uses
+ * currentPlanningGw() (freshest available) and BLOCKS with a one-click
+ * fix (re-run Analyse Squad) if it disagrees with the last analysis —
+ * a known, certain problem, not a guess. A separately old squad CACHE
+ * gets a warning instead of a block (a heuristic, not a certainty —
+ * no prompt wording fixes genuinely stale local data, only an actual
+ * re-sync does). The prompt itself (schema v4) now includes
+ * forGameweekDeadline and asks the AI to sanity-check today's date
+ * against it before doing anything else, setting a new
+ * gameweekMismatchSuspected flag if a newer gameweek looks likely —
+ * surfaced immediately on import (not just a quiet later badge) and
+ * persistently in that check's own section in the External tab.
  *
  * v1.33 — reported directly: Lex's Settings tab showed Pete's real FPL
  * entry ID. Root cause was architectural, not cosmetic: every per-user
@@ -1327,7 +1360,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.33';
+const FF_VERSION = '1.34';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1485,7 +1518,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.33',
+    appVersion: '1.34',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -3145,6 +3178,39 @@ function generateExportPrompt() {
     return;
   }
   const rd = _lastAdviceRenderData;
+
+  // rd.fixtureGW (not rd.gwId — gwId means something different by mode,
+  // the already-locked gameweek in Live mode specifically, the same
+  // distinction the v1.32 fix already had to make for the analysis
+  // filter) is frozen at whatever gameweek was current the last time
+  // Advice was actually RUN — if that was a while ago and a deadline
+  // has since passed without Pete re-running Advice, exporting it
+  // as-is silently tells the AI the WRONG gameweek. Its reply then
+  // gets correctly excluded as stale the moment it's imported (the
+  // v1.32 fix) — technically correct, but a frustrating, avoidable
+  // round trip through an AI chat for nothing. currentPlanningGw()
+  // reflects whatever the LAST SQUAD LOAD actually said, which is
+  // always at least as fresh as (usually fresher than) the last
+  // Advice run, so it's the authoritative answer to "what gameweek is
+  // this actually for" — a mismatch here is a known, certain problem
+  // with a one-click fix, so this blocks rather than just warning.
+  const freshGwId = currentPlanningGw();
+  if (freshGwId != null && rd.fixtureGW != null && freshGwId !== rd.fixtureGW) {
+    safeToast('Your last analysis was for Gameweek ' + rd.fixtureGW + ', but your squad is now on Gameweek ' + freshGwId + ' — re-run Analyse Squad first so the export matches.', 'err');
+    return;
+  }
+  const exportGwId = freshGwId != null ? freshGwId : rd.fixtureGW;
+
+  // The squad cache ITSELF can go stale if Pete hasn't reloaded in a
+  // while — no amount of prompt wording fixes that, only an actual
+  // fresh sync does. This is a heuristic (an old cache MIGHT still be
+  // perfectly correct if nothing's actually changed), not a certain
+  // problem like the mismatch above, so it warns rather than blocks.
+  const cacheAgeHours = (_lastLiveSquadCache && _lastLiveSquadCache.cachedAt) ? (Date.now() - _lastLiveSquadCache.cachedAt) / 3600000 : null;
+  if (cacheAgeHours != null && cacheAgeHours > 36) {
+    safeToast('Your squad data is over ' + Math.floor(cacheAgeHours / 24) + ' day(s) old — worth clicking Sync from FPL first in case the gameweek has moved on since.', 'err');
+  }
+
   const squad = rd.picks.map(p => {
     const el = rd.elementsById[p.element];
     return el ? { id: el.id, name: el.web_name, team: teamShortNameFor(el.team), position: POSITION_SHORT[el.element_type] } : null;
@@ -3152,13 +3218,14 @@ function generateExportPrompt() {
   const priorityPlayers = buildPriorityPlayers(rd);
 
   const squadBasis = rd.isPlannedMode
-    ? 'Locked In Squad for Gameweek ' + rd.gwId + ' (your real squad with active transfers applied — some may not be visible via FPL\'s API yet)'
-    : 'Live squad for Gameweek ' + rd.gwId + ' (as FPL\'s API currently shows it)';
+    ? 'Locked In Squad for Gameweek ' + exportGwId + ' (your real squad with active transfers applied — some may not be visible via FPL\'s API yet)'
+    : 'Live squad for Gameweek ' + exportGwId + ' (as FPL\'s API currently shows it)';
 
   const payload = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: new Date().toISOString(),
-    forGameweek: rd.gwId,
+    forGameweek: exportGwId,
+    forGameweekDeadline: currentPlanningGwDeadline(),
     squadBasis,
     currentCaptain: rd.captain ? rd.captain.web_name : null,
     squad,
@@ -3189,11 +3256,13 @@ function generateExportPrompt() {
 // second look justifies.
 function buildExportPromptText(payload) {
   const schema = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     aiSource: 'claude | chatgpt | gemini | other — which AI is generating this reply',
     generatedAt: 'ISO timestamp',
     forGameweek: payload.forGameweek,
     confirmedSquadBasis: 'repeat back the squadBasis string from my situation above, so I can see this reply was actually based on it',
+    gameweekMismatchSuspected: 'boolean — see step 0 below',
+    gameweekMismatchNote: 'string, only if gameweekMismatchSuspected is true — a sentence explaining why',
     players: [{
       id: 'number, must match an id from priorityPlayers above',
       name: 'string',
@@ -3226,6 +3295,7 @@ function buildExportPromptText(payload) {
     '```',
     '',
     '## What to do',
+    '0. Sanity-check the gameweek before anything else: forGameweekDeadline above is when Gameweek ' + payload.forGameweek + ' actually locks. Compare it to today\'s real date (use a web search if you\'re not confident what today\'s date is). If that deadline looks like it was already MORE than a day or so in the past, a newer gameweek has almost certainly become current since this was generated, and everything below may be stale — set gameweekMismatchSuspected to true, explain briefly in gameweekMismatchNote, and still do your best with the research below rather than refusing, since a flagged-but-completed reply is more useful to me than none at all. If the deadline is today, upcoming, or only slightly in the past, set it to false and proceed normally.',
     '1. For each entry in priorityPlayers above, search for genuinely current team news: press conference reports, official club statements, and mainstream sports journalism (BBC Sport, Sky Sports, The Athletic, the club\'s own site). Do NOT use paywalled fantasy-football-specific predicted-lineup services (Fantasy Football Scout and similar) even if you find references to them in search results — stick to primary/official reporting that anyone can verify.',
     '2. For each, assess separately: fitnessStatus (are they actually fit) and startLikelihood (will they actually START — a fit player can still be rotated or tactically benched, so this is a genuinely different question from fitness).',
     '3. Set confidence based on source quality and recency — an official team statement from the last 24-48h is HIGH; a vague pundit guess or anything more than 5 days old is LOW regardless of how it reads.',
@@ -3320,7 +3390,26 @@ function importExternalCheck() {
   persistExternalChecks();
   document.getElementById('importCheckBox').value = '';
   renderExternalChecksSection();
-  safeToast('Imported from ' + AI_SOURCE_LABELS[aiSource] + ' — ' + parsed.players.length + ' player note' + (parsed.players.length === 1 ? '' : 's'));
+
+  // Immediate, prominent feedback rather than only the quiet staleness
+  // badge further down the External tab — the whole point of exporting
+  // and importing is to act on this promptly, so if it's already not
+  // going to be used, Pete should hear that right now, not discover it
+  // later when Advice silently didn't apply it. Two independent
+  // signals, checked separately since they catch different things:
+  // the app's own comparison against what it currently considers the
+  // planning gameweek (certain, mechanical), and the AI's own
+  // self-flagged date sanity-check from the prompt's step 0 (a softer
+  // signal — it can be wrong, but it's still worth surfacing).
+  const planningGw = currentPlanningGw();
+  const mismatchedGw = planningGw != null && parsed.forGameweek != null && parsed.forGameweek !== planningGw;
+  if (mismatchedGw) {
+    safeToast('Imported, but this is for Gameweek ' + parsed.forGameweek + ' — you\'re now on Gameweek ' + planningGw + ', so it won\'t be used until you export and import a fresh one.', 'err');
+  } else if (parsed.gameweekMismatchSuspected) {
+    safeToast('Imported — but ' + AI_SOURCE_LABELS[aiSource] + ' itself flagged a possible gameweek mismatch: ' + (parsed.gameweekMismatchNote || 'see its notes') + '. Worth a fresh export if in doubt.', 'err');
+  } else {
+    safeToast('Imported from ' + AI_SOURCE_LABELS[aiSource] + ' — ' + parsed.players.length + ' player note' + (parsed.players.length === 1 ? '' : 's'));
+  }
 }
 
 function renderExternalChecksSection() {
@@ -3358,6 +3447,9 @@ function renderExternalChecksSection() {
     }
     if (isStale) {
       html += '<div class="ext-check-banner">⚠️ This check was for Gameweek ' + ec.forGameweek + ', but you\'re now planning for Gameweek ' + planningGw + ' — it\'s likely out of date.</div>';
+    }
+    if (ec.gameweekMismatchSuspected) {
+      html += '<div class="ext-check-banner">⚠️ ' + safeEsc(label) + ' itself flagged a possible gameweek mismatch when this was generated: ' + safeEsc(ec.gameweekMismatchNote || 'no further detail given') + '</div>';
     }
     if (!ec.players.length) {
       html += '<div class="sub">No new information was found for any flagged player at import time.</div>';
@@ -4088,6 +4180,7 @@ function explainerHtml() {
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
     '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for.</p>' +
     '<p><strong>"No transfer recorded" / "Already planned" / "Conflicts with a recorded plan"</strong> — every suggested transfer is checked against the Transfer log for an existing planned or locked-in entry on the same OUT player, so a suggestion never silently repeats something you\'ve already decided, and a genuine disagreement (you\'ve recorded a different IN player than this analysis currently rates highest) is flagged rather than hidden. The squad shown is always your last LOCKED gameweek; any transfer suggestion is for the NEXT one, since that\'s the only gameweek a transfer made now can actually take effect for — both are labelled explicitly when they differ.</p>' +
+    '<p><strong>Export staleness prevention:</strong> generating an export prompt uses the gameweek from your most recent squad load, not just the last time Advice happened to be run — if those two have drifted apart (a deadline passed since you last analysed), generating a prompt is blocked with a one-click fix (re-run Analyse Squad) rather than silently baking in a stale gameweek the AI would then dutifully echo back. A separately old squad CACHE (you haven\'t synced from FPL in a while) gets a warning instead of a block, since that\'s a heuristic, not a certainty. The prompt itself also asks the AI to sanity-check today\'s date against the given deadline before doing anything else, and flag it if a newer gameweek looks like it\'s probably already current — surfaced both as an immediate message the moment you import, and persistently in that check\'s own section here, not just a one-time toast easy to miss.</p>' +
     '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. Gameweek-scoped: only a check whose forGameweek exactly matches the NEXT gameweek — the actionable one any transfer, captain or team-news decision is actually about, in both Live and Locked In Squad mode — gets used; a check imported for Gameweek 5 is completely ignored once planning has moved to Gameweek 6, rather than silently continuing to influence an analysis it was never actually about. This deliberately isn\'t the already-locked gameweek Live mode\'s squad display shows — that squad can\'t be changed any more, so team news about it isn\'t actionable either; the FROM/TO header above already makes this same distinction for transfer suggestions. If nothing active exists but something older IS imported, the summary says so explicitly rather than looking indistinguishable from "nothing was ever imported" — the External tab itself still shows every import regardless, stale ones included, with their own staleness warning; the filtering only governs what the analysis acts on. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
     '<p><strong>Bench order</strong> in Recommended Team is a suggested fallback priority, not a claim of exactly matching FPL\'s own auto-substitution logic (which also depends on formation validity at kickoff, something this doesn\'t simulate). Outfield reserves are ranked by score — best fallback first — with the bench goalkeeper placed last regardless of score, since a bench GK only ever comes on if the starting keeper doesn\'t play, a materially rarer event than an outfield sub, so ranking it against outfield scores wouldn\'t mean much.</p>' +
     '<p><strong>Substitutions</strong> in the Locked In Squad view are a genuinely separate layer from transfers — transfers decide WHICH 15 players are in the squad, substitutions decide WHICH 11 of those 15 start, in what order the other 4 would come on, and who\'s captain/vice. Tap ⇄ on a starter then ⇄ on a bench player to swap them; C/V set the armband. A goalkeeper can only swap with the bench goalkeeper (a squad always needs exactly 1 starting one); an outfield swap can cross DEF/MID/FWD lines same as the real FPL app, but is checked against a legal formation (3-5 DEF, 2-5 MID, 1-3 FWD) first — an invalid swap is rejected outright, nothing partial happens. Advice\'s Locked In Squad analysis reads this exact lineup — not its own independent suggestion — for which captain and starting XI it\'s reporting on, so "Your captain" there always matches what\'s actually set in Squad; the separate "Recommended team" section still shows the algorithm\'s own best-XI-from-all-15 opinion alongside it, since comparing the two is the point, not replacing one with the other.</p>' +
