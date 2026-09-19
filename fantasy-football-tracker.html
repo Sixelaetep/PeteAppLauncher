@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.36</title>
+<title>Fantasy Football Tracker v1.37</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -141,13 +141,21 @@
   .fdr-chip.medium { background: rgba(255,166,87,.15); color: var(--accent5); }
   .fdr-chip.hard { background: rgba(247,129,102,.15); color: var(--accent3); }
   .fdr-chip.none { background: var(--neutral-bg); color: var(--ink3); }
-  .match-chip {
-    display: block; font-size: 10px; font-weight: 600; margin-top: 2px;
-    white-space: nowrap; font-variant-numeric: tabular-nums;
+  .player-fixture-boxes { display: flex; gap: 6px; margin-top: 4px; }
+  .fixture-box {
+    flex: 1; min-width: 0; border-radius: 6px; padding: 4px 7px;
+    border: 1px solid var(--border); background: var(--surface2);
   }
-  .match-chip.upcoming { color: var(--ink3); }
-  .match-chip.live { color: var(--accent3); font-weight: 800; }
-  .match-chip.finished { color: var(--ink2); }
+  .fixture-box-label { font-size: 8px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink3); margin-bottom: 1px; }
+  .fixture-box-value {
+    font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fixture-box-sub { font-size: 9px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fixture-box.good { border-color: var(--accent2); background: rgba(63,185,80,.1); }
+  .fixture-box.good .fixture-box-value { color: var(--accent2); }
+  .fixture-box.bad { border-color: var(--accent3); background: rgba(247,129,102,.1); }
+  .fixture-box.bad .fixture-box-value { color: var(--accent3); }
   .cap-badge {
     font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px;
     background: var(--accent); color: #06210f; letter-spacing: .02em;
@@ -373,7 +381,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.36</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.37</span></div>
 </nav>
 
 <div class="tabs">
@@ -507,13 +515,32 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.36"></script>
-<script src="pal-sync.js?v=1.36"></script>
-<script src="pal-utils.js?v=1.36"></script>
+<script src="pal-config.js?v=1.37"></script>
+<script src="pal-sync.js?v=1.37"></script>
+<script src="pal-utils.js?v=1.37"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.37 — Live squad's player cards redesigned into two clearly
+ * labelled boxes side by side, replacing the single inline match-
+ * state chip and the separate right-side FDR chip:
+ *
+ * - "This week" box: the same live/FT/upcoming match state as before,
+ *   now boxed and colour-coded by a new matchOutcomeSentiment() —
+ *   green for good, red for bad, plain for neutral. Deliberately a
+ *   simple, honest heuristic, not a claim this specific player
+ *   personally contributed: GK/DEF judged on the clean-sheet prize
+ *   (0 conceded = good, 2+ = bad, 1 = neutral — sheet's gone but it's
+ *   not a disaster); MID/FWD judged on their own side scoring (2+ =
+ *   good, a blank AT FULL TIME = bad, anything mid-match with 0-1
+ *   stays neutral rather than judging an unfinished game).
+ * - "Next gameweek" box: the opponent and FDR for the gameweek being
+ *   planned for, sourced from the same fixtureGW data Locked In
+ *   Squad/Advice already use (v1.36) — genuinely new information on
+ *   the Live view specifically, which previously only showed the
+ *   already-locked gameweek's own match state.
  *
  * v1.36 — three pieces of work:
  *
@@ -1416,7 +1443,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.36';
+const FF_VERSION = '1.37';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1574,7 +1601,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.36',
+    appVersion: '1.37',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -2001,10 +2028,12 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByP
       <div class="player-info">
         <div class="player-name">${safeEsc(el.web_name)} ${badge}${gwBadge}</div>
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}${statusNote}${multiplierNote}</div>
-        ${matchStateChipHtml(el, matchStateByTeam)}
+        <div class="player-fixture-boxes">
+          ${thisWeekBoxHtml(el, matchStateByTeam)}
+          ${nextWeekBoxHtml(el, nextFixtureByTeam)}
+        </div>
         ${pointsLineHtml(el, maxPointsByPos)}
       </div>
-      ${fdrChipHtml(el, nextFixtureByTeam)}
       <div class="player-price">${formatPrice(el.now_cost)}</div>
     </div>`;
 }
@@ -3921,18 +3950,56 @@ function buildMatchStateByTeam(fixtures, teamsById, targetGw) {
   return byTeam;
 }
 
-function matchStateChipHtml(el, matchStateByTeam) {
+// A simple, honest heuristic — NOT a claim that this specific player
+// personally contributed, which the match score alone can't tell us.
+// Defensive positions (GK/DEF) are judged on the clean-sheet prize
+// (4pts each): 0 conceded is good, 2+ is bad, 1 sits neutral (clean
+// sheet gone, but not a disaster). Attacking positions (MID/FWD) are
+// judged on their own side scoring, since that's the closer proxy for
+// goal/assist/bonus opportunity: 2+ is good, a blank at full time is
+// bad, anything short of full time with 0-1 stays neutral rather than
+// judging a game that isn't over yet.
+function matchOutcomeSentiment(el, m) {
+  if (!m || m.ownScore == null || m.oppScore == null) return null;
+  const isDefensive = el.element_type === 1 || el.element_type === 2;
+  if (isDefensive) {
+    if (m.oppScore === 0) return 'good';
+    if (m.oppScore >= 2) return 'bad';
+    return 'neutral';
+  }
+  if (m.ownScore >= 2) return 'good';
+  if (m.ownScore === 0 && m.finished) return 'bad';
+  return 'neutral';
+}
+
+function thisWeekBoxHtml(el, matchStateByTeam) {
   const m = matchStateByTeam ? matchStateByTeam[el.team] : null;
-  if (!m) return '';
-  const vsText = 'vs ' + safeEsc(m.opponentName) + ' (' + (m.isHome ? 'H' : 'A') + ')';
+  if (!m) return '<div class="fixture-box"><div class="fixture-box-label">This week</div><div class="fixture-box-value">—</div></div>';
+  const sentiment = matchOutcomeSentiment(el, m) || 'neutral';
+  const vsText = (m.isHome ? 'vs ' : '@ ') + safeEsc(m.opponentName);
+  let valueText;
   if (m.finished) {
-    return '<span class="match-chip finished">FT ' + m.ownScore + '-' + m.oppScore + ' ' + vsText + '</span>';
+    valueText = 'FT ' + m.ownScore + '-' + m.oppScore;
+  } else if (m.started) {
+    valueText = '🔴 ' + m.ownScore + '-' + m.oppScore + ' (' + m.minutes + '\')';
+  } else {
+    valueText = formatDeadline(m.kickoffTime) || 'Not yet scheduled';
   }
-  if (m.started) {
-    return '<span class="match-chip live">🔴 LIVE ' + m.ownScore + '-' + m.oppScore + ' ' + vsText + ' (' + m.minutes + '\')</span>';
+  return '<div class="fixture-box ' + (sentiment === 'neutral' ? '' : sentiment) + '">' +
+    '<div class="fixture-box-label">This week</div>' +
+    '<div class="fixture-box-value">' + safeEsc(valueText) + '</div>' +
+    '<div class="fixture-box-sub">' + vsText + '</div></div>';
+}
+
+function nextWeekBoxHtml(el, nextFixtureByTeam) {
+  const fx = nextFixtureByTeam ? nextFixtureByTeam[el.team] : null;
+  if (!fx) {
+    return '<div class="fixture-box"><div class="fixture-box-label">Next gameweek</div><div class="fixture-box-value">—</div></div>';
   }
-  const kickoffText = formatDeadline(m.kickoffTime);
-  return '<span class="match-chip upcoming">' + (kickoffText || 'Not yet scheduled') + ' ' + vsText + '</span>';
+  return '<div class="fixture-box">' +
+    '<div class="fixture-box-label">Next gameweek</div>' +
+    '<div class="fixture-box-value">' + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ')</div>' +
+    '<div class="fixture-box-sub">FDR ' + fx.difficulty + '/5</div></div>';
 }
 
 function buildFixtureDifficultyMap(fixtures, fromGW, windowSize) {
@@ -4337,7 +4404,7 @@ function explainerHtml() {
     '<p><strong>Export staleness prevention:</strong> generating an export prompt uses the gameweek from your most recent squad load, not just the last time Advice happened to be run — if those two have drifted apart (a deadline passed since you last analysed), generating a prompt is blocked with a one-click fix (re-run Analyse Squad) rather than silently baking in a stale gameweek the AI would then dutifully echo back. A separately old squad CACHE (you haven\'t synced from FPL in a while) gets a warning instead of a block, since that\'s a heuristic, not a certainty. The prompt itself also asks the AI to sanity-check today\'s date against the given deadline before doing anything else, and flag it if a newer gameweek looks like it\'s probably already current — surfaced both as an immediate message the moment you import, and persistently in that check\'s own section here, not just a one-time toast easy to miss.</p>' +
     '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. Gameweek-scoped: only a check whose forGameweek exactly matches the NEXT gameweek — the actionable one any transfer, captain or team-news decision is actually about, in both Live and Locked In Squad mode — gets used; a check imported for Gameweek 5 is completely ignored once planning has moved to Gameweek 6, rather than silently continuing to influence an analysis it was never actually about. This deliberately isn\'t the already-locked gameweek Live mode\'s squad display shows — that squad can\'t be changed any more, so team news about it isn\'t actionable either; the FROM/TO header above already makes this same distinction for transfer suggestions. If nothing active exists but something older IS imported, the summary says so explicitly rather than looking indistinguishable from "nothing was ever imported" — the External tab itself still shows every import regardless, stale ones included, with their own staleness warning; the filtering only governs what the analysis acts on. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected.</p>' +
     '<p><strong>Bench order</strong> in Recommended Team is a suggested fallback priority, not a claim of exactly matching FPL\'s own auto-substitution logic (which also depends on formation validity at kickoff, something this doesn\'t simulate). Outfield reserves are ranked by score — best fallback first — with the bench goalkeeper placed last regardless of score, since a bench GK only ever comes on if the starting keeper doesn\'t play, a materially rarer event than an outfield sub, so ranking it against outfield scores wouldn\'t mean much.</p>' +
-    '<p><strong>Live match scores</strong> on Live squad\'s player cards are as current as your last refresh (Load Squad / Sync from FPL) — not auto-updating on their own, since this app doesn\'t poll in the background. 🔴 LIVE shows the running score and minute; FT shows the final score; anything not yet kicked off shows the time and opponent instead. These are specifically the already-LOCKED gameweek\'s own fixtures — Locked In Squad and Advice show the NEXT gameweek\'s fixtures instead (the one transfer and captain decisions actually affect), each labelled so which is which is never ambiguous.</p>' +
+    '<p><strong>Live match scores</strong> on Live squad\'s player cards ("This week" box) are as current as your last refresh (Load Squad / Sync from FPL) — not auto-updating on their own, since this app doesn\'t poll in the background. 🔴 shows the running score and minute; FT shows the final score; anything not yet kicked off shows the time and opponent instead. Colour is a simple, honest heuristic, not a claim this specific player personally contributed: GK/DEF judged on keeping a clean sheet (green = 0 conceded, red = 2+, plain = 1 conceded but the game\'s not over); MID/FWD judged on their own side scoring (green = 2+, red = a blank at full time, plain = anything mid-match). A separate "Next gameweek" box alongside it shows the opponent and FDR for the gameweek actually being planned for — the same fixture data Locked In Squad and Advice use, now visible on Live too without switching views. Each box\'s own gameweek is never ambiguous: "This week" is specifically the already-LOCKED gameweek\'s fixtures; "Next gameweek" (and everything in Locked In Squad/Advice) is the one transfer and captain decisions actually affect.</p>' +
     '<p><strong>Substitutions</strong> in the Locked In Squad view are a genuinely separate layer from transfers — transfers decide WHICH 15 players are in the squad, substitutions decide WHICH 11 of those 15 start, in what order the other 4 would come on, and who\'s captain/vice. Tap ⇄ on a starter then ⇄ on a bench player to swap them; C/V set the armband. A goalkeeper can only swap with the bench goalkeeper (a squad always needs exactly 1 starting one); an outfield swap can cross DEF/MID/FWD lines same as the real FPL app, but is checked against a legal formation (3-5 DEF, 2-5 MID, 1-3 FWD) first — an invalid swap is rejected outright, nothing partial happens. Advice\'s Locked In Squad analysis reads this exact lineup — not its own independent suggestion — for which captain and starting XI it\'s reporting on, so "Your captain" there always matches what\'s actually set in Squad; the separate "Recommended team" section still shows the algorithm\'s own best-XI-from-all-15 opinion alongside it, since comparing the two is the point, not replacing one with the other.</p>' +
     '<p><strong>Suggested lineup and captain/vice-captain</strong> apply a hard rule on top of their score: an unavailable player is never suggested to start or captain unless a position has no fit alternative at all — any formation using every available player always beats one that had to fall back to an unavailable player, regardless of raw score.</p>' +
     '<p><strong>Captain and vice-captain</strong> are ranked by FPL\'s own <code>ep_next</code> among your actual starting XI. <strong>Confidence</strong> reflects the ep_next gap to the next-best candidate — two close candidates produce LOW/MEDIUM confidence rather than artificial certainty.</p>' +
