@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.104</title>
+<title>Gym Tracker v2.105</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -309,7 +309,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.104</div></span>
+      <span>Gym Tracker<div class="ver">v2.105</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -956,9 +956,9 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-config.js?v=2.104"></script>
-<script src="pal-sync.js?v=2.104"></script>
-<script src="pal-utils.js?v=2.104"></script>
+<script src="pal-config.js?v=2.105"></script>
+<script src="pal-sync.js?v=2.105"></script>
+<script src="pal-utils.js?v=2.105"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1208,6 +1208,31 @@
 // point" but the body said "maximum of 2 decimal point" — implemented
 // per the more detailed body text (2dp); flagging the discrepancy in
 // case 1dp was actually intended, since it's a one-line change to fix.
+// v2.105 (GYM-093 — move circuits up/down within a plan): circuit order
+// was never its own piece of state — the block order shown in the plan
+// editor, the read-only plan summary and the live session view was
+// always just "wherever a circuit's first member happens to sit in the
+// flat _planItems/plan.items array" (see the GYM-091 grouping comment
+// below). So reordering circuits didn't need a new field: moveCircuitBlock()
+// recomputes the same block list renderPlanItemsList() already builds
+// (planItemBlocks(), factored out of the old inline version), swaps the
+// target circuit's block with its neighbour, and reconcatenates
+// _planItems in that order — every member of the circuit moves as one
+// unit, in its existing internal order, and non-circuit exercises are
+// blocks of one so a circuit can swap past a standalone exercise too.
+// ▲▼ buttons live on the circuit block header (same .pib-reorder look as
+// every other reorder control in the app) and are disabled at whichever
+// end of the block sequence has nothing to swap with. Like every other
+// in-editor plan edit this only mutates the modal's in-memory _planItems
+// until Save Plan is pressed — nothing is written to storage or Supabase
+// by the move itself. Data model unchanged (plan.items is still a flat
+// array, circuits still just group by circuitId), so JSON export/import
+// and older backups are unaffected. Historical sessions already clone
+// plan.items/plan.circuits into their own session.items/session.circuits
+// at start time (see startSession()), so reordering a plan afterwards
+// can't touch anything already completed — untouched by this change,
+// just confirmed by reading it. Plans with one circuit or none, and
+// plans nobody reorders, render and behave exactly as before.
 // v2.104 (GYM-092 — filed as FT-060 with a "Fortnight Tracker" v3.66
 // header, but the uploaded file and the content ("circuits", "plans")
 // were unmistakably Gym Tracker — same template mix-up pattern as the
@@ -2359,7 +2384,7 @@
 // newer notes not yet synced, restoring an older backup here and letting
 // it push could overwrite them once that device's edit reaches the cloud
 // — restore is authoritative for this collection, by design.
-const VERSION = '2.104';
+const VERSION = '2.105';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -4261,31 +4286,67 @@ function openPlanEditor(id) {
 // Members are gathered by matching circuitId regardless of their
 // position in _planItems (same approach the live session view uses),
 // not by requiring them to sit adjacent in the array.
+// GYM-093: blocks are computed once up front (same grouping rule as
+// before — gather by circuitId regardless of position, first occurrence
+// sets the block's position) so each circuit block knows whether it's
+// first/last among ALL blocks (circuits and standalone items alike) for
+// the Move Up/Down boundary buttons, without a second pass over _planItems.
+function planItemBlocks() {
+  const seen = new Set();
+  const blocks = [];
+  _planItems.forEach((item, idx) => {
+    if (seen.has(idx)) return;
+    if (item.circuitId) {
+      const memberIdxs = _planItems.map((it,i)=>i).filter(i => _planItems[i].circuitId === item.circuitId);
+      memberIdxs.forEach(i => seen.add(i));
+      blocks.push({ circuitId: item.circuitId, idxs: memberIdxs });
+    } else {
+      seen.add(idx);
+      blocks.push({ circuitId: null, idxs: [idx] });
+    }
+  });
+  return blocks;
+}
 function renderPlanItemsList() {
   const el = document.getElementById('planItemsList');
   renderPlanTimeTotal();
   if (!_planItems.length) { el.innerHTML = '<p style="font-size:12px;color:var(--ink2);padding:6px 0">No exercises added yet.</p>'; return; }
-  const rendered = new Set();
+  const blocks = planItemBlocks();
   let html = '';
-  _planItems.forEach((item, idx) => {
-    if (rendered.has(idx)) return;
-    if (item.circuitId) {
-      const circuit = _planCircuits.find(c => c.id === item.circuitId);
-      const memberIdxs = _planItems.map((it,i)=>i).filter(i => _planItems[i].circuitId === item.circuitId);
-      memberIdxs.forEach(i => rendered.add(i));
-      html += planCircuitBlockHtml(circuit, memberIdxs);
+  blocks.forEach((block, bi) => {
+    if (block.circuitId) {
+      const circuit = _planCircuits.find(c => c.id === block.circuitId);
+      html += planCircuitBlockHtml(circuit, block.idxs, bi===0, bi===blocks.length-1);
     } else {
-      rendered.add(idx);
-      html += planItemBlockHtml(item, idx);
+      html += planItemBlockHtml(_planItems[block.idxs[0]], block.idxs[0]);
     }
   });
   el.innerHTML = html;
+}
+// GYM-093: moves an entire circuit block — every one of its member
+// items, in their existing relative order — one position up/down
+// against its neighbouring block (another circuit, or a standalone
+// exercise). Recomputes the block list fresh each call so it can't go
+// stale, then simply re-concatenates _planItems in the swapped block
+// order; nothing about circuit membership, rounds, sets or item order
+// within a block is touched.
+function moveCircuitBlock(circuitId, dir) {
+  const blocks = planItemBlocks();
+  const pos = blocks.findIndex(b => b.circuitId === circuitId);
+  const newPos = pos + dir;
+  if (pos < 0 || newPos < 0 || newPos >= blocks.length) return;
+  const tmp = blocks[pos]; blocks[pos] = blocks[newPos]; blocks[newPos] = tmp;
+  _planItems = blocks.flatMap(b => b.idxs.map(i => _planItems[i]));
+  renderPlanItemsList();
 }
 // GYM-091: wraps a circuit's member cards (planItemBlockHtml() below,
 // same function used for standalone items — "the usual controls",
 // unchanged either way) in a labelled, bordered block with the rounds
 // count front and centre.
-function planCircuitBlockHtml(circuit, memberIdxs) {
+// GYM-093: isFirstBlock/isLastBlock gate the Move Up/Down buttons —
+// same disabled-at-the-boundary pattern as the plan list's ▲▼ and the
+// standalone item ▲▼ right below.
+function planCircuitBlockHtml(circuit, memberIdxs, isFirstBlock, isLastBlock) {
   if (!circuit) return ''; // orphaned circuitId somehow pointing at nothing — nothing sane to render
   const membersHtml = memberIdxs.map(idx => planItemBlockHtml(_planItems[idx], idx)).join('');
   return `<div class="plan-circuit-block" style="border:1.5px solid var(--accent5);border-radius:var(--radius);padding:10px;margin-bottom:10px;background:rgba(210,168,255,0.05)">
@@ -4295,7 +4356,11 @@ function planCircuitBlockHtml(circuit, memberIdxs) {
         <input type="number" min="2" value="${circuit.rounds}" style="width:44px;padding:4px 6px" onchange="updateCircuitRounds('${circuit.id}',this.value)">
         × rounds
       </span>
-      <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="saveCircuitAsTemplate('${circuit.id}')">💾 Save as Template</button>
+      <span style="display:flex;align-items:center;gap:2px;margin-left:auto">
+        <button class="pib-reorder" onclick="moveCircuitBlock('${circuit.id}',-1)" ${isFirstBlock?'disabled':''} title="Move circuit up">▲</button>
+        <button class="pib-reorder" onclick="moveCircuitBlock('${circuit.id}',1)" ${isLastBlock?'disabled':''} title="Move circuit down">▼</button>
+      </span>
+      <button class="btn btn-secondary btn-sm" style="flex-basis:100%" onclick="saveCircuitAsTemplate('${circuit.id}')">💾 Save as Template</button>
     </div>
     ${membersHtml}
   </div>`;
