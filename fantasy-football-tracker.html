@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.38</title>
+<title>Fantasy Football Tracker v1.39</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -386,7 +386,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.38</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.39</span></div>
 </nav>
 
 <div class="tabs">
@@ -521,13 +521,29 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.38"></script>
-<script src="pal-sync.js?v=1.38"></script>
-<script src="pal-utils.js?v=1.38"></script>
+<script src="pal-config.js?v=1.39"></script>
+<script src="pal-sync.js?v=1.39"></script>
+<script src="pal-utils.js?v=1.39"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.39 [FF-016] — Reported directly: free transfers showing 0
+ * remaining with nothing actually transferred this window. Root
+ * cause was in computeTransferSlotUsage() — it counted EVERY active
+ * (locked/planned) transfer-log entry ever logged, with no gameweek
+ * scoping at all, so an entry that was never explicitly resolved
+ * (marked made, or auto-matched by Sync from FPL) went on silently
+ * consuming every future gameweek's free-transfer budget forever.
+ * addManualTransfer() now stamps gwId at creation (previously only
+ * set once an entry later became 'made'), and computeTransferSlotUsage
+ * only counts entries tagged for the CURRENT planning gameweek —
+ * anything else active is reported as staleActiveCount rather than
+ * silently dropped, with a new banner in the Transfers tab explaining
+ * how many there are and pointing at Sync from FPL (auto-resolves
+ * genuine matches) or manual review/delete. Entries logged before this
+ * fix all have gwId: null and fall out of the count immediately.
  *
  * v1.38 [FF-015] — External Advice review, three fixes in one:
  *
@@ -1483,7 +1499,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.38';
+const FF_VERSION = '1.39';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1641,7 +1657,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.38',
+    appVersion: '1.39',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -2960,13 +2976,37 @@ async function handleTransferRatingToggle(detailsEl, entryId) {
 // certain; within each tier, oldest first. One source of truth, used
 // everywhere a FREE/HIT label appears, so nothing can disagree with
 // itself about which slot a given transfer occupies.
+//
+// FF-016 (reported directly): free transfers were showing 0 remaining
+// despite nothing being transferred this window. Root cause — this
+// used to count EVERY active (locked/planned) entry in the whole
+// transfer log, with no gameweek scoping at all, so an entry logged
+// weeks ago that was never explicitly resolved (marked made, or
+// auto-matched by Sync from FPL) went on silently consuming every
+// future gameweek's free-transfer budget forever. addManualTransfer
+// now stamps gwId at creation (previously only set once an entry
+// later became 'made'), so an active entry can finally be scoped to
+// the window it was actually logged for. Only entries whose gwId
+// matches the CURRENT planning gameweek count toward usage here —
+// anything else active is reported separately as staleActive rather
+// than silently dropped, so it stays visible and actionable (Sync
+// from FPL / Mark as made / Delete) instead of just vanishing from
+// the count with no explanation. Entries from before this fix all
+// have gwId: null, so they fall out of the count immediately and
+// surface via staleActive on first load after upgrading.
 function computeTransferSlotUsage() {
   const available = _settings.freeTransfersCount;
   const gw = currentPlanningGw();
-  const locked = (_transferLog || []).filter(t => t.status === 'locked').slice()
+  const activeAll = (_transferLog || []).filter(t => isActiveTransferStatus(t.status));
+  // If we don't yet know what gameweek is being planned for (no squad
+  // loaded), there's no reference frame to scope against — fall back
+  // to the old unscoped behaviour rather than excluding everything.
+  const inWindow = t => gw == null || t.gwId === gw;
+  const locked = activeAll.filter(t => t.status === 'locked' && inWindow(t)).slice()
     .sort((a, b) => new Date(a.date) - new Date(b.date));
-  const planned = (_transferLog || []).filter(t => t.status === 'planned').slice()
+  const planned = activeAll.filter(t => t.status === 'planned' && inWindow(t)).slice()
     .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const staleActive = gw == null ? [] : activeAll.filter(t => !inWindow(t));
   const ordered = locked.concat(planned);
   let remaining = available != null ? available : null;
   const entries = ordered.map(t => {
@@ -2979,9 +3019,11 @@ function computeTransferSlotUsage() {
     usedCount: ordered.length,
     remaining: available != null ? Math.max(0, available - ordered.length) : null,
     isStale: gw != null && _settings.freeTransfersSavedForGw != null && _settings.freeTransfersSavedForGw !== gw,
-    liveGwId: _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null
+    liveGwId: _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null,
+    staleActiveCount: staleActive.length
   };
 }
+
 
 // Cross-references each suggested transfer opportunity against the
 // Transfer log: is this OUT player already covered by an active
@@ -3096,6 +3138,16 @@ function renderTransferList() {
       ', but you\'re now planning for Gameweek ' + slotUsage.gw +
       '. FREE/HIT labels below may be wrong until you check the FPL site and re-save it in Settings.</div>';
   }
+  // FF-016: entries logged before this fix (or from a past window that
+  // never got resolved) no longer silently count against the CURRENT
+  // free-transfer total — but that means they could otherwise just
+  // quietly disappear from the count with no explanation. Surfaced
+  // here so it's obvious why the number moved and what to do about it.
+  if (slotUsage.staleActiveCount > 0) {
+    html += '<div class="projection-banner">⚠️ ' + slotUsage.staleActiveCount + ' planned/locked-in transfer' +
+      (slotUsage.staleActiveCount === 1 ? '' : 's') + ' below ' + (slotUsage.staleActiveCount === 1 ? 'is' : 'are') +
+      ' from an earlier gameweek and no longer counted toward your current free transfers. Click <strong>Sync from FPL</strong> to auto-resolve any that genuinely went through, or review and delete the rest below.</div>';
+  }
 
   const nextDeadlineText = formatDeadline(currentPlanningGwDeadline());
   html += '<div class="position-label">For your next deadline' + (slotUsage.gw != null ? ' — Gameweek ' + slotUsage.gw : '') +
@@ -3145,7 +3197,11 @@ function addManualTransfer(status) {
     date: (typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10)),
     playerOutName: _txfOutSelected.name, playerInName: _txfInSelected.name,
     playerOutId: _txfOutSelected.id, playerInId: _txfInSelected.id,
-    costDelta, note, status: status, source: 'manual', gwId: null
+    // FF-016: stamped at creation now (was null until markTransferMade)
+    // so computeTransferSlotUsage can scope this entry to the window
+    // it was actually planned for, instead of it silently counting
+    // against every future gameweek if it's never explicitly resolved.
+    costDelta, note, status: status, source: 'manual', gwId: currentPlanningGw()
   };
   _transferLog.push(entry);
   persistTransferLog();
@@ -4661,7 +4717,7 @@ function explainerHtml() {
     '<p><strong>Minutes risk</strong> is a season-to-date reliability band (SECURE/ROTATION RISK/BENCH RISK) — not a detected recent trend, since that would need a per-gameweek minutes call this app doesn\'t make. Labelled as season-to-date deliberately.</p>' +
     '<p><strong>Decisions</strong> (HOLD/MONITOR/CONSIDER SELL/SELL) require multiple independent negative signals before escalating — one bad signal alone (e.g. a single tough fixture run) only ever produces MONITOR. Immediate unavailability (injured/suspended) is SELL directly; doubtful is MONITOR directly. Bench players only get the availability check — low bench minutes is often by design (a backup keeper, a cheap enabler), not a risk signal. SELL/CONSIDER SELL here means "worth evaluating transfer alternatives" — not an instruction to make a transfer this instant; squad structure isn\'t modelled.</p>' +
     '<p><strong>Transfer opportunity</strong> (HIGH/MEDIUM/LOW) is the score gap to the best available same-position replacement within budget — an opportunity indicator, not a forecast of actual points.</p>' +
-    '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for.</p>' +
+    '<p><strong>FREE/−4 HIT labels</strong> come from the free-transfer count you enter in Settings — FPL\'s API has no field for this, it\'s genuinely derived from your whole season\'s history and chip usage, and the rule has had at least one mid-season adjustment no formula could have predicted, so this app asks rather than simulates. LOCKED IN transfers (done on FPL, not yet visible via the API) consume slots first, then PLANNED ones, both oldest first; a suggestion beyond what\'s left is labelled a hit, with a warning if the projected gain doesn\'t clearly clear −4 (a simple, deliberately conservative bar, not a claim of the exact break-even point). The gameweek this count applies to is read from your live squad, not typed — a reconfirm prompt appears only if you last saved the count for a different gameweek than you\'re now planning for. Only a planned/locked-in entry logged FOR the current planning gameweek counts against this total — one left over from an earlier window that was never marked made or auto-resolved by Sync from FPL doesn\'t silently keep consuming future gameweeks\' free transfers; it\'s reported separately instead, with a prompt to sync or clean it up.</p>' +
     '<p><strong>"No transfer recorded" / "Already planned" / "Conflicts with a recorded plan"</strong> — every suggested transfer is checked against the Transfer log for an existing planned or locked-in entry on the same OUT player, so a suggestion never silently repeats something you\'ve already decided, and a genuine disagreement (you\'ve recorded a different IN player than this analysis currently rates highest) is flagged rather than hidden. The squad shown is always your last LOCKED gameweek; any transfer suggestion is for the NEXT one, since that\'s the only gameweek a transfer made now can actually take effect for — both are labelled explicitly when they differ.</p>' +
     '<p><strong>Export staleness prevention:</strong> generating an export prompt uses the gameweek from your most recent squad load, not just the last time Advice happened to be run — if those two have drifted apart (a deadline passed since you last analysed), generating a prompt is blocked with a one-click fix (re-run Analyse Squad) rather than silently baking in a stale gameweek the AI would then dutifully echo back. A separately old squad CACHE (you haven\'t synced from FPL in a while) gets a warning instead of a block, since that\'s a heuristic, not a certainty. The prompt itself also asks the AI to sanity-check today\'s date against the given deadline before doing anything else, and flag it if a newer gameweek looks like it\'s probably already current — surfaced both as an immediate message the moment you import, and persistently in that check\'s own section here, not just a one-time toast easy to miss.</p>' +
     '<p><strong>External team news check</strong> (its own tab) is a round trip through a separate chat, not a live data source — this app has no way to fetch team news or predicted lineups. Works with Claude, ChatGPT, or Gemini — each is kept as its own separate check rather than merged together, since they\'re independent opinions; re-importing from the same AI replaces its previous entry. Gameweek-scoped: only a check whose forGameweek exactly matches the NEXT gameweek — the actionable one any transfer, captain or team-news decision is actually about, in both Live and Locked In Squad mode — gets used; a check imported for Gameweek 5 is completely ignored once planning has moved to Gameweek 6, rather than silently continuing to influence an analysis it was never actually about. This deliberately isn\'t the already-locked gameweek Live mode\'s squad display shows — that squad can\'t be changed any more, so team news about it isn\'t actionable either; the FROM/TO header above already makes this same distinction for transfer suggestions. If nothing active exists but something older IS imported, the summary says so explicitly rather than looking indistinguishable from "nothing was ever imported" — the External tab itself still shows every import regardless, stale ones included, with their own staleness warning; the filtering only governs what the analysis acts on. It genuinely informs the Advice tab in two distinct ways, kept deliberately separate because the evidence behind them is different in kind. A confident (high or medium) external fitness/rotation-risk signal on a specific player CAN adjust the starting XI or captain choice away from them, in favour of the best same-position, externally-clean alternative — always same-position only (the formation is never re-derived), and only when a genuinely clean replacement exists; if every alternative is also flagged, nothing is forced through and it\'s reported as unresolved instead. An external AI\'s own independent recommendedXI opinion is different — a bare "I would start these 11" with no sourced fact attached — so it\'s only ever surfaced as a contradiction to look at, never auto-applied; it\'s compared against the algorithm\'s FINAL answer (after any signal-based adjustment above) and any mismatch in starting XI or captain is named explicitly, both in the summary note AND directly on the affected player\'s own card in Recommended Team ("🔀 ChatGPT would bench this"), naming which AI disagrees. Every adjustment or contradiction is logged in an "External advice considered" note with full attribution (which AI, what it found, its confidence) — nothing here is silent. The underlying player scores, the advice cache, and score history are never touched by any of this — only which of the algorithm\'s own already-scored players gets selected. An imported transferRecommendation gets the same treatment as recommendedXI, not the fitness-signal treatment: it\'s a bare opinion (hold or a named swap, with the AI\'s own reasoning), so it\'s compared against the algorithm\'s own current sell/buy candidates and any agreement or disagreement is named explicitly in the summary note — never auto-applied to the Transfer Log or anywhere else. That comparison only runs against transfer candidates the algorithm itself is currently flagging; it doesn\'t independently re-evaluate a swap the AI suggests that the algorithm hasn\'t considered.</p>' +
