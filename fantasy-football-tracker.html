@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.40</title>
+<title>Fantasy Football Tracker v1.41</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -386,7 +386,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.40</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.41</span></div>
 </nav>
 
 <div class="tabs">
@@ -522,13 +522,26 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.40"></script>
-<script src="pal-sync.js?v=1.40"></script>
-<script src="pal-utils.js?v=1.40"></script>
+<script src="pal-config.js?v=1.41"></script>
+<script src="pal-sync.js?v=1.41"></script>
+<script src="pal-utils.js?v=1.41"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.41 [FF-017 Phase C] — External Review card gains the multi-AI
+ * hand-off (brief §8/§9): once a review package exists, the card now
+ * shows a per-source status row (Claude / ChatGPT / Gemini, ✓
+ * Complete or ○ Not run, read straight from the same activeChecks
+ * getReviewSessionStatus() already computes) plus Copy Prompt,
+ * Download JSON, and Open Claude/ChatGPT/Gemini buttons. All five
+ * reuse existing functions unchanged (copyExportPrompt,
+ * downloadExportPromptJson) or a single new one-line window.open
+ * helper (openAIProvider) — no export/import logic duplicated, no API
+ * integration (deliberately out of scope per brief §19). The primary
+ * button now reads "Get External Review" while none exists yet and
+ * "Regenerate Review Package" once one does.
  *
  * v1.40 [FF-017] — Gameweek Review Session, Phase A + B of the
  * workflow brief. Orchestration only — no scoring/analysis logic
@@ -1530,7 +1543,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.40';
+const FF_VERSION = '1.41';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1688,7 +1701,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.40',
+    appVersion: '1.41',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -3481,13 +3494,13 @@ function getReviewSessionStatus() {
   };
 }
 
-// FF-017 Phase B: the "EXTERNAL REVIEW" card on Advice (brief §6/§7).
-// Appended (not prepended) so it doesn't reorder anything already on
-// the page. Every number shown here is read straight off rd via
-// functions that already exist for the export prompt itself
-// (buildPriorityPlayers) or the page's own render pass
-// (transferOpportunities, watchItems, captain) — nothing here is
-// computed twice.
+// FF-017 Phase B/C: the "EXTERNAL REVIEW" card on Advice (brief
+// §6/§7, plus §8/§9's status row and hand-off buttons). Appended (not
+// prepended) so it doesn't reorder anything already on the page.
+// Every number shown here is read straight off rd via functions that
+// already exist for the export prompt itself (buildPriorityPlayers)
+// or the page's own render pass (transferOpportunities, watchItems,
+// captain) — nothing here is computed twice.
 function renderExternalReviewCard() {
   const body = document.getElementById('adviceBody');
   if (!body) return;
@@ -3522,16 +3535,51 @@ function renderExternalReviewCard() {
   if (session.status === 'STALE' && session.staleReason) {
     html += '<div class="projection-banner" style="margin-top:8px">⚠️ ' + safeEsc(session.staleReason) + '</div>';
   }
-  if (session.responses.length) {
-    html += '<div class="sub" style="margin-top:8px"><strong>Responses in:</strong> ' +
-      session.responses.map(r => safeEsc(AI_SOURCE_LABELS[r.aiSource] || AI_SOURCE_LABELS.other)).join(', ') + '</div>';
+
+  // FF-017 Phase C (brief §8/§9): once a package actually exists,
+  // show per-AI ✓/○ status plus the hand-off actions — all of them
+  // reusing existing functions (copyExportPrompt, downloadExportPromptJson)
+  // or a one-line window.open helper. Hidden in READY, since there's
+  // nothing yet to copy/open/send.
+  if (session.status !== 'READY') {
+    const KNOWN_SOURCES = ['claude', 'chatgpt', 'gemini'];
+    const respondedSet = new Set(session.responses.map(r => r.aiSource));
+    html += '<div class="sub" style="margin-top:10px"><strong>External review — GW' + session.gw + '</strong></div>';
+    KNOWN_SOURCES.forEach(src => {
+      const done = respondedSet.has(src);
+      html += '<div class="sub">' + safeEsc(AI_SOURCE_LABELS[src]) + '&nbsp;&nbsp;' + (done ? '✓ Complete' : '○ Not run') + '</div>';
+    });
+    if (session.responses.some(r => !KNOWN_SOURCES.includes(r.aiSource))) {
+      html += '<div class="sub">' + safeEsc(AI_SOURCE_LABELS.other) + '&nbsp;&nbsp;✓ Complete</div>';
+    }
+
+    html += '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">';
+    html += '<button class="btn secondary" onclick="copyExportPrompt()">📋 Copy Prompt</button>';
+    html += '<button class="btn secondary" onclick="downloadExportPromptJson()">⬇️ Download JSON</button>';
+    html += '<button class="btn secondary" onclick="openAIProvider(\'claude\')">Open Claude</button>';
+    html += '<button class="btn secondary" onclick="openAIProvider(\'chatgpt\')">Open ChatGPT</button>';
+    html += '<button class="btn secondary" onclick="openAIProvider(\'gemini\')">Open Gemini</button>';
+    html += '</div>';
   }
 
-  html += '<button class="btn" style="margin-top:10px" onclick="startExternalReview()">🌐 Get External Review</button>';
+  const primaryLabel = session.status === 'READY' ? '🌐 Get External Review' : '🔄 Regenerate Review Package';
+  html += '<button class="btn" style="margin-top:10px" onclick="startExternalReview()">' + primaryLabel + '</button>';
   html += '</div>';
 
   body.insertAdjacentHTML('beforeend', html);
 }
+
+// FF-017 Phase C (brief §8): no API integration for these providers —
+// deliberately out of scope per §19 — just opens each one's own chat
+// UI in a new tab so pasting the already-copied prompt is the very
+// next click rather than a search for the right URL.
+const AI_PROVIDER_URLS = { claude: 'https://claude.ai/new', chatgpt: 'https://chatgpt.com/', gemini: 'https://gemini.google.com/app' };
+function openAIProvider(source) {
+  const url = AI_PROVIDER_URLS[source];
+  if (!url) return;
+  window.open(url, '_blank', 'noopener');
+}
+
 
 // FF-017 Phase B: single entry point from Advice (brief §6) — builds
 // the review package via the existing, unchanged generateExportPrompt()
