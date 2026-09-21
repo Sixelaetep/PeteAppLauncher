@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.41</title>
+<title>Fantasy Football Tracker v1.42</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -386,7 +386,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.41</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.42</span></div>
 </nav>
 
 <div class="tabs">
@@ -522,13 +522,29 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.41"></script>
-<script src="pal-sync.js?v=1.41"></script>
-<script src="pal-utils.js?v=1.41"></script>
+<script src="pal-config.js?v=1.42"></script>
+<script src="pal-sync.js?v=1.42"></script>
+<script src="pal-utils.js?v=1.42"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.42 [FF-017 Phase D] — Combined decision support (brief §12).
+ * The existing "🔎 External advice considered" banner (unchanged in
+ * every other respect) now opens with an explicit summary: players
+ * researched, how many findings agree with the model vs changed the
+ * XI vs were flagged but inconclusive, a Captain line (Algorithm's
+ * pick vs how many external AIs agree/differ), and a Transfer line
+ * (Algorithm's own HOLD/swap verdict, via new algorithmicTransferVerdict()
+ * — mirrors transferVerdictLine's existing "worth it" bar exactly, so
+ * the two can never disagree — vs how many external reviews say HOLD
+ * vs TRANSFER). Every figure is read from overrides/unresolvedFlags/
+ * contradictionFlags/transferContradictionFlags/rd.captain/
+ * rd.transferOpportunities, all already computed elsewhere in the same
+ * render pass — nothing here is a new comparison. "Agree" for players
+ * is an inferred count (researched minus overridden minus unresolved),
+ * not a claim of exact per-finding matching.
  *
  * v1.41 [FF-017 Phase C] — External Review card gains the multi-AI
  * hand-off (brief §8/§9): once a review package exists, the card now
@@ -1543,7 +1559,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.41';
+const FF_VERSION = '1.42';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1701,7 +1717,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.41',
+    appVersion: '1.42',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -4287,7 +4303,7 @@ function buildContradictionFlags(picks, elementsById, optimalRaw, captain, exter
 // Summary shown in Advice: exactly what external input existed, and
 // exactly what (if anything) it changed — the explicit call-out
 // requested, so nothing here is a silent adjustment.
-function externalAdviceSummaryHtml(activeExternalChecks, overrides, unresolvedFlags, contradictionFlags, allExternalChecks, targetGw, transferContradictionFlags) {
+function externalAdviceSummaryHtml(activeExternalChecks, overrides, unresolvedFlags, contradictionFlags, allExternalChecks, targetGw, transferContradictionFlags, captain, transferOpportunities) {
   const staleOnly = (!activeExternalChecks || !activeExternalChecks.length) && allExternalChecks && allExternalChecks.length;
   if ((!activeExternalChecks || !activeExternalChecks.length) && !staleOnly) return '';
 
@@ -4307,6 +4323,49 @@ function externalAdviceSummaryHtml(activeExternalChecks, overrides, unresolvedFl
   const sources = externalChecks.map(c => AI_SOURCE_LABELS[c.aiSource] || AI_SOURCE_LABELS.other).join(', ');
   let html = '<div class="ext-check-banner">🔎 External advice considered — checked against ' + externalChecks.length +
     ' import' + (externalChecks.length === 1 ? '' : 's') + ' for this gameweek (' + safeEsc(sources) + ').';
+
+  // FF-017 Phase D (brief §12): the explicit "combined decision
+  // support" readout — built entirely from figures already computed
+  // elsewhere in this same render pass (overrides, unresolvedFlags,
+  // contradictionFlags, transferContradictionFlags, rd.captain,
+  // rd.transferOpportunities). Nothing here is a new comparison, just
+  // a clearer presentation of what's already been decided. "Agree" is
+  // an inferred count — every researched player who didn't end up in
+  // overrides or unresolvedFlags — rather than an explicit per-player
+  // match, so it's a reasonable approximation, not a claim of exact
+  // per-finding agreement.
+  const researchedIds = new Set();
+  externalChecks.forEach(c => {
+    const ids = (c.playersChecked && c.playersChecked.length) ? c.playersChecked : (c.players || []).map(p => p.id);
+    ids.forEach(id => researchedIds.add(id));
+  });
+  const researchedCount = researchedIds.size;
+  if (researchedCount) {
+    const agreeCount = Math.max(0, researchedCount - overrides.length - unresolvedFlags.length);
+    html += '<div class="sub" style="margin-top:8px">✓ ' + researchedCount + ' player' + (researchedCount === 1 ? '' : 's') + ' researched</div>';
+    html += '<div class="sub">' + agreeCount + ' finding' + (agreeCount === 1 ? '' : 's') + ' agree with the model</div>';
+    if (overrides.length) html += '<div class="sub">' + overrides.length + ' finding' + (overrides.length === 1 ? '' : 's') + ' changed the starting XI</div>';
+    if (unresolvedFlags.length) html += '<div class="sub">' + unresolvedFlags.length + ' finding' + (unresolvedFlags.length === 1 ? '' : 's') + ' flagged but inconclusive — not acted on</div>';
+  }
+  if (captain) {
+    const captainChecks = externalChecks.filter(c => c.recommendedXI && c.recommendedXI.captain);
+    if (captainChecks.length) {
+      const differ = contradictionFlags ? contradictionFlags.filter(f => f.captainDiffers).length : 0;
+      const agree = Math.max(0, captainChecks.length - differ);
+      html += '<div class="sub" style="margin-top:4px"><strong>Captain:</strong> Algorithm: ' + safeEsc(captain.web_name) +
+        ' · External AIs: ' + agree + ' agree' + (differ ? ' / ' + differ + ' differ' : '') + '</div>';
+    }
+  }
+  if (transferOpportunities) {
+    const transferChecks = externalChecks.filter(c => c.transferRecommendation && c.transferRecommendation.action);
+    if (transferChecks.length) {
+      const holdCount = transferChecks.filter(c => c.transferRecommendation.action === 'hold').length;
+      const transferCount = transferChecks.length - holdCount;
+      html += '<div class="sub" style="margin-top:4px"><strong>Transfer:</strong> Algorithm: ' + safeEsc(algorithmicTransferVerdict(transferOpportunities)) +
+        ' · External review: ' + holdCount + ' HOLD' + (transferCount ? ' / ' + transferCount + ' TRANSFER' : '') + '</div>';
+    }
+  }
+
   if (overrides.length) {
     html += '<div class="sub" style="margin-top:4px">Adjusted the starting XI for ' + overrides.length + ' player' + (overrides.length === 1 ? '' : 's') + ':</div>';
     overrides.forEach(o => {
@@ -5125,6 +5184,22 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
   return html;
 }
 
+// FF-017 Phase D: a short label ("HOLD" or "X → Y") for the algorithm's
+// own transfer verdict, for the combined-decision summary. Mirrors the
+// SAME "worth it" bar transferVerdictLine already uses (a FREE slot, a
+// HIGH/MEDIUM-rated opportunity, a real candidate) — not a new
+// judgment, just that existing one read as a label instead of a
+// sentence, so this can never disagree with what transferVerdictLine
+// already says elsewhere on the page.
+function algorithmicTransferVerdict(transferOpportunities) {
+  const slotUsage = computeTransferSlotUsage();
+  if (slotUsage.available != null && slotUsage.remaining != null && slotUsage.remaining > 0) {
+    const goodFree = (transferOpportunities || []).find(o => o.slotLabel === 'FREE' && o.opportunity && (o.opportunity.level === 'HIGH' || o.opportunity.level === 'MEDIUM') && o.candidates.length);
+    if (goodFree) return goodFree.el.web_name + ' → ' + goodFree.candidates[0].el.web_name;
+  }
+  return 'HOLD';
+}
+
 function transferVerdictLine(transferOpportunities) {
   const slotUsage = computeTransferSlotUsage();
   if (slotUsage.available == null) return '';
@@ -5619,7 +5694,7 @@ async function loadAdvice() {
       isPlannedMode: _adviceViewMode === 'planned', contradictionFlags, transferContradictionFlags
     };
     renderAdvice(renderData);
-    const extSummary = externalAdviceSummaryHtml(activeExternalChecks, externalOverrides, externalUnresolvedFlags, contradictionFlags, _externalChecks, fixtureGW, transferContradictionFlags);
+    const extSummary = externalAdviceSummaryHtml(activeExternalChecks, externalOverrides, externalUnresolvedFlags, contradictionFlags, _externalChecks, fixtureGW, transferContradictionFlags, captain, transferOpportunities);
     if (extSummary) document.getElementById('adviceBody').insertAdjacentHTML('afterbegin', extSummary);
     // Kept in memory (not persisted) so the export prompt can use
     // whichever mode was most recently analyzed — a planned-mode run
