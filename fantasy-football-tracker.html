@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.39</title>
+<title>Fantasy Football Tracker v1.40</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -386,7 +386,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.39</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.40</span></div>
 </nav>
 
 <div class="tabs">
@@ -422,7 +422,8 @@
   <div class="tab-panel" id="tab-advice">
     <div class="squad-header">
       <div class="squad-meta" id="adviceMeta">Not loaded yet</div>
-      <button class="btn secondary" id="adviceRefreshBtn" onclick="loadAdvice()">🔄 Analyse Squad</button>
+      <button class="btn" id="adviceRefreshAndAnalyseBtn" onclick="refreshAndAnalyse()">🔄 Refresh &amp; Analyse</button>
+      <button class="btn secondary" id="adviceRefreshBtn" onclick="loadAdvice()">Analyse Squad only</button>
     </div>
     <div class="mode-toggle">
       <button class="mode-btn active" id="adviceModeLiveBtn" onclick="switchAdviceViewMode('live')">Live (FPL)</button>
@@ -521,13 +522,43 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.39"></script>
-<script src="pal-sync.js?v=1.39"></script>
-<script src="pal-utils.js?v=1.39"></script>
+<script src="pal-config.js?v=1.40"></script>
+<script src="pal-sync.js?v=1.40"></script>
+<script src="pal-utils.js?v=1.40"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.40 [FF-017] — Gameweek Review Session, Phase A + B of the
+ * workflow brief. Orchestration only — no scoring/analysis logic
+ * changed, no new persisted state:
+ *
+ * - Phase A: new "Refresh & Analyse" primary button on Advice
+ *   (refreshAndAnalyse()) sequences the existing loadSquad() then
+ *   loadAdvice() — the old "Analyse Squad only" button is kept
+ *   alongside it for a quick re-run without a fresh FPL fetch.
+ *   importExternalCheck() now auto-triggers loadAdvice() after a
+ *   valid, non-gameweek-mismatched import, so the combined view is
+ *   ready the moment an import finishes — no more "did I remember to
+ *   re-analyse?" step.
+ * - Phase B: new getReviewSessionStatus() — a computed view (not a
+ *   new source of truth) over _lastAdviceRenderData/_lastExportPayload/
+ *   _externalChecks, classifying the current review as
+ *   READY/EXTERNAL_PENDING/PARTIAL/COMPLETE/STALE. Rendered as a new
+ *   "🌐 External Review" card at the end of the Advice tab
+ *   (renderExternalReviewCard()) showing status, squad basis,
+ *   internal-view summary, and which AI sources have responded, with
+ *   a "Get External Review" button (startExternalReview()) that
+ *   builds the package via the existing generateExportPrompt() and
+ *   hands off to the External tab — no export logic duplicated.
+ *   generateExportPrompt() now returns true/false so callers can tell
+ *   whether it actually produced a package.
+ * - Deferred rather than guessed at: detecting staleness from a
+ *   changed squad composition (as opposed to a changed gameweek,
+ *   which IS detected). The brief's fuller freshness/status-history
+ *   view (Phase C–E) is unimplemented — this covers §5, §6, §7,
+ *   §10, §11 only.
  *
  * v1.39 [FF-016] — Reported directly: free transfers showing 0
  * remaining with nothing actually transferred this window. Root
@@ -1499,7 +1530,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.39';
+const FF_VERSION = '1.40';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1657,7 +1688,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.39',
+    appVersion: '1.40',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -3390,10 +3421,158 @@ function teamShortNameFor(teamId) {
 
 let _lastExportPayload = null;
 
+// FF-017: Gameweek Review Session — Phase A/B of the workflow brief.
+// Deliberately a COMPUTED VIEW over state that already exists
+// (_lastAdviceRenderData, _lastExportPayload, _externalChecks), not a
+// new persisted structure — there is still exactly one source of
+// truth for the squad and the analysis, this just reads it. Returns
+// null when no analysis has been run yet this session, so callers can
+// show their own "click Analyse" placeholder instead of a fake status.
+//
+// Status meanings:
+//   READY             analysis exists, no review package generated yet
+//   EXTERNAL_PENDING  package generated for this gw, 0 responses in
+//   PARTIAL           package generated, some but not all of
+//                     claude/chatgpt/gemini have responded
+//   COMPLETE          claude, chatgpt AND gemini have all responded
+//                     for this gameweek
+//   STALE             a package exists but was generated for a
+//                     different gameweek/squad basis than the
+//                     analysis currently showing — regenerate before
+//                     relying on it. (Squad-changed-but-same-gw
+//                     staleness isn't detected yet — see FF-017 notes
+//                     in the changelog for why that's deferred rather
+//                     than guessed at.)
+function getReviewSessionStatus() {
+  const rd = _lastAdviceRenderData;
+  if (!rd) return null;
+
+  const fixtureGW = rd.fixtureGW;
+  const activeChecks = (_externalChecks || []).filter(ec => ec.forGameweek === fixtureGW);
+  const packageExists = !!_lastExportPayload;
+  const packageCurrent = packageExists && _lastExportPayload.forGameweek === fixtureGW;
+
+  const KNOWN_SOURCES = ['claude', 'chatgpt', 'gemini'];
+  const sourcesPresent = new Set(activeChecks.map(c => c.aiSource));
+  const knownPresentCount = KNOWN_SOURCES.filter(s => sourcesPresent.has(s)).length;
+
+  let status, staleReason = null;
+  if (packageExists && !packageCurrent) {
+    status = 'STALE';
+    staleReason = 'Your external review package was generated for a different gameweek or squad basis than the analysis currently showing — click Get External Review again before sending it to an AI.';
+  } else if (!packageExists) {
+    status = 'READY';
+  } else if (activeChecks.length === 0) {
+    status = 'EXTERNAL_PENDING';
+  } else if (knownPresentCount >= KNOWN_SOURCES.length) {
+    status = 'COMPLETE';
+  } else {
+    status = 'PARTIAL';
+  }
+
+  return {
+    gw: fixtureGW,
+    deadline: rd.deadline,
+    squadBasis: rd.isPlannedMode ? 'Locked In Squad' : 'Live Squad',
+    analysisGeneratedAt: _lastAdviceGeneratedAt,
+    externalPackageGeneratedAt: packageCurrent ? _lastExportPayload.generatedAt : null,
+    responses: activeChecks.map(c => ({ aiSource: c.aiSource, importedAt: c.importedAt })),
+    status, staleReason
+  };
+}
+
+// FF-017 Phase B: the "EXTERNAL REVIEW" card on Advice (brief §6/§7).
+// Appended (not prepended) so it doesn't reorder anything already on
+// the page. Every number shown here is read straight off rd via
+// functions that already exist for the export prompt itself
+// (buildPriorityPlayers) or the page's own render pass
+// (transferOpportunities, watchItems, captain) — nothing here is
+// computed twice.
+function renderExternalReviewCard() {
+  const body = document.getElementById('adviceBody');
+  if (!body) return;
+  const existing = document.getElementById('reviewSessionCard');
+  if (existing) existing.remove();
+
+  const session = getReviewSessionStatus();
+  if (!session) return;
+  const rd = _lastAdviceRenderData;
+
+  const STATUS_LABEL = {
+    READY: 'Not yet reviewed',
+    EXTERNAL_PENDING: 'Review package ready — awaiting a response',
+    PARTIAL: 'Partially reviewed',
+    COMPLETE: 'Reviewed',
+    STALE: 'Stale — regenerate before relying on it'
+  };
+
+  const priorityCount = buildPriorityPlayers(rd).length;
+  const transferCandidateCount = (rd.transferOpportunities || []).length;
+  const urgentCount = (rd.watchItems || []).filter(w => w.severity === 'RED').length;
+
+  let html = '<div class="card" id="reviewSessionCard"><h2>🌐 External Review</h2>';
+  html += '<div class="sub"><strong>Status:</strong> ' + safeEsc(STATUS_LABEL[session.status] || session.status) + '</div>';
+  html += '<div class="sub" style="margin-top:4px"><strong>Based on:</strong> ' + safeEsc(session.squadBasis) + ' — Gameweek ' + session.gw + '</div>';
+  html += '<div class="sub" style="margin-top:8px">Players flagged for external verification: ' + priorityCount + '</div>';
+  html += '<div class="sub" style="margin-top:4px"><strong>Internal view:</strong></div>';
+  html += '<div class="sub">' + transferCandidateCount + ' transfer candidate' + (transferCandidateCount === 1 ? '' : 's') + '</div>';
+  html += '<div class="sub">' + urgentCount + ' urgent item' + (urgentCount === 1 ? '' : 's') + ' flagged</div>';
+  html += '<div class="sub">Captain: ' + safeEsc(rd.captain ? rd.captain.web_name : '—') + '</div>';
+
+  if (session.status === 'STALE' && session.staleReason) {
+    html += '<div class="projection-banner" style="margin-top:8px">⚠️ ' + safeEsc(session.staleReason) + '</div>';
+  }
+  if (session.responses.length) {
+    html += '<div class="sub" style="margin-top:8px"><strong>Responses in:</strong> ' +
+      session.responses.map(r => safeEsc(AI_SOURCE_LABELS[r.aiSource] || AI_SOURCE_LABELS.other)).join(', ') + '</div>';
+  }
+
+  html += '<button class="btn" style="margin-top:10px" onclick="startExternalReview()">🌐 Get External Review</button>';
+  html += '</div>';
+
+  body.insertAdjacentHTML('beforeend', html);
+}
+
+// FF-017 Phase B: single entry point from Advice (brief §6) — builds
+// the review package via the existing, unchanged generateExportPrompt()
+// and hands off to the External tab, where Copy/Download/Import
+// already live. Deliberately does not duplicate any of that logic; a
+// later phase can add Copy/Open-in-AI actions directly on the card
+// itself (brief §8/§9) without this function needing to change.
+function startExternalReview() {
+  switchTab('external');
+  const ok = generateExportPrompt();
+  if (ok) safeToast('Review package ready — copy it into your AI of choice below');
+}
+
+// FF-017 Phase A: the brief's single primary "Refresh & Analyse"
+// action (§5) — orchestrates the two existing functions rather than
+// duplicating their fetch logic. Each still independently fetches
+// bootstrap/fixtures exactly as it did before; only the manual click
+// between "load squad" and "analyse it" goes away. loadSquad() never
+// rethrows (it catches its own errors and reports them in the Squad
+// tab), so loadAdvice() always gets a chance to run — in Live mode
+// that's fine since it does its own independent fetch; in Locked In
+// mode, if the squad load genuinely failed, loadAdvice() reports its
+// own clear "load your live squad first" error rather than this
+// function needing to duplicate that check.
+async function refreshAndAnalyse() {
+  const btn = document.getElementById('adviceRefreshAndAnalyseBtn');
+  const prevLabel = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    await loadSquad();
+    await loadAdvice();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
+  }
+}
+
+
 function generateExportPrompt() {
   if (!_lastAdviceRenderData) {
     safeToast('Analyse Squad first (Live or Locked In Squad) before exporting a prompt', 'err');
-    return;
+    return false;
   }
   const rd = _lastAdviceRenderData;
 
@@ -3415,7 +3594,7 @@ function generateExportPrompt() {
   const freshGwId = currentPlanningGw();
   if (freshGwId != null && rd.fixtureGW != null && freshGwId !== rd.fixtureGW) {
     safeToast('Your last analysis was for Gameweek ' + rd.fixtureGW + ', but your squad is now on Gameweek ' + freshGwId + ' — re-run Analyse Squad first so the export matches.', 'err');
-    return;
+    return false;
   }
   const exportGwId = freshGwId != null ? freshGwId : rd.fixtureGW;
 
@@ -3497,6 +3676,7 @@ function generateExportPrompt() {
   document.getElementById('copyExportBtn').style.display = 'inline-block';
   document.getElementById('downloadExportBtn').style.display = 'inline-block';
   box.focus(); box.select();
+  return true;
 }
 
 // The prompt is written to be self-contained — it's read by a FRESH
@@ -3757,6 +3937,17 @@ function importExternalCheck() {
     safeToast('Imported — but ' + AI_SOURCE_LABELS[aiSource] + ' itself flagged a possible gameweek mismatch: ' + (parsed.gameweekMismatchNote || 'see its notes') + '. Worth a fresh export if in doubt.', 'err');
   } else {
     safeToast('Imported from ' + AI_SOURCE_LABELS[aiSource] + ' — ' + parsed.players.length + ' player note' + (parsed.players.length === 1 ? '' : 's'));
+  }
+
+  // FF-017 Phase A (brief §10/§11): re-running Advice here removes the
+  // "did I remember to re-analyse after importing?" step entirely — the
+  // combined view is ready the moment the import finishes. Fire-and-
+  // forget, same pattern every other onclick-triggered async call in
+  // this app already uses. Skipped when the import provably won't be
+  // used (wrong gameweek) since loadAdvice's own activeExternalChecks
+  // filter would just exclude it anyway — no point in the extra fetch.
+  if (!mismatchedGw) {
+    loadAdvice();
   }
 }
 
@@ -5205,6 +5396,11 @@ async function pullRemoteAdviceCache() {
 
 let _adviceViewMode = 'live';
 let _lastAdviceRenderData = null;
+// FF-017: when _lastAdviceRenderData was last (successfully) set —
+// used by getReviewSessionStatus() to answer "how fresh is this
+// analysis", same purpose the app already serves for squad-cache and
+// external-check age, just for the analysis itself.
+let _lastAdviceGeneratedAt = null;
 let _externalChecks = [];
 
 function switchAdviceViewMode(mode) {
@@ -5382,6 +5578,12 @@ async function loadAdvice() {
     // deliberately never writes to ff_advice_cache, so that alone
     // wouldn't be enough to find it again for exporting.
     _lastAdviceRenderData = renderData;
+    _lastAdviceGeneratedAt = Date.now();
+    // FF-017 Phase B: surfaces the review-session status inline in
+    // Advice — appended after everything else so existing layout/order
+    // is untouched; re-rendered on every analysis run so it can never
+    // itself show a stale status.
+    renderExternalReviewCard();
 
     if (_adviceViewMode === 'planned' && projectionInfo) {
       let banner;
