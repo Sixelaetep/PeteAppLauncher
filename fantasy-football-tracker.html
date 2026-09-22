@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.43</title>
+<title>Fantasy Football Tracker v1.44</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -421,7 +421,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.43</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.44</span></div>
 </nav>
 
 <div class="tabs">
@@ -504,9 +504,10 @@
   </div>
 
   <div class="tab-panel" id="tab-external">
+    <div class="card" id="reviewSessionBanner"><h2>Review session</h2><div class="sub">Not loaded yet — analyse your squad on the Advice tab first.</div></div>
     <div class="card">
       <h2>External team news check</h2>
-      <p style="margin-bottom:8px">This app has no live source for team news or predicted lineups — FPL's API doesn't expose it, and the free websites that do don't offer a public API. Generate a prompt below, run it in a fresh chat (Claude, ChatGPT, or Gemini — whichever you use), let it search the web for current team news on your flagged players and give its own starting-XI opinion AND a hold-or-transfer verdict (using your saved free transfer count and bank), then paste its JSON reply back in to import it here. Genuinely informs the Advice tab's starting-XI, captain, and transfer choices where a confident signal exists — see the "External advice considered" note there for exactly what, if anything, was adjusted.</p>
+      <p style="margin-bottom:8px">This app has no live source for team news or predicted lineups — FPL's API doesn't expose it, and the free websites that do don't offer a public API. The quickest way in is the <strong>Get External Review</strong> button on the Advice tab; the tools here (generate/copy/import) still work standalone too. Run the prompt in a fresh chat (Claude, ChatGPT, or Gemini — whichever you use), let it search the web for current team news on your flagged players and give its own starting-XI opinion AND a hold-or-transfer verdict (using your saved free transfer count and bank), then paste its JSON reply back in to import it here. Genuinely informs the Advice tab's starting-XI, captain, and transfer choices where a confident signal exists — see the "External advice considered" note there for exactly what, if anything, was adjusted.</p>
       <button class="btn secondary" onclick="generateExportPrompt()">Generate export prompt</button>
       <textarea class="copy-box" id="exportPromptBox" readonly style="display:none" onclick="this.select()"></textarea>
       <button class="btn secondary" id="copyExportBtn" onclick="copyExportPrompt()" style="display:none">📋 Copy to clipboard</button>
@@ -557,13 +558,28 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.43"></script>
-<script src="pal-sync.js?v=1.43"></script>
-<script src="pal-utils.js?v=1.43"></script>
+<script src="pal-config.js?v=1.44"></script>
+<script src="pal-sync.js?v=1.44"></script>
+<script src="pal-utils.js?v=1.44"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.44 [FF-017 Phase E] — External tab gains a "Review session"
+ * banner (brief §14/§15): GW + squad basis, how long ago the current
+ * analysis was run, X/3 external sources complete, and an overall
+ * status — reusing getReviewSessionStatus() unchanged (the exact same
+ * computed view the Advice tab's own card already uses), so the two
+ * can never disagree. A STALE status shows the reason plus a
+ * Refresh & Analyse button (reuses refreshAndAnalyse() unchanged).
+ * Refreshed both after every analysis run and whenever the External
+ * tab is switched to, so its "Analysed Xm ago" text can't go stale
+ * just from time passing. The tab's intro text now points at Advice's
+ * Get External Review button as the quicker way in, without removing
+ * or de-emphasizing any of the existing generate/copy/import controls
+ * here — they still work exactly as before. This closes out the
+ * remaining scope of the FF-017 Gameweek Review Session brief.
  *
  * v1.43 [FF-018] — Requested directly, two related pieces:
  *
@@ -1618,7 +1634,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.43';
+const FF_VERSION = '1.44';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1733,6 +1749,11 @@ if (typeof applyThemeCore === 'function') {
 function switchTab(id) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + id));
+  // FF-018 Phase E: the "Analysed Xm ago" text goes stale just by time
+  // passing, not only by a new analysis running — refresh it whenever
+  // the tab is actually looked at, same principle as any other
+  // on-demand freshness display in this app.
+  if (id === 'external' && typeof renderReviewSessionBanner === 'function') renderReviewSessionBanner();
 }
 
 // ── Settings (local-first, synced via PalSync once a session exists) ──
@@ -1776,7 +1797,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.43',
+    appVersion: '1.44',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -3567,6 +3588,45 @@ function getReviewSessionStatus() {
     responses: activeChecks.map(c => ({ aiSource: c.aiSource, importedAt: c.importedAt })),
     status, staleReason
   };
+}
+
+// FF-018 Phase E (brief §14/§15): a small freshness summary at the top
+// of the External tab, reusing the EXACT SAME computed view
+// (getReviewSessionStatus) the Advice tab's own External Review card
+// already uses — so the two can never disagree about what "stale"
+// means or how many AI sources have responded. Purely a read; nothing
+// here recomputes or duplicates any comparison logic.
+function renderReviewSessionBanner() {
+  const el = document.getElementById('reviewSessionBanner');
+  if (!el) return;
+  const session = getReviewSessionStatus();
+  if (!session) {
+    el.innerHTML = '<h2>Review session</h2><div class="sub">No analysis run yet this session — head to the <strong>Advice</strong> tab and click <strong>Refresh &amp; Analyse</strong> first.</div>';
+    return;
+  }
+
+  const STATUS_LABEL = {
+    READY: 'Not yet reviewed',
+    EXTERNAL_PENDING: 'Review package ready — awaiting a response',
+    PARTIAL: 'Partially reviewed',
+    COMPLETE: 'Reviewed',
+    STALE: 'Stale — regenerate before relying on it'
+  };
+  const ageMin = session.analysisGeneratedAt != null ? Math.round((Date.now() - session.analysisGeneratedAt) / 60000) : null;
+  const ageText = ageMin == null ? null : (ageMin < 1 ? 'just now' : ageMin < 60 ? ageMin + 'm ago' : Math.round(ageMin / 60) + 'h ago');
+  const KNOWN_SOURCES = ['claude', 'chatgpt', 'gemini'];
+  const respondedCount = session.responses.filter(r => KNOWN_SOURCES.includes(r.aiSource)).length;
+
+  let html = '<h2>Review session</h2>';
+  html += '<div class="sub"><strong>GW' + session.gw + ' · ' + safeEsc(session.squadBasis) + '</strong></div>';
+  if (ageText) html += '<div class="sub">Analysed ' + ageText + '</div>';
+  html += '<div class="sub">External review: ' + respondedCount + '/' + KNOWN_SOURCES.length + ' complete</div>';
+  html += '<div class="sub">Status: ' + safeEsc(STATUS_LABEL[session.status] || session.status) + '</div>';
+  if (session.status === 'STALE') {
+    html += '<div class="projection-banner" style="margin-top:8px">⚠️ ' + safeEsc(session.staleReason || 'Regenerate the review package before relying on it.') + '</div>' +
+      '<button class="btn secondary" style="margin-top:8px" onclick="refreshAndAnalyse()">🔄 Refresh &amp; Analyse</button>';
+  }
+  el.innerHTML = html;
 }
 
 // FF-017 Phase B/C: the "EXTERNAL REVIEW" card on Advice (brief
@@ -5776,6 +5836,12 @@ async function loadAdvice() {
     // is untouched; re-rendered on every analysis run so it can never
     // itself show a stale status.
     renderExternalReviewCard();
+    // FF-018 Phase E: same status, mirrored onto the External tab's
+    // own "Review session" banner — kept in sync here rather than only
+    // computed on demand, since the External tab may already be
+    // visible (e.g. via a direct link or a prior switch) when analysis
+    // finishes.
+    renderReviewSessionBanner();
 
     if (_adviceViewMode === 'planned' && projectionInfo) {
       let banner;
