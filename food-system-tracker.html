@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
-<meta name="app-version" content="1.1">
+<meta name="app-version" content="1.2">
 <script>
 // Apply any explicit global theme preference before first paint (suite pattern).
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Food System v1.1</title>
+<title>Food System v1.2</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='18' text-anchor='middle'>🥫</text></svg>">
 <style>
   :root {
@@ -188,7 +188,7 @@
 <body>
 
 <nav id="nav">
-  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.1</span></div>
+  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.2</span></div>
   <div class="nav-spacer"></div>
   <button class="sync-pill" id="syncPill" onclick="go('settings');document.getElementById('sec-sync').scrollIntoView()" title="Sync status"><span class="sync-dot"></span><span id="syncLabel">Local</span></button>
 </nav>
@@ -216,6 +216,16 @@
 <div id="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div>
 <div id="toast"><span id="toastMsg"></span><button id="toastAct" hidden></button></div>
 
+<!-- v1.2 (FS-052): sync reviewed against the actual pal-sync.js (v1.11).
+     Confirmed every cloud read/write goes through pal-sync (initSession,
+     table().upsert with its 401 retry queue, paginated fetchTableRows,
+     errorHint) — no direct Supabase calls. table().pull() deliberately
+     not used (reasons in the SYNC header comment). Two gaps closed:
+     pal-sync's upsert()/fetchTableRows() silently no-op when the session
+     is gone, which could clear a pending edit that never reached the
+     cloud — now aborts and keeps it pending; and a missing/broken
+     pal-config.js now shows a clear local-only message instead of
+     repeated TypeErrors. Settings → About names pal-sync.js. -->
 <!-- v1.1 (FS-049): Phase 1 initial household inventory seeded — the 20
      supplied products (19 with stock batches; Grahams yoghurt has no
      quantity/date so is product-only). All values preserved verbatim in
@@ -237,13 +247,14 @@
      offline consumption on two devices merges without losing either.
      Requires the fs_records migration (see release notes) before cloud
      sync will work; runs local-only until then. -->
-<script src="pal-config.js?v=1.1"></script>
-<script src="pal-sync.js?v=1.1"></script>
+<script src="pal-config.js?v=1.2"></script>
+<script src="pal-sync.js?v=1.2"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // FOOD SYSTEM TRACKER  (app id: food-system-tracker, issue prefix FS)
 // v1.0 — Phase 1: core food system foundation.
 // v1.1 — Phase 1 initial household inventory seeded (see INV_SEED_ROWS).
+// v1.2 — FS-052 sync review against the real pal-sync.js (see SYNC notes).
 //
 // Architecture notes (read before changing):
 // • Local-first. Everything lives in localStorage under STORAGE_KEY using
@@ -262,7 +273,7 @@
 //   duplicates.
 // ══════════════════════════════════════════════════════════════════
 const APP_ID      = 'food-system-tracker';
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 const STORAGE_KEY = 'fs_v1';
 const SB_TABLE    = 'fs_records';
 const SEED_TS     = '2026-01-01T00:00:00.000Z';
@@ -1004,13 +1015,31 @@ function replacer(k, v) { return k === '_qty' ? undefined : v; }
 function clean(rec) { return JSON.parse(JSON.stringify(rec, replacer)); }
 
 // ══════════════════════════════════════════════════════════════════
-// SUPABASE SYNC (via the suite's pal-sync.js)
-// Depends only on PalSync.table(name,{prefix}).upsert(id,data),
-// PalSync.fetchTableRows(name), hasSession(), errorHint().
-// Merge is record-level last-write-wins on updatedAt, done here:
-//   1. push every locally pending record (offline edits land first)
-//   2. fetch all rows, adopt any cloud record newer than local,
-//      push any local record newer than (or missing from) cloud.
+// SUPABASE SYNC (via the suite's shared pal-sync.js — FS-052 review)
+// ALL cloud traffic goes through pal-sync.js; this app never calls
+// Supabase directly. Used from the library:
+//   initSession()      — launcher PAL_SESSION handshake, origin guard
+//   table(fs_records, {prefix}).upsert() — PATCH-then-POST per record,
+//                        automatic 401 retry queue (pal_retry_queue_v1)
+//   fetchTableRows()   — one paginated fetch for all 8 record kinds
+//   hasSession(), errorHint(), retryQueueLength()
+// NOT used: table().pull(). Deliberate, reviewed against pal-sync v1.11:
+//   • pull() drops a record locally once the cloud confirms its
+//     tombstone. This app keeps tombstones on purpose — voided
+//     movements stay visible in batch history ("— voided"), and the
+//     reference seed (locations, categories, Chappie, settings) is only
+//     re-created when its id is absent, so dropping a deleted seed
+//     record would let the next boot resurrect it.
+//   • pull() only pushes ids the cloud has never seen (plus tombstones).
+//     An offline edit to an EXISTING record is only sent by the app's
+//     own edit-time upsert; if that fails for a non-401 reason
+//     (offline, network) pal-sync drops it. This app keeps its own
+//     `pending` set so such edits are always pushed on the next sync.
+// Merge here (record-level last-write-wins on data.updatedAt):
+//   1. fetch all rows once (fetchTableRows)
+//   2. adopt any cloud record newer than local; mark local records
+//      newer than, or missing from, the cloud as pending
+//   3. push pending via table().upsert()
 // Movements are immutable apart from voiding, so ledger history from
 // every device is simply unioned — quantities can't be clobbered.
 // ══════════════════════════════════════════════════════════════════
@@ -1049,6 +1078,11 @@ async function pushPending() {
       const rec = D[kind] && D[kind][id];
       if (!rec) { delete W.sync.pending[key]; continue; }
       const stamp = rec.updatedAt;
+      // v1.2 (FS-052): pal-sync's upsert() returns WITHOUT sending when
+      // there's no session (e.g. launcher locked mid-sync). Treating that
+      // as success cleared the pending flag for a record that never
+      // reached the cloud — so stop here instead and keep it pending.
+      if (!palReady()) { queue.length = 0; const e = new Error('Session ended during sync'); e.status = 401; throw e; }
       await tbl(kind).upsert(id, clean(rec));
       // only clear if not edited again while in flight
       if (D[kind][id] && D[kind][id].updatedAt === stamp) delete W.sync.pending[key];
@@ -1070,6 +1104,9 @@ async function syncNow() {
     // compared with the cloud copy first; only the newer side is kept.
     const pushed = 0;
     const rows = await window.PalSync.fetchTableRows(SB_TABLE);
+    // fetchTableRows() returns [] (not an error) when there's no session —
+    // never merge against that as if the cloud were empty.
+    if (!palReady()) { const e = new Error('Session ended during sync'); e.status = 401; throw e; }
     let adopted = 0, up = 0;
     const cloudSeen = {};
     for (const row of rows || []) {
@@ -1110,6 +1147,14 @@ async function syncNow() {
 }
 
 function initSync() {
+  // v1.2 (FS-052): pal-config.js supplies SB_URL/SB_KEY to pal-sync. If
+  // it failed to load or has a syntax error, every request would throw
+  // a TypeError — say so plainly and stay local-only instead.
+  if (!window.PAL_CONFIG || !window.PAL_CONFIG.SB_URL || !window.PAL_CONFIG.SB_KEY) {
+    syncLog('pal-config.js missing or invalid (check it loads without errors) — running local-only', 'err');
+    setSyncState('local');
+    return;
+  }
   if (!window.PalSync || !window.PalSync.initSession) {
     syncLog('pal-sync.js not loaded — running local-only (JSON backup still available)', 'info');
     setSyncState('local');
@@ -2146,7 +2191,7 @@ function renderSettings() {
     '<div class="kv"><span>Last successful sync</span><b>' + (_sync.lastOk ? fmtDateTime(_sync.lastOk) : '—') + '</b></div>' +
     '<div class="row" style="margin:8px 0"><button class="btn" onclick="syncNow()"' + (palReady() ? '' : ' disabled') + '>Sync now</button><button class="btn" onclick="showIntegrity()">Check ledger integrity</button></div>' +
     '<div class="log" id="syncLog"></div></div>';
-  h += '<div class="panel"><h3 style="margin-top:0">About</h3><div class="small muted">Food System Tracker v' + APP_VERSION + ' · data key <code>' + STORAGE_KEY + '</code> · cloud table <code>' + SB_TABLE + '</code></div></div>';
+  h += '<div class="panel"><h3 style="margin-top:0">About</h3><div class="small muted">Food System Tracker v' + APP_VERSION + ' · data key <code>' + STORAGE_KEY + '</code> · cloud table <code>' + SB_TABLE + '</code> · sync via shared <code>pal-sync.js</code>' + (window.PalSync ? '' : ' <b>(not loaded)</b>') + '</div></div>';
   document.getElementById('view-settings').innerHTML = h;
   renderSyncLog();
 }
