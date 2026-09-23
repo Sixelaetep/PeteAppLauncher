@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
-<meta name="app-version" content="1.2">
+<meta name="app-version" content="1.3">
 <script>
 // Apply any explicit global theme preference before first paint (suite pattern).
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Food System v1.2</title>
+<title>Food System v1.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='18' text-anchor='middle'>🥫</text></svg>">
 <style>
   :root {
@@ -50,6 +50,13 @@
   #tabs{position:fixed;top:var(--nav-h);left:0;right:0;height:var(--tabs-h);background:var(--surface);border-bottom:1px solid var(--border);display:flex;gap:2px;padding:0 8px;overflow-x:auto;scrollbar-width:none;z-index:49}
   #tabs::-webkit-scrollbar{display:none}
   .tab{flex-shrink:0;background:none;border:none;border-bottom:2px solid transparent;padding:0 12px;color:var(--ink2);font-weight:600;font-size:13px;white-space:nowrap}
+  .tab.hidden{display:none}
+  /* Stock Check (v1.3) */
+  .sc-actual{width:84px;text-align:right}
+  .sc-diff{font-weight:700}
+  .sc-diff.sc-up{color:var(--green)} .sc-diff.sc-down{color:var(--red)}
+  tr.sc-changed{background:var(--hover)}
+  .panel.due{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.06)}
   .tab.active{color:var(--ink);border-bottom-color:var(--fs)}
   .tab .badge{display:inline-block;min-width:16px;padding:0 5px;margin-left:5px;border-radius:8px;font-size:10px;line-height:16px;background:var(--amber);color:#111;text-align:center}
   .tab .badge.red{background:var(--red);color:#fff}
@@ -188,34 +195,75 @@
 <body>
 
 <nav id="nav">
-  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.2</span></div>
+  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.3</span></div>
   <div class="nav-spacer"></div>
   <button class="sync-pill" id="syncPill" onclick="go('settings');document.getElementById('sec-sync').scrollIntoView()" title="Sync status"><span class="sync-dot"></span><span id="syncLabel">Local</span></button>
 </nav>
 
+<!-- v1.3 (FS-053): Phase 1 scope reduction. Consume and Shopping are no
+     longer primary-nav tabs — they're hidden with .tab.hidden (display:none)
+     rather than removed, so their DOM (including badgeShop, still read by
+     renderBadges()) and every underlying function stay exactly as they
+     were; unhiding them later is a one-class change, not a rebuild.
+     Shopping stays reachable from Home ("To buy" → Shopping). Stock Check
+     is the new primary tab for periodic physical counts. -->
 <div id="tabs" role="tablist">
   <button class="tab active" data-view="home" onclick="go('home')">Home</button>
   <button class="tab" data-view="inventory" onclick="go('inventory')">Inventory</button>
   <button class="tab" data-view="rotation" onclick="go('rotation')">Rotation<span class="badge" id="badgeRot" hidden></span></button>
-  <button class="tab" data-view="consume" onclick="go('consume')">Consume</button>
-  <button class="tab" data-view="shopping" onclick="go('shopping')">Shopping<span class="badge" id="badgeShop" hidden></span></button>
   <button class="tab" data-view="resilience" onclick="go('resilience')">Resilience</button>
+  <button class="tab" data-view="stockcheck" onclick="go('stockcheck')">Stock Check</button>
   <button class="tab" data-view="settings" onclick="go('settings')">Settings</button>
+  <button class="tab hidden" data-view="consume" onclick="go('consume')">Consume</button>
+  <button class="tab hidden" data-view="shopping" onclick="go('shopping')">Shopping<span class="badge" id="badgeShop" hidden></span></button>
 </div>
 
 <main id="main">
   <section class="view active" id="view-home"></section>
   <section class="view" id="view-inventory"></section>
   <section class="view" id="view-rotation"></section>
+  <section class="view" id="view-resilience"></section>
+  <section class="view" id="view-stockcheck"></section>
+  <section class="view" id="view-settings"></section>
   <section class="view" id="view-consume"></section>
   <section class="view" id="view-shopping"></section>
-  <section class="view" id="view-resilience"></section>
-  <section class="view" id="view-settings"></section>
 </main>
 
 <div id="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div>
 <div id="toast"><span id="toastMsg"></span><button id="toastAct" hidden></button></div>
 
+<!-- v1.3 (FS-053): Phase 1 scope reduction to a Household Food
+     Resilience & Rotation System, per Pete's request — not a rebuild,
+     the existing data model, movement ledger, rotation engine and
+     resilience calc are unchanged underneath.
+     ACTIVE: Inventory (add/edit/adjust/remove stock), Rotation (Use
+     First / Rotation Risk / Maintain / Expired), Resilience (now shows
+     target + shortfall on Home as well as its own tab), dog food, and
+     a new Stock Check tab — compare system vs actual quantity across
+     all batches and apply the differences in one go (reuses the
+     existing per-batch adjustTo(), same op openStock()'s "Counted
+     quantity" field already used — no new ledger operation).
+     HIDDEN, NOT DELETED: Consume and Shopping are no longer primary-nav
+     tabs (.tab.hidden, display:none — DOM, ids/badges and every
+     underlying function untouched). Shopping stays reachable from
+     Home's "To buy" panel. Both, plus Log meal, are also reachable from
+     a "Deferred features (Phase 2+)" section in Settings. Home's "Use
+     food"/"Log meal" quick actions and the Inventory stock table's
+     per-row "Use" button are removed (the row already opens the same
+     counted-quantity editor via a click); rotItem's action button now
+     opens that editor too, instead of quick-consume.
+     BEHAVIOUR FIX (not just hiding): rotationFor() previously defaulted
+     any batch with no logged consumption history to Rotation Risk once
+     enough time had passed since first boot — harmless while consumption
+     was being logged, but under this workflow logging never happens, so
+     it would have flagged nearly all stock red, permanently. It now
+     requires real observed consumption events before applying that
+     pace-based check; with none, a distant-dated batch reads Maintain
+     from date/quantity alone. Logging consumption in a future phase
+     re-activates the pace-based check automatically.
+     Settings gained a stock-check reminder interval (default 30 days)
+     and Home/Stock Check show a "due for a check" banner from it.
+     No data-model or schema change; existing/seeded data loads as-is. -->
 <!-- v1.2 (FS-052): sync reviewed against the actual pal-sync.js (v1.11).
      Confirmed every cloud read/write goes through pal-sync (initSession,
      table().upsert with its 401 retry queue, paginated fetchTableRows,
@@ -247,14 +295,22 @@
      offline consumption on two devices merges without losing either.
      Requires the fs_records migration (see release notes) before cloud
      sync will work; runs local-only until then. -->
-<script src="pal-config.js?v=1.2"></script>
-<script src="pal-sync.js?v=1.2"></script>
+<script src="pal-config.js?v=1.3"></script>
+<script src="pal-sync.js?v=1.3"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // FOOD SYSTEM TRACKER  (app id: food-system-tracker, issue prefix FS)
 // v1.0 — Phase 1: core food system foundation.
 // v1.1 — Phase 1 initial household inventory seeded (see INV_SEED_ROWS).
 // v1.2 — FS-052 sync review against the real pal-sync.js (see SYNC notes).
+// v1.3 — FS-053 Phase 1 scope reduction: primary workflow is now periodic
+//   Stock Check (adjustTo per batch) rather than logged consumption.
+//   Consume/meal logging hidden from nav (not deleted — see part1.html's
+//   .tab.hidden note and Settings → Deferred features). Rotation no
+//   longer defaults distant-dated stock to Risk when there's no logged
+//   consumption evidence (see rotationFor's hasEvidence note) — that
+//   default made Rotation Risk fire on nearly everything once logging
+//   stopped being the norm.
 //
 // Architecture notes (read before changing):
 // • Local-first. Everything lives in localStorage under STORAGE_KEY using
@@ -273,7 +329,7 @@
 //   duplicates.
 // ══════════════════════════════════════════════════════════════════
 const APP_ID      = 'food-system-tracker';
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 const STORAGE_KEY = 'fs_v1';
 const SB_TABLE    = 'fs_records';
 const SEED_TS     = '2026-01-01T00:00:00.000Z';
@@ -422,6 +478,12 @@ const DEFAULT_SETTINGS = () => ({
   forecastDays: 14,
   countPastBestBefore: false,
   trackingStart: null,
+  // v1.3: periodic Stock Check replaces continuous consumption logging as
+  // the primary way quantities get corrected (see FS-053). stockCheckReminderDays
+  // drives the "due for a check" flag on Home; lastStockCheckAt is stamped
+  // whenever a check is applied or explicitly marked done with no changes.
+  stockCheckReminderDays: 30,
+  lastStockCheckAt: null,
   createdAt: SEED_TS, updatedAt: SEED_TS
 });
 
@@ -448,6 +510,9 @@ function seedIfNeeded() {
   // updatedAt past the seed timestamp so a real edit elsewhere still wins.
   if (!S.dogRuleStart) { S.dogRuleStart = todayISO(); changed = true; }
   if (!S.trackingStart) { S.trackingStart = todayISO(); changed = true; }
+  // v1.3: backfill for settings records created before Stock Check existed.
+  if (S.stockCheckReminderDays == null) { S.stockCheckReminderDays = 30; changed = true; }
+  if (S.lastStockCheckAt === undefined) { S.lastStockCheckAt = null; changed = true; }
   return changed;
 }
 function settings() { return D.settings.settings; }
@@ -785,8 +850,26 @@ function rotationFor(s) {
   const ahead = batchesOf(p.id).filter(o => o.id !== s.id && (o.opened || (o.date && (o.date < s.date || (o.date === s.date && o.createdAt < s.createdAt)))))
     .reduce((a, o) => a + o._qty, 0);
   const need = ahead + q;
-  const horizon = r.known ? R.horizonDays : Math.round(R.horizonDays / 2);
+  // v1.3 (FS-053): under the Phase 1 workflow (periodic stock checks, not
+  // meal-by-meal logging) there is normally NO logged consumption at all —
+  // r.events stays 0 forever, not just "not enough yet". The old fallback
+  // for that case was Rotation Risk, which meant every batch beyond the
+  // Use First window ended up flagged, for every household running this
+  // workflow — the exact opposite of a useful signal. Rotation now needs
+  // real, observed evidence of slow use (r.events > 0) before it will
+  // demote a distant-dated batch to Rotation Risk; with none, it reports
+  // Maintain from date/quantity alone. Real usage logging (Phase 2+,
+  // dormant unless re-enabled) re-activates the pace-based check exactly
+  // as before — nothing below this comment changed for that case, and dog
+  // food (source 'rule', driven by the daily feeding rule rather than
+  // logged events) is unaffected either way.
+  const hasEvidence = r.source !== 'observed' || r.events > 0;
+  const horizon = (hasEvidence && r.known) ? R.horizonDays : Math.round(R.horizonDays / 2);
   if (dl > horizon) { out.reasons.push(dateWord[0].toUpperCase() + dateWord.slice(1) + ' ' + when + ' — well ahead'); return out; }
+  if (!hasEvidence) {
+    out.reasons.push(dateWord[0].toUpperCase() + dateWord.slice(1) + ' ' + when + ' — plenty of time, no usage history logged');
+    return out;
+  }
   if (!r.known) {
     out.status = 'risk';
     out.reasons.push(fmtQty(q, unit) + ' with ' + dateWord + ' ' + when);
@@ -1438,7 +1521,7 @@ function go(view) {
   document.getElementById('main').scrollTop = 0;
 }
 function renderView(v) {
-  const f = { home: renderHome, inventory: renderInventory, rotation: renderRotation, consume: renderConsume, shopping: renderShopping, resilience: renderResilience, settings: renderSettings }[v];
+  const f = { home: renderHome, inventory: renderInventory, rotation: renderRotation, consume: renderConsume, shopping: renderShopping, resilience: renderResilience, stockcheck: renderStockCheck, settings: renderSettings }[v];
   if (f) f();
 }
 function renderAll() { invalidate(); renderView(currentView); renderBadges(); renderSyncPill(); }
@@ -1513,13 +1596,24 @@ function chip(status, bbPast) { return '<span class="chip ' + (bbPast ? 'bbpast'
 // ══════════════════════════════════════════════════════════════════
 // HOME
 // ══════════════════════════════════════════════════════════════════
+function stockCheckStatus() {
+  const S = settings();
+  const last = S.lastStockCheckAt;
+  const days = last ? Math.floor((Date.now() - new Date(last).getTime()) / 86400000) : null;
+  const remind = num(S.stockCheckReminderDays) || 30;
+  const overdue = days == null || days > remind;
+  return { last, days, remind, overdue };
+}
 function renderHome() {
   const res = resilience(), dog = dogStatus(), rot = rotationAll(), atRisk = resilienceAtRisk(res);
   const S = settings();
+  const target = num(S.humanTargetDays) || 0;
+  const shortfall = target ? Math.max(0, target - res.days) : 0;
   const uf = rot.filter(r => r.status === 'usefirst' || (r.status === 'expired'));
   const rk = rot.filter(r => r.status === 'risk');
   const recs = recommendations().filter(r => !r.onList);
   const openShop = live('shopping').filter(i => i.status === 'open');
+  const sc = stockCheckStatus();
   const empty = !live('stock').some(s => s._qty > 1e-9 && product(s.productId) && product(s.productId).foodType !== 'dog');
   let h = '';
   if (empty) h += '<div class="warnbox"><b>No household food in the inventory yet.</b> Paste your inventory spreadsheet in <a href="#" onclick="openBulk();return false">Inventory → Bulk add</a>, or add items one at a time.</div>';
@@ -1527,6 +1621,7 @@ function renderHome() {
   h += '<div class="panel"><div class="small muted">Estimated resilience</div>' +
     '<div class="headline"><span class="num">' + fmtDays(res.days) + '</span><span class="unit">days</span>' +
     (atRisk.days >= 1 ? '<span class="small muted">· ' + fmtDays(atRisk.days) + ' at risk</span>' : '') + '</div>' +
+    (target ? '<div class="small" style="margin-top:4px">Target <b>' + target + ' days</b> — ' + (res.days >= target ? '<span class="chip maintain">met</span>' : '<span class="chip usefirst">' + fmtDays(shortfall) + '-day shortfall</span>') + '</div>' : '') +
     '<div class="measures">' + res.measures.map(m => '<div class="measure' + (m === res.limiting ? ' limit' : '') + '"><div class="v">' + fmtDays(m.days) + '</div><div class="l">' + m.label + (m === res.limiting ? ' · limiting' : '') + '</div></div>').join('') + '</div>' +
     (res.cats._none ? '<div class="note">Some stock is uncategorised, so the practical-food check is only partial — <a href="#" onclick="ui.invTab=\'products\';ui.cat=\'_none\';go(\'inventory\');return false">categorise</a>.</div>' : '') +
     (res.unknown.length ? '<div class="note">' + res.unknown.length + ' batch' + (res.unknown.length > 1 ? 'es have' : ' has') + ' no nutrition data and ' + (res.unknown.length > 1 ? 'are' : 'is') + ' not counted — <a href="#" onclick="go(\'resilience\');return false">see details</a>.</div>' : '') +
@@ -1537,10 +1632,12 @@ function renderHome() {
     '<div class="small muted" style="margin-top:4px">' + fmtNum(dog.daily, 0) + 'g/day · target ' + dog.target + ' days</div>' +
     (dog.replenish ? '<div style="margin-top:8px"><span class="chip usefirst">Replenish</span> <span class="small">Buy ' + dog.buyPacks + ' × ' + (dog.packG ? fmtWeight(dog.packG) : '') + ' ' + esc(dog.product ? dog.product.unit : 'bag') + '</span></div>' : '') +
     '</div></div>';
+  h += '<div class="panel' + (sc.overdue ? ' due' : '') + '" style="margin-bottom:14px"><div class="row"><span class="small' + (sc.overdue ? '' : ' muted') + '">' +
+    (sc.last ? 'Last stock check: <b>' + (sc.days === 0 ? 'today' : sc.days + ' day' + (sc.days === 1 ? '' : 's') + ' ago') + '</b>' : '<b>No stock check recorded yet</b>') +
+    (sc.overdue ? ' — due a check' : '') + '</span><span class="grow"></span><button class="btn sm" onclick="go(\'stockcheck\')">Stock Check</button></div></div>';
   h += '<div class="quick">' +
-    '<button class="btn" onclick="openConsume()">Use food</button>' +
     '<button class="btn" onclick="openAddFood()">Add food</button>' +
-    '<button class="btn" onclick="openMeal()">Log meal</button>' +
+    '<button class="btn" onclick="go(\'stockcheck\')">Stock Check</button>' +
     '<button class="btn" onclick="go(\'shopping\')">Shopping' + (recs.length + openShop.length ? ' (' + (recs.length + openShop.length) + ')' : '') + '</button></div>';
   h += '<div class="panel"><div class="group-head" style="margin-top:0"><h3>Needs attention</h3><span class="chip usefirst">' + uf.length + '</span><span class="grow"></span><button class="btn sm ghost" onclick="go(\'rotation\')">All rotation</button></div>' +
     (uf.length ? uf.slice(0, 6).map(rotItem).join('') : '<div class="empty">Nothing to use urgently or clear out.</div>') + '</div>';
@@ -1556,7 +1653,7 @@ function rotItem(r) {
   const p = r.product, s = r.stock;
   const acts = r.status === 'expired' && !r.bbPast
     ? '<button class="btn sm danger" onclick="confirmRemove(\'' + s.id + '\')">Remove</button>'
-    : '<button class="btn sm" onclick="openConsume(\'' + p.id + '\',\'' + s.id + '\',' + (r.status === 'risk' || r.status === 'usefirst') + ')">Use</button>';
+    : '<button class="btn sm" onclick="openStock(\'' + s.id + '\')">Update</button>';
   return '<div class="item"><div class="body"><div class="name">' + productLabel(p) + ' ' + chip(r.status, r.bbPast) + '</div>' +
     '<div class="why">' + stockLine(s) + ' · ' + esc(locationName(s)) + (s.date ? ' · ' + dateCell(s) : '') + '</div>' +
     '<div class="why">' + r.reasons.map(esc).join('<br>') + (r.action ? '<br><b>Suggested:</b> ' + esc(r.action) : '') + '</div></div>' +
@@ -1635,6 +1732,101 @@ function renderResilience() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// STOCK CHECK (v1.3, FS-053) — the primary Phase 1 workflow for
+// correcting quantities: periodically compare system vs physical stock
+// and apply the differences in one go, instead of logging consumption
+// as it happens. Reuses the existing per-batch adjustTo() ledger op
+// (the same one openStock()'s "Counted quantity" field already calls) —
+// no new movement type, no new data model.
+// ══════════════════════════════════════════════════════════════════
+let _sc = { q: '' };
+let _scRows = null;
+function scRows() {
+  return live('stock').filter(s => s._qty > 1e-9)
+    .map(s => ({ s, p: product(s.productId) })).filter(x => x.p)
+    .sort((a, b) => a.p.name.localeCompare(b.p.name) || ((a.s.date || '9') < (b.s.date || '9') ? -1 : 1));
+}
+function renderStockCheck() {
+  const q = norm(_sc.q);
+  let rows = scRows();
+  if (q) rows = rows.filter(({ p, s }) => (norm(p.name) + ' ' + norm(p.brand) + ' ' + norm(locationName(s))).indexOf(q) !== -1);
+  _scRows = rows;
+  let h = '<h2>Stock Check</h2><p class="small muted" style="margin-bottom:6px">Compare what the system thinks you have against what\'s actually on the shelf, correct any differences, then apply them together.</p>';
+  h += '<div class="toolbar"><input class="inp search" id="scSearch" placeholder="Search name, brand, location…" value="' + esc(_sc.q) + '" oninput="_sc.q=this.value;renderStockCheck()"></div>';
+  if (!rows.length) {
+    h += '<div class="panel empty">' + (scRows().length ? 'No batches match “' + esc(_sc.q) + '”.' : 'Nothing in stock to check yet.') + '</div>';
+  } else {
+    h += '<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>Product</th><th>Where / date</th><th class="num">System</th><th class="num">Actual</th><th class="num">Diff</th></tr></thead><tbody>';
+    rows.forEach(({ s, p }, i) => {
+      h += '<tr id="sc-row-' + i + '"><td class="lead" data-l="Product">' + productLabel(p) + (p.foodType === 'dog' ? ' <span class="tiny muted">dog</span>' : '') + '</td>' +
+        '<td data-l="Where" class="hide-m">' + esc(locationName(s)) + (s.date ? ' · ' + dateCell(s) : '') + '</td>' +
+        '<td class="num" data-l="System">' + fmtQty(s._qty, p.unit) + '</td>' +
+        '<td class="num" data-l="Actual"><input class="inp sc-actual" inputmode="decimal" data-i="' + i + '" value="' + round(s._qty, 3) + '" oninput="scOnInput(' + i + ')"></td>' +
+        '<td class="num sc-diff" data-l="Diff" id="sc-diff-' + i + '">—</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    h += '<div class="row" style="margin-top:14px;gap:10px"><span class="small muted grow" id="scChangedCount">No changes yet</span><button class="btn" onclick="scMarkChecked()">Mark checked, no changes</button><button class="btn primary" onclick="scApply()">Apply stock check</button></div>';
+  }
+  const sc = stockCheckStatus();
+  h += '<div class="note" style="margin-top:14px">' + (sc.last ? 'Last checked ' + (sc.days === 0 ? 'today' : sc.days + ' day' + (sc.days === 1 ? '' : 's') + ' ago') : 'Never checked yet') +
+    (sc.overdue ? ' — <b>due for a check</b> (every ' + sc.remind + ' days, set in Settings)' : '') + '</div>';
+  document.getElementById('view-stockcheck').innerHTML = h;
+}
+// Rows display quantity rounded to 3dp (fmtQty/round(...,3) — see renderStockCheck),
+// so a batch with a repeating decimal (e.g. 11000g of a 15000g dog bag = 0.7333...
+// bags) never round-trips exactly through the input. Comparing the typed value
+// against that SAME 3dp baseline — not the raw full-precision quantity — is what
+// makes "untouched" mean "no change": comparing against the raw value instead
+// (an earlier bug) treated ordinary display rounding as a real edit and applied a
+// spurious sub-gram correction to every such row, even ones the user never touched.
+function scBaseline(row) { return round(row.s._qty, 3); }
+function scOnInput(i) {
+  const row = _scRows && _scRows[i]; if (!row) return;
+  const input = document.querySelector('.sc-actual[data-i="' + i + '"]');
+  const diffEl = document.getElementById('sc-diff-' + i);
+  const tr = document.getElementById('sc-row-' + i);
+  const v = num(input.value);
+  if (v == null) { diffEl.textContent = '—'; diffEl.className = 'num sc-diff'; if (tr) tr.classList.remove('sc-changed'); }
+  else {
+    const diff = round(v - scBaseline(row), 3);
+    diffEl.textContent = diff === 0 ? '—' : (diff > 0 ? '+' : '') + fmtNum(diff, 2);
+    diffEl.className = 'num sc-diff' + (diff > 0 ? ' sc-up' : diff < 0 ? ' sc-down' : '');
+    if (tr) tr.classList.toggle('sc-changed', diff !== 0);
+  }
+  scUpdateSummary();
+}
+function scUpdateSummary() {
+  if (!_scRows) return;
+  let changed = 0;
+  _scRows.forEach((row, i) => {
+    const el = document.querySelector('.sc-actual[data-i="' + i + '"]'); if (!el) return;
+    const v = num(el.value); if (v != null && round(v - scBaseline(row), 3) !== 0) changed++;
+  });
+  const el = document.getElementById('scChangedCount'); if (el) el.textContent = changed ? changed + ' change' + (changed === 1 ? '' : 's') + ' to apply' : 'No changes yet';
+}
+function scApply() {
+  if (!_scRows || !_scRows.length) { scMarkChecked(); return; }
+  let count = 0, skipped = 0;
+  const note = 'Stock check ' + todayISO();
+  _scRows.forEach((row, i) => {
+    const el = document.querySelector('.sc-actual[data-i="' + i + '"]'); if (!el) return;
+    const v = num(el.value);
+    if (v == null || v < 0) { if (el.value.trim() !== '') skipped++; return; }
+    if (round(v - scBaseline(row), 3) === 0) return;
+    adjustTo(row.s.id, v, note); count++;
+  });
+  const S = settings(); S.lastStockCheckAt = nowISO(); put('settings', S);
+  invalidate(); commit();
+  toast((count ? count + ' item' + (count === 1 ? '' : 's') + ' adjusted' : 'No changes needed') + (skipped ? ' · ' + skipped + ' skipped (invalid quantity)' : ''));
+  go('home');
+}
+function scMarkChecked() {
+  const S = settings(); S.lastStockCheckAt = nowISO(); put('settings', S); commit();
+  toast('Marked checked — no changes recorded');
+  go('home');
+}
+
+// ══════════════════════════════════════════════════════════════════
 // INVENTORY
 // ══════════════════════════════════════════════════════════════════
 function renderInventory() {
@@ -1669,13 +1861,15 @@ function invStock() {
   let h = invFilters(true);
   h += '<div class="small muted" style="margin-bottom:6px">' + rows.length + ' of ' + total + ' batches · tap a row to edit, count or move</div>';
   if (!rows.length) return h + '<div class="panel empty">' + (total ? 'No batches match these filters.' : 'No stock yet. Use <b>Bulk add / paste</b> to bring in your inventory spreadsheet.') + '</div>';
-  h += '<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>Product</th><th>Category</th><th>Location</th><th class="num">Quantity</th><th>Date</th><th>Status</th><th></th></tr></thead><tbody>';
+  // v1.3 (FS-053): dropped the per-row "Use" quick-consume button — the
+  // whole row already opens openStock() on click, which is now the
+  // sanctioned way to correct a quantity (its "Counted quantity" field).
+  h += '<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>Product</th><th>Category</th><th>Location</th><th class="num">Quantity</th><th>Date</th><th>Status</th></tr></thead><tbody>';
   rows.forEach(r => {
     const s = r.stock, p = r.product, c = category(p.categoryId);
     h += '<tr class="click" onclick="openStock(\'' + s.id + '\')"><td class="lead" data-l="Product">' + productLabel(p) + (s.opened ? ' <span class="tiny muted">opened</span>' : '') + '</td>' +
       '<td data-l="Category" class="hide-m">' + esc(c ? c.name : '—') + '</td><td data-l="Location">' + esc(locationName(s)) + '</td>' +
-      '<td class="num" data-l="Qty">' + stockLine(s) + '</td><td data-l="Date">' + dateCell(s) + '</td><td data-l="Status">' + chip(r.status, r.bbPast) + '</td>' +
-      '<td onclick="event.stopPropagation()"><button class="btn sm" onclick="openConsume(\'' + p.id + '\',\'' + s.id + '\')">Use</button></td></tr>';
+      '<td class="num" data-l="Qty">' + stockLine(s) + '</td><td data-l="Date">' + dateCell(s) + '</td><td data-l="Status">' + chip(r.status, r.bbPast) + '</td></tr>';
   });
   return h + '</tbody></table></div>';
 }
@@ -2175,7 +2369,8 @@ function renderSettings() {
     '<label class="f">Use First: best-before within (days)<input class="inp" id="rBB" inputmode="numeric" value="' + R.bestBeforeDays + '"></label>' +
     '<label class="f">Check rotation risk up to (days ahead)<input class="inp" id="rHz" inputmode="numeric" value="' + R.horizonDays + '"></label>' +
     '<label class="f">History needed before trusting pace (days)<input class="inp" id="rMin" inputmode="numeric" value="' + R.minHistoryDays + '"></label>' +
-    '<label class="f">Shopping: warn when fewer than (days) left<input class="inp" id="sFc" inputmode="numeric" value="' + S.forecastDays + '"></label></div>' +
+    '<label class="f">Shopping: warn when fewer than (days) left<input class="inp" id="sFc" inputmode="numeric" value="' + S.forecastDays + '"></label>' +
+    '<label class="f">Remind me to do a stock check every (days)<input class="inp" id="sScRemind" inputmode="numeric" value="' + (S.stockCheckReminderDays == null ? 30 : S.stockCheckReminderDays) + '"></label></div>' +
     '<div class="row" style="margin-top:12px"><span class="grow"></span><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div>';
   h += '<div class="panel"><h3 style="margin-top:0">Storage locations</h3>' + live('locations').sort((a, b) => (a.order || 0) - (b.order || 0)).map(l => '<div class="row" style="padding:3px 0"><input class="inp grow" style="width:auto" value="' + esc(l.name) + '" onchange="renameRec(\'locations\',\'' + l.id + '\',this.value)"><label class="small row"><input type="checkbox"' + (l.archived ? ' checked' : '') + ' onchange="archiveRec(\'locations\',\'' + l.id + '\',this.checked)"> hidden</label></div>').join('') +
     '<div class="row" style="margin-top:6px"><input class="inp grow" id="newLoc" placeholder="New location" style="width:auto"><button class="btn" onclick="addNamed(\'locations\',\'newLoc\')">Add</button></div></div>';
@@ -2191,7 +2386,10 @@ function renderSettings() {
     '<div class="kv"><span>Last successful sync</span><b>' + (_sync.lastOk ? fmtDateTime(_sync.lastOk) : '—') + '</b></div>' +
     '<div class="row" style="margin:8px 0"><button class="btn" onclick="syncNow()"' + (palReady() ? '' : ' disabled') + '>Sync now</button><button class="btn" onclick="showIntegrity()">Check ledger integrity</button></div>' +
     '<div class="log" id="syncLog"></div></div>';
-  h += '<div class="panel"><h3 style="margin-top:0">About</h3><div class="small muted">Food System Tracker v' + APP_VERSION + ' · data key <code>' + STORAGE_KEY + '</code> · cloud table <code>' + SB_TABLE + '</code> · sync via shared <code>pal-sync.js</code>' + (window.PalSync ? '' : ' <b>(not loaded)</b>') + '</div></div>';
+  h += '<div class="panel"><details><summary style="cursor:pointer"><b>Deferred features (Phase 2+)</b></summary>' +
+    '<div class="small muted" style="margin-top:8px">Not part of the Phase 1 workflow — inventory and resilience never depend on these. Kept working underneath in case you want them:</div>' +
+    '<div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="btn sm" onclick="go(\'consume\')">Consume / quick use</button><button class="btn sm" onclick="openMeal()">Log a meal</button><button class="btn sm" onclick="go(\'shopping\')">Shopping list</button></div></details></div>';
+  h += '<div class="panel"><h3 style="margin-top:0">About</h3><div class="small muted">Food System Tracker v' + APP_VERSION + ' — household food resilience & rotation. Data key <code>' + STORAGE_KEY + '</code> · cloud table <code>' + SB_TABLE + '</code> · sync via shared <code>pal-sync.js</code>' + (window.PalSync ? '' : ' <b>(not loaded)</b>') + '</div></div>';
   document.getElementById('view-settings').innerHTML = h;
   renderSyncLog();
 }
@@ -2216,6 +2414,7 @@ function saveSettings() {
     household: { adults: num($v('sAdults')) || 0, kcal, protein: prot },
     humanTargetDays: num($v('sHumanTarget')) || 0, countPastBestBefore: document.getElementById('sPastBB').checked,
     dogs, dogProductId: newDogProd || S.dogProductId, dogTargetDays: num($v('sDogTarget')) || 0, forecastDays: num($v('sFc')) || 14,
+    stockCheckReminderDays: num($v('sScRemind')) || 30,
     rotation: Object.assign({}, S.rotation, { useByDays: num($v('rUB')) || 0, bestBeforeDays: num($v('rBB')) || 0, horizonDays: num($v('rHz')) || 180, minHistoryDays: num($v('rMin')) || 0 })
   });
   put('settings', S); commit(); toast('Settings saved');
