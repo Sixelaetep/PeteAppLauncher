@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.44</title>
+<title>Fantasy Football Tracker v1.45</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -123,6 +123,7 @@
   .player-dot.out { background: var(--accent3); }
   .player-info { flex: 1; min-width: 0; }
   .player-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .risk-icon { font-size: 12px; line-height: 1; cursor: help; }
   .player-sub { font-size: 11px; color: var(--ink2); }
   .player-price { font-size: 12px; color: var(--ink2); font-variant-numeric: tabular-nums; }
 
@@ -421,7 +422,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.44</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.45</span></div>
 </nav>
 
 <div class="tabs">
@@ -558,13 +559,28 @@
 
 <div id="toast"></div>
 
-<script src="pal-config.js?v=1.44"></script>
-<script src="pal-sync.js?v=1.44"></script>
-<script src="pal-utils.js?v=1.44"></script>
+<script src="pal-config.js?v=1.45"></script>
+<script src="pal-sync.js?v=1.45"></script>
+<script src="pal-utils.js?v=1.45"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.45 — Squad view (both live and locked-in/planned cards) now
+ * shows a small 🚑 icon next to a player's name when they're
+ * genuinely at risk of not playing — reuses isEffectivelyUnavailable()
+ * unchanged (the exact same gate that already keeps such players out
+ * of the suggested XI and captaincy), so this can never disagree with
+ * those. That means injured/suspended/unavailable always gets the
+ * icon, and doubtful only gets it when FPL's own
+ * chance_of_playing_next_round is known and ≤25% — a plain doubtful
+ * player with a decent or unknown chance does NOT get flagged, same
+ * distinction the app already draws everywhere else. Hovering the
+ * icon shows the reason (status + chance % + FPL's own news text
+ * where available). The existing colour dot and news-text tooltip on
+ * the card are untouched — this is additive, for players whose colour
+ * dot alone might get missed.
  *
  * v1.44 [FF-017 Phase E] — External tab gains a "Review session"
  * banner (brief §14/§15): GW + squad basis, how long ago the current
@@ -1634,7 +1650,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.44';
+const FF_VERSION = '1.45';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1797,7 +1813,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.44',
+    appVersion: '1.45',
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -2033,6 +2049,38 @@ function statusDotClass(status) {
   return '';
 }
 
+// Human-readable reason behind a risk icon. Kept separate from the
+// existing colour dot: the dot is a quick-glance signal but relies on
+// colour alone, which isn't obvious enough for "will this player
+// actually play" specifically — this is an explicit, hoverable icon
+// for that one question. 'i'/'s'/'u'/'n' mirror the FPL status codes
+// already used throughout (injured/suspended/unavailable/not at club);
+// 'd' includes the known chance-of-playing percentage when FPL
+// supplies one.
+function injuryRiskLabel(el) {
+  if (el.status === 'i') return 'Injured';
+  if (el.status === 's') return 'Suspended';
+  if (el.status === 'u' || el.status === 'n') return 'Unavailable';
+  if (el.status === 'd') {
+    return 'Doubtful' + (el.chance_of_playing_next_round != null ? ' (' + el.chance_of_playing_next_round + '% chance of playing)' : '');
+  }
+  return '';
+}
+
+// Shown only when isEffectivelyUnavailable() says so — the SAME gate
+// already used to keep genuinely-at-risk players out of the
+// suggested XI and captaincy (defined further below; function
+// declarations are hoisted so the forward reference is safe). That
+// means a plain "doubtful" player with a decent/unknown chance of
+// playing does NOT get the icon — only injured/suspended/unavailable,
+// or doubtful with a known low chance — matching "risk of not
+// playing", not just "any news at all".
+function riskIconHtml(el) {
+  if (!isEffectivelyUnavailable(el)) return '';
+  const label = injuryRiskLabel(el) + (el.news ? ' — ' + el.news : '');
+  return ' <span class="risk-icon" title="' + safeEsc(label) + '">🚑</span>';
+}
+
 function fdrChipHtml(el, nextFixtureByTeam) {
   const fx = nextFixtureByTeam ? nextFixtureByTeam[el.team] : null;
   if (!fx) return '<span class="fdr-chip none">—</span>';
@@ -2222,7 +2270,7 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByP
     <div class="player-card${isBench ? ' bench' : ''}" title="${safeEsc(el.news || '')}">
       <div class="player-dot ${dotClass}"></div>
       <div class="player-info">
-        <div class="player-name">${safeEsc(el.web_name)} ${badge}${gwBadge}</div>
+        <div class="player-name">${safeEsc(el.web_name)}${riskIconHtml(el)} ${badge}${gwBadge}</div>
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}${statusNote}${multiplierNote}</div>
         <div class="player-fixture-boxes">
           ${thisWeekBoxHtml(el, matchStateByTeam)}
@@ -2676,7 +2724,7 @@ function interactiveLockedInCardHtml(el, team, pick, isBench, nextFixtureByTeam,
     <div class="player-card${isBench ? ' bench' : ''}${isPendingOut ? ' pending-swap' : ''}" title="${safeEsc(el.news || '')}">
       <div class="player-dot ${dotClass}"></div>
       <div class="player-info">
-        <div class="player-name">${safeEsc(el.web_name)} ${badge}</div>
+        <div class="player-name">${safeEsc(el.web_name)}${riskIconHtml(el)} ${badge}</div>
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}</div>
         ${pointsLineHtml(el, maxPointsByPos)}
       </div>
