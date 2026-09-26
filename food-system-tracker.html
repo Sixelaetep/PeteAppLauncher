@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
-<meta name="app-version" content="1.5">
+<meta name="app-version" content="1.6">
 <script>
 // Apply any explicit global theme preference before first paint (suite pattern).
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Food System v1.5</title>
+<title>Food System v1.6</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='18' text-anchor='middle'>🥫</text></svg>">
 <style>
   :root {
@@ -198,7 +198,7 @@
 <body>
 
 <nav id="nav">
-  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.5</span></div>
+  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.6</span></div>
   <div class="nav-spacer"></div>
   <button class="sync-pill" id="syncPill" onclick="go('settings');document.getElementById('sec-sync').scrollIntoView()" title="Sync status"><span class="sync-dot"></span><span id="syncLabel">Local</span></button>
 </nav>
@@ -212,6 +212,7 @@
      is the new primary tab for periodic physical counts. -->
 <div id="tabs" role="tablist">
   <button class="tab active" data-view="home" onclick="go('home')">Home</button>
+  <button class="tab" data-view="required" onclick="go('required')">Required<span class="badge" id="badgeReq" hidden></span></button>
   <button class="tab" data-view="inventory" onclick="go('inventory')">Inventory</button>
   <button class="tab" data-view="rotation" onclick="go('rotation')">Rotation<span class="badge" id="badgeRot" hidden></span></button>
   <button class="tab" data-view="resilience" onclick="go('resilience')">Resilience</button>
@@ -223,6 +224,7 @@
 
 <main id="main">
   <section class="view active" id="view-home"></section>
+  <section class="view" id="view-required"></section>
   <section class="view" id="view-inventory"></section>
   <section class="view" id="view-rotation"></section>
   <section class="view" id="view-resilience"></section>
@@ -235,6 +237,34 @@
 <div id="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div>
 <div id="toast"><span id="toastMsg"></span><button id="toastAct" hidden></button></div>
 
+<!-- v1.6 (FS-070): Required Inventory — Pete's resilience-box shopping/
+     stock-check exercise (4×10L boxes, aisle-grouped list, 28-day dinner
+     rotation) becomes the app's headline measure instead of a one-off
+     PDF. New `required` record kind: a target list of items with a
+     specced quantity/unit/category (seeded from that exercise, linked
+     by fixed id to the matching real product where Pete's Phase 1
+     inventory already has one — e.g. tuna, lentils, chopped tomatoes,
+     pesto — so day one coverage reflects actual stock, not zero).
+     Categories replaced with the shopping-aisle groupings used in that
+     list (tinned meat/fish, beans/pulses, tomatoes, veg, fruit, soup,
+     dry goods, sauces, spices/stock, oils, dairy, drinks, snacks,
+     vitamins, equipment) — cat_dog and cat_other keep their old ids.
+     Locations: the single "Emergency/resilience box" location becomes
+     four (Emergency Box 1-4), matching the physical boxes, alongside
+     the existing Pantry/Kitchen/Fridge/Freezer/Dog/Other.
+     New "Required" tab: a Stock-Check-style form seeded from the
+     required list — each row shows the target, an editable "Have"
+     quantity, and a location/box assignment, applied together (same
+     adjustTo()/addStock() ledger ops as Stock Check and Inventory, no
+     new mutation path). Rows with no linked product yet create one on
+     first save. New items can be added to the required list inline.
+     Home's headline is now required-inventory coverage: overall % of
+     the specced list held, and how many of the 28 planned dinner days
+     that implies (requiredCoverage(), MEAL_PLAN_DAYS=28) — the old
+     kcal/protein/practical-food resilience panel is kept, demoted
+     below it, unchanged. Rotation is untouched: it already shows each
+     batch's box/location and best-before date, which is what keeps
+     working here. -->
 <!-- v1.5 (FS-062): the v1.4 mobile fixes weren't enough — a real iPhone
      screenshot (Stock Check) still showed oversized, cut-off content.
      Root cause: this app's viewport meta tag was missing
@@ -367,7 +397,7 @@
 //   duplicates.
 // ══════════════════════════════════════════════════════════════════
 const APP_ID      = 'food-system-tracker';
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 const STORAGE_KEY = 'fs_v1';
 const SB_TABLE    = 'fs_records';
 const SEED_TS     = '2026-01-01T00:00:00.000Z';
@@ -381,6 +411,7 @@ const KINDS = {
   movements:  'mov_',
   locations:  'loc_',
   categories: 'cat_',
+  required:   'req_',
   meals:      'meal_',
   shopping:   'shop_',
   settings:   'set_'
@@ -494,15 +525,72 @@ function live(kind) { return Object.values(D[kind]).filter(r => !r._deleted); }
 // ══════════════════════════════════════════════════════════════════
 const SEED_LOCATIONS = [
   ['loc_kitchen','Kitchen cupboard'],['loc_pantry','Pantry'],['loc_fridge','Fridge'],['loc_freezer','Freezer'],
-  ['loc_resilience','Emergency/resilience box'],['loc_dog','Dog food storage'],['loc_other','Other']
+  ['loc_box1','Emergency Box 1'],['loc_box2','Emergency Box 2'],['loc_box3','Emergency Box 3'],['loc_box4','Emergency Box 4'],
+  ['loc_dog','Dog food storage'],['loc_other','Other']
 ];
 // share = the largest fraction of a day's energy this category can
-// sensibly supply in the "practical food" coverage measure.
+// sensibly supply in the "practical food" coverage measure. Aisle-based
+// (v1.6, FS-070) to match the required-inventory shopping list — cat_dog
+// and cat_other keep their old ids so existing links aren't broken.
 const SEED_CATEGORIES = [
-  ['cat_grains','Grains / starches',0.4],['cat_pulses','Pulses / beans',0.4],['cat_meat','Meat / poultry',0.4],
-  ['cat_fish','Fish',0.4],['cat_dairy','Dairy',0.3],['cat_tinned','Tinned foods',0.4],['cat_fruit','Fruit',0.25],
-  ['cat_veg','Vegetables',0.25],['cat_sauces','Sauces / condiments',0.1],['cat_snacks','Snacks',0.15],
-  ['cat_breakfast','Breakfast',0.4],['cat_drinks','Drinks',0.1],['cat_dog','Dog food',0],['cat_other','Other',0.25]
+  ['cat_meatfish','Tinned Meat & Fish',0.4],['cat_beanspulse','Beans, Pulses & Chickpeas',0.4],
+  ['cat_tomatoes','Tinned Tomatoes & Passata',0.3],['cat_vegtin','Tinned Vegetables',0.25],
+  ['cat_fruit','Tinned Fruit',0.25],['cat_soup','Tinned Soup',0.3],
+  ['cat_drygoods','Pasta, Rice, Oats & Dry Goods',0.4],['cat_sauces','Jars & Sauces',0.15],
+  ['cat_spices','Herbs, Spices, Stock & Seasoning',0.05],['cat_oils','Oils',0.1],
+  ['cat_dairy','Milk & Dairy',0.3],['cat_drinks','Hot Drinks',0.05],['cat_snacks','Snacks & Biscuits',0.15],
+  ['cat_vitamins','Vitamins & Supplements',0],['cat_equipment','Equipment',0],
+  ['cat_dog','Dog food',0],['cat_other','Other',0.25]
+];
+// Required inventory (v1.6, FS-070) — the specced target from Pete's
+// resilience-box exercise: 4×10L boxes, aisle-grouped, sized to cover a
+// 28-day dinner rotation. [id, name, categoryId, qty, unit, productId].
+// productId links to a Phase 1 seed product (see INV_SEED_ROWS) where
+// the exercise's item matches something Pete already has stocked, so
+// coverage reflects real stock from day one rather than starting at 0%.
+const MEAL_PLAN_DAYS = 28;
+const SEED_REQUIRED = [
+  ['req_tuna','Tuna chunks (brine or oil)','cat_meatfish',3,'item','prod_seed_tuna_chunk_brine'],
+  ['req_cornedbeef','Corned beef','cat_meatfish',3,'tin',null],
+  ['req_tinnedchicken','Tinned chicken breast','cat_meatfish',2,'tin',null],
+  ['req_chickpeas','Chickpeas','cat_beanspulse',4,'item','prod_seed_chickpeas_water'],
+  ['req_kidneybeans','Kidney beans','cat_beanspulse',2,'tin',null],
+  ['req_mixedbeans','Mixed beans','cat_beanspulse',2,'tin',null],
+  ['req_butterbeans','Butter beans','cat_beanspulse',2,'item','prod_seed_butterbeans'],
+  ['req_bakedbeans','Baked beans','cat_beanspulse',2,'item','prod_seed_newgate_baked_beans'],
+  ['req_lentils','Red split lentils (dried)','cat_beanspulse',2,'item','prod_seed_red_lentils'],
+  ['req_choppedtom','Chopped tomatoes','cat_tomatoes',4,'item','prod_seed_chopped_tomatoes'],
+  ['req_plumtom','Plum tomatoes','cat_tomatoes',2,'item','prod_seed_plum_tomatoes'],
+  ['req_passata','Passata','cat_tomatoes',1,'item','prod_seed_passata_morrisons'],
+  ['req_carrots','Tinned carrots','cat_vegtin',3,'tin',null],
+  ['req_peas','Tinned peas','cat_vegtin',2,'tin',null],
+  ['req_mixedveg','Mixed vegetables','cat_vegtin',3,'tin',null],
+  ['req_mushrooms','Mushrooms','cat_vegtin',2,'tin',null],
+  ['req_sweetcorn','Sweetcorn','cat_vegtin',1,'item','prod_seed_sweetcorn_gg'],
+  ['req_tinnedfruit','Tinned fruit (peach/pineapple/mandarin)','cat_fruit',4,'item','prod_seed_pineapple_syrup'],
+  ['req_driedfruit','Dried fruit (raisins/apricots)','cat_fruit',2,'bag',null],
+  ['req_soup','Tinned soup (assorted)','cat_soup',4,'item','prod_seed_scotch_broth'],
+  ['req_spaghetti','Spaghetti','cat_drygoods',2,'item','prod_seed_spaghetti_lidl'],
+  ['req_rice','Rice (large bag)','cat_drygoods',1,'item','prod_seed_basmati_lidl'],
+  ['req_oats','Porridge oats','cat_drygoods',3,'item','prod_seed_scott_porridge_oats'],
+  ['req_sugar','Sugar','cat_drygoods',1,'bag',null],
+  ['req_greenpesto','Green pesto','cat_sauces',2,'item','prod_seed_green_pesto'],
+  ['req_redpesto','Red pesto','cat_sauces',1,'item','prod_seed_red_pesto'],
+  ['req_currysauce','Curry sauce / paste','cat_sauces',4,'jar',null],
+  ['req_peanutbutter','Peanut butter','cat_sauces',1,'item','prod_seed_peanut_butter_1kg'],
+  ['req_honey','Honey','cat_sauces',1,'jar',null],
+  ['req_salt','Salt','cat_spices',1,'bag',null],
+  ['req_herbs','Dried mixed herbs','cat_spices',1,'item',null],
+  ['req_spicemix','Curry powder / chilli / paprika','cat_spices',1,'item',null],
+  ['req_stockcubes','Stock cubes','cat_spices',1,'box',null],
+  ['req_oil','Cooking oil','cat_oils',2,'bottle',null],
+  ['req_powderedmilk','Powdered milk','cat_dairy',1,'box',null],
+  ['req_uhtmilk','UHT milk cartons','cat_dairy',4,'item',null],
+  ['req_teacoffee','Tea bags / instant coffee','cat_drinks',1,'pack',null],
+  ['req_snacks','Biscuits or crackers','cat_snacks',2,'pack',null],
+  ['req_multivit','Multivitamin tablets','cat_vitamins',2,'item',null],
+  ['req_vitc','Vitamin C tablets or squash','cat_vitamins',1,'item',null],
+  ['req_tinopener','Manual tin opener (+ spares)','cat_equipment',3,'item',null]
 ];
 const DEFAULT_SETTINGS = () => ({
   id: 'settings',
@@ -522,6 +610,7 @@ const DEFAULT_SETTINGS = () => ({
   // whenever a check is applied or explicitly marked done with no changes.
   stockCheckReminderDays: 30,
   lastStockCheckAt: null,
+  lastRequiredCheckAt: null,
   createdAt: SEED_TS, updatedAt: SEED_TS
 });
 
@@ -532,6 +621,9 @@ function seedIfNeeded() {
   });
   SEED_CATEGORIES.forEach(([id, name, share], i) => {
     if (!D.categories[id]) { D.categories[id] = { id, name, share, order: i, createdAt: SEED_TS, updatedAt: SEED_TS }; changed = true; }
+  });
+  SEED_REQUIRED.forEach(([id, name, categoryId, qty, unit, productId], i) => {
+    if (!D.required[id]) { D.required[id] = { id, name, categoryId, qty, unit, productId: productId || null, primaryStockId: null, order: i, createdAt: SEED_TS, updatedAt: SEED_TS }; changed = true; }
   });
   if (!D.products.prod_chappie) {
     D.products.prod_chappie = {
@@ -551,6 +643,7 @@ function seedIfNeeded() {
   // v1.3: backfill for settings records created before Stock Check existed.
   if (S.stockCheckReminderDays == null) { S.stockCheckReminderDays = 30; changed = true; }
   if (S.lastStockCheckAt === undefined) { S.lastStockCheckAt = null; changed = true; }
+  if (S.lastRequiredCheckAt === undefined) { S.lastRequiredCheckAt = null; changed = true; }
   return changed;
 }
 function settings() { return D.settings.settings; }
@@ -998,6 +1091,34 @@ function resilienceAtRisk(base) {
 }
 // No false precision: whole days, floored.
 function fmtDays(d) { if (d == null || isNaN(d)) return '—'; if (d > 0 && d < 1) return '<1'; return String(Math.floor(d)); }
+
+// ══════════════════════════════════════════════════════════════════
+// REQUIRED INVENTORY (v1.6, FS-070) — Pete's resilience-box exercise
+// (4×10L boxes, sized to a 28-day dinner rotation) as a live target
+// list rather than a one-off PDF. One question per item: do we hold
+// what we specced? Overall coverage is the plain average of each
+// item's held/required ratio (capped at 1) — every item counts equally
+// regardless of unit, so a huge rice bag can't outweigh a missing tin
+// of tuna. "Dinners covered" is that same percentage of MEAL_PLAN_DAYS,
+// since the required quantities were sized to cover exactly that many
+// planned dinners.
+// ══════════════════════════════════════════════════════════════════
+function required(id) { const r = D.required[id]; return r && !r._deleted ? r : null; }
+function requiredList() { return live('required').sort((a, b) => (category(a.categoryId) ? a.categoryId : '').localeCompare(category(b.categoryId) ? b.categoryId : '') || (a.order || 0) - (b.order || 0)); }
+function reqHeld(row) { return row.productId ? productQty(row.productId) : 0; }
+function reqRatio(row) { const q = num(row.qty) || 0; if (q <= 0) return reqHeld(row) > 0 ? 1 : 0; return Math.min(reqHeld(row) / q, 1); }
+function requiredCoverage() {
+  const rows = requiredList().map(row => ({ row, held: reqHeld(row), ratio: reqRatio(row) }));
+  const pct = rows.length ? round(rows.reduce((a, r) => a + r.ratio, 0) / rows.length * 100, 1) : 0;
+  const dinnerDays = Math.round(MEAL_PLAN_DAYS * pct / 100);
+  const shortfalls = rows.filter(r => r.ratio < 1).sort((a, b) => a.ratio - b.ratio);
+  return { rows, pct, dinnerDays, shortfalls };
+}
+function requiredCheckStatus() {
+  const S = settings(), last = S.lastRequiredCheckAt;
+  const days = last ? Math.floor((Date.now() - new Date(last).getTime()) / 86400000) : null;
+  return { last, days };
+}
 
 // ══════════════════════════════════════════════════════════════════
 // DOG FOOD — same inventory, predictable consumption rule
@@ -1559,7 +1680,7 @@ function go(view) {
   document.getElementById('main').scrollTop = 0;
 }
 function renderView(v) {
-  const f = { home: renderHome, inventory: renderInventory, rotation: renderRotation, consume: renderConsume, shopping: renderShopping, resilience: renderResilience, stockcheck: renderStockCheck, settings: renderSettings }[v];
+  const f = { home: renderHome, required: renderRequired, inventory: renderInventory, rotation: renderRotation, consume: renderConsume, shopping: renderShopping, resilience: renderResilience, stockcheck: renderStockCheck, settings: renderSettings }[v];
   if (f) f();
 }
 function renderAll() { invalidate(); renderView(currentView); renderBadges(); renderSyncPill(); }
@@ -1581,6 +1702,8 @@ function renderBadges() {
   b.hidden = !urgent; b.textContent = urgent; b.className = 'badge' + (rot.some(r => r.status === 'expired' && !r.bbPast) ? ' red' : '');
   const shop = live('shopping').filter(i => i.status === 'open').length + recommendations().filter(r => !r.onList).length;
   const sb = document.getElementById('badgeShop'); sb.hidden = !shop; sb.textContent = shop;
+  const short = requiredCoverage().shortfalls.length;
+  const rb = document.getElementById('badgeReq'); if (rb) { rb.hidden = !short; rb.textContent = short; }
 }
 function renderSyncPill() {
   const pill = document.getElementById('syncPill'); if (!pill || !W) return;
@@ -1653,9 +1776,16 @@ function renderHome() {
   const openShop = live('shopping').filter(i => i.status === 'open');
   const sc = stockCheckStatus();
   const empty = !live('stock').some(s => s._qty > 1e-9 && product(s.productId) && product(s.productId).foodType !== 'dog');
+  const rc = requiredCoverage();
   let h = '';
   if (empty) h += '<div class="warnbox"><b>No household food in the inventory yet.</b> Paste your inventory spreadsheet in <a href="#" onclick="openBulk();return false">Inventory → Bulk add</a>, or add items one at a time.</div>';
-  h += '<div class="home-top">';
+  h += '<div class="panel"><div class="row"><span class="small muted grow">Required inventory (the resilience-box list)</span><button class="btn sm ghost" onclick="go(\'required\')">Check inventory</button></div>' +
+    '<div class="headline"><span class="num">' + rc.pct + '</span><span class="unit">% held</span></div>' +
+    '<div class="bar" style="margin-top:8px"><i style="width:' + Math.min(100, rc.pct) + '%"></i></div>' +
+    '<div class="small" style="margin-top:8px"><b>' + rc.dinnerDays + ' of ' + MEAL_PLAN_DAYS + '</b> planned dinner days covered, at the specced quantities</div>' +
+    (rc.shortfalls.length ? '<div class="small muted" style="margin-top:8px">Shortest: ' + rc.shortfalls.slice(0, 4).map(x => esc(x.row.name) + ' (' + fmtNum(x.held, 0) + '/' + fmtNum(x.row.qty, 0) + ')').join(' · ') + '</div>' : '<div class="small muted" style="margin-top:8px">Every required item is fully stocked.</div>') +
+    '</div>';
+  h += '<div class="home-top" style="margin-top:12px">';
   h += '<div class="panel"><div class="small muted">Estimated resilience</div>' +
     '<div class="headline"><span class="num">' + fmtDays(res.days) + '</span><span class="unit">days</span>' +
     (atRisk.days >= 1 ? '<span class="small muted">· ' + fmtDays(atRisk.days) + ' at risk</span>' : '') + '</div>' +
@@ -1867,6 +1997,100 @@ function scMarkChecked() {
   const S = settings(); S.lastStockCheckAt = nowISO(); put('settings', S); commit();
   toast('Marked checked — no changes recorded');
   go('home');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// REQUIRED INVENTORY CHECK (v1.6, FS-070) — a Stock-Check-style form
+// seeded from the required list rather than existing stock batches, so
+// it also covers items with nothing held yet. Each row: target qty,
+// an editable "Have" total, and a box/location to assign it to. On
+// save, a row with no linked product yet creates one and adds a stock
+// batch in the chosen location; a row that already has one adjusts its
+// primary batch by the difference (same adjustTo() op Stock Check
+// uses) and moves it if the location changed. Other batches of the
+// same product (e.g. added normally via Inventory) are left alone and
+// still count toward "System" — only the delta is corrected here.
+// ══════════════════════════════════════════════════════════════════
+let _reqRows = null;
+function renderRequired() {
+  const rc = requiredCoverage();
+  _reqRows = rc.rows;
+  let h = '<h2>Required Inventory</h2><p class="small muted" style="margin-bottom:6px">The specced resilience-box list — what we should hold, and how close we are. Enter what you actually have and where it lives, then save together.</p>';
+  h += '<div class="panel"><div class="headline"><span class="num" style="font-size:32px">' + rc.pct + '</span><span class="unit">% held</span></div>' +
+    '<div class="small" style="margin-top:4px">' + rc.dinnerDays + ' of ' + MEAL_PLAN_DAYS + ' planned dinner days covered</div>' +
+    '<div class="bar" style="margin-top:6px"><i style="width:' + Math.min(100, rc.pct) + '%"></i></div></div>';
+  let lastCatId = null;
+  h += '<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>Item</th><th class="num">Required</th><th class="num">Have</th><th>Box / location</th></tr></thead><tbody>';
+  rc.rows.forEach((row, i) => {
+    const r = row.row;
+    if (r.categoryId !== lastCatId) { lastCatId = r.categoryId; const c = category(r.categoryId); h += '<tr class="cat-head"><td colspan="4" style="padding-top:14px;font-weight:700">' + esc(c ? c.name : 'Uncategorised') + '</td></tr>'; }
+    const primary = r.primaryStockId ? D.stock[r.primaryStockId] : null;
+    const locSel = primary ? primary.locationId : '';
+    h += '<tr id="req-row-' + i + '" class="' + (row.ratio < 1 ? 'sc-changed' : '') + '">' +
+      '<td class="lead" data-l="Item">' + esc(r.name) + '</td>' +
+      '<td class="num" data-l="Required">' + fmtQty(r.qty, r.unit) + '</td>' +
+      '<td class="num" data-l="Have"><input class="inp sc-actual" inputmode="decimal" data-i="' + i + '" value="' + round(row.held, 2) + '"></td>' +
+      '<td data-l="Box / location"><select class="inp" id="req-loc-' + i + '">' + locOptions(locSel, false) + '</select></td></tr>';
+  });
+  h += '</tbody></table></div>';
+  h += '<div class="row" style="margin-top:14px;gap:10px"><span class="grow"></span><button class="btn primary" onclick="reqApply()">Save check</button></div>';
+  h += '<div class="panel" style="margin-top:14px"><h3 style="margin-top:0">Add a new required item</h3><div class="grid3">' +
+    '<label class="f">Item name<input class="inp" id="reqNewName" placeholder="e.g. Tinned ham"></label>' +
+    '<label class="f">Qty required<input class="inp" id="reqNewQty" inputmode="decimal" value="1"></label>' +
+    '<label class="f">Unit<select class="inp" id="reqNewUnit">' + unitOptions('tin') + '</select></label></div>' +
+    '<div class="row" style="margin-top:8px"><label class="f grow">Category<select class="inp" id="reqNewCat">' + catOptions('', 'Uncategorised') + '</select></label>' +
+    '<button class="btn" style="align-self:end" onclick="reqAddItem()">Add to required list</button></div></div>';
+  const rcs = requiredCheckStatus();
+  h += '<div class="note" style="margin-top:14px">' + (rcs.last ? 'Last checked ' + (rcs.days === 0 ? 'today' : rcs.days + ' day' + (rcs.days === 1 ? '' : 's') + ' ago') : 'Never checked yet') + '</div>';
+  document.getElementById('view-required').innerHTML = h;
+}
+function reqApply() {
+  if (!_reqRows || !_reqRows.length) return;
+  let count = 0;
+  _reqRows.forEach((row, i) => {
+    const input = document.querySelector('#req-row-' + i + ' .sc-actual'); if (!input) return;
+    const have = num(input.value); if (have == null || have < 0) return;
+    const locSel = $v('req-loc-' + i);
+    const locationId = locSel && locSel !== '__tbc' ? locSel : null;
+    const r = row.row;
+    let changed = false;
+    let p = r.productId ? product(r.productId) : null;
+    if (!p) {
+      if (have <= 0) return; // nothing to record yet
+      p = findProduct(r.name, '') || put('products', {
+        id: uid('prod_'), name: r.name, brand: '', categoryId: r.categoryId,
+        foodType: r.categoryId === 'cat_dog' ? 'dog' : 'human', barcode: '', unit: r.unit,
+        packSize: '', packWeightG: null, kcalPer100g: null, proteinPer100g: null, kcalPerUnit: null, proteinPerUnit: null,
+        minQty: null, targetQty: null, notes: ''
+      });
+      r.productId = p.id; changed = true;
+    }
+    const batches = batchesOf(p.id, true);
+    let primary = r.primaryStockId ? D.stock[r.primaryStockId] : null;
+    if (!primary || primary._deleted) primary = fifo(p.id)[0] || batches[0] || null;
+    const currentTotal = productQty(p.id);
+    if (!primary) {
+      if (have > 0) { primary = addStock({ productId: p.id, qty: have, locationId, note: 'Required inventory check ' + todayISO() }); r.primaryStockId = primary.id; changed = true; count++; }
+    } else {
+      const delta = round(have - currentTotal, 3);
+      if (Math.abs(delta) > 1e-9) { adjustTo(primary.id, round(qtyOf(primary.id) + delta, 3), 'Required inventory check ' + todayISO()); count++; }
+      if (locationId !== primary.locationId) { moveStock(primary.id, locationId); }
+      if (r.primaryStockId !== primary.id) { r.primaryStockId = primary.id; changed = true; }
+    }
+    if (changed) put('required', r);
+  });
+  const S = settings(); S.lastRequiredCheckAt = nowISO(); put('settings', S);
+  invalidate(); commit();
+  toast(count ? count + ' item' + (count === 1 ? '' : 's') + ' updated' : 'No changes needed');
+  go('home');
+}
+function reqAddItem() {
+  const name = $v('reqNewName').trim(); if (!name) { toast('Enter an item name'); return; }
+  const qty = num($v('reqNewQty')); if (!(qty > 0)) { toast('Qty must be above zero'); return; }
+  put('required', { id: uid('req_'), name, categoryId: $v('reqNewCat') || null, qty, unit: $v('reqNewUnit') || 'item', productId: null, primaryStockId: null, order: 100 + live('required').length });
+  commit();
+  document.getElementById('reqNewName').value = '';
+  toast('Added to required list');
 }
 
 // ══════════════════════════════════════════════════════════════════
