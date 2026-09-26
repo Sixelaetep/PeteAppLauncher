@@ -2,6 +2,10 @@
 
 Full version history for the clean, contiguous changelog block in `reading-tracker.html` (lines 1787-2226 of the pre-trim file, v3.29 through v3.67). The app's own inline comment keeps only the 15 most recent releases from that block for quick reference — the rest lives here. Note: this file also has older changelog notes scattered through earlier sections of the code (short, tied to specific lines) which were left untouched — only this one clean block was archived.
 
+## v3.69 (MR-054)
+
+Dropped Playfair Display and Inter (Google Fonts preconnect + stylesheet link, both removed) in favour of the system font stack (-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif) everywhere. No CSS variable centralized font-family here (unlike GigsAndTrips' --f), so this was a direct find-and-replace across all ~39 call sites (two spacing variants of each font's declaration both existed in the source — caught both). Same load-time trade-off Fortnight Tracker made first (FT-056) and Pete's explicit choice for this app too, despite the serif headings being a deliberate literary touch for a book tracker. Purely visual — no data model, sync, or UI logic touched; verified via node --check and a manual reload against a real saved session.
+
 ## v3.52 (MR-037)
 
 the widget's "This month's target" label was a static hardcoded string — it never switched to "This cycle's target" even when a cycle start date was set, even though the subtext underneath it ("N days left this month/cycle") already switched correctly. Now both read the same cfg.cycleStartDate check. This does NOT explain the full report (day-count itself showing calendar-month math while the Book List's own cycle-date field displayed the date correctly set) — every read of cfg.cycleStartDate in the widget and the settings panel goes through the same appState.monthlyConfig object, and nothing in this codebase resets it once set, so that half of the report needs a fresh JSON export or a repeat-after-resaving check to pin down further; noted back to Pete rather than guessed at further.
