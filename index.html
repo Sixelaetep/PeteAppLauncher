@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.86</title>
+<title>P Apps v10.87</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -642,7 +642,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.86</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.87</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1144,19 +1144,17 @@
      cache stays in step across the suite; this app's own version
      (10.66) isn't the right value here, unlike pal-config.js above,
      since pal-utils is a suite-wide shared file, not per-app config. -->
-<!-- PET-078 v10.71: launcher now also loads pal-sync.js, purely for its
-     already-proven generic table()/sbFetch()/fetchTableRows() helpers —
-     used only to write/read the new pal_diagnostics table (see
-     logLoadDiagnostic()/exportLoadDiagnostics() below). The launcher
-     never calls initSession() (that listens for an inbound PAL_SESSION
-     postMessage, which is what the launcher SENDS to iframed apps, not
-     something it receives itself) — it calls PalSync.setSession()
-     directly with its own existing sbSession token/user id right before
-     each use. Cache-bust tied to this app's own version, same pattern
-     as pal-config.js above. -->
-<script src="pal-config.js?v=10.83"></script>
-<script src="pal-sync.js?v=10.83"></script>
-<script src="pal-utils.js?v=1.0"></script>
+<!-- PET-091 v10.87: switched from three separate script tags to one
+     combined pal-shared.js — same load-order-critical sequence
+     (config, then sync, then utils), just fewer requests. The
+     pal-utils.js "?v=1.0" placeholder inconsistency this comment used
+     to describe (a fixed value, unlike pal-config.js/pal-sync.js's
+     version-tied cache-busting) is now moot — one tag, one version,
+     tied to this app's own version like everything else in the suite.
+     See capturePhaseBreakdown() below for the corresponding update to
+     this launcher's own load-time diagnostics, which specifically
+     watched for these three script names. -->
+<script src="pal-shared.js?v=10.87"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -1285,8 +1283,21 @@ function getDiagDeviceId() {
 // fully rolled out and any stale worker has unregistered itself, which
 // is itself a useful thing to see confirmed in the data over time.
 function capturePhaseBreakdown(frame) {
+  // PET-091: script_pal_config_ms/script_pal_utils_ms/script_pal_sync_ms
+  // stop populating for any app now loading the combined pal-shared.js
+  // (they'll only ever match a request literally named that way again)
+  // — kept defined, permanently null going forward, rather than removed,
+  // so historical rows in pal_diagnostics that DO have real values there
+  // still round-trip cleanly through exportLoadDiagnostics()'s raw JSON
+  // dump. New script_pal_shared_ms field takes over the same job for
+  // every app on the new bundle. Once every app + this launcher has
+  // shipped that switch and enough history has rolled by that the old
+  // three fields are all-null across the board, they're safe to drop
+  // outright — not done yet, deliberately, so the transition itself is
+  // visible in the data rather than silently discontinuous.
   const out = { dns_ms: null, connect_ms: null, ttfb_ms: null, download_ms: null, dom_ms: null,
                 script_pal_config_ms: null, script_pal_utils_ms: null, script_pal_sync_ms: null,
+                script_pal_shared_ms: null,
                 supabase_ms: null, sw_intercepted_ms: null, sw_controller: null };
   try {
     const perf = frame.contentWindow.performance;
@@ -1306,6 +1317,7 @@ function capturePhaseBreakdown(frame) {
       if (r.name.indexOf('pal-config.js') !== -1) out.script_pal_config_ms = round(r.duration);
       else if (r.name.indexOf('pal-utils.js') !== -1) out.script_pal_utils_ms = round(r.duration);
       else if (r.name.indexOf('pal-sync.js') !== -1) out.script_pal_sync_ms = round(r.duration);
+      else if (r.name.indexOf('pal-shared.js') !== -1) out.script_pal_shared_ms = round(r.duration);
       else if (r.name.indexOf(window.PAL_CONFIG.SB_URL) !== -1) { supabaseTotal += r.duration; sawSupabase = true; }
     });
     if (sawSupabase) out.supabase_ms = round(supabaseTotal);
@@ -2563,6 +2575,19 @@ function statFantasy() {
 // every other live-stat card already uses, so the card updates
 // immediately on a squad save rather than waiting for the next
 // sign-in or home-screen return.
+// v10.87 (PET-091): switched from three separate script tags to one
+// combined pal-shared.js, for this launcher's own <head> load and for
+// every app in the suite (each app's own release covers its own file;
+// this entry is the launcher-side half). capturePhaseBreakdown()
+// updated to match: new script_pal_shared_ms field captures the
+// combined file's load time for any app now on it; the three old
+// script_pal_config_ms/script_pal_utils_ms/script_pal_sync_ms fields
+// are kept defined (permanently null going forward) rather than
+// removed, so historical pal_diagnostics rows still round-trip
+// cleanly through exportLoadDiagnostics()'s raw JSON dump — dropping
+// them outright can wait until enough history has rolled by that
+// they're all-null across the board anyway. No other diagnostic
+// field, HEALTH_APPS entry, or backup mechanism touched.
 // v10.86 (PET-090): Horizon's nav button removed — reached now via On
 // Budget's own new Horizon tab (nested lazy-loaded iframe,
 // on-budget.html ON--069). Same treatment as HTML Vault (PET-088) and

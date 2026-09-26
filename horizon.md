@@ -2,6 +2,10 @@
 
 Full version history for `horizon.html`. The app's own inline comment block keeps only the most recent releases for quick reference during active work — everything else lives here. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed.
 
+## v4.12 (2026-09-26)
+
+HZN-014: switched from three separate script tags (pal-config.js, pal-sync.js, pal-utils.js) to one combined pal-shared.js — same three files concatenated in the same load-order-critical sequence (config before sync/utils, which reference window.PAL_CONFIG), just fewer requests. No code inside any of the three sections changed. Verified via node --check and a manual reload confirming sync/theme/uid/esc all still work.
+
 ## v4.11 (2026-09-26)
 
 HZN-013: dropped all three Google Fonts (Fraunces, IBM Plex Sans, IBM Plex Mono — preconnect + stylesheet link, all removed), the heaviest font load in the suite. Each of the three role variables (--serif, --sans, --mono) already carried a full system-font fallback chain after the custom name, so this was just dropping the leading custom font from each — Georgia stands in for headings, the system sans stack for body copy, and the system monospace stack for tabular figures. Role separation (serif headings / sans body / mono data) is unchanged, only the custom downloads are gone. The header design-notes comment above updated to match, so it doesn't keep naming fonts that are no longer loaded. Same load-time trade-off Fortnight Tracker made first (FT-056) and Pete's explicit choice for this app too. Purely visual — no calculation or data-model logic touched; verified via node --check and a manual reload against a real saved session.
