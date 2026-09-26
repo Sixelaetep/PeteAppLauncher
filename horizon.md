@@ -2,6 +2,10 @@
 
 Full version history for `horizon.html`. The app's own inline comment block keeps only the most recent releases for quick reference during active work — everything else lives here. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed.
 
+## v4.10 (2026-09-26)
+
+HZN-012: joined the shared pal-utils.js rollout. Local escHtml() deleted — pal-utils.js ships an escHtml() alias that is a strict superset (also escapes single quotes via the DOM textContent/innerHTML round-trip vs pal-utils's regex approach; rendered output is identical either way, since both produce valid entity-escaped HTML). Local uid() deleted too — every call site here already builds its own compound key externally (e.g. "bucket_" + uid()), so pal-utils's uid(prefix), called bare with no prefix argument, is a safe drop-in with zero call-site changes; only the shape of freshly-generated ids changes (a timestamp+random suffix instead of a bare 7-char random one), and nothing in this app parses or validates that shape. No other local helper (toast, todayISO, closeModal) exists here to migrate. No calculation or data-model logic touched — verified via node --check and a manual reload against a real saved session (buckets, mortgage options, checkpoints all displayed unchanged). Also bumped the cache-busting query string on pal-config.js/pal-sync.js/pal-utils.js to ?v=4.10, matching the version-badge/VERSION const bump.
+
 ## v4.9 (2026-09-26)
 
 HZN-011: changelog housekeeping only, no functional change. Everything from v2.4 back to the v1.0 initial release (28 entries) was moved verbatim into this file from the inline comment block in horizon.html; nothing was reworded or shortened, only relocated and reflowed from block-comment wrapping into markdown paragraphs. horizon.html itself keeps v4.9 down to v3.0.1 inline for quick reference. From this release on, this file is loaded alongside horizon.html before any change, and both are updated and pushed to GitHub together, every time.
