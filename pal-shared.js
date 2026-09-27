@@ -36,6 +36,15 @@
  * so it survives every future release of that app unchanged — this
  * file is edited once and is never part of a per-app release diff,
  * unlike the app HTML files which get regenerated wholesale each time.
+ * v1.2 (FTT-001): added TMDB_API_KEY / TMDB_READ_TOKEN for
+ * film-tv-tracker.html's search and metadata/availability enrichment.
+ * Same reasoning as FF_PROXY_KEY above — a personal, non-commercial
+ * TMDB key, safe to use client-side (read-only public metadata API,
+ * same risk posture as the Supabase anon key above), kept here once
+ * rather than hardcoded per-release into the app file. Only
+ * TMDB_READ_TOKEN (the v4 Bearer token) is actually used by the app;
+ * TMDB_API_KEY (the v3 key) is stored alongside it for reference/
+ * future use only, since TMDB issues both from one account.
  * ─────────────────────────────────────────────────────────────
  */
 window.PAL_CONFIG = {
@@ -53,6 +62,13 @@ window.PAL_CONFIG = {
   // need to re-enter it every time a new fantasy-football-tracker.html
   // is delivered.
   FF_PROXY_KEY: 'zarsor-0tUsma-vamboj',
+
+  // ── Film & TV Tracker — TMDB credentials ─────────────────────
+  // TMDB_READ_TOKEN (v4 auth, Bearer token) is what film-tv-tracker.html
+  // actually sends on every request. TMDB_API_KEY (v3 key) is kept for
+  // reference only — not currently used by any app.
+  TMDB_API_KEY: 'bab49adcb39449717588da9fedf1b6d2',
+  TMDB_READ_TOKEN: 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJiYWI0OWFkY2IzOTQ0OTcxNzU4OGRhOWZlZGYxYjZkMiIsIm5iZiI6MTczNjcwNzUzNS45NTUwMDAyLCJzdWIiOiI2Nzg0MGRjZmM1ZDJlOTZlMjY3YjliMWEiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.aCbl2u57im1rRU6M5yhl9Z-wjXGxt6wN3F3WPHFAmuY',
 
   // ── Known users ───────────────────────────────────────────
   // Maps Supabase Auth user_id → display info.

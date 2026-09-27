@@ -2,6 +2,20 @@
 
 Full version history for `index.html`. As of v10.89, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v10.91 (PET-096) — Film & TV Tracker registered
+
+Launcher-side half of bringing up the new Film & TV Tracker app (film-tv-tracker.html v1.0, FTT-001 — see that app's own changelog for the app itself). Three additions, all additive:
+
+**Nav icon + home card.** New `nav-btn`/`app-card` pair, `data-target="screen"` (🎬, `--app-color:#2dd4bf`), placed after Food System. Unlike Claim Tracker/HTML Vault/Horizon, this app has no host app to embed inside — there's no "standalone" concept for it — so it follows the plain always-on pattern used by Gigs/Gym/Reading/Fantasy/Food (visible by default, no `data-layout-managed`, no `display:none`) rather than the hidden-until-standalone pattern PET-094 introduced for the three embeddable apps.
+
+**`LAYOUT_APPS` entry.** `{ id:'screen', order:11, width:'full', cardVisible:true, iconVisible:true }` — sits after Horizon, card and icon visible from the very first load (no migration needed, matching PET-094's rule that a new catalog entry's defaults describe today's actual layout).
+
+**`statScreen()` card stat.** Reads `pal_ftt_stat` — a small `{watchlistCount, availableNow, bedtimeNow}` cache film-tv-tracker.html writes on every save, same cache-then-reconcile shape as `statVaultSub()`/`statHorizonSub()`. Shows watchlist count, plus "N available now" / "N for bedtime" when non-zero; falls back to "Open app to set up" before the app's ever been opened. Wired into `refreshCardStats()` alongside the other sub-cards.
+
+Also added `film-tv-tracker: 'screen'` to `PAL_NAV_SLUG_MAP` and a new `frame-screen` iframe (`film-tv-tracker.html`).
+
+Tested: `node --check` on all three inline script blocks, an HTML tag-balance check, and a full cross-reference confirming every new id (`stat-screen`, `frame-screen`, `data-target="screen"`, `data-app="screen"`) is singular and doesn't collide with an existing one. Not tested live in a browser — first real open of the launcher with the new app registered is still outstanding.
+
 ## v10.90 (PET-095) — Two layout-system bugs, both reported directly
 
 **(1) Cards with Card unchecked (or an embedded app's card, standalone off) were showing on the home screen anyway.** Root cause: `applyUserView()` runs on every load and sets `display:''` (visible) on every `.pete-only` element for Pete, unconditionally — including every managed card, before `loadLayoutConfig()`/`renderHomeGrid()` ever get a chance to run. `renderHomeGrid()` only ever explicitly touched the cards it was *showing*; anything not in that visible set was left exactly as `applyUserView()` had just set it — visible. Confirmed against the reported screenshots: Claim Tracker, Test & Issues, HTML Vault, and Horizon all had Card unchecked (or standalone off) yet all four were rendering. Fix: `renderHomeGrid()` now explicitly hides every `.app-card[data-app]` unconditionally first, then only re-shows the ones actually in the visible set — correct regardless of what state `applyUserView()`'s blanket unhide left them in. `renderNavIcons()` already did this correctly (it touches every app unconditionally, not just the visible ones), which is why nav icons weren't affected — only cards were.

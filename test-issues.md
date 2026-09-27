@@ -2,6 +2,12 @@
 
 Full version history for `test-issues.html`. As of v1.73, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.74 (TI-085) — Film & TV Tracker registered
+
+One-line `APP_REGISTRY` addition: `{ id: 'film-tv-tracker', name: 'Film & TV Tracker', emoji: '🎬', prefix: 'FTT', aliases: ['film-tv-tracker'] }`. Companion registration to index.html's PET-096 — brings up the new app (film-tv-tracker.html v1.0, FTT-001) inside this app's own registry so it resolves to a proper name/icon/prefix once an app record and test cases are logged for it here, same as every other app. No other function touched — `resolveCanonicalAppId()`, `appIcon()`, `migrateAppRegistry()` and the brief-generator all key off the registry array itself, so nothing else needed changing for a plain new entry.
+
+Tested: `node --check`, an HTML tag-balance check. Not yet tested: adding the actual app record + initial test cases inside the running app — still to be done via the app's own UI.
+
 ## v1.73 (TI-084)
 
 Two changes, both Pete's direct request, for the launcher's new customizable layout system (index.html PET-094):
