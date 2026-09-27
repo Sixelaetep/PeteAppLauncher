@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.89</title>
+<title>P Apps v10.90</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -642,7 +642,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.89</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.90</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1470,6 +1470,7 @@ async function saveLayoutConfig() {
   if (!window.PalSync || !window.PalSync.hasSession()) return;
   try {
     await window.PalSync.table('pal_layout').upsert('layout', layoutConfig);
+    toast('Layout saved');
   } catch (e) { toast('Saved locally — will sync once back online'); }
 }
 
@@ -1530,6 +1531,17 @@ function renderHomeGrid() {
     })
     .slice()
     .sort((a, b) => a.order - b.order);
+
+  // PET-095 fix: applyUserView() runs before this on every load and sets
+  // display:'' on every .pete-only element, including every managed
+  // card here — that blanket unhide happens BEFORE this function gets a
+  // chance to say which ones should actually stay hidden. The bug this
+  // caused: any card whose cardVisible was false (or an embedded app's
+  // standalone-only card) rendered visible anyway, since nothing here
+  // was explicitly re-hiding it — only the visible ones were ever
+  // touched. Fix: explicitly hide every managed card first, unconditionally,
+  // then only the ones actually in `visible` get shown back.
+  document.querySelectorAll('.app-card[data-app]').forEach(el => { el.style.display = 'none'; });
 
   const cardEls = {};
   visible.forEach(app => {
@@ -1656,12 +1668,37 @@ function renderLayoutSettings() {
 function layoutSetAppField(id, field, value) {
   const app = layoutConfig.apps.find(a => a.id === id);
   if (!app) return;
-  app[field] = value;
-  // Turning standalone off should also stop pretending the card/icon
-  // are shown — they have no meaning while embedded.
-  if (field === 'standalone' && !value) { app.cardVisible = false; app.iconVisible = false; }
+  if (field === 'order') {
+    // PET-095 fix: this used to just overwrite this one app's order
+    // value directly — if that collided with another app's existing
+    // number (or even if it didn't), nothing else visibly moved, which
+    // isn't what typing a new position should do. layoutMoveAppToOrder()
+    // treats the typed number as "move to this position" and renumbers
+    // every app sequentially around it, a real insert-and-shift.
+    layoutMoveAppToOrder(id, value);
+  } else {
+    app[field] = value;
+    // Turning standalone off should also stop pretending the card/icon
+    // are shown — they have no meaning while embedded.
+    if (field === 'standalone' && !value) { app.cardVisible = false; app.iconVisible = false; }
+  }
   saveLayoutConfig();
   renderLayoutSettings();
+}
+
+// Moves `id` to the given target position among ALL apps (by current
+// order, across every group — order is one flat sequence, groups don't
+// partition it), then renumbers everything 0..n-1 to match. Out-of-range
+// input (negative, or past the end) clamps to the nearest valid position
+// rather than erroring.
+function layoutMoveAppToOrder(id, targetPos) {
+  const sorted = layoutConfig.apps.slice().sort((a, b) => a.order - b.order);
+  const fromIdx = sorted.findIndex(a => a.id === id);
+  if (fromIdx === -1) return;
+  const moved = sorted.splice(fromIdx, 1)[0];
+  const toIdx = Math.max(0, Math.min(sorted.length, targetPos));
+  sorted.splice(toIdx, 0, moved);
+  sorted.forEach((a, i) => { a.order = i; });
 }
 function layoutAddGroup() {
   const label = prompt('Group name:');
@@ -2655,6 +2692,10 @@ function statFantasy() {
 // every other live-stat card already uses, so the card updates
 // immediately on a squad save rather than waiting for the next
 // sign-in or home-screen return.
+// v10.90 (PET-095): two bug fixes to the layout system, both reported
+// directly with screenshots — full notes in index.md, not duplicated
+// here. (1) Cards with Card unchecked were showing anyway. (2) Typing
+// a new Order number didn't shift anything else.
 // v10.89 (PET-094): customizable home-screen layout system — full
 // design writeup, the new pal_layout Supabase table SQL, and complete
 // notes in index.md, not duplicated here.
