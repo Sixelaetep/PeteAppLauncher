@@ -2,6 +2,23 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.6 (FTT-009) — Dashboard stat boxes are clickable
+
+Pete's direct request, from a screenshot of the dashboard's stat row. Each of the six boxes now jumps to the tab/filter that produced its number:
+
+- Want to Watch → Watchlist, filter "All"
+- Watched → Watched, filter "All"
+- Available Now → Watchlist, filter "Available to me"
+- Unavailable → Watchlist, filter "Unavailable"
+- Services owned → Services tab
+- Favourites → Watchlist, filter "Favourites"
+
+New `goToStat(tab, filterElId, filterValue)` calls `switchTab()` then sets the named filter `<select>`'s value and re-renders just that one panel, so the filter takes effect immediately rather than waiting for the next interaction. `.stat-box` got a pointer cursor and a hover border to make them read as clickable.
+
+**Favourites is worth flagging rather than leaving quietly inconsistent:** the stat itself counts every favourited title regardless of status (watched or watchlist), but there's no single view that shows both together — clicking it goes to the Watchlist tab's own Favourites filter (matching the "Favourite Watchlist" dashboard section directly below it), which only shows watchlist favourites. A favourited *watched* title has its own Favourites filter on the Watched tab, just not reachable from this one click. Flagged rather than fixed unasked — a combined "all favourites regardless of status" view is a reasonable follow-up if it'd be more useful than the current per-tab split.
+
+Tested: `node --check` on both script blocks, a full id cross-reference, an HTML tag-balance check. Not tested live in a browser.
+
 ## v1.5 (FTT-008) — Generic JSON import for viewing history and watchlist
 
 Pete's direct request: a JSON-based import (he doesn't have the source file yet, but wanted the mechanism ready) for two separate cases — viewing history (mark watched) and watchlist (want to watch) — reusing the CSV importer's matching/dedupe machinery rather than a parallel implementation.
