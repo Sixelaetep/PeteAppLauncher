@@ -2,6 +2,14 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.4 (FTT-007) — Season progress denominator fix, every season shown
+
+Pete asked directly whether "6/9 seasons watched" was actually implemented, which surfaced a real gap: `seasonsWatchedSummary()`'s denominator was `Object.keys(t.seasonsProgress).length` — the count of seasons that had ever been *touched* (loaded or marked) — not the show's actual total season count. A 9-season show with only 6 seasons ever marked would have shown "6/6" (100%), not "6/9". Fixed to use `t.seasons` (the real total, already known from TMDB) as the denominator, falling back to the touched-count only for a title with no known season total at all.
+
+`renderSeasonsList()` had the same shape of gap the other way round: it only rendered rows for seasons already in `seasonsProgress`, so an untouched season 7, 8 or 9 wouldn't appear at all — no way to mark it watched without first using "Load / refresh season data" for the whole show. It now always lists every season 1..`t.seasons`, rendering a plain "Season N — not started" row with a one-click "Mark watched" for anything not yet touched, alongside the existing per-episode checklist for seasons that have full data and the "imported/marked, no episode detail" summary for lightweight ones. Added `quickMarkSeasonWatched()`/`unmarkSeasonWatched()` (the latter — an explicit "Unmark" button — didn't exist before this release at all, for any season).
+
+Tested: the fixed `seasonsWatchedSummary()` logic was run standalone against a mock 9-season title with 6 seasons manually marked — confirmed it now returns `{fully: 6, total: 9}`. `node --check` on both script blocks, a full id cross-reference, and an HTML tag-balance check all pass. Not tested live in a browser.
+
 ## v1.3 (FTT-006) — Netflix history import, "times watched"
 
 Pete uploaded a real Netflix "Viewing history" CSV export (`NetflixViewingHistory.csv`, ~3,060 rows) and asked for it to populate historical watched data: no duplicates (a count instead, for rewatches), and season-level rather than episode-level marking for TV.

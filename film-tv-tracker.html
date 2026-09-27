@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint.
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v1.3</title>
+<title>Film &amp; TV Tracker v1.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -157,6 +157,7 @@
   .avail-tag.purchase { background:rgba(255,166,87,0.18); color:var(--orange); }
 
   .season-block { border:1px solid var(--border); border-radius:8px; margin-bottom:8px; overflow:hidden; }
+  .season-block.season-empty-row { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; font-size:12px; color:var(--ink2); }
   .season-block > summary { padding:8px 10px; font-size:12px; font-weight:700; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; background:var(--surface2); list-style:none; }
   .season-block > summary::-webkit-details-marker { display:none; }
   .ep-list { padding:4px 10px 8px; }
@@ -218,7 +219,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v1.3</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v1.4</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -501,10 +502,10 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.3"></script>
+<script src="pal-shared.js?v=1.4"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v1.3 (FTT-001..FTT-006) — see film-tv-tracker.md.
+// FILM & TV TRACKER v1.4 (FTT-001..FTT-007) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -642,15 +643,16 @@ function liveTitles() { return state.titles.filter(t => !t._deleted); }
 function liveServices() { return state.services.filter(s => !s._deleted); }
 
 function seasonsWatchedSummary(t) {
-  if (t.type !== 'tv' || !t.seasonsProgress) return null;
-  const nums = Object.keys(t.seasonsProgress);
-  if (!nums.length) return null;
-  const fully = nums.filter(sn => {
-    const s = t.seasonsProgress[sn];
+  if (t.type !== 'tv') return null;
+  const sp = t.seasonsProgress || {};
+  const totalSeasons = t.seasons || Object.keys(sp).length;
+  if (!totalSeasons) return null;
+  const fully = Object.keys(sp).filter(sn => {
+    const s = sp[sn];
     if (s.manuallyMarkedWatched) return true;
     return s.episodeCount && (s.watchedEpisodes || []).length >= s.episodeCount;
   }).length;
-  return { fully, total: nums.length };
+  return { fully, total: totalSeasons };
 }
 
 function titleCardHtml(t, opts) {
@@ -941,7 +943,7 @@ function setupEpisodesSection() {
   const hasTmdb = !!(t.externalIds && t.externalIds.tmdb);
   document.getElementById('tm-episodes-no-tmdb').style.display = hasTmdb ? 'none' : '';
   document.getElementById('tm-episodes-loader').style.display = hasTmdb ? '' : 'none';
-  if (hasTmdb && t.seasonsProgress && Object.keys(t.seasonsProgress).length) renderSeasonsList();
+  if (hasTmdb) renderSeasonsList();
   else { document.getElementById('tm-seasons-list').innerHTML = ''; document.getElementById('tm-seasons-summary').textContent = ''; }
 }
 
@@ -987,22 +989,34 @@ function renderSeasonsList() {
   const t = currentTitleId ? state.titles.find(x => x.id === currentTitleId) : null;
   if (!t) return;
   const sp = t.seasonsProgress || {};
-  const seasonNums = Object.keys(sp).map(Number).sort((a, b) => a - b);
-  if (!seasonNums.length) {
-    document.getElementById('tm-seasons-list').innerHTML = '<div style="font-size:11.5px;color:var(--ink2)">No season data loaded yet.</div>';
+  const totalSeasons = t.seasons || Object.keys(sp).length;
+  if (!totalSeasons) {
+    document.getElementById('tm-seasons-list').innerHTML = '<div style="font-size:11.5px;color:var(--ink2)">Season count unknown for this title — set it above, or use "Load / refresh season data" once it has one.</div>';
     document.getElementById('tm-seasons-summary').textContent = '';
     return;
   }
   let fullyWatched = 0;
-  const html = seasonNums.map(sn => {
+  const rows = [];
+  for (let sn = 1; sn <= totalSeasons; sn++) {
     const season = sp[sn];
+    if (!season) {
+      rows.push(`
+        <div class="season-block season-empty-row">
+          <span>Season ${sn} — not started</span>
+          <button class="small-btn" onclick="quickMarkSeasonWatched(${sn})">Mark watched</button>
+        </div>`);
+      continue;
+    }
     if (season.manuallyMarkedWatched && !(season.episodeList || []).length) {
       fullyWatched++;
-      return `
+      rows.push(`
         <details class="season-block">
-          <summary>Season ${sn} — ✅ Watched <span style="font-weight:400;color:var(--ink2);font-size:10px">(imported, no episode detail)</span></summary>
+          <summary>Season ${sn} — ✅ Watched <span style="font-weight:400;color:var(--ink2);font-size:10px">(marked, no episode detail)</span>
+            <button class="small-btn" onclick="event.preventDefault();event.stopPropagation();unmarkSeasonWatched(${sn})">Unmark</button>
+          </summary>
           <div class="ep-list"><div style="font-size:11px;color:var(--ink2);padding:6px 0">Use "Load / refresh season data" below to fetch the full episode list for this season.</div></div>
-        </details>`;
+        </details>`);
+      continue;
     }
     const watchedCount = (season.watchedEpisodes || []).length;
     const total = season.episodeCount || 0;
@@ -1016,16 +1030,34 @@ function renderSeasonsList() {
         <span class="ep-meta">${ep.runtime ? ep.runtime + 'm' : ''}</span>
       </div>`;
     }).join('');
-    return `
+    rows.push(`
       <details class="season-block" ${complete ? '' : 'open'}>
         <summary>Season ${sn} — ${watchedCount}/${total} watched
           <button class="small-btn" onclick="event.preventDefault();event.stopPropagation();markSeasonWatched(${sn})">Mark all watched</button>
         </summary>
         <div class="ep-list">${episodesHtml}</div>
-      </details>`;
-  }).join('');
-  document.getElementById('tm-seasons-list').innerHTML = html;
-  document.getElementById('tm-seasons-summary').textContent = `${fullyWatched} of ${seasonNums.length} season(s) fully watched`;
+      </details>`);
+  }
+  document.getElementById('tm-seasons-list').innerHTML = rows.join('');
+  document.getElementById('tm-seasons-summary').textContent = `${fullyWatched} of ${totalSeasons} season(s) watched`;
+}
+
+function quickMarkSeasonWatched(seasonNum) {
+  const t = currentTitleId ? state.titles.find(x => x.id === currentTitleId) : null; if (!t) return;
+  t.seasonsProgress = t.seasonsProgress || {};
+  t.seasonsProgress[seasonNum] = { episodeCount: null, name: 'Season ' + seasonNum, episodeList: [], watchedEpisodes: [], manuallyMarkedWatched: true, source: 'manual' };
+  t.updatedAt = new Date().toISOString();
+  renderSeasonsList();
+  saveState();
+  if (window.PalSync.hasSession()) syncPushTitle(t);
+}
+function unmarkSeasonWatched(seasonNum) {
+  const t = currentTitleId ? state.titles.find(x => x.id === currentTitleId) : null; if (!t || !t.seasonsProgress) return;
+  delete t.seasonsProgress[seasonNum];
+  t.updatedAt = new Date().toISOString();
+  renderSeasonsList();
+  saveState();
+  if (window.PalSync.hasSession()) syncPushTitle(t);
 }
 
 function toggleEpisodeWatched(seasonNum, epNum) {
