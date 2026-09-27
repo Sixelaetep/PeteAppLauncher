@@ -2,6 +2,21 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.5 (FTT-008) — Generic JSON import for viewing history and watchlist
+
+Pete's direct request: a JSON-based import (he doesn't have the source file yet, but wanted the mechanism ready) for two separate cases — viewing history (mark watched) and watchlist (want to watch) — reusing the CSV importer's matching/dedupe machinery rather than a parallel implementation.
+
+**Schema, deliberately lenient** since the exact source isn't known yet: accepts a bare JSON array, or `{"titles": [...]}`; each entry can be a plain string or `{"title":"…","year":2020,"type":"movie"}` (`year`/`type` both optional — a year disambiguates a common title, a type skips guessing film vs TV and searches TMDB's typed `/search/movie` or `/search/tv` endpoint directly instead of `/search/multi`). Verified standalone under Node against all three shapes (bare array, wrapper object, and malformed/empty input) before wiring it into the app.
+
+**Dedupe rules, per Pete's spec exactly:**
+- *Viewing history import:* a title already in the library that isn't yet watched gets flipped to watched; one already watched is a true duplicate and is skipped (counted, not silently lost); a title with no existing match gets a full TMDB details fetch and is added as watched.
+- *Watchlist import:* a title already in the library in **any** status is left alone — never downgrades something already watched back to watchlist, and never duplicates something already on the watchlist. Only genuinely new titles get added, as watchlist.
+- Either way, matching happens by TMDB id after resolving the search (not raw text), so "Dune" vs "Dune (2021)"-style spelling differences don't create false non-duplicates. Anything TMDB can't match at all is still added — flagged in its notes for manual review, same convention as the CSV importer — rather than dropped.
+
+**Refactor, not a third copy-pasted importer:** the Netflix CSV importer's progress/cancel UI (`netflixImportControls`/`Running`/`Progress` ids) was renamed to the generic `importControls`/`importRunning`/`importProgress` and is now shared by all three import buttons — only one can run at a time regardless, so one progress area is simpler than three near-identical ones. `cancelNetflixImport()`/`_netflixImportCancel` were renamed to `cancelImport()`/`_bulkImportCancel` for the same reason. `importNetflixCSV()`'s own logic is untouched beyond the id/name updates.
+
+Tested: `node --check` on both script blocks, a full id cross-reference, an HTML tag-balance check, and the JSON parser run standalone against all three documented input shapes plus two error cases — all pass. Not tested live: the actual TMDB matching (same standing limitation as the CSV importer — no network path to api.themoviedb.org from the build sandbox), and there's no real source file yet to try an end-to-end import against.
+
 ## v1.4 (FTT-007) — Season progress denominator fix, every season shown
 
 Pete asked directly whether "6/9 seasons watched" was actually implemented, which surfaced a real gap: `seasonsWatchedSummary()`'s denominator was `Object.keys(t.seasonsProgress).length` — the count of seasons that had ever been *touched* (loaded or marked) — not the show's actual total season count. A 9-season show with only 6 seasons ever marked would have shown "6/6" (100%), not "6/9". Fixed to use `t.seasons` (the real total, already known from TMDB) as the denominator, falling back to the touched-count only for a title with no known season total at all.
