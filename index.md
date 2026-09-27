@@ -2,6 +2,41 @@
 
 Full version history for `index.html`. As of v10.89, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v10.92 (PET-097) — Film & TV Tracker shared with Lex
+
+Pete's direct request, following a comparison against `GigsAndTrips.html`'s existing sharing pattern before touching anything.
+
+**What GigsAndTrips actually does — and what it doesn't.** Read through the real file rather than assuming: it does *not* use `window.PalSync`/`pal-sync.js` at all — deliberate, per its own header comments — it has a bespoke sign-in form and calls the Supabase REST API directly. The part that matters for sharing is its RLS shape: every GigsAndTrips table's policy requires `auth.uid()` to be Pete *or* Lex specifically (`auth.uid() = ANY(ARRAY[...])` against their two known UIDs), not `auth.uid() = user_id` per-row ownership — `user_id` is still stamped on each row, but only for authorship, never checked for access. Replicating GigsAndTrips' whole bespoke sync layer onto Film Tracker would have been a large, unnecessary rewrite: Film Tracker already goes through this launcher's ordinary `PAL_SESSION` postMessage relay exactly like every other non-legacy app, and that relay is already generic per signed-in user (`currentUser`/`KNOWN_USERS`), not Pete-specific — confirmed by reading the actual relay code before concluding this, not assumed. So `window.PalSync.initSession()` in film-tv-tracker.html already receives whichever of Pete or Lex is signed into the launcher, with their own real token; `pal-sync.js`'s `table()/pull()/upsert()` never filter by user in JS at all — every bit of access control already happens in Postgres. Net effect: **film-tv-tracker.html needed zero code changes.** Only the RLS policy shape needed copying, plus making the app actually reachable from Lex's home screen.
+
+**Launcher change (this file).** The "screen" nav-btn and app-card both lost their `pete-only` class — that class is the *only* thing `applyUserView()` checks, and Lex's home screen never calls `loadLayoutConfig()`/`renderHomeGrid()` at all (confirmed both are gated `if (isPete)`), so removing the class was the complete fix for visibility; no `LAYOUT_APPS` change needed, since that catalog only feeds Pete's own layout-customization panel.
+
+**Supabase migration (Pete needs to run this, not shipped as code).** Replace `pal_film_tracker`'s per-user policies with GigsAndTrips' allow-list shape, using the two UIDs already on file in `PAL_CONFIG.KNOWN_USERS`:
+
+```sql
+drop policy if exists "pal_film_tracker_select_own" on public.pal_film_tracker;
+drop policy if exists "pal_film_tracker_insert_own" on public.pal_film_tracker;
+drop policy if exists "pal_film_tracker_update_own" on public.pal_film_tracker;
+
+create policy "pal_film_tracker_select_shared"
+  on public.pal_film_tracker for select
+  using (auth.uid() = ANY (ARRAY['d3203136-833d-405b-9a48-13d7045df4fd', '0e5607ff-7bc8-420e-92c6-fa82b680a0f0']::uuid[]));
+
+create policy "pal_film_tracker_insert_shared"
+  on public.pal_film_tracker for insert
+  with check (auth.uid() = ANY (ARRAY['d3203136-833d-405b-9a48-13d7045df4fd', '0e5607ff-7bc8-420e-92c6-fa82b680a0f0']::uuid[]));
+
+create policy "pal_film_tracker_update_shared"
+  on public.pal_film_tracker for update
+  using (auth.uid() = ANY (ARRAY['d3203136-833d-405b-9a48-13d7045df4fd', '0e5607ff-7bc8-420e-92c6-fa82b680a0f0']::uuid[]))
+  with check (auth.uid() = ANY (ARRAY['d3203136-833d-405b-9a48-13d7045df4fd', '0e5607ff-7bc8-420e-92c6-fa82b680a0f0']::uuid[]));
+```
+
+`user_id` stays on every row exactly as before (still stamped with whoever's `getUserId()` created it) — it's just no longer checked for access, same as GigsAndTrips' `events` table. Existing data isn't touched or migrated; only the policy changes, so nothing already in the table needs to move.
+
+**Consequence worth stating plainly, not burying:** once this runs, Lex will see Pete's *entire* existing library immediately — every title and service already saved, not just things added from here on — since it's now one shared table read under one shared policy, not a merge of two separate datasets. That's the explicit ask ("one data set... read and write into this app with the same data"), not a side effect.
+
+Tested: `node --check` on all three inline script blocks, an HTML tag-balance check, and confirmed no duplicate ids were introduced. Not tested: the SQL itself (no live Supabase access from the build sandbox) and Lex's actual home-screen view post-migration — both worth a first real check once the policy change has been run.
+
 ## v10.91 (PET-096) — Film & TV Tracker registered
 
 Launcher-side half of bringing up the new Film & TV Tracker app (film-tv-tracker.html v1.0, FTT-001 — see that app's own changelog for the app itself). Three additions, all additive:
