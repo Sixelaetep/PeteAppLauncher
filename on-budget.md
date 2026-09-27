@@ -2,6 +2,10 @@
 
 Full version history for `on-budget.html`. The app's own inline comment block keeps only the detailed, recent-era releases (v3.44 onward) for quick reference during active work — everything from v1.0 through v3.43 lives here instead. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed. Note: v1.0–v2.8 were never logged as individual entries in the source file — only this one combined summary paragraph — so that's reproduced as-is rather than split up.
 
+## v3.75 (ON--071)
+
+Horizon standalone-mode support, for the launcher's new customizable layout system (index.html PET-094). If Pete sets Horizon to standalone in the new settings panel (its own icon/card again, replacing this embed rather than living alongside it), the launcher writes `pal_standalone_horizon` to localStorage. This app checks that flag once at boot — a plain same-origin localStorage read, no postMessage or timing dependency involved, so it's correct even if this app is opened directly (bypassing the launcher entirely) — and if set, hides the Horizon tab button. No redirect-off-tab guard needed here (unlike Fortnight Tracker's equivalent change for Claims): the Spending panel is always the default active tab on load, so there's no scenario where Horizon could already be showing at the point this check runs. `loadHorizonFrame()`/`pingHorizonFrame()` and `horizon.html` itself are untouched; the tab still works exactly as before when the flag is unset (the default). Verified via `node --check` and a manual test setting the flag directly in devtools, confirming the tab disappears and reappears correctly on reload.
+
 ## v3.74 (ON--070)
 
 Switched from three separate script tags (pal-config.js, pal-sync.js, pal-utils.js) to one combined pal-shared.js — same three files concatenated in the same load-order-critical sequence, just fewer requests. No code inside any of the three sections changed. Verified via node --check and a manual reload confirming sync/theme/esc/uid/toast all still work.
