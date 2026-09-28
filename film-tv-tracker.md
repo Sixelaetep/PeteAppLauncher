@@ -2,6 +2,14 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.12 (FTT-019) — Library search moved above the curated rows
+
+Pete's follow-up on v1.11: the library search/filter bar had ended up below the curated preview rows, so it read as buried among the film cards rather than sitting where scrolling should "lock in". Reordered so the library search/status/filter/sort bar sits directly under the dashboard stat boxes — that's where it now goes sticky from — and the curated rows (Favourites, Good for tonight, etc.) moved below it, into the part of the page that scrolls underneath the sticky bar along with the full list. They keep their icons and "See all" links, but are now clearly just a visual glance rather than something structurally between the dashboard and the search.
+
+No JS changed — `renderFilms()` fills each section by element id regardless of where those ids sit in the page, so this was purely a reorder of the existing HTML blocks.
+
+Tested: `node --check` on both inline script blocks; the usual id/onclick-to-function cross-reference and duplicate-id/duplicate-function scans; confirmed in the file itself that the sticky filter bar's markup now precedes the curated rows' markup, which precedes the full grid. Not tested: a live browser render of the actual scroll behaviour.
+
 ## v1.11 (FTT-018) — Curated preview rows restored on the Films tab
 
 Pete clarified after v1.10: the stat boxes filtering the full list weren't what was meant by "the sections we had before" — it was the actual curated preview rows themselves (Favourites, Good for tonight, etc., each with its own icon and a handful of cards), which v1.9's merge had dropped in favour of the stat boxes alone.
