@@ -2,6 +2,18 @@
 
 Full version history for `on-budget.html`. The app's own inline comment block keeps only the detailed, recent-era releases (v3.44 onward) for quick reference during active work — everything from v1.0 through v3.43 lives here instead. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed. Note: v1.0–v2.8 were never logged as individual entries in the source file — only this one combined summary paragraph — so that's reproduced as-is rather than split up.
 
+## v3.79 (ON--073)
+
+Increasing mode wording fix, prompted by Headroom showing the full reserve as a negative (e.g. -£642.86) at the start of a month.
+
+Cause: a month set up under the old model had a £0 start balance with the £750 logged as income. In Increasing mode the pot is the spending limit (start balance), and since v3.78 income is a card payment rather than pot funding, so a £0 limit means a £0 pot and headroom = −reserve. The maths is correct and unchanged; the problem was the screens still calling this figure "Current balance" / "Update starting balance", which for a credit card reads as the card's own balance, so it was easy to enter £0.
+
+Fix, Increasing mode only: the month-setup screen now asks for the "Spending limit", the bottom button and prompt read "Update spending limit", and the pot sub-line shows a prompt to set a limit when it's £0. Decreasing mode wording is unchanged. No calculation, data or sync changes.
+
+To correct a month already started with a £0 limit: tap Update spending limit and enter £750. Headroom then becomes the limit less spend less the food/travel reserve.
+
+Tested against the real page in jsdom: reproduced the negative-headroom case with a £0 limit and £750 income; setup wording in both directions; the zero-limit prompt; the update flow via the real prompt path (limit £750 gives £750 left and positive headroom); Decreasing wording unchanged. No load errors. Not tested on a physical device.
+
 ## v3.78 (ON--072)
 
 Increasing (credit card) mode reworked into a spend counter plus a real card balance. Supersedes v3.77's "ignore income" change, which fixed the £0 start-of-month case but would have stopped next month's pay-in from clearing the card.
