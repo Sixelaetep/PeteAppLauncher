@@ -2,6 +2,16 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.11 (FTT-018) — Curated preview rows restored on the Films tab
+
+Pete clarified after v1.10: the stat boxes filtering the full list weren't what was meant by "the sections we had before" — it was the actual curated preview rows themselves (Favourites, Good for tonight, etc., each with its own icon and a handful of cards), which v1.9's merge had dropped in favour of the stat boxes alone.
+
+Restored between the stat row and "My Films & TV": ⭐ Favourites, 🌙 Good for tonight, ✅ Available now, 🚫 Interested-but-can't-watch-yet, 🕘 Recently watched, and 🆕 New Seasons Available when there are any — same icons, same ordering, same card counts (6 or 8) as the pre-v1.9 dashboard. Each has a "See all" link that calls the same `goToStat()` its matching stat box already used, jumping to the full filtered list below. One deliberate difference from before: Favourites now pulls from both Watchlist and Watched (the v1.9 changelog's cross-status fix), not Watchlist alone.
+
+These sit alongside, not instead of, the v1.9 changes — the stat boxes above them and the single searchable/filterable library below are both still there and still work the same way; this just puts the "what's good right now" glance back above the full list.
+
+Tested: `node --check` on both inline script blocks; the usual id/onclick-to-function cross-reference and duplicate-id/duplicate-function scans. The six bucket computations (favourites, bedtime, available, unavailable, watched, newSeasons) that feed both the stat boxes and these new sections were extracted from the real `renderFilms()` and run standalone against five titles covering every case — cross-status favourite, short-and-available vs short-but-blocked, owned vs unowned service, and a flagged new season — all six came back correct. Not tested: a live browser render of how the rows actually look or scroll.
+
 ## v1.10 (FTT-017) — Sticky-header gap fix, sticky library filters, "Good for tonight" restored, clearer card buttons
 
 Four fixes from one screenshot, all Pete's direct report/request.
