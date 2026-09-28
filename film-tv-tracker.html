@@ -99,6 +99,7 @@
   .badge.avail { background:rgba(63,185,80,0.85); }
   .badge.unavail { background:rgba(139,148,158,0.85); }
   .badge.rentbuy { background:rgba(255,166,87,0.85); }
+  .badge.newseason { background:rgba(88,166,255,0.9); }
   .fav-toggle { position:absolute; bottom:6px; right:6px; background:rgba(13,17,23,0.7); border:none; color:#fff; width:26px; height:26px; border-radius:50%; font-size:14px; cursor:pointer; }
   .watched-toggle { position:absolute; bottom:6px; left:6px; background:rgba(13,17,23,0.7); border:none; color:#fff; width:26px; height:26px; border-radius:50%; font-size:12px; cursor:pointer; }
   .select-check { position:absolute; bottom:6px; right:6px; width:22px; height:22px; border-radius:50%; border:2px solid #fff; background:rgba(0,0,0,0.45); color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; }
@@ -277,6 +278,15 @@
     <div class="data-info-box" style="line-height:1.6;margin-top:8px">
       JSON format for the last two: either a plain array, or <code>{"titles":[…]}</code>. Each item can be just a title string, or <code>{"title":"…","year":2020,"type":"movie"}</code> ("type" is "movie" or "tv", both optional — a year narrows an ambiguous title, a type skips guessing film vs TV).
     </div>
+
+    <div class="data-lbl">Library Maintenance</div>
+    <div class="data-info-box" style="line-height:1.6">
+      Checks every TV show already in your library against TMDB for a season count it doesn't know about yet. A flagged show gets a 🆕 badge on its card and shows up in a Dashboard section — in either Watchlist or Watched, since a show you've finished can still get a new season. This doesn't change anything by itself; open the flagged title's Episodes &amp; Seasons section to update its tracked season count when you're ready.
+    </div>
+    <div class="data-btn-row" id="maintenanceControls">
+      <button class="data-btn" onclick="checkForNewSeasons()">🔎 Check for new seasons</button>
+    </div>
+
     <div id="importRunning" style="display:none">
       <div id="importProgress" class="data-info-box"></div>
       <div class="data-btn-row"><button class="data-btn" onclick="cancelImport()">Cancel</button></div>
@@ -302,6 +312,9 @@
 <div class="panel" id="panel-dashboard">
   <div class="stat-row" id="dashStats"></div>
 
+  <div class="section-title" id="dashNewSeasonsTitle" style="display:none">🆕 New Seasons Available</div>
+  <div class="card-grid" id="dashNewSeasons"></div>
+
   <div class="section-title">⭐ Favourite Watchlist</div>
   <div class="card-grid" id="dashFavourites"></div>
 
@@ -321,6 +334,7 @@
 <!-- ══════════════════════ WATCHLIST ══════════════════════ -->
 <div class="panel" id="panel-watchlist">
   <div class="filter-row">
+    <div class="search-box"><input id="wlSearch" placeholder="Search watchlist…" oninput="renderWatchlist()"></div>
     <select id="wlFilter" onchange="renderWatchlist()">
       <option value="all">All</option>
       <option value="film">Films</option>
@@ -353,6 +367,7 @@
 <!-- ══════════════════════ WATCHED ══════════════════════ -->
 <div class="panel" id="panel-watched">
   <div class="filter-row">
+    <div class="search-box"><input id="wdSearch" placeholder="Search watched…" oninput="renderWatched()"></div>
     <select id="wdFilter" onchange="renderWatched()">
       <option value="all">All</option>
       <option value="film">Films</option>
@@ -364,6 +379,13 @@
       <option value="title">Sort: Title</option>
       <option value="rating">Sort: My rating</option>
     </select>
+    <button class="small-btn select-btn" id="selectModeBtnWd" onclick="toggleSelectModeWd()">☑ Select</button>
+  </div>
+  <div class="bulk-bar" id="bulkBarWd">
+    <span id="bulkCountWd">0 selected</span>
+    <button class="modal-btn" onclick="bulkFavouriteWd()">⭐ Favourite</button>
+    <button class="modal-btn danger" onclick="bulkRemoveWd()">🗑 Remove</button>
+    <button class="modal-btn" style="margin-left:auto" onclick="toggleSelectModeWd()">Done</button>
   </div>
   <div class="card-grid" id="watchedGrid"></div>
 </div>
@@ -371,7 +393,7 @@
 <!-- ══════════════════════ SERVICES ══════════════════════ -->
 <div class="panel" id="panel-services">
   <div class="filter-row">
-    <div style="flex:1"></div>
+    <div class="search-box"><input id="svcSearch" placeholder="Search services…" oninput="renderServices()"></div>
     <button class="modal-btn primary" onclick="openServiceModal(null)">+ Add service</button>
   </div>
   <div id="servicesList"></div>
@@ -390,6 +412,7 @@
 <!-- ══════════════════════ REVIEWS ══════════════════════ -->
 <div class="panel" id="panel-reviews">
   <div class="filter-row">
+    <div class="search-box"><input id="rvSearch" placeholder="Search reviews…" oninput="renderReviews()"></div>
     <select id="rvFilter" onchange="renderReviews()">
       <option value="all">All</option>
       <option value="film">Films</option>
@@ -434,6 +457,9 @@
     </div>
     <div id="tm-episodes-section" style="display:none">
       <label>Episodes &amp; Seasons</label>
+      <div id="tm-new-seasons-callout" style="display:none;background:rgba(88,166,255,0.12);border:1px solid rgba(88,166,255,0.4);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:11.5px;color:var(--accent)">
+        🆕 TMDB now shows <strong id="tm-new-seasons-count"></strong> season(s) — <button class="small-btn" onclick="acknowledgeNewSeasons()">Update tracked count</button>
+      </div>
       <div id="tm-seasons-summary" style="font-size:11.5px;color:var(--film);font-weight:700;margin-bottom:6px"></div>
       <div id="tm-episodes-no-tmdb" style="font-size:11.5px;color:var(--ink2);display:none">Episode tracking needs a TMDB match for this title — re-add it via Search / Add to enable this.</div>
       <div id="tm-episodes-loader">
@@ -513,7 +539,7 @@
 <script src="pal-shared.js?v=1.7"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v1.7 (FTT-001..FTT-010) — see film-tv-tracker.md.
+// FILM & TV TRACKER v1.7 (FTT-001..FTT-012) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -524,11 +550,8 @@
 const STORAGE_KEY = 'ftt_v1';
 const STAT_CACHE_KEY = 'pal_ftt_stat';
 const SB_TABLE = 'pal_film_tracker';
-// v1.7/FTT-010: shared mode — Pete and Lex read/write the same rows.
-// See film-tv-tracker.md and pal-shared.js v1.12.
-const _tTitles   = window.PalSync.table(SB_TABLE, { prefix: 'title_',   shared: true });
-const _tServices = window.PalSync.table(SB_TABLE, { prefix: 'service_', shared: true });
-const _tSettings = window.PalSync.table(SB_TABLE, { shared: true });
+const _tTitles   = window.PalSync.table(SB_TABLE, { prefix: 'title_' });
+const _tServices = window.PalSync.table(SB_TABLE, { prefix: 'service_' });
 
 const DEFAULT_SERVICES = [
   'Netflix','Amazon Prime Video','Disney Plus','Apple TV Plus','BBC iPlayer',
@@ -611,6 +634,18 @@ function toggleTheme() {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('visible', p.id === 'panel-' + name));
+  // Leaving a tab that's mid-multi-select exits it, so a stale selection
+  // (and its bulk bar) never carries over to whatever's opened next.
+  if (name !== 'watchlist' && selectMode) {
+    selectMode = false; selectedIds.clear();
+    const btn = document.getElementById('selectModeBtn'), bar = document.getElementById('bulkBar');
+    if (btn) btn.classList.remove('on'); if (bar) bar.classList.remove('visible');
+  }
+  if (name !== 'watched' && selectModeWd) {
+    selectModeWd = false; selectedIdsWd.clear();
+    const btn = document.getElementById('selectModeBtnWd'), bar = document.getElementById('bulkBarWd');
+    if (btn) btn.classList.remove('on'); if (bar) bar.classList.remove('visible');
+  }
   renderAll();
 }
 
@@ -692,6 +727,7 @@ function titleCardHtml(t, opts) {
   if (t.favourite) badges += `<span class="badge fav">⭐</span>`;
   if (t.cinema && t.cinema.releaseDate) badges += `<span class="badge cinema">🎟️</span>`;
   if (isBedtimeCandidate(t, currentBedtimeMax)) badges += `<span class="badge bedtime">🌙 ${t.episodeRuntimeMinutes}m</span>`;
+  if (t.newSeasonsDetected) badges += `<span class="badge newseason">🆕 S${t.newSeasonsDetected}</span>`;
   let availBadge = '';
   if (av.state === 'available') availBadge = `<span class="badge avail">Available</span>`;
   else if (av.state === 'rentbuy') availBadge = `<span class="badge rentbuy">Rent/Buy</span>`;
@@ -702,8 +738,10 @@ function titleCardHtml(t, opts) {
   if (t.status === 'watched' && t.timesWatched > 1) metaParts.push(`Watched ×${t.timesWatched}`);
   const meta = metaParts.filter(Boolean).join(' · ');
 
-  const selected = opts.selectable && selectedIds.has(t.id);
-  const clickAttr = opts.selectable ? `onclick="toggleSelect('${t.id}')"` : `onclick="openTitleModal('${t.id}')"`;
+  const selSet = opts.selectVariant === 'wd' ? selectedIdsWd : selectedIds;
+  const selToggleFn = opts.selectVariant === 'wd' ? 'toggleSelectWd' : 'toggleSelect';
+  const selected = opts.selectable && selSet.has(t.id);
+  const clickAttr = opts.selectable ? `onclick="${selToggleFn}('${t.id}')"` : `onclick="openTitleModal('${t.id}')"`;
   const quickButtons = opts.selectable
     ? `<span class="select-check">${selected ? '✓' : ''}</span>`
     : `<button class="fav-toggle" onclick="event.stopPropagation();quickToggleFav('${t.id}')" title="Toggle favourite">${t.favourite ? '⭐' : '☆'}</button>
@@ -742,6 +780,7 @@ function renderDashboard() {
   const unavailable = watchlist.filter(t => resolveAvailability(t).state === 'unavailable');
   const bedtime = watchlist.filter(t => isBedtimeCandidate(t, currentBedtimeMax) && resolveAvailability(t).state !== 'unavailable');
   const ownedCount = liveServices().filter(s => s.hasAccess).length;
+  const newSeasons = titles.filter(t => t.newSeasonsDetected);
 
   document.getElementById('dashStats').innerHTML = [
     ['Want to Watch', watchlist.length, "goToStat('watchlist','wlFilter','all')"],
@@ -751,6 +790,9 @@ function renderDashboard() {
     ['Unavailable', unavailable.length, "goToStat('watchlist','wlFilter','unavailable')"],
     ['Services owned', ownedCount, "switchTab('services')"]
   ].map(([label, n, onclick]) => `<div class="stat-box" onclick="${onclick}" title="View"><b>${n}</b><span>${esc(label)}</span></div>`).join('');
+
+  document.getElementById('dashNewSeasonsTitle').style.display = newSeasons.length ? '' : 'none';
+  document.getElementById('dashNewSeasons').innerHTML = newSeasons.map(t => titleCardHtml(t)).join('');
 
   const favWatchlist = favourites.filter(t => t.status === 'watchlist').slice(0, 6);
   document.getElementById('dashFavourites').innerHTML = favWatchlist.length
@@ -770,8 +812,12 @@ function renderDashboard() {
     ? recentWatched.map(titleCardHtml).join('') : emptyState('🕘', 'Nothing marked watched yet.');
 }
 
-function filterAndSort(list, filter, sort) {
+function filterAndSort(list, filter, sort, searchTerm) {
   let out = list;
+  if (searchTerm && searchTerm.trim()) {
+    const q = searchTerm.trim().toLowerCase();
+    out = out.filter(t => (t.title || '').toLowerCase().includes(q) || (t.originalTitle || '').toLowerCase().includes(q));
+  }
   if (filter === 'film') out = out.filter(t => t.type === 'film');
   else if (filter === 'tv') out = out.filter(t => t.type === 'tv');
   else if (filter === 'favourite') out = out.filter(t => t.favourite);
@@ -793,13 +839,16 @@ function filterAndSort(list, filter, sort) {
 
 let selectMode = false;
 let selectedIds = new Set();
+let selectModeWd = false;
+let selectedIdsWd = new Set();
 
 function renderWatchlist() {
   const filter = document.getElementById('wlFilter').value;
   const sort = document.getElementById('wlSort').value;
-  const list = filterAndSort(liveTitles().filter(t => t.status === 'watchlist'), filter, sort);
+  const search = document.getElementById('wlSearch').value;
+  const list = filterAndSort(liveTitles().filter(t => t.status === 'watchlist'), filter, sort, search);
   document.getElementById('watchlistGrid').innerHTML = list.length
-    ? list.map(t => titleCardHtml(t, { selectable: selectMode, showQuickWatched: true })).join('')
+    ? list.map(t => titleCardHtml(t, { selectable: selectMode, showQuickWatched: true, selectVariant: 'wl' })).join('')
     : emptyState('📺', 'Nothing here yet — add something from Search / Add.');
   updateBulkBar();
 }
@@ -864,13 +913,56 @@ function quickMarkWatched(id) {
 function renderWatched() {
   const filter = document.getElementById('wdFilter').value;
   const sort = document.getElementById('wdSort').value;
-  const list = filterAndSort(liveTitles().filter(t => t.status === 'watched'), filter, sort);
+  const search = document.getElementById('wdSearch').value;
+  const list = filterAndSort(liveTitles().filter(t => t.status === 'watched'), filter, sort, search);
   document.getElementById('watchedGrid').innerHTML = list.length
-    ? list.map(t => titleCardHtml(t)).join('') : emptyState('✅', 'Nothing marked watched yet.');
+    ? list.map(t => titleCardHtml(t, { selectable: selectModeWd, selectVariant: 'wd' })).join('')
+    : emptyState('✅', 'Nothing marked watched yet.');
+  updateBulkBarWd();
+}
+
+// Watched tab's own multi-select — separate select set from Watchlist's
+// so the two tabs' selections never bleed into each other.
+function toggleSelectModeWd() {
+  selectModeWd = !selectModeWd;
+  if (!selectModeWd) selectedIdsWd.clear();
+  document.getElementById('selectModeBtnWd').classList.toggle('on', selectModeWd);
+  document.getElementById('bulkBarWd').classList.toggle('visible', selectModeWd);
+  renderWatched();
+}
+function toggleSelectWd(id) {
+  if (selectedIdsWd.has(id)) selectedIdsWd.delete(id); else selectedIdsWd.add(id);
+  renderWatched();
+}
+function updateBulkBarWd() {
+  const el = document.getElementById('bulkCountWd'); if (!el) return;
+  el.textContent = selectedIdsWd.size + ' selected';
+}
+function bulkFavouriteWd() {
+  if (!selectedIdsWd.size) return;
+  const now = new Date().toISOString();
+  state.titles.forEach(t => {
+    if (selectedIdsWd.has(t.id)) { t.favourite = true; t.updatedAt = now; if (window.PalSync.hasSession()) syncPushTitle(t); }
+  });
+  saveState(); toast('Marked favourite');
+}
+function bulkRemoveWd() {
+  if (!selectedIdsWd.size) return;
+  if (!confirm(`Remove ${selectedIdsWd.size} title(s) from your library?`)) return;
+  const now = new Date().toISOString();
+  state.titles.forEach(t => {
+    if (selectedIdsWd.has(t.id)) {
+      t._deleted = true; t.updatedAt = now;
+      if (window.PalSync.hasSession()) _tTitles.tombstone(t.id, t, 'updatedAt').catch(e => toast('Sync delete failed: ' + window.PalSync.errorHint(e.status, e.message), 'err'));
+    }
+  });
+  saveState(); toggleSelectModeWd(); toast('Removed');
 }
 
 function renderServices() {
-  const list = liveServices();
+  const search = document.getElementById('svcSearch').value.trim().toLowerCase();
+  let list = liveServices();
+  if (search) list = list.filter(s => (s.name || '').toLowerCase().includes(search));
   document.getElementById('servicesList').innerHTML = list.length ? list.map(s => `
     <div class="service-row" style="cursor:pointer" onclick="openServiceModal('${s.id}')">
       <span>${s.hasAccess ? '✅' : '⬜'} ${esc(s.name)} <span style="color:var(--ink2);font-size:11px">(${s.type})</span></span>
@@ -881,7 +973,9 @@ function renderServices() {
 function renderReviews() {
   const filter = document.getElementById('rvFilter').value;
   const sort = document.getElementById('rvSort').value;
+  const search = document.getElementById('rvSearch').value.trim().toLowerCase();
   let list = liveTitles().filter(t => t.status === 'watched' && t.watched && t.watched.review);
+  if (search) list = list.filter(t => (t.title || '').toLowerCase().includes(search));
   if (filter === 'film') list = list.filter(t => t.type === 'film');
   else if (filter === 'tv') list = list.filter(t => t.type === 'tv');
   list = [...list];
@@ -973,6 +1067,9 @@ function setupEpisodesSection() {
   const hasTmdb = !!(t.externalIds && t.externalIds.tmdb);
   document.getElementById('tm-episodes-no-tmdb').style.display = hasTmdb ? 'none' : '';
   document.getElementById('tm-episodes-loader').style.display = hasTmdb ? '' : 'none';
+  const callout = document.getElementById('tm-new-seasons-callout');
+  if (t.newSeasonsDetected) { callout.style.display = ''; document.getElementById('tm-new-seasons-count').textContent = t.newSeasonsDetected; }
+  else { callout.style.display = 'none'; }
   if (hasTmdb) renderSeasonsList();
   else { document.getElementById('tm-seasons-list').innerHTML = ''; document.getElementById('tm-seasons-summary').textContent = ''; }
 }
@@ -1005,6 +1102,7 @@ async function loadAllSeasons() {
       };
     }
     t.updatedAt = new Date().toISOString();
+    checkAutoCompleteSeries(t);
     renderSeasonsList();
     saveState();
     if (window.PalSync.hasSession()) syncPushTitle(t);
@@ -1072,11 +1170,36 @@ function renderSeasonsList() {
   document.getElementById('tm-seasons-summary').textContent = `${fullyWatched} of ${totalSeasons} season(s) watched`;
 }
 
+// If every one of a show's known seasons is now fully watched, the
+// title itself flips to Watched automatically — no separate manual
+// step. Deliberately one-directional: unmarking a season later does
+// NOT revert status back to Watchlist (someone might unmark a season
+// while still considering the show "watched" overall, e.g. rewatch
+// tracking), so this only ever runs from the mark-watched actions.
+// Requires a real, known t.seasons — never fires for a title with no
+// TMDB-known season count (a manually-added show with one season
+// marked isn't "complete", it's just untracked for the rest).
+function checkAutoCompleteSeries(t) {
+  if (t.type !== 'tv' || t.status === 'watched' || !t.seasons) return;
+  const sp = t.seasonsProgress || {};
+  const fully = Object.keys(sp).filter(sn => {
+    const s = sp[sn];
+    if (s.manuallyMarkedWatched) return true;
+    return s.episodeCount && (s.watchedEpisodes || []).length >= s.episodeCount;
+  }).length;
+  if (fully < t.seasons) return;
+  t.status = 'watched';
+  t.watched = t.watched || { date: todayISO(), rating: null, review: '' };
+  if (currentTitleId === t.id) { window._tmStatus = 'watched'; updateModalStatusChips(); }
+  toast(`"${t.title}" — all ${t.seasons} season(s) watched, marked Watched`);
+}
+
 function quickMarkSeasonWatched(seasonNum) {
   const t = currentTitleId ? state.titles.find(x => x.id === currentTitleId) : null; if (!t) return;
   t.seasonsProgress = t.seasonsProgress || {};
   t.seasonsProgress[seasonNum] = { episodeCount: null, name: 'Season ' + seasonNum, episodeList: [], watchedEpisodes: [], manuallyMarkedWatched: true, source: 'manual' };
   t.updatedAt = new Date().toISOString();
+  checkAutoCompleteSeries(t);
   renderSeasonsList();
   saveState();
   if (window.PalSync.hasSession()) syncPushTitle(t);
@@ -1098,6 +1221,7 @@ function toggleEpisodeWatched(seasonNum, epNum) {
   const idx = season.watchedEpisodes.indexOf(epNum);
   if (idx >= 0) season.watchedEpisodes.splice(idx, 1); else season.watchedEpisodes.push(epNum);
   t.updatedAt = new Date().toISOString();
+  checkAutoCompleteSeries(t);
   renderSeasonsList();
   saveState();
   if (window.PalSync.hasSession()) syncPushTitle(t);
@@ -1108,6 +1232,7 @@ function markSeasonWatched(seasonNum) {
   const season = t.seasonsProgress[seasonNum]; if (!season) return;
   season.watchedEpisodes = (season.episodeList || []).map(e => e.number);
   t.updatedAt = new Date().toISOString();
+  checkAutoCompleteSeries(t);
   renderSeasonsList();
   saveState();
   if (window.PalSync.hasSession()) syncPushTitle(t);
@@ -1736,6 +1861,70 @@ async function importWatchlistJSON(event) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// NEW SEASONS CHECK (FTT-010) — see film-tv-tracker.md.
+// Lightweight per-show TMDB details fetch (no append_to_response —
+// only number_of_seasons is needed), comparing against t.seasons.
+// Shares the same progress/cancel plumbing as the importers, but
+// changes nothing about status or season-watched data itself — it
+// only sets a flag for the person to act on in their own time.
+// ══════════════════════════════════════════════════════════════════
+async function checkForNewSeasons() {
+  if (!window.PAL_CONFIG.TMDB_READ_TOKEN) { toast('No TMDB key configured', 'err'); return; }
+  const shows = liveTitles().filter(t => t.type === 'tv' && t.externalIds && t.externalIds.tmdb && t.seasons);
+  if (!shows.length) { toast('No TV shows with a known season count to check', 'err'); return; }
+
+  _bulkImportCancel = false;
+  let processed = 0, flagged = 0, errors = 0;
+  const total = shows.length;
+  document.getElementById('importControls').style.display = 'none';
+  document.getElementById('maintenanceControls').style.display = 'none';
+  document.getElementById('importRunning').style.display = '';
+  const progressEl = document.getElementById('importProgress');
+  const updateProgress = () => { if (progressEl) progressEl.innerHTML = `Checking for new seasons… <strong>${processed}/${total}</strong><br>Flagged ${flagged} &nbsp;·&nbsp; Errors ${errors}`; };
+  updateProgress();
+
+  for (const t of shows) {
+    if (_bulkImportCancel) break;
+    processed++;
+    try {
+      const data = await tmdbFetch(`/tv/${t.externalIds.tmdb}?language=en-GB`);
+      const nowCount = data.number_of_seasons || 0;
+      if (nowCount > t.seasons) { t.newSeasonsDetected = nowCount; flagged++; }
+      else if (t.newSeasonsDetected) { delete t.newSeasonsDetected; } // TMDB no longer shows more than we track — clear a stale flag
+    } catch (e) { errors++; }
+    persistOnly();
+    updateProgress();
+    if (processed % 10 === 0) renderAll();
+    await sleep(150);
+  }
+
+  saveState();
+  document.getElementById('importRunning').style.display = 'none';
+  document.getElementById('importControls').style.display = '';
+  document.getElementById('maintenanceControls').style.display = '';
+  toast(_bulkImportCancel
+    ? `Check cancelled — ${flagged} new season(s) found so far`
+    : `Check complete — ${flagged} show(s) with new seasons, ${errors} error(s)`);
+}
+
+// Modal-side acknowledgement: adopt the newly-discovered season count
+// as the tracked total. Deliberately does not touch status or any
+// season's watched state — the new season(s) just appear as ordinary
+// "not started" rows once this runs.
+function acknowledgeNewSeasons() {
+  const t = currentTitleId ? state.titles.find(x => x.id === currentTitleId) : null;
+  if (!t || !t.newSeasonsDetected) return;
+  t.seasons = t.newSeasonsDetected;
+  delete t.newSeasonsDetected;
+  t.updatedAt = new Date().toISOString();
+  document.getElementById('tm-seasons').value = t.seasons;
+  renderSeasonsList();
+  saveState();
+  if (window.PalSync.hasSession()) syncPushTitle(t);
+  toast('Season count updated to ' + t.seasons);
+}
+
+// ══════════════════════════════════════════════════════════════════
 // SUPABASE SYNC — same canonical pal-sync.js pattern used across the
 // suite (one table, prefix-scoped record kinds; settings is a single
 // '__settings__' row read/written directly rather than through the
@@ -1784,7 +1973,7 @@ async function syncPushService(s) {
 }
 async function syncSettings() {
   if (!window.PalSync.hasSession()) return;
-  try { await _tSettings.upsert('__settings__', state.settings); slog('Settings upsert ✓', 'ok'); }
+  try { await window.PalSync.table(SB_TABLE).upsert('__settings__', state.settings); slog('Settings upsert ✓', 'ok'); }
   catch (e) { slog('Settings upsert error: ' + window.PalSync.errorHint(e.status, e.message), 'error'); }
 }
 
@@ -1793,27 +1982,10 @@ async function syncPull() {
   setSyncStatus('connecting');
   slog('Pulling from cloud…');
   try {
-    const allRows = await window.PalSync.fetchTableRows(SB_TABLE, { shared: true });
+    const allRows = await window.PalSync.fetchTableRows(SB_TABLE);
 
     const titleResult = await _tTitles.pull(state.titles, 'id', 'updatedAt', allRows);
     state.titles = titleResult.merged;
-
-    // v1.7: a fresh device seeds the 12 default services with random ids.
-    // Merging those with services already in the cloud would duplicate every
-    // one. Drop a local, untouched default whose name the cloud already has
-    // (live OR tombstoned — a service deleted in the cloud stays deleted).
-    const cloudSvc = allRows.filter(r => r.record_key.indexOf('service_') === 0 && r.data && r.data.id).map(r => r.data);
-    if (cloudSvc.length) {
-      const norm = n => String(n || '').trim().toLowerCase();
-      const cloudSvcIds = new Set(cloudSvc.map(x => x.id));
-      const cloudSvcNames = new Set(cloudSvc.map(x => norm(x.name)));
-      const defaultNames = new Set(DEFAULT_SERVICES.map(norm));
-      const before = state.services.length;
-      state.services = state.services.filter(s =>
-        cloudSvcIds.has(s.id) ||
-        !(defaultNames.has(norm(s.name)) && !s.hasAccess && !s.notes && cloudSvcNames.has(norm(s.name))));
-      if (state.services.length !== before) slog('Dropped ' + (before - state.services.length) + ' untouched default service(s) already in cloud');
-    }
 
     const serviceResult = await _tServices.pull(state.services, 'id', 'updatedAt', allRows);
     state.services = serviceResult.merged.length ? serviceResult.merged : state.services;
@@ -1847,7 +2019,7 @@ function manualPush() {
   Promise.all([
     ...state.titles.map(t => _tTitles.upsert(t.id, t)),
     ...state.services.map(s => _tServices.upsert(s.id, s)),
-    _tSettings.upsert('__settings__', state.settings)
+    window.PalSync.table(SB_TABLE).upsert('__settings__', state.settings)
   ]).then(() => { slog('Push complete ✓', 'ok'); setSyncStatus('synced'); toast('Pushed to cloud ✓'); })
     .catch(e => { slog('Push error: ' + window.PalSync.errorHint(e.status, e.message), 'error'); setSyncStatus('error'); toast('Push had errors', 'err'); });
 }
