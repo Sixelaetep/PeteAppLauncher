@@ -2,6 +2,18 @@
 
 Full version history for `on-budget.html`. The app's own inline comment block keeps only the detailed, recent-era releases (v3.44 onward) for quick reference during active work — everything from v1.0 through v3.43 lives here instead. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed. Note: v1.0–v2.8 were never logged as individual entries in the source file — only this one combined summary paragraph — so that's reproduced as-is rather than split up.
 
+## v3.78 (ON--072)
+
+Increasing (credit card) mode reworked into a spend counter plus a real card balance. Supersedes v3.77's "ignore income" change, which fixed the £0 start-of-month case but would have stopped next month's pay-in from clearing the card.
+
+In Increasing mode: the hero value is the month's spend counter (climbing towards the pot/limit) with "£X left of £Y pot" beneath. Income is treated as a payment to the card, so it no longer raises the pot or headroom (pot = start balance − spent). A new **Card balance** row shows the actual balance = carried-over balance + spent − payments ± adjustments, carried forward month to month from the first month that has a balance set. A **Set** button takes the real card balance and stores only the difference as a month-level `cardAdjust` — it never touches transactions, the spend counter, pot or headroom.
+
+`cardAdjust` is a month field rather than a transaction type because every spend total in the app treats any non-income transaction as spend. It syncs with the month record (upsert, pull and merge) and defaults to null, so older backups and cloud rows load unchanged. `pot` in the launcher summary and History's left-over figure follow the same direction rule. Decreasing mode is unchanged. Settings hint text updated to describe the new behaviour.
+
+Behaviour change to note: in Increasing mode, income no longer counts towards the pot or headroom. Until a card balance has been set, the card balance is calculated from the current month only (opening £0), so logging a payment first shows a negative balance until Set is used.
+
+Tested against the real page in jsdom: this-month flow (£750 income, Set to £0, spend, Set to a statement figure with the counter unmoved), next-month carry-over and £750 payment returning the card to £0, Decreasing mode unchanged, History left-over, month sync payload, save/backup round-trip, and old data without the new field. No load errors. Not tested against live Supabase or on a physical device.
+
 ## v3.77 (ON--071)
 
 Fixed Increasing mode's "Card balance" showing -£750.00 at the start of a month after the pay-in was logged as income. The hero value was spent − income, so any income transaction pushed the card total negative. Income funds the pot (it raises the pot/headroom figures) rather than paying the card, so the card balance is now simply the total spent. Applied to the live hero card and to each completed month's history card, which shared the same formula. Decreasing mode, pot, headroom, the launcher summary and stored data are unchanged — no migration needed. Behaviour change: an income entry no longer reduces the Increasing-mode card balance (e.g. a refund).

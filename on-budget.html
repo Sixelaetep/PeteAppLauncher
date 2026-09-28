@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.77</title>
+<title>On Budget v3.78</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -358,7 +358,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.77</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.78</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -414,7 +414,7 @@
           <button class="toggle-opt" id="pd-down" onclick="setPotDirection('decreasing')">Decreasing</button>
           <button class="toggle-opt" id="pd-up" onclick="setPotDirection('increasing')">Increasing</button>
         </div>
-        <div class="settings-hint">Decreasing: money left, draining from your pot to £0 — for a debit account. Increasing: running total spent so far, climbing from £0 towards your pot — for tracking a credit card against your statement.</div>
+        <div class="settings-hint">Decreasing: money left, draining from your pot to £0 — for a debit account. Increasing: spend counter climbing from £0 towards your pot, plus an actual card balance you can set — for a credit card. Income logged in this mode counts as a payment to the card.</div>
       </div>
       <div class="field-group">
         <label class="field-label">Weekly food budget</label>
@@ -819,14 +819,35 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.77"></script>
+<script src="pal-shared.js?v=3.78"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.77
+// On Budget v3.78
 // localStorage key: on_budget_v1
 // Full version history for v1.0 through v3.43 (49 releases,
 // 2026-06-xx to 2026-08-xx) has moved to on-budget.md, kept alongside
 // this file — nothing before v3.44 is duplicated here any more.
+// v3.78 (ON--072): Increasing (credit card) mode reworked into a spend
+// counter PLUS a real card balance, superseding v3.77's "ignore income"
+// change (which fixed this month but would have stopped next month's
+// pay-in from clearing the card). In Increasing mode: (1) the hero value
+// is the month's spend counter, climbing towards the pot/limit, with
+// "£X left of £Y pot" beneath — income no longer raises the pot or
+// headroom here (pot = start balance − spent), because income is a
+// payment TO the card, not funding; (2) a new Card balance row shows the
+// actual card balance = carried-over balance + spent − payments (income)
+// ± adjustments, carried forward month to month by walking the months
+// from the first one that has a card balance set (cardBalanceInfo());
+// (3) a "Set" button (setCardBalance()) takes the real balance and
+// stores only the difference as a month-level `cardAdjust` — it never
+// touches transactions, the spend counter, pot or headroom. cardAdjust
+// is a month field, not a transaction type, because every spend total
+// treats any non-income transaction as spend; it syncs via the same
+// month record (upsert + pull + merge) and defaults to null, so older
+// backups/cloud rows load unchanged. pot in computeDashboardSummary()
+// and History's `remainder` follow the same direction rule, so the
+// launcher card and History agree with the dashboard. Decreasing mode
+// is byte-for-byte unchanged in behaviour.
 // v3.77 (ON--071): fixed Increasing mode ("Card balance") showing
 // -£750.00 at the start of a month after the pay-in was logged as
 // income. The hero value was spent − income, so any income transaction
@@ -1709,6 +1730,7 @@ async function syncUpsertMonth(mk) {
       weeklyFoodBudget:months[mk].weeklyFoodBudget ?? null,
       weeklyFoodAdjustment:months[mk].weeklyFoodAdjustment ?? null,
       travelBudget:months[mk].travelBudget ?? null,
+      cardAdjust:months[mk].cardAdjust ?? null,
       updated_at:months[mk].updated_at
     });
     setSyncState('synced'); addSyncLog('Month '+mk+' synced','ok');
@@ -1893,6 +1915,7 @@ async function syncPull() {
       weeklyFoodBudget: months[mk].weeklyFoodBudget ?? null,
       weeklyFoodAdjustment: months[mk].weeklyFoodAdjustment ?? null,
       travelBudget: months[mk].travelBudget ?? null,
+      cardAdjust: months[mk].cardAdjust ?? null,
       updated_at: months[mk].updated_at
     }));
     const monthsResult = await _obMonths.pull(flatMonths, 'monthKey', 'updated_at', rows);
@@ -1902,6 +1925,7 @@ async function syncPull() {
       months[m.monthKey].weeklyFoodBudget = m.weeklyFoodBudget ?? null;
       months[m.monthKey].weeklyFoodAdjustment = m.weeklyFoodAdjustment ?? null;
       months[m.monthKey].travelBudget = m.travelBudget ?? null;
+      months[m.monthKey].cardAdjust = m.cardAdjust ?? null;
       months[m.monthKey].updated_at   = m.updated_at;
     });
 
@@ -2275,7 +2299,10 @@ function computeDashboardSummary() {
       const reserveBd = calcReserve(weeks, tx, monthTravelBudget);
       const spent  = tx.filter(t => t.type !== 'income').reduce((s, t) => s + (t.amount || 0), 0);
       const income = tx.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
-      pot      = Math.round((d.startBalance + income - spent) * 100) / 100;
+      // v3.78 (ON--072): in Increasing mode income is a card payment, not
+      // pot funding, so it's left out — same rule as the dashboard.
+      const incFunds = settings.potDirection === 'increasing' ? 0 : income;
+      pot      = Math.round((d.startBalance + incFunds - spent) * 100) / 100;
       headroom = Math.round((pot - reserveBd.total) * 100) / 100;
       food     = Math.round(reserveBd.food * 100) / 100;
       travel   = Math.round(reserveBd.travel * 100) / 100;
@@ -2332,7 +2359,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.77', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.78', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2341,7 +2368,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.77', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.78', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2621,6 +2648,49 @@ function ensureMonth() {
   return months[k];
 }
 
+// ── Card balance (v3.78, ON--072) — Increasing mode only ───────────
+// Actual card balance = carried balance + spent − payments (income) ±
+// adjustments, summed over months from the first one that has a card
+// balance set (month.cardAdjust is a number) up to `curK`. If none has
+// been set yet, only the current month counts (opening balance £0).
+// `ignoreCurAdj` drops the current month's own adjustment so
+// setCardBalance() can work out the offset needed for a typed balance.
+function cardBalanceInfo(curK, ignoreCurAdj) {
+  const keys = Object.keys(months).filter(mk => mk <= curK && months[mk]).sort();
+  const isSet = mk => typeof months[mk].cardAdjust === 'number' && !isNaN(months[mk].cardAdjust);
+  const startKey = keys.find(isSet) || curK;
+  let bal = 0;
+  keys.forEach(mk => {
+    if (mk < startKey) return;
+    const tx = (months[mk].transactions||[]).filter(t=>!t._deleted);
+    const spend = tx.filter(t=>t.type!=='income').reduce((a,t)=>a+(t.amount||0),0);
+    const inc   = tx.filter(t=>t.type==='income').reduce((a,t)=>a+(t.amount||0),0);
+    bal += spend - inc;
+    if (!(ignoreCurAdj && mk===curK) && isSet(mk)) bal += months[mk].cardAdjust;
+  });
+  return { balance: Math.round(bal*100)/100, anchored: keys.some(isSet) };
+}
+
+// Type in what the card actually shows; only the difference is stored,
+// as this month's cardAdjust. Never touches transactions, the spend
+// counter, pot or headroom.
+function setCardBalance() {
+  const d = curData();
+  if (!d || d.startBalance === null || d.startBalance === undefined) { toast('Start the month first'); return; }
+  const k = curKey();
+  const cur  = cardBalanceInfo(k, false).balance;
+  const base = cardBalanceInfo(k, true).balance;
+  const v = prompt(`Actual card balance right now (currently £${cur.toFixed(2)}):`, cur.toFixed(2));
+  if (v===null) return;
+  const val = parseFloat(String(v).replace(/[£,\s]/g,''));
+  if (isNaN(val)) { toast('Invalid amount'); return; }
+  d.cardAdjust = Math.round((val - base)*100)/100;
+  d.updated_at = new Date().toISOString();
+  save(true); renderDash();
+  syncUpsertMonth(k);
+  toast('Card balance set ✓');
+}
+
 // v3.68 (ON--064): local uid() removed — now supplied by pal-utils.js.
 // All call sites here call uid() with no argument (no prefix), same as
 // before; pal-utils's version just generates a slightly longer random
@@ -2736,7 +2806,10 @@ function renderDash() {
   const reserve  = reserveBd.total;
   const spent    = tx.filter(t=>t.type!=='income').reduce((s,t)=>s+(t.amount||0),0);
   const incomeTot= tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
-  const pot      = d.startBalance + incomeTot - spent;
+  // v3.78 (ON--072): in Increasing mode income is a payment to the card,
+  // not pot funding, so it doesn't raise the pot/headroom there.
+  const potDirection = settings.potDirection === 'increasing' ? 'increasing' : 'decreasing';
+  const pot      = d.startBalance + (potDirection==='increasing' ? 0 : incomeTot) - spent;
   const headroom = pot - reserve;
   // v3.67 (ON--065): `pot` above stays the direction-agnostic "room left
   // before the cap" figure — unchanged, and still exactly what headroom,
@@ -2744,12 +2817,12 @@ function renderDash() {
   // colour thresholds (which mirror this screen's, per ON--062) keep
   // working identically regardless of which direction the user picks.
   // Only the number and label actually shown in the hero card change.
-  const potDirection = settings.potDirection === 'increasing' ? 'increasing' : 'decreasing';
-  // v3.77 (ON--071): card balance is what has been spent on the card —
-  // income is the pay-in funding the pot, not a payment against the card,
-  // so it must not be netted off (it made a fresh month read -£750).
+  // v3.78 (ON--072): Increasing mode's hero value is the month's spend
+  // counter (climbing towards the pot/limit). The actual card balance is
+  // its own row below (cardInfo), so neither figure is overloaded.
   const potShown = potDirection==='increasing' ? spent : pot;
-  const potLabel = potDirection==='increasing' ? 'Card balance' : 'Pot remaining';
+  const potLabel = potDirection==='increasing' ? 'Spent this month' : 'Pot remaining';
+  const cardInfo = potDirection==='increasing' ? cardBalanceInfo(k, false) : null;
   const today    = new Date(); today.setHours(0,0,0,0);
   const dToNext  = daysBetween(today, next);
 
@@ -2844,6 +2917,23 @@ function renderDash() {
   // their headline figure big, with the other figure right underneath it,
   // same as each other — just with which figure is which flipped, exactly
   // as each direction's own point is to do.
+  // v3.78 (ON--072): actual card balance row (Increasing mode only).
+  // Neutral colour on purpose — it's a fact to check against the card
+  // statement, not a health state. A negative balance means the card is
+  // in credit. "Set" opens setCardBalance() and only records an offset.
+  const cardRowHtml = cardInfo ? (() => {
+    const cb = cardInfo.balance;
+    const cbFmt = (cb<0?'-':'')+'£'+Math.abs(cb).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
+      <div>
+        <div class="stat-card-label" style="margin-bottom:2px">Card balance</div>
+        <div class="stat-card-val" style="color:var(--ink)">${cbFmt}</div>
+        ${cb<0?'<div class="stat-card-sub" style="color:var(--ink3)">in credit</div>':''}
+      </div>
+      <button class="date-toggle-btn" onclick="setCardBalance()">Set</button>
+    </div>`;
+  })() : '';
+
   const potBudgetSub = potDirection==='increasing'
     ? (pot>=0
       ? `<div class="stat-card-sub" style="color:var(--${potCls==='warn'?'red':potCls==='amber'?'amber':'accent'})">£${pot.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})} left of £${d.startBalance.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})} pot</div>`
@@ -2924,11 +3014,11 @@ function renderDash() {
         ${potBudgetSub}
       </div>
       <div class="hero-right">
-        £${spent.toFixed(2)} spent${incomeTot>0?` · +£${incomeTot.toFixed(2)} inc`:''}<br>${daysStr} to pay-in
+        £${spent.toFixed(2)} spent${incomeTot>0?(potDirection==='increasing'?` · £${incomeTot.toFixed(2)} paid`:` · +£${incomeTot.toFixed(2)} inc`):''}<br>${daysStr} to pay-in
       </div>
     </div>
     <div class="bar-track" style="margin-top:8px"><div class="bar-fill ${potBarCls}" style="width:${potPct}%"></div></div>
-
+    ${cardRowHtml}
     <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
       <div class="hero-top" style="margin-bottom:0">
         <div>
@@ -3638,7 +3728,9 @@ function monthAgg(k) {
   });
   const topShop = Object.values(shops).sort((a,b)=>b.total-a.total)[0] || null;
   return { food, travel, other, income, spend,
-           remainder: (d.startBalance??0) + income - spend,
+           // v3.78 (ON--072): Increasing mode leaves income out (it's a
+           // card payment, not pot funding) — matches the dashboard.
+           remainder: (d.startBalance??0) + (settings.potDirection==='increasing' ? 0 : income) - spend,
            // v3.67 (ON--065): running total for a month, used instead of
            // `remainder` when Settings > Pot tracking direction is
            // 'increasing' — same underlying spend/income, just the other
@@ -3770,7 +3862,7 @@ function renderHist() {
     html += `<div class="stat-card" style="margin-bottom:14px;padding:13px 14px">
       <div class="stat-card-label">Left over each month</div>
       ${histRemainderSvg(pastAsc.slice(-12), aggs)}
-      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">Start balance + income − spend, Food &amp; Travel pot only — Bills run on their own cleared balance. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
+      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">${settings.potDirection==='increasing' ? 'Start balance − spend' : 'Start balance + income − spend'}, Food &amp; Travel pot only — Bills run on their own cleared balance. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
     </div>`;
   }
 
