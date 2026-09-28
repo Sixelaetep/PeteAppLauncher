@@ -293,6 +293,24 @@ window.PAL_CONFIG = {
  * it for codes but not bundles. On Budget, Gym Tracker, and Claim
  * Tracker already filtered consistently and needed no changes for this.
  *
+ * v1.12 — opt-in SHARED mode for tables that two known users read and
+ * write together (first user: Film & TV Tracker, pal_film_tracker).
+ * Everything above was strictly per-user: fetchTableRows(), upsert()'s
+ * PATCH and the compaction filters all hard-coded user_id=eq.<me>, so
+ * even when a table's RLS let both users in, each only ever saw their
+ * own rows. table(name, { shared: true }) and fetchTableRows(name,
+ * { shared: true }) change that, and ONLY for callers that pass the flag
+ * — every existing app behaves byte-for-byte as before.
+ * Shared mode: (1) fetch drops the user_id filter (RLS is the boundary)
+ * and collapses duplicate record_keys to the newest updated_at, ordered
+ * by record_key then user_id so pagination stays stable; (2) upsert()
+ * PATCHes by record_key alone and omits user_id from the PATCH body, so
+ * one user editing the other's record updates it in place instead of
+ * forking a second copy or taking ownership; POST (new record) still
+ * stamps the caller's user_id; (3) the flag rides along in the retry
+ * queue so a queued shared upsert is replayed as shared. Compaction is
+ * left per-user on purpose (see v1.10 note on shared-data tombstones).
+ *
  * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
  * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
  *
@@ -344,12 +362,12 @@ window.PalSync = (function () {
   // so ordinary apps never need to call this directly. Re-read the stored
   // queue first so a queue written by another app moments ago isn't
   // clobbered by this app's stale in-memory copy.
-  function _queueForRetry(tableName, prefix, id, data) {
+  function _queueForRetry(tableName, prefix, id, data, shared) {
     _rehydrateRetryQueue();
     _retryQueue = _retryQueue.filter(function (q) {
-      return !(q.tableName === tableName && (q.prefix || '') === (prefix || '') && q.id === id);
+      return !(q.tableName === tableName && (q.prefix || '') === (prefix || '') && !!q.shared === !!shared && q.id === id);
     });
-    _retryQueue.push({ tableName: tableName, prefix: prefix || '', id: id, data: data });
+    _retryQueue.push({ tableName: tableName, prefix: prefix || '', id: id, data: data, shared: !!shared });
     _persistRetryQueue();
   }
 
@@ -366,7 +384,7 @@ window.PalSync = (function () {
     _persistRetryQueue();
     let flushed = 0;
     for (const q of queue) {
-      try { await table(q.tableName, { prefix: q.prefix }).upsert(q.id, q.data); flushed++; }
+      try { await table(q.tableName, { prefix: q.prefix, shared: !!q.shared }).upsert(q.id, q.data); flushed++; }
       catch (e) { /* 401 → upsert() re-queued (and re-persisted) it; other errors dropped as documented */ }
     }
     return { flushed: flushed, stillQueued: _retryQueue.length };
@@ -474,11 +492,15 @@ window.PalSync = (function () {
   // page size, so it stays correct even if the server's max-rows is ever
   // configured below our requested page size. A table that fits in one
   // page costs exactly one request, same as before.
-  async function fetchTableRows(tableName) {
+  // v1.12: opts.shared — see changelog. Default (no opts) is unchanged.
+  async function fetchTableRows(tableName, opts) {
     if (!hasSession()) return [];
+    const shared = !!(opts && opts.shared);
     const PAGE = 1000;
-    const basePath = '/' + tableName + '?user_id=eq.' + _userId +
-                     '&select=record_key,data,updated_at&order=record_key.asc';
+    const basePath = shared
+      ? '/' + tableName + '?select=user_id,record_key,data,updated_at&order=record_key.asc,user_id.asc'
+      : '/' + tableName + '?user_id=eq.' + _userId +
+        '&select=record_key,data,updated_at&order=record_key.asc';
     let all = [];
     for (;;) {
       const res = await sbFetch(basePath, 'GET', null, {
@@ -497,6 +519,16 @@ window.PalSync = (function () {
         const err = new Error('pagination stalled fetching ' + tableName + ' (' + all.length + ' of ' + total + ' rows)');
         err.status = 500; throw err;
       }
+    }
+    if (shared) {
+      // Two users can each hold a row for the same record_key (e.g. both
+      // wrote '__settings__' before sharing was wired up). Keep the newest.
+      const byKey = {};
+      all.forEach(function (r) {
+        const cur = byKey[r.record_key];
+        if (!cur || (r.updated_at || '') > (cur.updated_at || '')) byKey[r.record_key] = r;
+      });
+      all = Object.keys(byKey).sort().map(function (k) { return byKey[k]; });
     }
     return all;
   }
@@ -550,6 +582,7 @@ window.PalSync = (function () {
   // Create one table() instance per kind sharing the same tableName.
   function table(tableName, opts) {
     const prefix = (opts && opts.prefix) || '';
+    const shared = !!(opts && opts.shared);   // v1.12 — see changelog
 
     // PATCH first (matches existing row for this user_id + record_key);
     // POST if nothing matched. Throws on failure so callers can log it.
@@ -562,11 +595,14 @@ window.PalSync = (function () {
       if (!hasSession()) return;
       const recordKey = prefix + id;
       const row = { user_id: _userId, record_key: recordKey, data: data, updated_at: new Date().toISOString() };
+      // Shared: match by record_key only (either user's row) and never
+      // send user_id on the PATCH, so ownership of the row is untouched.
+      const patchPath = shared
+        ? '/' + tableName + '?record_key=eq.' + encodeURIComponent(recordKey)
+        : '/' + tableName + '?user_id=eq.' + _userId + '&record_key=eq.' + encodeURIComponent(recordKey);
+      const patchBody = shared ? { data: data, updated_at: row.updated_at } : row;
       try {
-        const patch = await sbFetch(
-          '/' + tableName + '?user_id=eq.' + _userId + '&record_key=eq.' + encodeURIComponent(recordKey),
-          'PATCH', row
-        );
+        const patch = await sbFetch(patchPath, 'PATCH', patchBody);
         if (patch.ok) {
           const body = await patch.json();
           if (Array.isArray(body) && body.length === 0) {
@@ -577,7 +613,7 @@ window.PalSync = (function () {
           const err = new Error('PATCH failed: ' + (await patch.text())); err.status = patch.status; throw err;
         }
       } catch (err) {
-        if (err && err.status === 401) _queueForRetry(tableName, prefix, id, data);
+        if (err && err.status === 401) _queueForRetry(tableName, prefix, id, data, shared);
         throw err;
       }
     }
@@ -649,7 +685,7 @@ window.PalSync = (function () {
       updatedAtField = updatedAtField || 'updated_at';
       if (!hasSession()) return { merged: localRecords, pushedCount: 0, retriedDeleteCount: 0, rows: [], skipped: true };
 
-      const allRows = preFetchedRows || await fetchTableRows(tableName);
+      const allRows = preFetchedRows || await fetchTableRows(tableName, { shared: shared });
       // Scope the merge to this instance's prefix, if any — otherwise a
       // table holding multiple record kinds (each with an id field) would
       // get cross-contaminated (e.g. issues merging into an apps pull).
