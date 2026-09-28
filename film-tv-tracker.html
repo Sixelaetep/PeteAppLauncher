@@ -7,9 +7,13 @@
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint.
-(function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
+// Own cache key (not the launcher's 'pal_theme') — mirrors on-budget.html's
+// ob_theme_pref. Prevents a flash of the wrong theme before the launcher's
+// PAL_THEME broadcast arrives; never written back to by this app, since
+// there is no local toggle any more (FTT-016) — theme is launcher-only.
+(function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v1.8</title>
+<title>Film &amp; TV Tracker v1.9</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -221,12 +225,11 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v1.8</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v1.9</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
   </button>
-  <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme">🌓</button>
 </div>
 
 <!-- Data modal — sync status, backup and preferences all live behind
@@ -281,10 +284,14 @@
 
     <div class="data-lbl">Library Maintenance</div>
     <div class="data-info-box" style="line-height:1.6">
-      Checks every TV show already in your library against TMDB for a season count it doesn't know about yet. A flagged show gets a 🆕 badge on its card and shows up in a Dashboard section — in either Watchlist or Watched, since a show you've finished can still get a new season. This doesn't change anything by itself; open the flagged title's Episodes &amp; Seasons section to update its tracked season count when you're ready.
+      Checks every TV show already in your library against TMDB for a season count it doesn't know about yet. A flagged show gets a 🆕 badge on its card and its own stat box on the Films tab, since a show you've finished can still get a new season. This doesn't change anything by itself; open the flagged title's Episodes &amp; Seasons section to update its tracked season count when you're ready.
     </div>
     <div class="data-btn-row" id="maintenanceControls">
       <button class="data-btn" onclick="checkForNewSeasons()">🔎 Check for new seasons</button>
+      <button class="data-btn" onclick="mergeServices()">🔀 Merge duplicate services</button>
+    </div>
+    <div class="data-info-box" style="line-height:1.6;margin-top:8px">
+      A fresh device (a new phone, a cleared browser, a first-time open before shared sync existed) seeds the 12 default streaming services locally with brand-new IDs. If those got synced up before this was fixed, the same service can exist more than once — this finds every duplicate group by name, keeps one record per name (favouring one with access ticked, then one with notes, then the most recently updated), carries over any access/notes the others had, and removes the rest.
     </div>
 
     <div id="importRunning" style="display:none">
@@ -300,43 +307,33 @@
 <div id="no-pal-banner" style="display:none;background:rgba(247,129,102,0.1);border-bottom:1px solid var(--red);padding:7px 14px;font-size:11.5px;color:var(--red);text-align:center;">Open via Pete's Apps launcher for cloud sync</div>
 
 <div class="tabs">
-  <button class="tab-btn" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</button>
-  <button class="tab-btn" data-tab="watchlist" onclick="switchTab('watchlist')">Watchlist</button>
-  <button class="tab-btn" data-tab="watched" onclick="switchTab('watched')">Watched</button>
+  <button class="tab-btn" data-tab="films" onclick="switchTab('films')">Films</button>
   <button class="tab-btn" data-tab="services" onclick="switchTab('services')">Services</button>
-  <button class="tab-btn" data-tab="search" onclick="switchTab('search')">Search / Add</button>
   <button class="tab-btn" data-tab="reviews" onclick="switchTab('reviews')">Reviews</button>
 </div>
 
-<!-- ══════════════════════ DASHBOARD ══════════════════════ -->
-<div class="panel" id="panel-dashboard">
-  <div class="stat-row" id="dashStats"></div>
-
-  <div class="section-title" id="dashNewSeasonsTitle" style="display:none">🆕 New Seasons Available</div>
-  <div class="card-grid" id="dashNewSeasons"></div>
-
-  <div class="section-title">⭐ Favourite Watchlist</div>
-  <div class="card-grid" id="dashFavourites"></div>
-
-  <div class="section-title">🌙 Good for tonight</div>
-  <div class="card-grid" id="dashBedtime"></div>
-
-  <div class="section-title">✅ Available now</div>
-  <div class="card-grid" id="dashAvailable"></div>
-
-  <div class="section-title">🚫 Interested, but can't watch yet</div>
-  <div class="card-grid" id="dashUnavailable"></div>
-
-  <div class="section-title">🕘 Recently watched</div>
-  <div class="card-grid" id="dashRecentWatched"></div>
-</div>
-
-<!-- ══════════════════════ WATCHLIST ══════════════════════ -->
-<div class="panel" id="panel-watchlist">
+<!-- ══════════════════════ FILMS — search/add, dashboard, library (FTT-014) ══════════════════════ -->
+<div class="panel" id="panel-films">
+  <div class="section-title">🔎 Search &amp; Add</div>
   <div class="filter-row">
-    <div class="search-box"><input id="wlSearch" placeholder="Search watchlist…" oninput="renderWatchlist()"></div>
-    <select id="wlFilter" onchange="renderWatchlist()">
+    <div class="search-box"><input id="searchInput" placeholder="Search films &amp; TV series…" onkeydown="if(event.key==='Enter')runSearch()"></div>
+    <button class="modal-btn primary" onclick="runSearch()">Search</button>
+  </div>
+  <div style="font-size:11px;color:var(--ink2);margin-bottom:14px" id="searchHint">Searches TMDB (UK region). Metadata and streaming availability are pulled in automatically when you add a title.</div>
+  <div id="searchResults"></div>
+
+  <div class="stat-row" id="dashStats" style="margin-top:4px"></div>
+
+  <div class="section-title" style="margin-top:20px">🎬 My Films &amp; TV</div>
+  <div class="filter-row">
+    <div class="search-box"><input id="filmSearch" placeholder="Search your library…" oninput="renderFilms()"></div>
+    <select id="filmStatus" onchange="renderFilms()">
       <option value="all">All</option>
+      <option value="watchlist">Watchlist</option>
+      <option value="watched">Watched</option>
+    </select>
+    <select id="filmFilter" onchange="renderFilms()">
+      <option value="all">Any</option>
       <option value="film">Films</option>
       <option value="tv">TV</option>
       <option value="favourite">Favourites</option>
@@ -344,13 +341,16 @@
       <option value="unavailable">Unavailable</option>
       <option value="cinema">Cinema</option>
       <option value="bedtime">Short / Bedtime</option>
+      <option value="newseason">New season</option>
     </select>
-    <select id="wlSort" onchange="renderWatchlist()">
+    <select id="filmSort" onchange="renderFilms()">
       <option value="added">Sort: Added recently</option>
       <option value="title">Sort: Title</option>
       <option value="runtime">Sort: Runtime</option>
       <option value="year">Sort: Release year</option>
       <option value="favourite">Sort: Favourite first</option>
+      <option value="watched">Sort: Recently watched</option>
+      <option value="rating">Sort: My rating</option>
     </select>
     <button class="small-btn select-btn" id="selectModeBtn" onclick="toggleSelectMode()">☑ Select</button>
   </div>
@@ -361,33 +361,7 @@
     <button class="modal-btn danger" onclick="bulkRemove()">🗑 Remove</button>
     <button class="modal-btn" style="margin-left:auto" onclick="toggleSelectMode()">Done</button>
   </div>
-  <div class="card-grid" id="watchlistGrid"></div>
-</div>
-
-<!-- ══════════════════════ WATCHED ══════════════════════ -->
-<div class="panel" id="panel-watched">
-  <div class="filter-row">
-    <div class="search-box"><input id="wdSearch" placeholder="Search watched…" oninput="renderWatched()"></div>
-    <select id="wdFilter" onchange="renderWatched()">
-      <option value="all">All</option>
-      <option value="film">Films</option>
-      <option value="tv">TV</option>
-      <option value="favourite">Favourites</option>
-    </select>
-    <select id="wdSort" onchange="renderWatched()">
-      <option value="watched">Sort: Recently watched</option>
-      <option value="title">Sort: Title</option>
-      <option value="rating">Sort: My rating</option>
-    </select>
-    <button class="small-btn select-btn" id="selectModeBtnWd" onclick="toggleSelectModeWd()">☑ Select</button>
-  </div>
-  <div class="bulk-bar" id="bulkBarWd">
-    <span id="bulkCountWd">0 selected</span>
-    <button class="modal-btn" onclick="bulkFavouriteWd()">⭐ Favourite</button>
-    <button class="modal-btn danger" onclick="bulkRemoveWd()">🗑 Remove</button>
-    <button class="modal-btn" style="margin-left:auto" onclick="toggleSelectModeWd()">Done</button>
-  </div>
-  <div class="card-grid" id="watchedGrid"></div>
+  <div class="card-grid" id="filmsGrid"></div>
 </div>
 
 <!-- ══════════════════════ SERVICES ══════════════════════ -->
@@ -397,16 +371,6 @@
     <button class="modal-btn primary" onclick="openServiceModal(null)">+ Add service</button>
   </div>
   <div id="servicesList"></div>
-</div>
-
-<!-- ══════════════════════ SEARCH / ADD ══════════════════════ -->
-<div class="panel" id="panel-search">
-  <div class="filter-row">
-    <div class="search-box"><input id="searchInput" placeholder="Search films &amp; TV series…" onkeydown="if(event.key==='Enter')runSearch()"></div>
-    <button class="modal-btn primary" onclick="runSearch()">Search</button>
-  </div>
-  <div style="font-size:11px;color:var(--ink2);margin-bottom:10px" id="searchHint">Searches TMDB (UK region). Metadata and streaming availability are pulled in automatically when you add a title.</div>
-  <div id="searchResults"></div>
 </div>
 
 <!-- ══════════════════════ REVIEWS ══════════════════════ -->
@@ -536,10 +500,10 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.8"></script>
+<script src="pal-shared.js?v=1.9"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v1.8 (FTT-001..FTT-013) — see film-tv-tracker.md.
+// FILM & TV TRACKER v1.9 (FTT-001..FTT-016) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -625,46 +589,40 @@ function writeStatCache() {
 // esc(), escHtml(), todayISO(), toast()/showToast(), uid(prefix),
 // applyThemeCore(), closeModal(id)
 
-function applyTheme(isDark) { applyThemeCore(isDark, { dark: '#0d1117', light: '#f4f6f8' }); }
-function toggleTheme() {
-  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-  applyTheme(isLight);
-  try { localStorage.setItem('pal_theme', isLight ? 'dark' : 'light'); } catch (e) {}
+// Global preference, controlled by the launcher only (FTT-016) — no local
+// toggle in this app any more, matching on-budget.html. See the PAL_THEME
+// listener further down and the pre-paint script in <head>.
+function applyTheme(theme) {
+  const dark = theme === 'dark';
+  applyThemeCore(dark, { dark: '#0d1117', light: '#f4f6f8' });
+  try { localStorage.setItem('ftt_theme_pref', dark ? 'dark' : 'light'); } catch (e) {}
 }
-(function(){ applyTheme(document.documentElement.getAttribute('data-theme') !== 'light'); })();
 
 // ── Tabs ─────────────────────────────────────────────────────────
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('visible', p.id === 'panel-' + name));
-  // Leaving a tab that's mid-multi-select exits it, so a stale selection
+  // Leaving Films while mid-multi-select exits it, so a stale selection
   // (and its bulk bar) never carries over to whatever's opened next.
-  if (name !== 'watchlist' && selectMode) {
+  if (name !== 'films' && selectMode) {
     selectMode = false; selectedIds.clear();
     const btn = document.getElementById('selectModeBtn'), bar = document.getElementById('bulkBar');
-    if (btn) btn.classList.remove('on'); if (bar) bar.classList.remove('visible');
-  }
-  if (name !== 'watched' && selectModeWd) {
-    selectModeWd = false; selectedIdsWd.clear();
-    const btn = document.getElementById('selectModeBtnWd'), bar = document.getElementById('bulkBarWd');
     if (btn) btn.classList.remove('on'); if (bar) bar.classList.remove('visible');
   }
   renderAll();
 }
 
-// Dashboard stat boxes are clickable — jump to the tab that produced
-// the number, with its filter dropdown pre-set to match. Re-renders
-// that one panel after switchTab() so the filter set here takes
-// effect immediately, rather than showing whatever filter was
-// previously selected until the next interaction.
-function goToStat(tab, filterElId, filterValue) {
-  switchTab(tab);
-  if (filterElId) {
-    const el = document.getElementById(filterElId);
-    if (el) el.value = filterValue;
-  }
-  if (tab === 'watchlist') renderWatchlist();
-  else if (tab === 'watched') renderWatched();
+// Dashboard stat boxes are clickable — set the Films list's own status
+// and attribute filters to match the number just clicked, re-render,
+// and scroll the list into view. FTT-014: since Dashboard/Watchlist/
+// Watched are now one Films tab, this sets filters in place instead of
+// switching tabs.
+function goToStat(status, filter) {
+  document.getElementById('filmStatus').value = status || 'all';
+  document.getElementById('filmFilter').value = filter || 'all';
+  renderFilms();
+  const grid = document.getElementById('filmsGrid');
+  if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ── Availability resolution ────────────────────────────────────────
@@ -741,10 +699,8 @@ function titleCardHtml(t, opts) {
   if (t.status === 'watched' && t.timesWatched > 1) metaParts.push(`Watched ×${t.timesWatched}`);
   const meta = metaParts.filter(Boolean).join(' · ');
 
-  const selSet = opts.selectVariant === 'wd' ? selectedIdsWd : selectedIds;
-  const selToggleFn = opts.selectVariant === 'wd' ? 'toggleSelectWd' : 'toggleSelect';
-  const selected = opts.selectable && selSet.has(t.id);
-  const clickAttr = opts.selectable ? `onclick="${selToggleFn}('${t.id}')"` : `onclick="openTitleModal('${t.id}')"`;
+  const selected = opts.selectable && selectedIds.has(t.id);
+  const clickAttr = opts.selectable ? `onclick="toggleSelect('${t.id}')"` : `onclick="openTitleModal('${t.id}')"`;
   const quickButtons = opts.selectable
     ? `<span class="select-check">${selected ? '✓' : ''}</span>`
     : `<button class="fav-toggle" onclick="event.stopPropagation();quickToggleFav('${t.id}')" title="Toggle favourite">${t.favourite ? '⭐' : '☆'}</button>
@@ -767,52 +723,53 @@ function emptyState(icon, text) {
 }
 
 function renderAll() {
-  renderDashboard();
-  renderWatchlist();
-  renderWatched();
+  renderFilms();
   renderServices();
   renderReviews();
 }
 
-function renderDashboard() {
+// Stat boxes + the single searchable/filterable library list, replacing
+// the old separate Dashboard/Watchlist/Watched panels (FTT-014). The
+// stat boxes set filmStatus/filmFilter (see goToStat) rather than
+// switching tabs, then this re-renders the list to match. Favourites
+// now correctly counts and filters across BOTH statuses in one click —
+// the v1.6 changelog flagged this as a reasonable follow-up; merging
+// Watchlist/Watched into one list gives it to us for free.
+function renderFilms() {
   const titles = liveTitles();
   const watchlist = titles.filter(t => t.status === 'watchlist');
   const watched = titles.filter(t => t.status === 'watched');
   const favourites = titles.filter(t => t.favourite);
   const available = watchlist.filter(t => resolveAvailability(t).state === 'available');
   const unavailable = watchlist.filter(t => resolveAvailability(t).state === 'unavailable');
-  const bedtime = watchlist.filter(t => isBedtimeCandidate(t, currentBedtimeMax) && resolveAvailability(t).state !== 'unavailable');
   const ownedCount = liveServices().filter(s => s.hasAccess).length;
   const newSeasons = titles.filter(t => t.newSeasonsDetected);
 
-  document.getElementById('dashStats').innerHTML = [
-    ['Want to Watch', watchlist.length, "goToStat('watchlist','wlFilter','all')"],
-    ['Favourites', favourites.length, "goToStat('watchlist','wlFilter','favourite')"],
-    ['Watched', watched.length, "goToStat('watched','wdFilter','all')"],
-    ['Available Now', available.length, "goToStat('watchlist','wlFilter','available')"],
-    ['Unavailable', unavailable.length, "goToStat('watchlist','wlFilter','unavailable')"],
+  const stats = [
+    ['Want to Watch', watchlist.length, "goToStat('watchlist','all')"],
+    ['Favourites', favourites.length, "goToStat('all','favourite')"],
+    ['Watched', watched.length, "goToStat('watched','all')"],
+    ['Available Now', available.length, "goToStat('watchlist','available')"],
+    ['Unavailable', unavailable.length, "goToStat('watchlist','unavailable')"],
     ['Services owned', ownedCount, "switchTab('services')"]
-  ].map(([label, n, onclick]) => `<div class="stat-box" onclick="${onclick}" title="View"><b>${n}</b><span>${esc(label)}</span></div>`).join('');
+  ];
+  if (newSeasons.length) stats.push(['New Seasons', newSeasons.length, "goToStat('all','newseason')"]);
+  document.getElementById('dashStats').innerHTML = stats
+    .map(([label, n, onclick]) => `<div class="stat-box" onclick="${onclick}" title="View"><b>${n}</b><span>${esc(label)}</span></div>`)
+    .join('');
 
-  document.getElementById('dashNewSeasonsTitle').style.display = newSeasons.length ? '' : 'none';
-  document.getElementById('dashNewSeasons').innerHTML = newSeasons.map(t => titleCardHtml(t)).join('');
-
-  const favWatchlist = favourites.filter(t => t.status === 'watchlist').slice(0, 6);
-  document.getElementById('dashFavourites').innerHTML = favWatchlist.length
-    ? favWatchlist.map(titleCardHtml).join('') : emptyState('⭐', 'No favourites on your watchlist yet.');
-
-  document.getElementById('dashBedtime').innerHTML = bedtime.length
-    ? bedtime.slice(0, 6).map(titleCardHtml).join('') : emptyState('🌙', `No short episodes (≤${currentBedtimeMax} min) available right now.`);
-
-  document.getElementById('dashAvailable').innerHTML = available.length
-    ? available.slice(0, 8).map(titleCardHtml).join('') : emptyState('✅', 'Nothing on your watchlist is available on an owned service yet.');
-
-  document.getElementById('dashUnavailable').innerHTML = unavailable.length
-    ? unavailable.slice(0, 8).map(titleCardHtml).join('') : emptyState('🚫', 'Nothing currently blocked by a missing service.');
-
-  const recentWatched = [...watched].sort((a, b) => (b.watched && b.watched.date || '').localeCompare(a.watched && a.watched.date || '')).slice(0, 6);
-  document.getElementById('dashRecentWatched').innerHTML = recentWatched.length
-    ? recentWatched.map(titleCardHtml).join('') : emptyState('🕘', 'Nothing marked watched yet.');
+  const status = document.getElementById('filmStatus').value;
+  const filter = document.getElementById('filmFilter').value;
+  const sort = document.getElementById('filmSort').value;
+  const search = document.getElementById('filmSearch').value;
+  let base = titles;
+  if (status === 'watchlist') base = watchlist;
+  else if (status === 'watched') base = watched;
+  const list = filterAndSort(base, filter, sort, search);
+  document.getElementById('filmsGrid').innerHTML = list.length
+    ? list.map(t => titleCardHtml(t, { selectable: selectMode, showQuickWatched: true })).join('')
+    : emptyState('🎬', 'Nothing here yet — try Search &amp; Add above, or clear your filters.');
+  updateBulkBar();
 }
 
 function filterAndSort(list, filter, sort, searchTerm) {
@@ -828,6 +785,7 @@ function filterAndSort(list, filter, sort, searchTerm) {
   else if (filter === 'unavailable') out = out.filter(t => resolveAvailability(t).state === 'unavailable');
   else if (filter === 'cinema') out = out.filter(t => t.cinema && t.cinema.releaseDate);
   else if (filter === 'bedtime') out = out.filter(t => isBedtimeCandidate(t, currentBedtimeMax));
+  else if (filter === 'newseason') out = out.filter(t => t.newSeasonsDetected);
 
   out = [...out];
   if (sort === 'title') out.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
@@ -840,32 +798,21 @@ function filterAndSort(list, filter, sort, searchTerm) {
   return out;
 }
 
+// FTT-014: Watchlist and Watched are one Films list now, so there's one
+// select-mode/selection-set pair, not the old wl/wd duplicate pair.
 let selectMode = false;
 let selectedIds = new Set();
-let selectModeWd = false;
-let selectedIdsWd = new Set();
-
-function renderWatchlist() {
-  const filter = document.getElementById('wlFilter').value;
-  const sort = document.getElementById('wlSort').value;
-  const search = document.getElementById('wlSearch').value;
-  const list = filterAndSort(liveTitles().filter(t => t.status === 'watchlist'), filter, sort, search);
-  document.getElementById('watchlistGrid').innerHTML = list.length
-    ? list.map(t => titleCardHtml(t, { selectable: selectMode, showQuickWatched: true, selectVariant: 'wl' })).join('')
-    : emptyState('📺', 'Nothing here yet — add something from Search / Add.');
-  updateBulkBar();
-}
 
 function toggleSelectMode() {
   selectMode = !selectMode;
   if (!selectMode) selectedIds.clear();
   document.getElementById('selectModeBtn').classList.toggle('on', selectMode);
   document.getElementById('bulkBar').classList.toggle('visible', selectMode);
-  renderWatchlist();
+  renderFilms();
 }
 function toggleSelect(id) {
   if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
-  renderWatchlist();
+  renderFilms();
 }
 function updateBulkBar() {
   const el = document.getElementById('bulkCount'); if (!el) return;
@@ -883,7 +830,7 @@ function bulkWatched() {
   if (!selectedIds.size) return;
   const now = new Date().toISOString();
   state.titles.forEach(t => {
-    if (selectedIds.has(t.id)) {
+    if (selectedIds.has(t.id) && t.status !== 'watched') {
       t.status = 'watched';
       t.watched = t.watched || { date: todayISO(), rating: null, review: '' };
       t.updatedAt = now;
@@ -911,55 +858,6 @@ function quickMarkWatched(id) {
   t.updatedAt = new Date().toISOString();
   saveState(); if (window.PalSync.hasSession()) syncPushTitle(t);
   toast('Marked watched');
-}
-
-function renderWatched() {
-  const filter = document.getElementById('wdFilter').value;
-  const sort = document.getElementById('wdSort').value;
-  const search = document.getElementById('wdSearch').value;
-  const list = filterAndSort(liveTitles().filter(t => t.status === 'watched'), filter, sort, search);
-  document.getElementById('watchedGrid').innerHTML = list.length
-    ? list.map(t => titleCardHtml(t, { selectable: selectModeWd, selectVariant: 'wd' })).join('')
-    : emptyState('✅', 'Nothing marked watched yet.');
-  updateBulkBarWd();
-}
-
-// Watched tab's own multi-select — separate select set from Watchlist's
-// so the two tabs' selections never bleed into each other.
-function toggleSelectModeWd() {
-  selectModeWd = !selectModeWd;
-  if (!selectModeWd) selectedIdsWd.clear();
-  document.getElementById('selectModeBtnWd').classList.toggle('on', selectModeWd);
-  document.getElementById('bulkBarWd').classList.toggle('visible', selectModeWd);
-  renderWatched();
-}
-function toggleSelectWd(id) {
-  if (selectedIdsWd.has(id)) selectedIdsWd.delete(id); else selectedIdsWd.add(id);
-  renderWatched();
-}
-function updateBulkBarWd() {
-  const el = document.getElementById('bulkCountWd'); if (!el) return;
-  el.textContent = selectedIdsWd.size + ' selected';
-}
-function bulkFavouriteWd() {
-  if (!selectedIdsWd.size) return;
-  const now = new Date().toISOString();
-  state.titles.forEach(t => {
-    if (selectedIdsWd.has(t.id)) { t.favourite = true; t.updatedAt = now; if (window.PalSync.hasSession()) syncPushTitle(t); }
-  });
-  saveState(); toast('Marked favourite');
-}
-function bulkRemoveWd() {
-  if (!selectedIdsWd.size) return;
-  if (!confirm(`Remove ${selectedIdsWd.size} title(s) from your library?`)) return;
-  const now = new Date().toISOString();
-  state.titles.forEach(t => {
-    if (selectedIdsWd.has(t.id)) {
-      t._deleted = true; t.updatedAt = now;
-      if (window.PalSync.hasSession()) _tTitles.tombstone(t.id, t, 'updatedAt').catch(e => toast('Sync delete failed: ' + window.PalSync.errorHint(e.status, e.message), 'err'));
-    }
-  });
-  saveState(); toggleSelectModeWd(); toast('Removed');
 }
 
 function renderServices() {
@@ -1928,6 +1826,55 @@ function acknowledgeNewSeasons() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// MERGE DUPLICATE SERVICES (FTT-015) — see film-tv-tracker.md.
+// Root cause: a fresh/empty local session re-seeds the 12 default
+// services with brand-new random ids (seedDefaultServices()); before
+// shared sync existed, each such session pushed its own set to the
+// cloud instead of finding what was already there. Groups live
+// services by normalised name, keeps one record per group, folds in
+// any access/notes a duplicate had, and soft-deletes the rest via the
+// normal tombstone path so the merge reaches Lex's copy too.
+// ══════════════════════════════════════════════════════════════════
+function mergeServices() {
+  const groups = {};
+  liveServices().forEach(s => {
+    const key = normalizeServiceName(s.name);
+    (groups[key] = groups[key] || []).push(s);
+  });
+  const dupGroups = Object.values(groups).filter(g => g.length > 1);
+  if (!dupGroups.length) { toast('No duplicate services found'); return; }
+  const dupCount = dupGroups.reduce((n, g) => n + g.length - 1, 0);
+  if (!confirm(`Merge ${dupGroups.length} service name(s), removing ${dupCount} duplicate row(s)? Access and notes from every duplicate are kept on the surviving record.`)) return;
+
+  const now = new Date().toISOString();
+  let removed = 0;
+  dupGroups.forEach(group => {
+    // Winner: has access, else has notes, else most recently updated.
+    const winner = group.slice().sort((a, b) => {
+      if (!!b.hasAccess !== !!a.hasAccess) return (b.hasAccess ? 1 : 0) - (a.hasAccess ? 1 : 0);
+      const an = !!(a.notes || '').trim(), bn = !!(b.notes || '').trim();
+      if (bn !== an) return (bn ? 1 : 0) - (an ? 1 : 0);
+      return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+    })[0];
+    if (group.some(s => s.hasAccess) && !winner.hasAccess) winner.hasAccess = true;
+    if (!(winner.notes || '').trim()) {
+      const otherNotes = group.map(s => (s.notes || '').trim()).find(Boolean);
+      if (otherNotes) winner.notes = otherNotes;
+    }
+    winner.updatedAt = now;
+    if (window.PalSync.hasSession()) syncPushService(winner);
+
+    group.forEach(s => {
+      if (s.id === winner.id) return;
+      s._deleted = true; s.updatedAt = now; removed++;
+      if (window.PalSync.hasSession()) _tServices.tombstone(s.id, s, 'updatedAt').catch(e => toast('Sync delete failed: ' + window.PalSync.errorHint(e.status, e.message), 'err'));
+    });
+  });
+  saveState();
+  toast(`Merged ${dupGroups.length} service name(s) — removed ${removed} duplicate row(s)`);
+}
+
+// ══════════════════════════════════════════════════════════════════
 // SUPABASE SYNC — same canonical pal-sync.js pattern used across the
 // suite (one table, prefix-scoped record kinds; settings is a single
 // '__settings__' row read/written directly rather than through the
@@ -2129,7 +2076,7 @@ function importJSON(evt) {
 // BOOT
 // ══════════════════════════════════════════════════════════════════
 loadState();
-switchTab('dashboard');
+switchTab('films');
 renderAll();
 </script>
 </body>
