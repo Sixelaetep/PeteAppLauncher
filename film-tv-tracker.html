@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint.
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v1.7</title>
+<title>Film &amp; TV Tracker v1.8</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -221,7 +221,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v1.7</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v1.8</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -536,10 +536,10 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.7"></script>
+<script src="pal-shared.js?v=1.8"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v1.7 (FTT-001..FTT-012) — see film-tv-tracker.md.
+// FILM & TV TRACKER v1.8 (FTT-001..FTT-013) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -550,8 +550,11 @@
 const STORAGE_KEY = 'ftt_v1';
 const STAT_CACHE_KEY = 'pal_ftt_stat';
 const SB_TABLE = 'pal_film_tracker';
-const _tTitles   = window.PalSync.table(SB_TABLE, { prefix: 'title_' });
-const _tServices = window.PalSync.table(SB_TABLE, { prefix: 'service_' });
+// v1.8/FTT-013: shared mode — Pete and Lex read/write the same rows.
+// See film-tv-tracker.md and pal-shared.js v1.12.
+const _tTitles   = window.PalSync.table(SB_TABLE, { prefix: 'title_',   shared: true });
+const _tServices = window.PalSync.table(SB_TABLE, { prefix: 'service_', shared: true });
+const _tSettings = window.PalSync.table(SB_TABLE, { shared: true });
 
 const DEFAULT_SERVICES = [
   'Netflix','Amazon Prime Video','Disney Plus','Apple TV Plus','BBC iPlayer',
@@ -1973,7 +1976,7 @@ async function syncPushService(s) {
 }
 async function syncSettings() {
   if (!window.PalSync.hasSession()) return;
-  try { await window.PalSync.table(SB_TABLE).upsert('__settings__', state.settings); slog('Settings upsert ✓', 'ok'); }
+  try { await _tSettings.upsert('__settings__', state.settings); slog('Settings upsert ✓', 'ok'); }
   catch (e) { slog('Settings upsert error: ' + window.PalSync.errorHint(e.status, e.message), 'error'); }
 }
 
@@ -1982,10 +1985,27 @@ async function syncPull() {
   setSyncStatus('connecting');
   slog('Pulling from cloud…');
   try {
-    const allRows = await window.PalSync.fetchTableRows(SB_TABLE);
+    const allRows = await window.PalSync.fetchTableRows(SB_TABLE, { shared: true });
 
     const titleResult = await _tTitles.pull(state.titles, 'id', 'updatedAt', allRows);
     state.titles = titleResult.merged;
+
+    // v1.8: a fresh device seeds the 12 default services with random ids.
+    // Merging those with services already in the cloud would duplicate every
+    // one. Drop a local, untouched default whose name the cloud already has
+    // (live OR tombstoned — a service deleted in the cloud stays deleted).
+    const cloudSvc = allRows.filter(r => r.record_key.indexOf('service_') === 0 && r.data && r.data.id).map(r => r.data);
+    if (cloudSvc.length) {
+      const norm = n => String(n || '').trim().toLowerCase();
+      const cloudSvcIds = new Set(cloudSvc.map(x => x.id));
+      const cloudSvcNames = new Set(cloudSvc.map(x => norm(x.name)));
+      const defaultNames = new Set(DEFAULT_SERVICES.map(norm));
+      const before = state.services.length;
+      state.services = state.services.filter(s =>
+        cloudSvcIds.has(s.id) ||
+        !(defaultNames.has(norm(s.name)) && !s.hasAccess && !s.notes && cloudSvcNames.has(norm(s.name))));
+      if (state.services.length !== before) slog('Dropped ' + (before - state.services.length) + ' untouched default service(s) already in cloud');
+    }
 
     const serviceResult = await _tServices.pull(state.services, 'id', 'updatedAt', allRows);
     state.services = serviceResult.merged.length ? serviceResult.merged : state.services;
@@ -2019,7 +2039,7 @@ function manualPush() {
   Promise.all([
     ...state.titles.map(t => _tTitles.upsert(t.id, t)),
     ...state.services.map(s => _tServices.upsert(s.id, s)),
-    window.PalSync.table(SB_TABLE).upsert('__settings__', state.settings)
+    _tSettings.upsert('__settings__', state.settings)
   ]).then(() => { slog('Push complete ✓', 'ok'); setSyncStatus('synced'); toast('Pushed to cloud ✓'); })
     .catch(e => { slog('Push error: ' + window.PalSync.errorHint(e.status, e.message), 'error'); setSyncStatus('error'); toast('Push had errors', 'err'); });
 }

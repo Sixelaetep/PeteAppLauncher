@@ -2,6 +2,25 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.8 (FTT-013) — Shared sync between Pete and Lex (needs pal-shared.js v1.12)
+
+**Bug:** Lex could open the tracker through the hub and the sync chip read "Synced", but she saw no titles. Diagnosed from the live database: the RLS policies on `pal_film_tracker` already allowed both user ids, and Pete's rows were all there — but `PalSync` was strictly per-user. `fetchTableRows()`, `upsert()`'s PATCH and the compaction filters all hard-coded `user_id=eq.<me>`, so each user only ever saw rows they had written themselves. Lex's pull returned nothing, "succeeded", and wrote a lone `__settings__` row under her own id (visible in the table).
+
+**Fix, in two places:**
+
+- `pal-shared.js` v1.12 adds an **opt-in** `shared: true` option to `table()` and `fetchTableRows()`. Shared reads drop the `user_id` filter (RLS remains the security boundary) and collapse duplicate `record_key`s to the newest `updated_at`. Shared upserts PATCH by `record_key` alone and never send `user_id` on the PATCH, so an edit updates the existing row in place — no forked copy, no change of ownership — while a genuinely new record is still POSTed under the caller's id. The flag is carried through the 401 retry queue. Every other app is unchanged: without the flag the code paths are identical to v1.11. Compaction stays per-user.
+- `film-tv-tracker.html` v1.8 uses shared mode for titles, services and the settings row.
+
+**Second issue found while fixing it — duplicate services.** A fresh device seeds the 12 default services with random ids. Once shared reads work, Lex's first pull would have merged those with Pete's existing services and pushed them up, doubling every service. `syncPull()` now drops a local service that is an untouched default (`hasAccess` false, no notes), is not in the cloud by id, and whose name the cloud already has — live or tombstoned, so a service Pete deleted stays deleted. Edited defaults, custom services, and defaults the cloud doesn't have are kept.
+
+**Consequences worth knowing:** services and settings are now household-level — if Lex marks Netflix as "I have access", Pete sees that too. Titles are shared, including status, favourites, ratings and notes; last-write-wins per record, as elsewhere in the suite. The old stray `__settings__` row under Lex's id is harmless (newest wins, and the next settings write updates both).
+
+**Merged onto v1.7:** built on top of the v1.7 changes (FTT-010..012 — auto-complete, new-seasons checker, per-tab search, Watched multi-select), which are untouched. The version is v1.8 because v1.7 was already taken by that work; the cache-bust on `pal-shared.js` also moves to `?v=1.8` so browsers that cached the old `?v=1.7` fetch the new library.
+
+**Deploy together:** the html loads `pal-shared.js?v=1.8`; an old `pal-shared.js` would silently ignore `shared: true` and revert to per-user behaviour.
+
+Tested: `node --check` on both inline script blocks and on `pal-shared.js`; a Node harness running the real `pal-shared.js` against a mock PostgREST with the same RLS rule as the live policies, covering default mode unchanged, Lex reading Pete's data, in-place edit without ownership change, Lex-created rows visible to Pete, tombstone propagation, duplicate-settings convergence, 2,300-row pagination across both users, a third user still blocked, the 401 retry queue replaying as shared, and the seed de-dupe logic (extracted from the html). Not tested: a live Supabase project or the hub iframe.
+
 ## v1.7 (FTT-010, FTT-011, FTT-012) — Auto-complete on all seasons watched, new-season checker, per-tab search, Watched multi-select
 
 Four changes from one message, all Pete's direct request.
