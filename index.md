@@ -2,6 +2,14 @@
 
 Full version history for `index.html`. As of v10.89, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v10.93 (PET-098) — Version drift fix
+
+Housekeeping only, Pete's direct request. The header badge (`.nav-version`, next to the "P Apps" logo) still read v10.90 while `<title>` said v10.92 — v10.91 (PET-096) and v10.92 (PET-097) bumped the title and this changelog but not the badge. Both now read v10.93. Also added the missing inline pointer comment in `index.html` for v10.91–v10.93 (the inline block stopped at v10.90).
+
+No functional, layout, data or storage changes. Checked for other launcher version representations: none found beyond `<title>`, the badge and the inline comments. The `pal-shared.js?v=10.87` cache-buster is deliberately left as-is — it tracks when that shared file last changed, not the launcher's own version (bumping it would only force an unnecessary re-download).
+
+Tested: `node --check` on every inline script block, and a search confirming the only live version strings are now `<title>` and the badge, both v10.93. Not tested in a browser.
+
 ## v10.92 (PET-097) — Film & TV Tracker shared with Lex
 
 Pete's direct request, following a comparison against `GigsAndTrips.html`'s existing sharing pattern before touching anything.
