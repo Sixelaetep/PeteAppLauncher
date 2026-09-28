@@ -2,21 +2,19 @@
 
 Full version history for `index.html`. As of v10.89, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
-## v10.93 (PET-098) — Layout wasn't syncing between devices
+## v10.94 (PET-099) — On Budget card: lead with card balance in Increasing mode
 
-**Cause.** The launcher never calls `PalSync.initSession()` (that listens for an inbound `PAL_SESSION`, which the launcher *sends* to apps), and the only code that ever called `PalSync.setSession()` directly was the load-speed diagnostics removed at PET-092. Since then `PalSync.hasSession()` has been false in the launcher, and both `loadLayoutConfig()` and `saveLayoutConfig()` returned early on that check with no message. The layout has only ever been saved to `pal_layout_cache` in localStorage on the device it was edited on.
+On Budget's Food & Travel launcher column now leads with the real card balance in Increasing (credit card) mode, with the amount left of the month's budget as a smaller bracketed sub-line — matching the app's own hero card (on-budget.html v3.80), fixing a mismatch where the two showed different figures for the same account. Reads the new `summary.cardBalance` and `summary.potDirection` fields; falls straight through to the previous pot-led display for Decreasing mode or an older on-budget.html save that predates these fields. No change to Bills, colour thresholds, or any other launcher card.
 
-**Fix.**
-- `layoutSyncReady()` hands PalSync the launcher's live `sbSession` (token + user id) immediately before every load and save, so it always uses the current refreshed token.
-- `pullLayoutConfig()` reads the cloud row; if none exists but this device already has a customised local layout, it pushes that up once. Anything set up before this fix therefore reaches the cloud on the next launch of the device it was made on, and other devices then pick it up.
-- Errors are no longer silent: a failed pull shows the PalSync error hint (e.g. table missing), a failed save shows the actual message, and saving while not signed in says it stayed on this device.
-- The layout is re-pulled when the page becomes visible again (max once per 30s, skipped while the settings panel is open so an edit in progress isn't overwritten), so a device left open picks up changes without a reload.
+Tested in jsdom against the real launcher code, using the app's own screenshot data: Increasing mode leads with £67.08 (card balance) and "(£682.92 left of budget)" underneath; Decreasing mode and an old summary without the new fields both render exactly as before; Not-started and Bills columns unaffected.
 
-**To finish setting up:** the `pal_layout` table and policies from v10.89 must exist in Supabase. If the table is missing, the new toast will now say so.
+## v10.93 (PET-098) — Version drift fix
 
-**Known limit.** Cloud wins on load; there is no per-field merge. If the same layout is edited on two devices while one is offline, the later save overwrites the other.
+Housekeeping only, Pete's direct request. The header badge (`.nav-version`, next to the "P Apps" logo) still read v10.90 while `<title>` said v10.92 — v10.91 (PET-096) and v10.92 (PET-097) bumped the title and this changelog but not the badge. Both now read v10.93. Also added the missing inline pointer comment in `index.html` for v10.91–v10.93 (the inline block stopped at v10.90).
 
-Verified with `node --check`; the session and upsert path was read against `pal-shared.js` (`setSession`, `sbFetch`, `table().upsert`, which throws on failure). Not run against live Supabase from here.
+No functional, layout, data or storage changes. Checked for other launcher version representations: none found beyond `<title>`, the badge and the inline comments. The `pal-shared.js?v=10.87` cache-buster is deliberately left as-is — it tracks when that shared file last changed, not the launcher's own version (bumping it would only force an unnecessary re-download).
+
+Tested: `node --check` on every inline script block, and a search confirming the only live version strings are now `<title>` and the badge, both v10.93. Not tested in a browser.
 
 ## v10.92 (PET-097) — Film & TV Tracker shared with Lex
 

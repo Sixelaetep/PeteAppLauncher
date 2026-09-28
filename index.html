@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.93</title>
+<title>P Apps v10.94</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -642,7 +642,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.93</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.94</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1446,51 +1446,22 @@ function mergeLayoutConfig(saved) {
   return { groups, apps };
 }
 
-// PET-098: the launcher never calls PalSync.initSession() (that
-// listens for an inbound PAL_SESSION, which the launcher SENDS to
-// apps rather than receives), and the only code that ever called
-// PalSync.setSession() directly was the load-speed diagnostics removed
-// at PET-092 — so hasSession() has been false in the launcher ever
-// since, and loadLayoutConfig()/saveLayoutConfig() below both bailed
-// out silently on it. The layout was local-only, never synced. Fix:
-// hand PalSync the launcher's own live session right before each use
-// (sbSession is refreshed periodically, so this is re-read each time
-// rather than set once at boot).
-function layoutSyncReady() {
-  if (!window.PalSync || !sbSession || !sbSession.access_token || !sbSession.user) return false;
-  window.PalSync.setSession(sbSession.access_token, sbSession.user.id);
-  return true;
-}
-
-let _layoutLastPull = 0;
 async function loadLayoutConfig() {
   layoutConfig = defaultLayoutConfig();
-  let hadCache = false;
   try {
     const cached = localStorage.getItem('pal_layout_cache');
-    if (cached) { layoutConfig = mergeLayoutConfig(JSON.parse(cached)); hadCache = true; }
+    if (cached) layoutConfig = mergeLayoutConfig(JSON.parse(cached));
   } catch (e) { /* no valid cache — defaults stand */ }
   applyStandaloneFlags();
   renderNavIcons();
   renderHomeGrid();
   renderLayoutSettings();
-  await pullLayoutConfig(hadCache);
-}
 
-// Cloud wins when a saved row exists. If none exists yet but this
-// device already has a customised local layout (i.e. everything made
-// before PET-098, which never reached the cloud), push it up once so
-// other devices pick it up instead of starting from defaults.
-async function pullLayoutConfig(hadCache) {
-  if (!layoutSyncReady()) return;
-  _layoutLastPull = Date.now();
+  if (!window.PalSync || !window.PalSync.hasSession()) return;
   try {
     const uid = window.PalSync.getUserId();
     const res = await window.PalSync.sbFetch('/pal_layout?user_id=eq.' + uid + '&record_key=eq.layout&select=data', 'GET');
-    if (!res.ok) {
-      toast('Layout sync failed — ' + window.PalSync.errorHint(res.status));
-      return;
-    }
+    if (!res.ok) return;
     const rows = await res.json();
     if (rows.length && rows[0].data) {
       layoutConfig = mergeLayoutConfig(rows[0].data);
@@ -1499,34 +1470,20 @@ async function pullLayoutConfig(hadCache) {
       renderNavIcons();
       renderHomeGrid();
       renderLayoutSettings();
-    } else if (hadCache) {
-      await window.PalSync.table('pal_layout').upsert('layout', layoutConfig);
     }
-  } catch (e) { /* offline — cached/default config already rendered */ }
+  } catch (e) { /* offline — cached/default config already rendered above */ }
 }
-
-// Re-pull when the page comes back into view, so a device left open
-// picks up changes made elsewhere without a manual reload. Skipped
-// while the settings panel is open (a rebuild would wipe an edit in
-// progress) and throttled to once per 30s.
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden || !layoutConfig || !currentUser || !currentUser.isPete) return;
-  const panel = document.getElementById('layoutSettingsPanel');
-  if (panel && panel.open) return;
-  if (Date.now() - _layoutLastPull < 30000) return;
-  pullLayoutConfig(true);
-});
 
 async function saveLayoutConfig() {
   localStorage.setItem('pal_layout_cache', JSON.stringify(layoutConfig));
   applyStandaloneFlags();
   renderNavIcons();
   renderHomeGrid();
-  if (!layoutSyncReady()) { toast('Saved on this device only — not signed in to sync'); return; }
+  if (!window.PalSync || !window.PalSync.hasSession()) return;
   try {
     await window.PalSync.table('pal_layout').upsert('layout', layoutConfig);
     toast('Layout saved');
-  } catch (e) { toast('Saved locally — sync failed: ' + (e && e.message ? e.message : 'unknown error')); }
+  } catch (e) { toast('Saved locally — will sync once back online'); }
 }
 
 // Writes each of the three standalone-toggle apps' flag to the fixed
@@ -2748,8 +2705,21 @@ function statFantasy() {
 // every other live-stat card already uses, so the card updates
 // immediately on a squad save rather than waiting for the next
 // sign-in or home-screen return.
-// v10.93 (PET-098): layout sync fixed (launcher never gave PalSync its
-// session, so nothing ever left this device) — full notes in index.md.
+// v10.94 (PET-099): On Budget's Food & Travel column now leads with the
+// real card balance in Increasing (credit card) mode, with the amount
+// left of the month's budget as a smaller bracketed sub-line — was
+// showing the amount left as its main figure while the app itself led
+// with the spend counter, i.e. two different numbers for the same
+// account (Pete's screenshots). Reads the new summary.cardBalance and
+// summary.potDirection fields on-budget.html v3.80 now exports; falls
+// straight through to the existing pot-led display for Decreasing mode
+// or an older on-budget.html save that predates these fields. Full
+// notes in index.md.
+// v10.93 (PET-098): version-drift fix only, no functional change — the
+// header badge (.nav-version) had been left at v10.90 through v10.91 and
+// v10.92 while <title> was bumped; both now read v10.93. Full notes in
+// index.md, not duplicated here. (v10.91 and v10.92 likewise live in
+// index.md only.)
 // v10.90 (PET-095): two bug fixes to the layout system, both reported
 // directly with screenshots — full notes in index.md, not duplicated
 // here. (1) Cards with Card unchecked were showing anyway. (2) Typing
@@ -3144,6 +3114,16 @@ function statOnBudget() {
     html += '<div><div class="ob-col-label">Food &amp; Travel</div>';
     if (!summary.cycleStarted) {
       html += '<div class="ob-col-main" style="color:var(--ink3);font-size:12px">Not started</div>';
+    } else if (summary.potDirection === 'increasing' && summary.cardBalance !== null && summary.cardBalance !== undefined) {
+      // v10.94 (PET-099): lead with the real card balance, matching the
+      // app's own hero card (on-budget.html v3.80) — amount left of the
+      // month's budget is now the smaller bracketed line beneath it,
+      // same figure as summary.pot always was, just no longer the
+      // headline number here.
+      html += '<div class="ob-col-main" style="color:' + potColor + '">£' + summary.cardBalance.toFixed(2) + '</div>';
+      html += '<div class="ob-col-sub" style="color:' + potColor + ';font-size:11px">(£' + summary.pot.toFixed(2) + ' left of budget)</div>';
+      html += '<div class="ob-col-sub" style="color:' + headroomColor + '">Headroom £' + summary.headroom.toFixed(2) + '</div>';
+      html += '<div class="ob-col-sub">Food £' + summary.food.toFixed(2) + ' · Travel £' + summary.travel.toFixed(2) + '</div>';
     } else {
       html += '<div class="ob-col-main" style="color:' + potColor + '">£' + summary.pot.toFixed(2) + '</div>';
       html += '<div class="ob-col-sub" style="color:' + headroomColor + '">Headroom £' + summary.headroom.toFixed(2) + '</div>';

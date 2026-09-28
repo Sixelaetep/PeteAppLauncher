@@ -2,6 +2,18 @@
 
 Full version history for `on-budget.html`. The app's own inline comment block keeps only the detailed, recent-era releases (v3.44 onward) for quick reference during active work — everything from v1.0 through v3.43 lives here instead. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed. Note: v1.0–v2.8 were never logged as individual entries in the source file — only this one combined summary paragraph — so that's reproduced as-is rather than split up.
 
+## v3.80 (ON--074)
+
+In Increasing (credit card) mode, the hero card and the launcher's Food & Travel card were showing two different numbers for the same account: the app itself led with the spend counter (£67.08 in the screenshots) while the launcher led with the amount left of budget (£682.92). Fixed by leading both with the same figure — the real card balance — with the amount left of the month's budget as a smaller bracketed sub-line underneath.
+
+In-app hero card: headline value is now the card balance (was the spend counter). The standalone "Card balance" row and its Set button added in v3.78 are folded into the hero value itself; Set moved to a small button under the hero-right text. The sub-line under the headline now reads "(£682.92 left of £750.00 budget)" — same figure and colour logic as before, reworded and set smaller to read as a secondary note rather than a second headline.
+
+Launcher: `computeDashboardSummary()` now exports `cardBalance` and `potDirection` so the launcher can tell which figure to lead with, without re-deriving the app's own direction setting. The Food & Travel column leads with the card balance and the bracketed amount-left sub-line in Increasing mode; an older save that predates these two fields, or Decreasing mode, falls straight through to the previous pot-led display unchanged.
+
+No calculation changes — `cardBalanceInfo()` and the pot/headroom formulas are exactly as in v3.78/v3.79. Decreasing mode is unchanged in both places.
+
+Tested against the real code in jsdom: the exact screenshot scenario (£67.08 spent, £750 limit, no balance set yet) reproduces £67.08 as the card balance headline and "(£682.92 left of £750.00 budget)" as the sub-line, matching between the in-app hero and the launcher card; Decreasing mode unaffected in both; an old summary missing the new fields falls back to the previous launcher display; the "Not started" and Bills columns unaffected. No load errors. Not tested on a physical device or against live Supabase.
+
 ## v3.79 (ON--073)
 
 Increasing mode wording fix, prompted by Headroom showing the full reserve as a negative (e.g. -£642.86) at the start of a month.
