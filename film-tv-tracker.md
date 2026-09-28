@@ -2,6 +2,20 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.10 (FTT-017) — Sticky-header gap fix, sticky library filters, "Good for tonight" restored, clearer card buttons
+
+Four fixes from one screenshot, all Pete's direct report/request.
+
+**(1) Gap above the tabs, with scrolled content visible through it.** Root cause: `.tabs`'s sticky `top` was a hardcoded `53px`, tuned to the OLD header's height — which included the theme-toggle button removed in v1.9 (FTT-016). That button was the tallest thing in the header row, so removing it shrank the header's actual height by roughly 10px while `.tabs` stayed pinned at the old offset, leaving a gap between the header's new (shorter) bottom edge and where the tabs bar actually sat — through which scrolled cards showed. Fixed properly rather than re-tuning another magic number: the header now has an explicit `height: var(--chrome-h)` instead of a content-derived one, and the tabs bar's `top` reads that same variable, so they're mechanically incapable of drifting apart again regardless of what either bar contains in future.
+
+**(2) The library's search/filter row is now sticky, under the tabs bar.** Scrolling a long list previously carried the Search/Status/Any/Sort controls and the Select button away with it. That row now sticks at `top: calc(var(--chrome-h) + var(--tabs-h))` — right under the tabs, using the same variable pattern as fix (1) — with a solid background so cards scrolling underneath never show through. Deliberately scoped to just that row, not the "Search & Add" TMDB box above it or the bulk-action bar, per what was actually asked.
+
+**(3) "Good for tonight" restored as its own stat box.** v1.9's merge folded the old dashboard's five curated sections into filters on the one list, but only gave four of them a stat-box shortcut — "Good for tonight" (short episodes you can actually watch) was reachable only by opening the Any-filter dropdown and picking "Short / Bedtime" yourself. It now has its own box between Available Now and Unavailable, same as before the merge. While restoring it, also caught and fixed a mismatch: the stat box's own count always used the old dashboard's real definition (short **and** not blocked by a missing service), but the Any-filter's "Short / Bedtime" option was checking length alone — so clicking the box and the dropdown filter could disagree. Both now use the same check.
+
+**(4) Poster art slightly shorter; the favourite/watched toggle buttons bigger and higher-contrast.** Card posters go from a 2:3 to a 2:2.7 aspect ratio — a modest reduction, not a redesign. The two circular toggle buttons overlaid at the bottom of each card are up from 26px to 29px, with a more opaque background (0.7 → 0.88 alpha), a subtle light border, and a drop shadow, so they read clearly against busy poster art instead of blending into it.
+
+Tested: `node --check` on both inline script blocks; the same id/onclick/onchange-to-function cross-reference and duplicate-function-name scan as every prior release. The "Good for tonight" semantics fix (bedtime-length short-circuiting on availability) run standalone against a blocked-but-short title and an unknown-availability-but-short title — confirms only the unblocked one counts, matching the pre-v1.9 dashboard's own logic exactly. The sticky-offset CSS was checked for internal consistency (`--chrome-h` and `--tabs-h` are the only two values anything's `top` or `height` derives from — no other hardcoded offset remains). Not tested: a live browser render of the actual gap/overlap/scroll behaviour, since that needs a real viewport rather than a container.
+
 ## v1.9 (FTT-014, FTT-015, FTT-016) — One Films tab, duplicate-service merge tool, launcher-only theme
 
 Three changes from one message, all Pete's direct request.
