@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v2.2</title>
+<title>Film &amp; TV Tracker v2.3</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -118,7 +118,7 @@
   .h-row::-webkit-scrollbar { display:none; }
   .disc-tools { display:flex; align-items:baseline; gap:16px; }
   .fav-hint { font-size:11.5px; color:var(--ink2); margin:-2px 0 8px; }
-  /* Reorder mode (v2.2): the row wraps so every favourite is on screen and reachable by one short drag. */
+  /* Reorder mode (v2.3): the row wraps so every favourite is on screen and reachable by one short drag. */
   .h-row.reordering { flex-wrap:wrap; overflow:visible; gap:12px 10px; padding-bottom:2px; }
   .fav-card { touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; outline:none; }
   .fav-card:active { cursor:grabbing; }
@@ -333,7 +333,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.2</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.3</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -669,7 +669,7 @@
 <script src="pal-shared.js?v=1.12"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v2.2 (FTT-001..FTT-022) — see film-tv-tracker.md.
+// FILM & TV TRACKER v2.3 (FTT-001..FTT-023) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -963,8 +963,13 @@ const DISC_MAX = 8;
 const FAV_MAX = 8;
 const LIB_HEADINGS = { watchlist: 'Want to Watch', watched: 'Watched', all: 'All Titles' };
 const lib = { status: 'watchlist', filter: 'all', sort: 'added', sortUser: false, search: '', limit: LIB_PAGE };
-// Inside the Favourites filter the list follows the saved favourite order — unless the user has explicitly picked another sort.
-function effectiveSort() { return (lib.filter === 'favourite' && !lib.sortUser) ? 'favourite' : lib.sort; }
+// Default ordering: the Favourites filter, the Want to Watch list and the Available filter all put favourites first
+// (in the saved favourite order) and then everything else newest-added first — unless the user has explicitly picked another sort.
+// Watched and All keep "Recently added".
+function effectiveSort() {
+  if (lib.sortUser) return lib.sort;
+  return (lib.filter === 'favourite' || lib.filter === 'available' || lib.status === 'watchlist') ? 'favourite' : lib.sort;
+}
 const PRIMARY_FILTERS = ['all', 'film', 'tv', 'available', 'favourite'];
 const MORE_FILTERS = [
   ['unavailable', 'Unavailable', 'Blocked by a service you don’t have'],
@@ -1006,12 +1011,11 @@ function renderLibrary() {
   // Discovery rows: only in the unfiltered, un-searched view, and only
   // when they have something to show.
   const discoveryOn = !lib.search.trim() && lib.filter === 'all' && !selectMode;
-  const available = watchlist.filter(t => resolveAvailability(t).state === 'available')
-    .sort((a, b) => (b.dateAdded || '').localeCompare(a.dateAdded || ''));
+  const available = watchlist.filter(t => resolveAvailability(t).state === 'available').sort(favFirstCmp);   // favourites lead the row
   const newSeasons = titles.filter(t => t.newSeasonsDetected);
   const showAvail = discoveryOn && lib.status !== 'watched' && available.length > 0;
   const showNew = discoveryOn && newSeasons.length > 0;
-  // My favourites (v2.2): the whole saved collection, in saved order. Shown in every status (favourites span
+  // My favourites (v2.3): the whole saved collection, in saved order. Shown in every status (favourites span
   // Want to Watch and Watched), capped at FAV_MAX with See all. Reorder here rearranges just the tiles shown.
   const favs = orderedFavourites();
   if (favDraft && !favs.length) { favDraft = null; favScope = null; }
@@ -1231,24 +1235,28 @@ function filterAndSort(list, filter, sort, searchTerm) {
   if (sort === 'title') out.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   else if (sort === 'runtime') out.sort((a, b) => (a.runtimeMinutes || a.episodeRuntimeMinutes || 9999) - (b.runtimeMinutes || b.episodeRuntimeMinutes || 9999));
   else if (sort === 'year') out.sort((a, b) => (b.year || 0) - (a.year || 0));
-  else if (sort === 'favourite') out.sort((a, b) => (b.favourite ? 1 : 0) - (a.favourite ? 1 : 0)
-    || (a.favourite && b.favourite ? favCmp(a, b) : (b.dateAdded || '').localeCompare(a.dateAdded || '')));  // v2.2: favourites in the saved order, then the rest newest-first
+  else if (sort === 'favourite') out.sort(favFirstCmp);   // favourites in the saved order, then the rest newest-first
   else if (sort === 'watched') out.sort((a, b) => (b.watched && b.watched.date || '').localeCompare(a.watched && a.watched.date || ''));
   else if (sort === 'rating') out.sort((a, b) => (b.watched && b.watched.rating || 0) - (a.watched && a.watched.rating || 0));
   else out.sort((a, b) => (b.dateAdded || '').localeCompare(a.dateAdded || '')); // 'added' default
   return out;
 }
 
-// ── Favourite order (v2.2/FTT-022) ───────────────────────────────
+// ── Favourite order (v2.3/FTT-023) ───────────────────────────────
 // The saved order lives on each title as `favouriteOrder` (1 = first). It is a per-title field on purpose:
 // titles already sync record-by-record to Supabase and travel inside the JSON backup, so the order rides both
 // with no new sync row and no change to the backup format. Only favourites carry it; un-favouriting removes it.
-// Titles saved before v2.2 have none, so ensureFavouriteOrder() numbers them — oldest-added first, which is
+// Titles saved before v2.3 have none, so ensureFavouriteOrder() numbers them — oldest-added first, which is
 // also the order new favourites are appended in — silently (no updatedAt bump), so every device derives the
 // same numbers from the same data and no sync storm results.
 let favDraft = null;   // ids in on-screen order while a reorder is in progress, otherwise null
 let favScope = null;   // 'row' = the home row (the tiles shown) · 'grid' = the full Favourites list in the library
 
+// Favourites first (in the saved favourite order), then everything else newest-added first.
+function favFirstCmp(a, b) {
+  return (b.favourite ? 1 : 0) - (a.favourite ? 1 : 0)
+    || (a.favourite && b.favourite ? favCmp(a, b) : String(b.dateAdded || '').localeCompare(String(a.dateAdded || '')));
+}
 function favNum(t) { return Number.isFinite(t.favouriteOrder) ? t.favouriteOrder : 1e15; }
 function favCmp(a, b) {
   return (favNum(a) - favNum(b))
