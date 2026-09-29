@@ -120,12 +120,13 @@
   .fav-hint { font-size:11.5px; color:var(--ink2); margin:-2px 0 8px; }
   /* Reorder mode (v2.2): the row wraps so every favourite is on screen and reachable by one short drag. */
   .h-row.reordering { flex-wrap:wrap; overflow:visible; gap:12px 10px; padding-bottom:2px; }
-  .mini.fav-card { touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; outline:none; }
-  .mini.fav-card:active { cursor:grabbing; }
-  .mini.fav-card .pw { outline:1.5px solid rgba(45,212,191,0.75); outline-offset:-1.5px; }
-  .mini.fav-card:focus-visible .pw { outline:2.5px solid var(--film); outline-offset:-2.5px; }
-  .mini.fav-card img { pointer-events:none; -webkit-user-drag:none; }
-  .mini.fav-card.dragging { opacity:0.25; }
+  .fav-card { touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; outline:none; }
+  .fav-card:active { cursor:grabbing; }
+  .fav-card .pw { outline:1.5px solid rgba(45,212,191,0.75); outline-offset:-1.5px; }
+  .fav-card:focus-visible .pw { outline:2.5px solid var(--film); outline-offset:-2.5px; }
+  .fav-card img { pointer-events:none; -webkit-user-drag:none; }
+  .fav-card.dragging { opacity:0.25; }
+  body.grid-reordering #selectModeBtn { display:none; }
   .fav-grip { position:absolute; bottom:5px; right:5px; width:20px; height:20px; border-radius:50%; background:rgba(13,17,23,0.78); color:#fff; font-size:11px; line-height:1; display:flex; align-items:center; justify-content:center; pointer-events:none; }
   .drag-ghost { position:fixed; z-index:500; margin:0; pointer-events:none; opacity:0.93; transform:scale(1.07); box-shadow:0 10px 26px rgba(0,0,0,0.55); border-radius:8px; flex:none; }
   @media (max-width:699px) { .h-row { margin:0 -14px; padding-left:14px; padding-right:14px; } }
@@ -481,9 +482,11 @@
           <option value="rating">My rating</option>
         </select>
       </label>
+      <button class="see-all sel-entry" id="gridReorderBtn" onclick="toggleGridReorder()" style="display:none">Reorder</button>
       <button class="see-all sel-entry" id="selectModeBtn" onclick="toggleSelectMode()">Select</button>
     </div>
   </div>
+  <div class="fav-hint" id="gridHint" style="display:none;margin-top:-4px">Drag to rearrange your favourites, then tap Done.</div>
   <div class="lib-grid" id="filmsGrid"></div>
   <div id="libMore"></div>
 </div>
@@ -891,9 +894,10 @@ function posterHtml(t, overlay) {
 function titleCardHtml(t, opts) {
   opts = opts || {};
   const av = t.status === 'watchlist' ? resolveAvailability(t) : { state: 'unknown' };
-  const muted = av.state === 'unavailable' && !opts.selectable;   // no dimming while selecting, so the selected state reads clearly
+  const reorder = !!opts.reorder;
+  const muted = av.state === 'unavailable' && !opts.selectable && !reorder;   // no dimming while selecting/reordering, so the state reads clearly
   const selected = !!(opts.selectable && selectedIds.has(t.id));
-  const overlay = cardIndicators(t, opts.showWatched) + (opts.selectable ? `<span class="select-check ${selected ? 'on' : ''}">${selected ? '✓' : ''}</span>` : '');
+  const overlay = cardIndicators(t, opts.showWatched) + (opts.selectable ? `<span class="select-check ${selected ? 'on' : ''}">${selected ? '✓' : ''}</span>` : '') + (reorder ? '<span class="fav-grip" aria-hidden="true">☰</span>' : '');
   const click = opts.selectable ? `toggleSelect('${t.id}')` : `openDetail('${t.id}')`;
   const meta = [t.year || '', t.type === 'tv' ? 'TV' : 'Film'].filter(Boolean).join(' · ');
 
@@ -911,7 +915,9 @@ function titleCardHtml(t, opts) {
   }
 
   return `
-    <div class="lcard ${muted ? 'muted' : ''} ${selected ? 'selected' : ''}" onclick="${click}">
+    <div ${reorder
+      ? `class="lcard fav-card" data-id="${t.id}" tabindex="0" role="button" aria-label="${esc(t.title)} — drag to reorder, or use the left and right arrow keys" ondragstart="return false" onpointerdown="favPointerDown(event,'${t.id}')" onkeydown="favKeyDown(event,'${t.id}')"`
+      : `class="lcard ${muted ? 'muted' : ''} ${selected ? 'selected' : ''}" onclick="${click}"`}>
       ${posterHtml(t, overlay)}
       <div class="lc-title">${esc(t.title)}</div>
       <div class="lc-meta">${esc(meta)}</div>
@@ -970,6 +976,7 @@ const MORE_FILTERS = [
 let _libSearchT = null;
 
 function setLib(patch) {
+  if (favDraft && favScope === 'grid') finishFavReorder();   // the list is about to change under the drag — save what was done
   Object.assign(lib, patch, { limit: LIB_PAGE });
   renderLibrary();
 }
@@ -1005,19 +1012,22 @@ function renderLibrary() {
   const showAvail = discoveryOn && lib.status !== 'watched' && available.length > 0;
   const showNew = discoveryOn && newSeasons.length > 0;
   // My favourites (v2.2): the whole saved collection, in saved order. Shown in every status (favourites span
-  // Want to Watch and Watched), capped at FAV_MAX with See all — except while reordering, when all are shown.
+  // Want to Watch and Watched), capped at FAV_MAX with See all. Reorder here rearranges just the tiles shown.
   const favs = orderedFavourites();
-  if (favDraft && !favs.length) favDraft = null;
-  const showFav = favs.length > 0 && !selectMode && (!!favDraft || discoveryOn);
+  if (favDraft && !favs.length) { favDraft = null; favScope = null; }
+  const rowReorder = !!favDraft && favScope === 'row';
+  const showFav = favs.length > 0 && !selectMode && (rowReorder || discoveryOn);
   document.getElementById('discFav').style.display = showFav ? '' : 'none';
   if (showFav) {
-    const reordering = !!favDraft;
+    const reordering = rowReorder;
     const byId = new Map(favs.map(t => [t.id, t]));
     const list = reordering ? favDraftIds().map(id => byId.get(id)) : favs.slice(0, FAV_MAX);
     const row = document.getElementById('discFavRow');
     row.classList.toggle('reordering', reordering);
     row.innerHTML = list.map(t => miniCardHtml(t, false, { favRow: true, reorder: reordering })).join('');
     document.getElementById('favHint').style.display = reordering ? '' : 'none';
+    document.getElementById('favHint').textContent = favs.length > FAV_MAX
+      ? `Drag to rearrange your top ${list.length}, then tap Done. To reorder the rest, use See all.` : 'Drag to rearrange, then tap Done.';
     document.getElementById('favReorderBtn').textContent = reordering ? 'Done' : 'Reorder';
     document.getElementById('favReorderBtn').style.display = (favs.length > 1 || reordering) ? '' : 'none';
     document.getElementById('favSeeAll').style.display = (!reordering && favs.length > FAV_MAX) ? '' : 'none';
@@ -1041,16 +1051,27 @@ function renderLibrary() {
   if (lib.status === 'watchlist') base = watchlist;
   else if (lib.status === 'watched') base = watched;
   const list = filterAndSort(base, lib.filter, effectiveSort(), lib.search);
-  const shown = list.slice(0, lib.limit);
+  // Reordering the full Favourites list shows every matching favourite (no paging), so any of them can be dragged anywhere.
+  const gridReorder = !!favDraft && favScope === 'grid';
+  let shown = list.slice(0, lib.limit);
+  if (gridReorder) { const byId = new Map(list.map(t => [t.id, t])); shown = favDraftIds().map(id => byId.get(id)).filter(Boolean); }
   document.getElementById('libTitle').textContent = LIB_HEADINGS[lib.status] + ' · ' + nf(list.length);
   // Selection only ever covers titles currently on screen: if a filter/search change
   // (or a delete elsewhere) removes a selected title from view, it drops out of the
   // selection, so "Delete N selected" can never touch something you can't see.
-  libView = { total: list.length, shownIds: shown.map(t => t.id) };
+  libView = { total: list.length, allIds: list.map(t => t.id), shownIds: shown.map(t => t.id) };
+  // Reorder is offered only where the list IS the saved favourite order: the Favourites filter on its default
+  // (or explicit "My favourites first") sort. Any other sort/filter would make dragging meaningless.
+  const canGridReorder = lib.filter === 'favourite' && effectiveSort() === 'favourite' && list.length > 1 && !selectMode;
+  const gridBtn = document.getElementById('gridReorderBtn');
+  gridBtn.style.display = (canGridReorder || gridReorder) ? '' : 'none';
+  gridBtn.textContent = gridReorder ? 'Done' : 'Reorder';
+  document.getElementById('gridHint').style.display = gridReorder ? '' : 'none';
+  document.body.classList.toggle('grid-reordering', gridReorder);
   if (selectMode) { const vis = new Set(libView.shownIds); [...selectedIds].forEach(id => { if (!vis.has(id)) selectedIds.delete(id); }); }
   const filtering = lib.filter !== 'all' || lib.search.trim();
   document.getElementById('filmsGrid').innerHTML = shown.length
-    ? shown.map(t => titleCardHtml(t, { selectable: selectMode, showWatched: lib.status === 'all' })).join('')
+    ? shown.map(t => titleCardHtml(t, { selectable: selectMode, reorder: gridReorder, showWatched: lib.status === 'all' })).join('')
     : emptyState('🎬', !titles.length ? 'Your library is empty — tap + Add to get started.'
         : filtering ? 'Nothing matches — try clearing the search or filter.'
         : lib.status === 'watchlist' ? 'Nothing on your Want to Watch list yet.' : 'Nothing here yet.');
@@ -1225,7 +1246,8 @@ function filterAndSort(list, filter, sort, searchTerm) {
 // Titles saved before v2.2 have none, so ensureFavouriteOrder() numbers them — oldest-added first, which is
 // also the order new favourites are appended in — silently (no updatedAt bump), so every device derives the
 // same numbers from the same data and no sync storm results.
-let favDraft = null;   // ids in on-screen order while the row is in Reorder mode, otherwise null
+let favDraft = null;   // ids in on-screen order while a reorder is in progress, otherwise null
+let favScope = null;   // 'row' = the home row (the tiles shown) · 'grid' = the full Favourites list in the library
 
 function favNum(t) { return Number.isFinite(t.favouriteOrder) ? t.favouriteOrder : 1e15; }
 function favCmp(a, b) {
@@ -1261,16 +1283,21 @@ function ensureFavouriteOrder() {
     .forEach(t => { t.favouriteOrder = ++max; changed = true; });
   return changed;
 }
-// Write a full new order (ids = every favourite, first to last). Renumbers 1..n and saves/syncs only titles whose number changed.
+// Write a new order for the favourites being rearranged. `ids` is that set in its new order: it may be ALL favourites,
+// just the tiles on the home row, or just those in a filtered list. The set moves among the positions it already
+// occupied, so every favourite outside it keeps exactly the place it had — home row and full list are two views onto
+// the same single order. Renumbers 1..n and saves/syncs only the titles whose number changed.
 function commitFavouriteOrder(ids) {
+  const fullIds = orderedFavourites().map(t => t.id);
+  const inFull = new Set(fullIds), seen = new Set(), sub = [];
+  ids.forEach(id => { if (inFull.has(id) && !seen.has(id)) { seen.add(id); sub.push(id); } });
+  const result = fullIds.slice();
+  let k = 0;
+  fullIds.forEach((id, i) => { if (seen.has(id)) result[i] = sub[k++]; });
   const byId = new Map(state.titles.map(t => [t.id, t]));
-  const seen = new Set();
-  const full = [];
-  ids.forEach(id => { const t = byId.get(id); if (t && t.favourite && !t._deleted && !seen.has(id)) { seen.add(id); full.push(t); } });
-  orderedFavourites().forEach(t => { if (!seen.has(t.id)) full.push(t); });   // any favourite not in the list keeps its place, after the rest
   const now = new Date().toISOString();
   const changed = [];
-  full.forEach((t, i) => { if (t.favouriteOrder !== i + 1) { t.favouriteOrder = i + 1; t.updatedAt = now; changed.push(t); } });
+  result.forEach((id, i) => { const t = byId.get(id); if (t && t.favouriteOrder !== i + 1) { t.favouriteOrder = i + 1; t.updatedAt = now; changed.push(t); } });
   if (!changed.length) return 0;
   saveState();
   if (window.PalSync.hasSession()) changed.forEach(t => syncPushTitle(t));
@@ -1279,21 +1306,28 @@ function commitFavouriteOrder(ids) {
 }
 
 function favDraftIds() {
-  const live = orderedFavourites().map(t => t.id), liveSet = new Set(live);
-  const kept = (favDraft || []).filter(id => liveSet.has(id)), keptSet = new Set(kept);
-  return kept.concat(live.filter(id => !keptSet.has(id)));   // a favourite added mid-reorder joins the end
+  const live = new Set(orderedFavourites().map(t => t.id));
+  return (favDraft || []).filter(id => live.has(id));   // a favourite un-favourited mid-reorder simply drops out
 }
-function toggleFavReorder() { if (favDraft) finishFavReorder(); else startFavReorder(); }
-function startFavReorder() {
+function startFavReorder(scope, ids) {
   if (selectMode || favDraft) return;
-  favDraft = orderedFavourites().map(t => t.id);
+  favScope = scope; favDraft = ids.slice();
   renderLibrary();
 }
 function finishFavReorder() {
   if (!favDraft) return;
   const ids = favDraftIds();
-  favDraft = null;
+  favDraft = null; favScope = null;
   if (!commitFavouriteOrder(ids)) renderLibrary();
+}
+// The two Reorder buttons. Pressing the button of the mode that's active = Done; pressing the other one saves and switches.
+function toggleFavReorder() {       // home row: rearranges the tiles shown (the top FAV_MAX)
+  const was = favScope; if (favDraft) finishFavReorder();
+  if (was !== 'row') startFavReorder('row', orderedFavourites().slice(0, FAV_MAX).map(t => t.id));
+}
+function toggleGridReorder() {      // Favourites list: rearranges everything in the list
+  const was = favScope; if (favDraft) finishFavReorder();
+  if (was !== 'grid') startFavReorder('grid', libView.allIds || []);
 }
 
 // Drag and drop on pointer events, so one code path serves mouse, pen and touch (HTML5 drag-and-drop doesn't work on touch).
@@ -1316,7 +1350,7 @@ function favPointerMove(e) {
     const r = d.el.getBoundingClientRect();
     d.offX = d.startX - r.left; d.offY = d.startY - r.top;
     const g = d.el.cloneNode(true);
-    g.className = 'mini drag-ghost'; g.removeAttribute('tabindex'); g.style.width = r.width + 'px';
+    g.className = (d.el.classList.contains('lcard') ? 'lcard' : 'mini') + ' drag-ghost'; g.removeAttribute('tabindex'); g.removeAttribute('data-id'); g.style.width = r.width + 'px';
     document.body.appendChild(g); d.ghost = g;
     d.el.classList.add('dragging');
   }
@@ -1361,7 +1395,7 @@ function favKeyDown(e, id) {
   ids.splice(j, 0, ids.splice(i, 1)[0]);
   favDraft = ids;
   renderLibrary();
-  const el = document.querySelector(`#discFavRow .fav-card[data-id="${id}"]`);
+  const el = document.querySelector(`.fav-card[data-id="${id}"]`);
   if (el) el.focus();
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden && favDraft) finishFavReorder(); });   // don't lose an unfinished reorder if the app is backgrounded
