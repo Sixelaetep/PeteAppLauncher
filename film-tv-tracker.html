@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v2.3</title>
+<title>Film &amp; TV Tracker v2.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -186,6 +186,12 @@
   body.selecting { padding-bottom:170px; }
   body.selecting #selectModeBtn { display:none; }
 
+  .lib-sec-head { margin:22px 0 10px; }
+  .lib-sec-head h2 { margin:0; font-size:11.5px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink2); }
+  .lc-line.stat { color:var(--film); font-weight:600; }
+  .lc-line.stat.watched { color:var(--ink2); }
+  .add-cta { text-align:center; margin:20px 0 4px; font-size:13px; color:var(--ink2); }
+  .empty-state .add-btn { margin-top:14px; height:auto; padding:11px 20px; }
   .empty-state { text-align:center; padding:40px 20px; color:var(--ink2); font-size:13px; }
   .empty-state .es-icon { font-size:34px; margin-bottom:8px; }
 
@@ -333,7 +339,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.3</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.4</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -431,9 +437,9 @@
     </div>
 
     <div class="seg" id="libSeg">
+      <button data-s="all" onclick="setLib({status:'all'})">All<span class="n" id="cnt-all"></span></button>
       <button data-s="watchlist" onclick="setLib({status:'watchlist'})">Want to Watch<span class="n" id="cnt-watchlist"></span></button>
       <button data-s="watched" onclick="setLib({status:'watched'})">Watched<span class="n" id="cnt-watched"></span></button>
-      <button data-s="all" onclick="setLib({status:'all'})">All<span class="n" id="cnt-all"></span></button>
     </div>
 
     <div class="chiprow">
@@ -452,7 +458,7 @@
   <div id="discFav" style="display:none">
     <div class="disc-head"><h2>My favourites</h2>
       <span class="disc-tools">
-        <button class="see-all" id="favSeeAll" onclick="setLib({status:'all',filter:'favourite'})">See all →</button>
+        <button class="see-all" id="favSeeAll" onclick="favSeeAll()">See all →</button>
         <button class="see-all" id="favReorderBtn" onclick="toggleFavReorder()">Reorder</button>
       </span>
     </div>
@@ -478,6 +484,7 @@
           <option value="runtime">Runtime</option>
           <option value="year">Release year</option>
           <option value="favourite">My favourites first</option>
+          <option value="priority">Favourites, available, unavailable</option>
           <option value="watched">Recently watched</option>
           <option value="rating">My rating</option>
         </select>
@@ -488,6 +495,7 @@
   </div>
   <div class="fav-hint" id="gridHint" style="display:none;margin-top:-4px">Drag to rearrange your favourites, then tap Done.</div>
   <div class="lib-grid" id="filmsGrid"></div>
+  <div id="libSections"></div>
   <div id="libMore"></div>
 </div>
 
@@ -669,7 +677,7 @@
 <script src="pal-shared.js?v=1.12"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v2.3 (FTT-001..FTT-023) — see film-tv-tracker.md.
+// FILM & TV TRACKER v2.4 (FTT-001..FTT-024) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -901,17 +909,17 @@ function titleCardHtml(t, opts) {
   const click = opts.selectable ? `toggleSelect('${t.id}')` : `openDetail('${t.id}')`;
   const meta = [t.year || '', t.type === 'tv' ? 'TV' : 'Film'].filter(Boolean).join(' · ');
 
-  let line = '';
+  let line = opts.showStatus ? `<div class="lc-line stat ${t.status}">${t.status === 'watched' ? 'Watched' : 'Want to Watch'}</div>` : '';
   if (t.status === 'watched') {
     const r = t.watched && t.watched.rating;
     const hasReview = !!(t.watched && t.watched.review);
     const parts = [];
     if (r) parts.push('★ ' + r + '/10');
     if (hasReview) parts.push('Review');
-    if (parts.length) line = `<div class="lc-line rate">${parts.join(' · ')}</div>`;
+    if (parts.length) line += `<div class="lc-line rate">${parts.join(' · ')}</div>`;
   } else {
     const a = availabilityLine(t);
-    if (a) line = `<div class="lc-line ${a.cls}">${esc(a.text)}</div>`;
+    if (a) line += `<div class="lc-line ${a.cls}">${esc(a.text)}</div>`;
   }
 
   return `
@@ -962,13 +970,16 @@ const LIB_PAGE = 60;
 const DISC_MAX = 8;
 const FAV_MAX = 8;
 const LIB_HEADINGS = { watchlist: 'Want to Watch', watched: 'Watched', all: 'All Titles' };
-const lib = { status: 'watchlist', filter: 'all', sort: 'added', sortUser: false, search: '', limit: LIB_PAGE };
-// Default ordering: the Favourites filter, the Want to Watch list and the Available filter all put favourites first
-// (in the saved favourite order) and then everything else newest-added first — unless the user has explicitly picked another sort.
-// Watched and All keep "Recently added".
+const lib = { status: 'all', filter: 'all', sort: 'added', sortUser: false, search: '', limit: LIB_PAGE, secLimit: { watchlist: LIB_PAGE, watched: LIB_PAGE } };
+// Default ordering (an explicit Sort choice always wins):
+//  · Favourites / Available filters: favourites first (saved order), then the rest newest-added first.
+//  · Want to Watch: favourites first, then titles available on a service you have, then the unavailable ones.
+//  · Watched and All keep "Recently added". (The sectioned All view uses fixed section orders — see renderLibrary.)
 function effectiveSort() {
   if (lib.sortUser) return lib.sort;
-  return (lib.filter === 'favourite' || lib.filter === 'available' || lib.status === 'watchlist') ? 'favourite' : lib.sort;
+  if (lib.filter === 'favourite' || lib.filter === 'available') return 'favourite';
+  if (lib.status === 'watchlist') return 'priority';
+  return lib.sort;
 }
 const PRIMARY_FILTERS = ['all', 'film', 'tv', 'available', 'favourite'];
 const MORE_FILTERS = [
@@ -981,8 +992,8 @@ const MORE_FILTERS = [
 let _libSearchT = null;
 
 function setLib(patch) {
-  if (favDraft && favScope === 'grid') finishFavReorder();   // the list is about to change under the drag — save what was done
-  Object.assign(lib, patch, { limit: LIB_PAGE });
+  if (favDraft) finishFavReorder();   // the view is about to change under the drag — save what was done
+  Object.assign(lib, patch, { limit: LIB_PAGE, secLimit: { watchlist: LIB_PAGE, watched: LIB_PAGE } });
   renderLibrary();
 }
 function onLibSearch() {
@@ -990,6 +1001,9 @@ function onLibSearch() {
   _libSearchT = setTimeout(() => setLib({ search: document.getElementById('libSearch').value }), 120);
 }
 function libShowMore() { lib.limit += LIB_PAGE; renderLibrary(); }
+function libShowMoreSec(key) { lib.secLimit[key] += LIB_PAGE; renderLibrary(); }
+function favSeeAll() { setLib({ status: lib.status, filter: 'favourite' }); }   // the full favourites list for the view you're in
+function addFromLibSearch() { openAddModal(document.getElementById('libSearch').value.trim()); }
 
 function renderLibrary() {
   const titles = liveTitles();
@@ -1015,17 +1029,18 @@ function renderLibrary() {
   const newSeasons = titles.filter(t => t.newSeasonsDetected);
   const showAvail = discoveryOn && lib.status !== 'watched' && available.length > 0;
   const showNew = discoveryOn && newSeasons.length > 0;
-  // My favourites (v2.3): the whole saved collection, in saved order. Shown in every status (favourites span
-  // Want to Watch and Watched), capped at FAV_MAX with See all. Reorder here rearranges just the tiles shown.
-  const favs = orderedFavourites();
-  if (favDraft && !favs.length) { favDraft = null; favScope = null; }
+  // My favourites shelf, scoped to the view: All = every favourite; Want to Watch = favourites still to watch;
+  // Watched = favourites that are FULLY watched (a show with seasons still to watch, or a new season, stays out).
+  // Capped at FAV_MAX with See all. Reorder here rearranges just the tiles shown.
+  const favs = shelfFavourites();
+  if (favDraft && !orderedFavourites().length) { favDraft = null; favScope = null; }
   const rowReorder = !!favDraft && favScope === 'row';
   const showFav = favs.length > 0 && !selectMode && (rowReorder || discoveryOn);
   document.getElementById('discFav').style.display = showFav ? '' : 'none';
   if (showFav) {
     const reordering = rowReorder;
     const byId = new Map(favs.map(t => [t.id, t]));
-    const list = reordering ? favDraftIds().map(id => byId.get(id)) : favs.slice(0, FAV_MAX);
+    const list = reordering ? favDraftIds().map(id => byId.get(id)).filter(Boolean) : favs.slice(0, FAV_MAX);
     const row = document.getElementById('discFavRow');
     row.classList.toggle('reordering', reordering);
     row.innerHTML = list.map(t => miniCardHtml(t, false, { favRow: true, reorder: reordering })).join('');
@@ -1050,20 +1065,34 @@ function renderLibrary() {
     document.querySelector('#discNew .see-all').style.display = newSeasons.length > DISC_MAX ? '' : 'none';
   }
 
-  // The library itself.
+  // The library itself. The plain All view (no filter, no search) is SECTIONED — after the shelves above:
+  // Want to Watch (favourites → available → unavailable), then Watched (recently added) — each section paged on its own.
+  // Every other view is one flat list.
+  const query = lib.search.trim();
+  const sectioned = lib.status === 'all' && lib.filter === 'all' && !query;
+  document.querySelector('.sortwrap').style.display = sectioned ? 'none' : '';   // sections have fixed orders
   let base = titles;
   if (lib.status === 'watchlist') base = watchlist;
   else if (lib.status === 'watched') base = watched;
   const list = filterAndSort(base, lib.filter, effectiveSort(), lib.search);
+  const secs = sectioned ? [
+    { key: 'watchlist', title: 'Want to Watch', items: filterAndSort(watchlist, 'all', 'priority', '') },
+    { key: 'watched', title: 'Watched', items: filterAndSort(watched, 'all', 'added', '') }
+  ].filter(x => x.items.length) : null;
   // Reordering the full Favourites list shows every matching favourite (no paging), so any of them can be dragged anywhere.
-  const gridReorder = !!favDraft && favScope === 'grid';
-  let shown = list.slice(0, lib.limit);
-  if (gridReorder) { const byId = new Map(list.map(t => [t.id, t])); shown = favDraftIds().map(id => byId.get(id)).filter(Boolean); }
-  document.getElementById('libTitle').textContent = LIB_HEADINGS[lib.status] + ' · ' + nf(list.length);
+  const gridReorder = !sectioned && !!favDraft && favScope === 'grid';
+  let shown;
+  if (sectioned) shown = secs.flatMap(x => x.items.slice(0, lib.secLimit[x.key]));
+  else {
+    shown = list.slice(0, lib.limit);
+    if (gridReorder) { const byId = new Map(list.map(t => [t.id, t])); shown = favDraftIds().map(id => byId.get(id)).filter(Boolean); }
+  }
+  const allItems = sectioned ? secs.flatMap(x => x.items) : list;
+  document.getElementById('libTitle').textContent = LIB_HEADINGS[lib.status] + ' · ' + nf(allItems.length);
   // Selection only ever covers titles currently on screen: if a filter/search change
   // (or a delete elsewhere) removes a selected title from view, it drops out of the
   // selection, so "Delete N selected" can never touch something you can't see.
-  libView = { total: list.length, allIds: list.map(t => t.id), shownIds: shown.map(t => t.id) };
+  libView = { total: allItems.length, allIds: allItems.map(t => t.id), shownIds: shown.map(t => t.id) };
   // Reorder is offered only where the list IS the saved favourite order: the Favourites filter on its default
   // (or explicit "My favourites first") sort. Any other sort/filter would make dragging meaningless.
   const canGridReorder = lib.filter === 'favourite' && effectiveSort() === 'favourite' && list.length > 1 && !selectMode;
@@ -1073,14 +1102,29 @@ function renderLibrary() {
   document.getElementById('gridHint').style.display = gridReorder ? '' : 'none';
   document.body.classList.toggle('grid-reordering', gridReorder);
   if (selectMode) { const vis = new Set(libView.shownIds); [...selectedIds].forEach(id => { if (!vis.has(id)) selectedIds.delete(id); }); }
-  const filtering = lib.filter !== 'all' || lib.search.trim();
-  document.getElementById('filmsGrid').innerHTML = shown.length
-    ? shown.map(t => titleCardHtml(t, { selectable: selectMode, reorder: gridReorder, showWatched: lib.status === 'all' })).join('')
-    : emptyState('🎬', !titles.length ? 'Your library is empty — tap + Add to get started.'
-        : filtering ? 'Nothing matches — try clearing the search or filter.'
+
+  const gridEl = document.getElementById('filmsGrid'), secEl = document.getElementById('libSections'), moreEl = document.getElementById('libMore');
+  if (sectioned && secs.length) {
+    gridEl.style.display = 'none'; gridEl.innerHTML = ''; moreEl.innerHTML = '';
+    secEl.innerHTML = secs.map(x => {
+      const sh = x.items.slice(0, lib.secLimit[x.key]), left = x.items.length - sh.length;
+      return `<div class="lib-sec">
+        <div class="lib-sec-head"><h2>${esc(x.title)} · ${nf(x.items.length)}</h2></div>
+        <div class="lib-grid">${sh.map(t => titleCardHtml(t, { selectable: selectMode })).join('')}</div>
+        ${left > 0 ? `<button class="more-btn" onclick="libShowMoreSec('${x.key}')">Show more · ${nf(left)} left</button>` : ''}
+      </div>`;
+    }).join('');
+  } else {
+    secEl.innerHTML = ''; gridEl.style.display = '';
+    const cardOpts = { selectable: selectMode, reorder: gridReorder, showWatched: lib.status === 'all', showStatus: !!query && lib.status === 'all' };
+    if (shown.length) gridEl.innerHTML = shown.map(t => titleCardHtml(t, cardOpts)).join('');
+    else if (query) gridEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="es-icon">🔎</div>Nothing in your library matches “${esc(query)}”.<br><button class="add-btn" onclick="addFromLibSearch()">+ Add “${esc(query)}”</button></div>`;
+    else gridEl.innerHTML = emptyState('🎬', !titles.length ? 'Your library is empty — tap + Add to get started.'
+        : lib.filter !== 'all' ? 'Nothing matches — try clearing the filter.'
         : lib.status === 'watchlist' ? 'Nothing on your Want to Watch list yet.' : 'Nothing here yet.');
-  document.getElementById('libMore').innerHTML = list.length > shown.length
-    ? `<button class="more-btn" onclick="libShowMore()">Show more · ${nf(list.length - shown.length)} left</button>` : '';
+    moreEl.innerHTML = (list.length > shown.length ? `<button class="more-btn" onclick="libShowMore()">Show more · ${nf(list.length - shown.length)} left</button>` : '')
+      + (query && shown.length ? `<div class="add-cta">Not the one you're after? <button class="see-all" onclick="addFromLibSearch()">+ Add “${esc(query)}”</button></div>` : '');
+  }
   updateBulkBar();
 }
 
@@ -1099,9 +1143,12 @@ function pickMoreFilter(key) {
 }
 
 // Add title modal (TMDB search is kept apart from library search)
-function openAddModal() {
+function openAddModal(q) {
   document.getElementById('modal-add').classList.remove('hidden');
-  setTimeout(() => { const i = document.getElementById('searchInput'); if (i) i.focus(); }, 60);
+  const i = document.getElementById('searchInput');
+  if (typeof q === 'string' && q) { i.value = q; runSearch(); }   // came from a library search that found nothing — carry the words over
+  else { i.value = ''; document.getElementById('searchResults').innerHTML = ''; }   // plain + Add starts clean (no stale query or results)
+  setTimeout(() => { if (i) i.focus(); }, 60);
 }
 function addManually() { closeModal('modal-add'); openTitleModal(null); }
 function viewFromSearch(id) { closeModal('modal-add'); openDetail(id); }
@@ -1236,6 +1283,7 @@ function filterAndSort(list, filter, sort, searchTerm) {
   else if (sort === 'runtime') out.sort((a, b) => (a.runtimeMinutes || a.episodeRuntimeMinutes || 9999) - (b.runtimeMinutes || b.episodeRuntimeMinutes || 9999));
   else if (sort === 'year') out.sort((a, b) => (b.year || 0) - (a.year || 0));
   else if (sort === 'favourite') out.sort(favFirstCmp);   // favourites in the saved order, then the rest newest-first
+  else if (sort === 'priority') out.sort(priorityCmp);     // favourites, then available, then unavailable
   else if (sort === 'watched') out.sort((a, b) => (b.watched && b.watched.date || '').localeCompare(a.watched && a.watched.date || ''));
   else if (sort === 'rating') out.sort((a, b) => (b.watched && b.watched.rating || 0) - (a.watched && a.watched.rating || 0));
   else out.sort((a, b) => (b.dateAdded || '').localeCompare(a.dateAdded || '')); // 'added' default
@@ -1252,6 +1300,31 @@ function filterAndSort(list, filter, sort, searchTerm) {
 let favDraft = null;   // ids in on-screen order while a reorder is in progress, otherwise null
 let favScope = null;   // 'row' = the home row (the tiles shown) · 'grid' = the full Favourites list in the library
 
+// Priority order for Want to Watch: favourites (saved order) → available on a service you have → everything else
+// (rent/buy only, needs a service you don't have, or unknown); newest-added first within the last two tiers.
+function priorityTier(t) { return t.favourite ? 0 : (resolveAvailability(t).state === 'available' ? 1 : 2); }
+function priorityCmp(a, b) {
+  const ta = priorityTier(a), tb = priorityTier(b);
+  return (ta - tb) || (ta === 0 ? favCmp(a, b) : String(b.dateAdded || '').localeCompare(String(a.dateAdded || '')));
+}
+// "Fully watched": status Watched, and — for a show — no newly detected season and no season still un-watched.
+// A show marked Watched with no per-season tracking at all counts as fully watched (nothing says otherwise).
+function isFullyWatched(t) {
+  if (t.status !== 'watched') return false;
+  if (t.type !== 'tv') return true;
+  if (t.newSeasonsDetected) return false;
+  if (!Object.keys(t.seasonsProgress || {}).length) return true;
+  const s = seasonsWatchedSummary(t);
+  return !s || s.fully >= s.total;
+}
+// The My favourites shelf follows the view: All = every favourite; Want to Watch = favourites still to watch;
+// Watched = favourites that are FULLY watched. Saved order throughout.
+function shelfFavourites() {
+  const all = orderedFavourites();
+  if (lib.status === 'watchlist') return all.filter(t => t.status === 'watchlist');
+  if (lib.status === 'watched') return all.filter(isFullyWatched);
+  return all;
+}
 // Favourites first (in the saved favourite order), then everything else newest-added first.
 function favFirstCmp(a, b) {
   return (b.favourite ? 1 : 0) - (a.favourite ? 1 : 0)
@@ -1331,7 +1404,7 @@ function finishFavReorder() {
 // The two Reorder buttons. Pressing the button of the mode that's active = Done; pressing the other one saves and switches.
 function toggleFavReorder() {       // home row: rearranges the tiles shown (the top FAV_MAX)
   const was = favScope; if (favDraft) finishFavReorder();
-  if (was !== 'row') startFavReorder('row', orderedFavourites().slice(0, FAV_MAX).map(t => t.id));
+  if (was !== 'row') startFavReorder('row', shelfFavourites().slice(0, FAV_MAX).map(t => t.id));
 }
 function toggleGridReorder() {      // Favourites list: rearranges everything in the list
   const was = favScope; if (favDraft) finishFavReorder();
