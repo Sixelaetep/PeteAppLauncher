@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.71</title>
+<title>9-Day Fortnight Tracker v3.72</title>
 <style>
 :root {
   --bg:#0f1923; --surface:#172130; --card:#1e2d3d; --border:#2a3f55;
@@ -552,7 +552,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.71</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.72</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -716,7 +716,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <div class="toast" id="toast"></div>
 
 
-<script src="pal-shared.js?v=3.71"></script>
+<script src="pal-shared.js?v=3.72"></script>
 <script>
 'use strict';
 // PWA
@@ -805,6 +805,9 @@ function normDate(s){
   return isNaN(d.getTime()) ? raw : isoDate(d);
 }
 
+// v3.72 (FT-062): new bundles' Timesheet weeks now start with three default
+// code rows (DSA Architecture, DSA Strategy, Other Meetings) — full notes
+// in fortnight-tracker.md, not duplicated here.
 // v3.71 (FT-064): Claim Tracker standalone-mode support, for the
 // launcher's new customizable layout system — full notes in
 // fortnight-tracker.md, not duplicated here.
@@ -1891,6 +1894,27 @@ function seedCodesIfEmpty(){
 }
 function codeById(id){ for(var i=0;i<codes.list.length;i++) if(codes.list[i].id===id) return codes.list[i]; return null; }
 function activeCodes(){ return codes.list.filter(function(c){ return !c.archived; }); }
+// FT-062: codes every new timesheet week starts with, in this order.
+// Mapped to the fixed SEED_CODES ids ('Other Meetings' = the Team
+// Meetings / OTHER_MEETINGS row). A default that's been deleted or
+// archived is skipped rather than resurrected. Rows are zero-minute
+// placeholders on the first day of each week (day 0 / day 5) — the same
+// mechanism tsMxAddCode() uses — so they show in the matrix at 0 and
+// no hours or totals are assumed.
+var DEFAULT_TS_CODE_IDS=['seed_dsa_arch','seed_dsa_strat','seed_tm_meet'];
+function seedDefaultTsCodes(bundle){
+  var ids=DEFAULT_TS_CODE_IDS.filter(function(id){ var c=codeById(id); return c&&!c.archived; });
+  if(!ids.length) return 0;
+  var n=0;
+  [0,5].forEach(function(di){
+    var d=bundle.days[di]; if(!d) return;
+    if(!d.alloc) d.alloc=[];
+    ids.forEach(function(id){
+      if(!d.alloc.some(function(a){return a.codeId===id;})){ d.alloc.push({codeId:id,mins:0}); n++; }
+    });
+  });
+  return n;
+}
 // FT-040: code '0001' = opex, any other non-blank code = capex. A
 // deleted/missing code, or a code with no value set, defaults to opex —
 // safer than silently counting unclassified time toward the capex %.
@@ -2002,16 +2026,29 @@ function hmm(m){ m=Math.max(0,m|0); return Math.floor(m/60)+':'+String(m%60).pad
 // Absence auto-allocation: only ever overwrites an empty alloc or a
 // single-row alloc pointing at an auto code — manual splits are never
 // clobbered.
+// FT-062: zero-minute rows on a non-auto code are just placeholder matrix
+// rows (the default codes seeded into new bundles, or a code added to a
+// week's matrix but not yet given hours) — they carry no time, so they
+// must neither block auto-allocation nor be wiped by it.
+function zeroPlaceholderRows(d){
+  return (d.alloc||[]).filter(function(a){
+    if(a.mins) return false;
+    var c=codeById(a.codeId);
+    return !(c&&(c.autoHoliday||c.autoSick));
+  });
+}
 function isPureAutoAlloc(d){
   if(!d.alloc||!d.alloc.length) return true;
-  if(d.alloc.length!==1) return false;
-  var c=codeById(d.alloc[0].codeId);
+  var real=d.alloc.filter(function(a){ return zeroPlaceholderRows({alloc:[a]}).length===0; });
+  if(!real.length) return true;
+  if(real.length!==1) return false;
+  var c=codeById(real[0].codeId);
   return !!(c&&(c.autoHoliday||c.autoSick));
 }
 function applyAutoAbsence(d){
   var c=autoCodeFor(d.status);
   if(!c) return;
-  if(isPureAutoAlloc(d)) d.alloc=[{codeId:c.id,mins:d.holidayMins||0}];
+  if(isPureAutoAlloc(d)) d.alloc=zeroPlaceholderRows(d).concat([{codeId:c.id,mins:d.holidayMins||0}]);
 }
 
 // FT-033/FT-034: shared fill — marks a bundle day absent from a leave
@@ -2060,7 +2097,7 @@ function revertAutoLeaveDay(day){
   }
   day.status=null;
   day.holidayMins=0;
-  day.alloc=[];
+  day.alloc=zeroPlaceholderRows(day);
   delete day._autoLeaveId;
   delete day._autoLeavePrev;
 }
@@ -3880,7 +3917,7 @@ function setStat(bi,di,status){
   // FT-020: absence days auto-allocate to the flagged leave code; a day
   // toggled fully off drops a pure-auto allocation (manual splits kept).
   if(day.status==='holiday'||day.status==='sick'){ applyAutoAbsence(day); }
-  else if(!day.status&&isPureAutoAlloc(day)){ day.alloc=[]; }
+  else if(!day.status&&isPureAutoAlloc(day)){ day.alloc=zeroPlaceholderRows(day); }
   save(state.bundles[bi]);
   checkAutoComplete(bi);
   // FT-020 workflow: marking a working day Done / Conference / Training
@@ -4149,6 +4186,7 @@ function createBundle(){
   // bundle's own span between week 1 Friday and week 2 Monday (Week 2's
   // "weekend before"). See weekendCardInner() for the date math.
   var nb={id:Date.now(),label:'Fortnight w/c '+fmtDate(startD),startDate:isoDate(startD),endDate:isoDate(endD),days:buildDays(selMonday),active:!hasActive,weekend1:{satH:0,satM:0,sunH:0,sunM:0},weekend2:{satH:0,satM:0,sunH:0,sunM:0}};
+  seedDefaultTsCodes(nb); // FT-062: before leave prefill, so absence auto-allocation sits alongside the defaults
   var filled=prefillHolidaysIntoBundle(nb);
   state.bundles.unshift(nb);
   state.bundles.sort(function(a,b){return b.startDate.localeCompare(a.startDate);});
