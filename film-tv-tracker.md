@@ -2,6 +2,14 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.5 (FTT-025) — Launcher dashcard shows the top 3 favourites
+
+Small addition for the P Apps launcher's Film & TV card (launcher v10.95 / PET-100). **No change to the tracker's screens, stored data, sync or backup format.** One function changed (`writeStatCache`) plus one line at boot; 142 other functions are byte-identical to v2.4.
+
+The tracker already writes a small cache (`pal_ftt_stat`) that the launcher card reads. It now also carries `topFavourites`: the first three favourites in your saved favourite order (the same three that lead the My favourites shelf in the All view), each with only what the card needs: title, type, year and a poster link. `favouriteCount` is included too. A poster link is kept only if it is a plain `https://` URL under 300 characters, so a large inline image can never be copied into the cache; it stays well under 1.5 KB. The cache is rewritten on every save (so reordering, favouriting or un-favouriting is reflected the next time you look at the launcher home) and now also **once on every open**, so the card picks favourites up straight after an upgrade without needing a save first. An empty list is written when there are no favourites, which tells the launcher there is nothing to look for.
+
+Tested (headless Chromium against the real page, `http://`): 14 checks, all passing. They cover an old-shape cache being rewritten on open with no save needed; top 3 equal to the first three in saved order; reorder, append (a new favourite goes to the end so the top 3 is unchanged), and un-favouriting all updating the cache; the poster guard (https kept; http and over-long refused; inline images never copied); two favourites, then none; and the earlier 44-check v2.4 suite re-run unchanged (44/44). Round trip with the real launcher is described in the launcher changelog (v10.95).
+
 ## v2.4 (FTT-024) — Opens on a sectioned All view; Want to Watch priority order; per-view favourites; search-then-add
 
 A presentation and ordering change; **no stored data changes** (no field added, renamed or removed; sync, backup/restore, importers, the ordering model and bulk actions are byte-identical to v2.3). 129 functions are unchanged, 7 changed, 7 added.

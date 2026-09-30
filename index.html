@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.94</title>
+<title>P Apps v10.95</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -483,6 +483,13 @@
   .card-stat.amber span.val { color: #f59e0b; }
   .card-stat.muted { opacity: 0.5; font-style: italic; }
   .card-stat.muted .card-stat-dot { background: var(--ink3); }
+  /* Film & TV Tracker card (PET-100): top-three favourites strip */
+  .ftt-favs-label { margin-top: 8px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3); }
+  .ftt-favs { display: flex; gap: 10px; margin-top: 6px; }
+  .ftt-fav { width: 80px; min-width: 0; }
+  .ftt-poster { position: relative; width: 80px; height: 120px; border-radius: 6px; overflow: hidden; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 22px; color: var(--ink3); }
+  .ftt-poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .ftt-fav-title { margin-top: 4px; font-size: 10.5px; line-height: 1.25; font-weight: 600; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; }
   /* PET-071: Fortnight Tracker card — active extra-hours timer readout.
      Own pulsing dot rather than the block-level warn/ok/amber modifiers
      above, since the timer is an independent live signal that can be
@@ -642,7 +649,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.94</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.95</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -2843,16 +2850,50 @@ function statFood() {
 }
 
 // PET-096 (FTT-001): Film & TV Tracker's first card — see index.md.
+// PET-100 (FTT-025): the card also shows the top three favourites, in the tracker's saved favourite order (the same three that
+// lead its My favourites shelf). The tracker writes them into pal_ftt_stat as `topFavourites`; a cache written by an older
+// tracker has no such key, so fall back to deriving them from the tracker's own saved data (ftt_v1) with the same ordering rule.
+function fttEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fttTopFavourites(sm) {
+  if (sm && Array.isArray(sm.topFavourites)) return sm.topFavourites.slice(0, 3);
+  try {
+    const d = JSON.parse(localStorage.getItem('ftt_v1') || 'null');
+    if (!d || !Array.isArray(d.titles)) return [];
+    const num = t => Number.isFinite(t.favouriteOrder) ? t.favouriteOrder : 1e15;
+    return d.titles.filter(t => t && t.favourite && !t._deleted)
+      .sort((a, b) => (num(a) - num(b)) || String(a.dateAdded || '').localeCompare(String(b.dateAdded || '')) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, 3)
+      .map(t => ({ id: t.id, title: t.title, type: t.type, year: t.year || null,
+                   posterUrl: (typeof t.posterUrl === 'string' && /^https:\/\//.test(t.posterUrl) && t.posterUrl.length < 300) ? t.posterUrl : null }));
+  } catch (e) { return []; }
+}
+function fttFavStripHtml(favs) {
+  const tiles = favs.map(f => {
+    const glyph = f.type === 'tv' ? '📺' : '🎬';
+    // The poster sits over a film/TV glyph; if the image can't load it removes itself and the glyph shows instead.
+    const img = (typeof f.posterUrl === 'string' && /^https:\/\//.test(f.posterUrl))
+      ? '<img src="' + fttEsc(f.posterUrl) + '" alt="" loading="lazy" onerror="this.remove()">' : '';
+    return '<div class="ftt-fav" title="' + fttEsc(f.title) + '"><div class="ftt-poster">' + glyph + img + '</div><div class="ftt-fav-title">' + fttEsc(f.title) + '</div></div>';
+  }).join('');
+  return '<div class="ftt-favs-label">Top favourites</div><div class="ftt-favs">' + tiles + '</div>';
+}
 function statScreen() {
   try {
     const raw = localStorage.getItem('pal_ftt_stat');
     if (!raw) { setCardStat('stat-screen', 'Open app to set up', 'muted'); return; }
     const sm = JSON.parse(raw);
-    if (!sm || !sm.watchlistCount) { setCardStat('stat-screen', 'Watchlist is empty', 'muted'); return; }
-    const bits = [sm.watchlistCount + ' on watchlist'];
-    if (sm.availableNow) bits.push(sm.availableNow + ' available now');
-    if (sm.bedtimeNow) bits.push(sm.bedtimeNow + ' for bedtime');
-    setCardStat('stat-screen', bits.join(' · '), sm.availableNow ? 'ok' : '');
+    const favs = fttTopFavourites(sm);
+    if (!sm || !sm.watchlistCount) {
+      // An empty watchlist is dimmed only when there is nothing else to show; with favourites the card stays at full strength.
+      setCardStat('stat-screen', 'Watchlist is empty', favs.length ? '' : 'muted');
+    } else {
+      const bits = [sm.watchlistCount + ' on watchlist'];
+      if (sm.availableNow) bits.push(sm.availableNow + ' available now');
+      if (sm.bedtimeNow) bits.push(sm.bedtimeNow + ' for bedtime');
+      setCardStat('stat-screen', bits.join(' · '), sm.availableNow ? 'ok' : '');
+    }
+    const el = document.getElementById('stat-screen');
+    if (el && favs.length) el.insertAdjacentHTML('beforeend', fttFavStripHtml(favs));
   } catch (e) { setCardStat('stat-screen', 'Open app to refresh', 'muted'); }
 }
 
