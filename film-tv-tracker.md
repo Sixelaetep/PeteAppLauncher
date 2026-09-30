@@ -2,6 +2,30 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.9 (FTT-029) — A ready-made AI prompt for the title list import
+
+Checked before deploy: v2.8 had **no** prompt for getting an AI to produce the import JSON, so this adds one. **No stored data, sync or backup change.**
+
+**Where.** Sync & Backup → Import Titles → **🤖 Have an AI write the list for you** (a collapsible section under the format note). It explains the steps, has a **📋 Copy prompt** button, and shows the full prompt in a read-only box that selects itself on tap, as the fallback if the browser blocks automatic copying (which can happen inside the launcher iframe; the button tries the clipboard API first, then a select-and-copy fallback, and says plainly if neither worked).
+
+**What the prompt asks for.** A single JSON array with no explanation and no code fences; each item an object with `title` (required, TMDB-style English title), `year` (a number: first release, or first air date for TV) and `type` (`movie` or `tv`), with `year` and `type` left out when the AI isn't sure. It tells the AI not to include `tmdb_id` or `imdb_id` (models often guess these wrongly, and the importer treats an id as an exact match, so a wrong id would import the wrong title), to list each show once with season/episode suffixes removed, to avoid duplicates and inventions, and to return valid JSON. It ends with an example of the exact shape and a `My list:` line to replace with notes, a copied column, or a description such as "the best-reviewed sci-fi films of the 2010s".
+
+**Importer hardening.** If an AI reply is saved with its markdown code fence still on (```` ```json … ``` ````), the importer now strips the fence instead of rejecting the file. The file picker already accepts `.json`, `.txt` and `.csv`, and the format is detected from the content, so a reply saved as `.txt` works.
+
+Tested (same headless setup): 14 checks passing plus the 37-check import and tagging suite re-run. They cover the prompt appearing in the panel; the copy button putting exactly that text on the clipboard; the fallback path selecting the whole prompt and reporting success; the prompt's own example being valid JSON that the importer reads as promised; plain, ```` ```json ````-fenced, bare-fenced, and BOM + CRLF fenced replies all parsing; a `{"titles":[…]}` wrapper with string years and type aliases; no horizontal overflow on a phone; no JS errors. Not tested: how any particular AI follows the prompt (worth trying once with your usual one), a physical iPhone, real TMDB.
+
+## v2.8 (FTT-028) — Import area cleaned up: the title list import is the only importer
+
+The Netflix history (CSV), Viewing history (JSON) and Watchlist (JSON) importers are removed; the v2.7 **Title list (CSV or JSON)** import and its tagging window replace them. **No stored data, sync or backup change**: titles those importers already created are ordinary titles and are untouched, and JSON backup Restore is a separate feature that stays.
+
+**Removed (9 functions):** `importNetflixCSV`, `importHistoryJSON`, `importWatchlistJSON`, `importGenericTitleList`, `parseGenericTitleListJSON`, `tmdbSearchTypedTop`, `tmdbSearchTop`, `addUnmatchedGeneric`, `splitNetflixTitle` (plus `NETFLIX_SEASON_RE`), the three buttons, the three hidden file inputs and the "JSON format for the last two" note. Kept because the title list import shares them: `parseCsvText`, `normalizeTitleForMatch`, `sleep`, `cancelImport`, `_bulkImportCancel`. No other function changed apart from the version strings and one comment.
+
+**The panel** now reads *Import Titles*: one short intro, **Title list (CSV or JSON)**, the **Tag imported titles (N waiting)** button when anything is untagged, and the format note. Library Maintenance and Sync & Backup are unchanged.
+
+**Worth knowing.** The Netflix importer also did two things the title list does not: it turned Netflix's "Show: Season N" rows into per-season watched marks, and it counted repeat viewings (`timesWatched`). Anything imported before keeps that data; new imports will not create it. If you re-import a Netflix export as a plain title list you get the shows as titles to tag, with no season-level progress.
+
+Tested (same headless setup as v2.7): the 37-check title list and tagging suite re-run and passing; `node --check` on both inline scripts; every removed function name and element id has zero remaining references; every inline onclick/onchange handler resolves to a defined function; the import panel opens with one import button (plus the hidden tag button), only the backup Restore and list file inputs remain, and no JS errors. Not tested: a physical iPhone, real TMDB or Supabase.
+
 ## v2.7 (FTT-027) — Title list import, and a tagging window for what it brings in
 
 One new import and one new window; **the three existing importers (Netflix CSV, viewing-history JSON, watchlist JSON) are untouched**. Stored data gains one optional per-title field, `importPending`, and two small companions (`importMatch`, `importLabel`), all removed when a title is tagged. They ride sync and backup with the title like any other field, so there is no new sync row and no backup-format change.
