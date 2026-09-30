@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v2.5</title>
+<title>Film &amp; TV Tracker v2.6</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -140,6 +140,10 @@
   .rl-mv:disabled { opacity:0.28; cursor:default; }
   .rl-row.dragging { opacity:1; background:rgba(45,212,191,0.08); border:1.5px dashed var(--film); }   /* the empty slot shows where it will land */
   .rl-row.dragging > * { visibility:hidden; }
+  .int-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin:14px 0 6px; font-size:11px; font-weight:800; letter-spacing:0.07em; text-transform:uppercase; color:var(--film); }
+  .lib-sec .int-head:first-of-type { margin-top:8px; }
+  .rl-int { align-self:flex-start; max-width:100%; margin:3px 0 0; padding:2px 4px; height:24px; background:var(--surface2); color:var(--ink); border:1px solid var(--border); border-radius:6px; font-size:11.5px; font-family:inherit; }
+  .rl-row.rl-flash { box-shadow:0 0 0 2px var(--film); }
   .drag-ghost.rl-row { transform:scale(1.02); opacity:0.97; background:var(--surface); border-color:var(--film); }
   body.grid-reordering #selectModeBtn { display:none; }
   .drag-ghost { position:fixed; z-index:500; margin:0; pointer-events:none; opacity:0.93; transform:scale(1.07); box-shadow:0 10px 26px rgba(0,0,0,0.55); border-radius:8px; flex:none; }
@@ -409,7 +413,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.5</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.6</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -743,6 +747,13 @@
 </div>
 
 <!-- ══════════════════════ MORE FILTERS ══════════════════════ -->
+<div class="modal-overlay sheet-overlay hidden" id="modal-interest" onclick="if(event.target===this)closeModal('modal-interest')">
+  <div class="modal">
+    <div class="modal-head"><h3>Set interest</h3><button class="modal-close" onclick="closeModal('modal-interest')" title="Close" aria-label="Close">✕</button></div>
+    <div id="interestOptions" style="margin-top:8px"></div>
+  </div>
+</div>
+
 <div class="modal-overlay sheet-overlay hidden" id="modal-more" onclick="if(event.target===this)closeModal('modal-more')">
   <div class="modal">
     <div class="modal-head">
@@ -770,7 +781,7 @@
 <script src="pal-shared.js?v=1.12"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v2.5 (FTT-001..FTT-036) — see film-tv-tracker.md.
+// FILM & TV TRACKER v2.6 (FTT-001..FTT-037) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -1069,13 +1080,17 @@ function effectiveSort() {
   if (lib.filter === 'favourite') return 'favourite';
   // v2.3: the Available pill and the Want to Watch tab both follow YOUR order: favourites (favourite order), then the queue
   // you arranged on Available to watch. Other titles (e.g. watched ones that have availability data) follow.
-  if (lib.filter === 'available' || lib.status === 'watchlist') return 'queue';
+  if (lib.filter === 'available' || lib.status === 'watchlist' || lib.filter.startsWith('int-')) return 'queue';
   return lib.sort;
 }
 const PRIMARY_FILTERS = ['all', 'newrelease', 'tagview', 'tv', 'film'];   // the pills; everything else is in More
 const MORE_FILTERS = [
   ['available', 'Available', 'On a service you have'],
   ['favourite', 'Favourites', 'Every favourite, in your saved order'],
+  ['int-high', 'High interest', 'Want to Watch titles you marked High'],
+  ['int-medium', 'Medium interest', 'Want to Watch titles you marked Medium'],
+  ['int-low', 'Low interest', 'Want to Watch titles you marked Low'],
+  ['int-unrated', 'Unrated', 'Want to Watch titles with no interest set'],
   ['unavailable', 'Unavailable', 'Blocked by a service you don’t have'],
   ['bedtime', 'Short / Bedtime', null],
   ['newseason', 'New season', 'Shows with a season you haven’t tracked yet'],
@@ -1137,19 +1152,25 @@ function releaseSections(base) {
 // and ↑ ↓. The poster tiles are never made smaller and carry no controls; this list is a temporary management mode. The list
 // lays out the WHOLE collection in the page (no inner scroll box), so a long queue scrolls with the page and a drag can reach
 // any position (auto-scroll at the edges). Edits change only the draft order; Done commits it to favouriteOrder / watchlistOrder.
-function reorderRowHtml(t, n, total) {
+function reorderRowHtml(t, n, total, opts) {
+  opts = opts || {};
   const a = t.status === 'watchlist' ? availabilityLine(t) : null;
   const sub = [t.year || '', t.type === 'tv' ? 'TV' : 'Film'].filter(Boolean).join(' · ') + (a ? ' · ' + a.text : '');
   const thumb = t.posterUrl ? `<img src="${esc(t.posterUrl)}" loading="lazy" alt="">` : (t.type === 'tv' ? '📺' : '🎬');
+  const sel = opts.interest ? `<select class="rl-int" aria-label="Interest for ${esc(t.title)}" onchange="changeInterest('${t.id}', this.value)">${INTEREST_KEYS.map(k => `<option value="${k}" ${interestKey(t) === k ? 'selected' : ''}>${INTEREST_LABEL[k]}</option>`).join('')}</select>` : '';
   return `<div class="rl-row fav-card" role="listitem" data-id="${t.id}" tabindex="0" aria-label="${esc(t.title)}, position ${n} of ${total}. Drag, or use the up and down arrow keys, to move it." ondragstart="return false" onpointerdown="favPointerDown(event,'${t.id}')" onkeydown="favKeyDown(event,'${t.id}')">
     <span class="rl-grip" aria-hidden="true">☰</span>
     <button type="button" class="rl-num" title="Move to a position" aria-label="Position ${n}. Tap to move ${esc(t.title)} to another position" onclick="promptMoveTo('${t.id}')">${n}</button>
     <span class="rl-thumb">${thumb}</span>
-    <span class="rl-main"><span class="rl-title">${esc(t.title)}</span><span class="rl-sub">${esc(sub)}</span></span>
+    <span class="rl-main"><span class="rl-title">${esc(t.title)}</span><span class="rl-sub">${esc(sub)}</span>${sel}</span>
     <span class="rl-btns"><button type="button" class="rl-mv up" aria-label="Move ${esc(t.title)} up" onclick="moveReorderRow('${t.id}',-1)" ${n === 1 ? 'disabled' : ''}>↑</button><button type="button" class="rl-mv down" aria-label="Move ${esc(t.title)} down" onclick="moveReorderRow('${t.id}',1)" ${n === total ? 'disabled' : ''}>↓</button></span>
   </div>`;
 }
-function reorderListHtml(items) { return `<div class="rl" role="list">${items.map((t, i) => reorderRowHtml(t, i + 1, items.length)).join('')}</div>`; }
+function reorderListHtml(items, opts) { return `<div class="rl" role="list">${items.map((t, i) => reorderRowHtml(t, i + 1, items.length, opts)).join('')}</div>`; }
+// The Available to watch reorder list: one dense list per Interest group, each numbered from 1, each with its own ↑ ↓ limits.
+function queueReorderHtml(rows) {
+  return interestGroups(rows).map(g => `<div class="int-head"><span>${esc(g.label)} · ${g.items.length}</span></div>${reorderListHtml(g.items, { interest: true })}`).join('');
+}
 // Renumber the rows and the ↑ ↓ enabled state to match the list as it is now (used live while dragging).
 function refreshRows(list) {
   const rows = [...list.querySelectorAll('.rl-row')];
@@ -1166,31 +1187,64 @@ function ensureRowVisible(el) {
   const r = el.getBoundingClientRect(), top = stickyBottom() + 10, bottom = window.innerHeight - 12;   // clear of the sticky header
   if (r.top < top) window.scrollBy(0, r.top - top); else if (r.bottom > bottom) window.scrollBy(0, r.bottom - bottom);
 }
-function moveDraftTo(id, toIndex) {
-  const ids = favDraftIds(), i = ids.indexOf(id);
-  if (i < 0) return;
-  const j = Math.max(0, Math.min(ids.length - 1, toIndex));
-  if (j === i) return;
-  ids.splice(j, 0, ids.splice(i, 1)[0]);
-  favDraft = ids;
+// In the Available to watch list, a title moves WITHIN its Interest group (group = its Interest level); elsewhere there is one group.
+function draftGroupKey(id) { if (favKind !== 'queue') return 'all'; return interestKey(state.titles.find(x => x.id === id)); }
+function draftGroup(id) {      // { slots: indexes in the flat draft held by this group, members: their ids in order }
+  const ids = favDraftIds(), key = draftGroupKey(id), slots = [];
+  ids.forEach((x, i) => { if (draftGroupKey(x) === key) slots.push(i); });
+  return { ids, slots, members: slots.map(i => ids[i]) };
+}
+function moveDraftTo(id, toIndex) {      // toIndex = position within the group (0-based)
+  const g = draftGroup(id), from = g.members.indexOf(id);
+  if (from < 0) return;
+  const to = Math.max(0, Math.min(g.members.length - 1, toIndex));
+  if (to === from) return;
+  g.members.splice(to, 0, g.members.splice(from, 1)[0]);
+  g.slots.forEach((slot, k) => { g.ids[slot] = g.members[k]; });   // the group's members refill the group's own slots; other groups stay put
+  favDraft = g.ids;
   renderLibrary();
   const el = document.querySelector(`.rl-row[data-id="${id}"]`);
   ensureRowVisible(el);
   return el;
 }
 function moveReorderRow(id, dir) {       // the ↑ / ↓ buttons
-  const i = favDraftIds().indexOf(id); if (i < 0) return;
+  const i = draftGroup(id).members.indexOf(id); if (i < 0) return;
   const el = moveDraftTo(id, i + dir);
   if (el) { const b = el.querySelector(dir < 0 ? '.rl-mv.up' : '.rl-mv.down'); const bb = b && !b.disabled ? b : el.querySelector(dir < 0 ? '.rl-mv.down' : '.rl-mv.up'); if (bb) bb.focus({ preventScroll: true }); }
 }
+// Change a title's Interest from its reorder row. Applies at once (saved and synced like any edit); the title joins the END of
+// its new group, in the draft as well as in the data, and the rest of the draft order is left exactly as it was.
+function changeInterest(id, level) {
+  const t = state.titles.find(x => x.id === id); if (!t) return;
+  if (!setInterest(t, level)) return;
+  favDraft = favDraftIds().filter(x => x !== id).concat(id);
+  saveState();
+  if (window.PalSync.hasSession()) syncPushTitle(t);
+  const el = document.querySelector(`.rl-row[data-id="${id}"]`);
+  if (el) { ensureRowVisible(el); el.classList.add('rl-flash'); setTimeout(() => el.classList.remove('rl-flash'), 1400); }
+  toast(`${t.title}: ${INTEREST_LABEL[interestKey(t)].toLowerCase()}`);
+}
 function promptMoveTo(id) {              // tap a position number: jump straight there
-  const ids = favDraftIds(), i = ids.indexOf(id); if (i < 0) return;
+  const g = draftGroup(id), i = g.members.indexOf(id); if (i < 0) return;
   const t = state.titles.find(x => x.id === id);
-  const raw = window.prompt(`Move “${t ? t.title : 'this title'}” to position (1–${ids.length})`, String(i + 1));
+  const raw = window.prompt(`Move “${t ? t.title : 'this title'}” to position (1–${g.members.length})`, String(i + 1));
   if (raw === null) return;
   const n = parseInt(String(raw).trim(), 10);
-  if (!(n >= 1)) { toast(`Enter a position from 1 to ${ids.length}`, 'err'); return; }
-  moveDraftTo(id, Math.min(n, ids.length) - 1);
+  if (!(n >= 1)) { toast(`Enter a position from 1 to ${g.members.length}`, 'err'); return; }
+  moveDraftTo(id, Math.min(n, g.members.length) - 1);
+}
+// Available to watch, normal mode: one compact shelf per Interest group (High → Medium → Low → Unrated), each showing SHELF_MAX
+// tiles with its own See all. If nothing has an Interest yet (everything Unrated) it is ONE plain shelf, exactly as before.
+function queueShelfHtml(x, nf) {
+  const n = x.items.length, groups = interestGroups(x.items), single = groups.length === 1 && groups[0].key === 'unrated';
+  const seeAll = g => { const gk = 'queue:' + g.key; return (!selectMode && g.items.length > SHELF_MAX) ? `<button class="see-all" data-k="${gk}" onclick="toggleSecOpen(this.dataset.k)">${secOpen[gk] ? 'Show less' : 'See all →'}</button>` : ''; };
+  const shelf = g => { const open = !!secOpen['queue:' + g.key] || selectMode; return `<div class="${open ? 'mini-grid' : 'h-row'}">${(open ? g.items : g.items.slice(0, SHELF_MAX)).map(t => miniCardHtml(t, true, { selectable: selectMode })).join('')}</div>`; };
+  let tools = single ? seeAll(groups[0]) : '';
+  if (!selectMode && n > 1) tools += `<button class="see-all" onclick="toggleQueueReorder()">Reorder</button>`;
+  return `<div class="lib-sec" data-sec="queue">
+    <div class="disc-head"><h2>${esc(x.title)} · ${nf(n)}</h2><span class="disc-tools">${tools}</span></div>
+    ${groups.map(g => (single ? '' : `<div class="int-head"><span>${esc(g.label)} · ${nf(g.items.length)}</span>${seeAll(g)}</div>`) + shelf(g)).join('')}
+  </div>`;
 }
 function sectionHtml(x, nf) {
   const n = x.items.length, head = `${esc(x.title)} · ${nf(n)}`;
@@ -1200,10 +1254,11 @@ function sectionHtml(x, nf) {
       const by = new Map(x.items.map(t => [t.id, t])), rows = favDraftIds().map(id => by.get(id)).filter(Boolean);
       return `<div class="lib-sec reorder-sec" data-sec="${esc(x.key)}">
         <div class="disc-head"><h2>Reorder ${esc(x.title)} · ${nf(rows.length)}</h2><span class="disc-tools"><button class="see-all" onclick="${x.kind === 'fav' ? 'toggleFavReorder()' : 'toggleQueueReorder()'}">Done</button></span></div>
-        <div class="fav-hint">${esc(reorderHint(x.kind === 'fav' ? 'favourites' : 'Available to watch list'))}</div>
-        ${reorderListHtml(rows)}
+        <div class="fav-hint">${esc(reorderHint(x.kind === 'fav' ? 'favourites' : 'Available to watch list'))}${x.kind === 'queue' ? ' Titles are grouped by Interest: use a row’s Interest menu to move it to another group (it joins the end).' : ''}</div>
+        ${x.kind === 'queue' ? queueReorderHtml(rows) : reorderListHtml(rows)}
       </div>`;
     }
+    if (x.key === 'queue') return queueShelfHtml(x, nf);
     const open = !!secOpen[x.key] || selectMode;
     let items = x.items;
     if (!open) items = items.slice(0, SHELF_MAX);
@@ -1267,9 +1322,10 @@ function renderLibrary() {
   const gridReorder = !structured && !!favDraft && favKind === 'fav' && favScope === 'grid';
   let shown;
   if (structured) {
-    shown = secs.flatMap(x => x.shelf
-      ? ((secOpen[x.key] || selectMode || (favDraft && favKind === x.kind)) ? x.items : x.items.slice(0, SHELF_MAX))
-      : x.items.slice(0, lib.secLimit[x.key]));
+    shown = secs.flatMap(x => {
+      if (x.shelf && x.key === 'queue') return (selectMode || (favDraft && favKind === 'queue')) ? x.items : interestGroups(x.items).flatMap(g => secOpen['queue:' + g.key] ? g.items : g.items.slice(0, SHELF_MAX));
+      return x.shelf ? ((secOpen[x.key] || selectMode || (favDraft && favKind === x.kind)) ? x.items : x.items.slice(0, SHELF_MAX)) : x.items.slice(0, lib.secLimit[x.key]);
+    });
   } else {
     shown = list.slice(0, lib.limit);
     if (gridReorder) { const byId = new Map(list.map(t => [t.id, t])); shown = favDraftIds().map(id => byId.get(id)).filter(Boolean); }
@@ -1397,6 +1453,7 @@ function detailHtml(t) {
     </div>`;
 
   if (t.overview) html += `<div class="dv-sec"><div class="dv-text">${esc(t.overview)}</div></div>`;
+  if (t.status === 'watchlist') html += `<div class="dv-sec"><h3>Interest</h3><div class="chip-row" style="margin-top:0">${INTEREST_KEYS.map(k => `<button class="chip-toggle ${interestKey(t) === k ? 'on' : ''}" onclick="quickSetInterest('${t.id}','${k}')">${k === 'unrated' ? 'Unrated' : INTEREST_LABEL[k].replace(' interest', '')}</button>`).join('')}</div></div>`;
 
   // Availability
   const avail = (t.availability || []).map(a => ({ a, owned: (a.type === 'subscription' || a.type === 'free') && ownsService(a.service) }))
@@ -1466,6 +1523,7 @@ function filterAndSort(list, filter, sort, searchTerm) {
   else if (filter === 'available') out = out.filter(t => resolveAvailability(t).state === 'available');
   else if (filter === 'unavailable') out = out.filter(t => resolveAvailability(t).state === 'unavailable');
   else if (filter === 'newrelease') out = out.filter(isNewRelease);
+  else if (filter.startsWith('int-')) { const k = filter.slice(4); out = out.filter(t => t.status === 'watchlist' && interestKey(t) === k); }   // v2.6: Interest filters
   else if (filter === 'reviewed') out = out.filter(t => t.status === 'watched' && t.watched && t.watched.review);
   else if (filter === 'bedtime') out = out.filter(t => isBedtimeCandidate(t, currentBedtimeMax) && resolveAvailability(t).state !== 'unavailable');
   else if (filter === 'newseason') out = out.filter(t => t.newSeasonsDetected);
@@ -1579,6 +1637,33 @@ function commitFavouriteOrder(ids) {
   return changed.length;
 }
 
+// ── Interest (v2.6/FTT-037) ───────────────────────────────────────
+// A lightweight, user-set grouping for Want to Watch titles: t.interest = 'high' | 'medium' | 'low'; missing (or null) = Unrated.
+// Interest decides the GROUP, watchlistOrder decides the order WITHIN it. It is never inferred from any data and is independent
+// of favourite, availability and watched. Existing titles have no field, which already means Unrated, so nothing is migrated or
+// rewritten. Changing a title's interest puts it at the END of its new group (it takes the next free watchlistOrder).
+const INTEREST_KEYS = ['high', 'medium', 'low', 'unrated'];
+const INTEREST_LABEL = { high: 'High interest', medium: 'Medium interest', low: 'Low interest', unrated: 'Unrated' };
+function interestKey(t) { return t && (t.interest === 'high' || t.interest === 'medium' || t.interest === 'low') ? t.interest : 'unrated'; }
+function interestRank(t) { return INTEREST_KEYS.indexOf(interestKey(t)); }
+// Split an ordered list into its interest groups (non-empty only, High → Medium → Low → Unrated), keeping each group's order.
+function interestGroups(items) {
+  return INTEREST_KEYS.map(k => ({ key: k, label: INTEREST_LABEL[k], items: items.filter(t => interestKey(t) === k) })).filter(g => g.items.length);
+}
+function nextWatchlistOrder() {
+  let m = 0;
+  activeWatchlist().forEach(t => { if (Number.isFinite(t.watchlistOrder)) m = Math.max(m, t.watchlistOrder); });
+  return m + 1;
+}
+function setInterest(t, level) {           // true when it changed
+  const v = (level === 'high' || level === 'medium' || level === 'low') ? level : null;
+  if ((t.interest || null) === v) return false;
+  if (v) t.interest = v; else delete t.interest;
+  if (t.status === 'watchlist') t.watchlistOrder = nextWatchlistOrder();   // joins the end of its new group
+  t.updatedAt = new Date().toISOString();
+  return true;
+}
+
 // ── Want to Watch order (v2.2/FTT-032) ───────────────────────────
 // A second, independent saved order, stored per title as `watchlistOrder` (1 = first) exactly like `favouriteOrder`, so it
 // rides Supabase record-by-record and the JSON backup with no new sync row and no backup-format change.
@@ -1597,7 +1682,9 @@ function wlCmp(a, b) {
 function activeWatchlist() { return liveTitles().filter(t => t.status === 'watchlist'); }
 // The Available to watch queue: non-favourite, Want to Watch, not blocked. (Blocked titles and favourites keep their numbers
 // in the background, so they come back to the same place, but they are not part of the active queue.)
-function orderedQueue() { return activeWatchlist().filter(t => !t.favourite && !isBlocked(t)).sort(wlCmp); }
+// Ordered by Interest group first (High → Medium → Low → Unrated), then watchlistOrder within the group.
+function queueOrderCmp(a, b) { return (interestRank(a) - interestRank(b)) || wlCmp(a, b); }
+function orderedQueue() { return activeWatchlist().filter(t => !t.favourite && !isBlocked(t)).sort(queueOrderCmp); }
 // Every number-holding title, in order: what a reorder's slot rule works within (so hidden titles keep their slots).
 function queueSpace() { return activeWatchlist().filter(t => !t.favourite || Number.isFinite(t.watchlistOrder)).sort(wlCmp); }
 // Favourites first (favourite order), then the rest in Want to Watch order. Titles not on Want to Watch go last.
@@ -1605,7 +1692,7 @@ function queueCmp(a, b) {
   const wa = a.status === 'watchlist', wb = b.status === 'watchlist';
   if (wa !== wb) return wa ? -1 : 1;
   if (!wa) return favFirstCmp(a, b);
-  return (b.favourite ? 1 : 0) - (a.favourite ? 1 : 0) || (a.favourite && b.favourite ? favCmp(a, b) : wlCmp(a, b));
+  return (b.favourite ? 1 : 0) - (a.favourite ? 1 : 0) || (a.favourite && b.favourite ? favCmp(a, b) : queueOrderCmp(a, b));
 }
 function ensureWatchlistOrder() {
   const act = activeWatchlist();
@@ -1641,7 +1728,11 @@ function slotReorder(fullTitles, subIds, field, now) {
   return changed;
 }
 function commitWatchlistOrder(ids) {
-  const changed = slotReorder(queueSpace(), ids, 'watchlistOrder', new Date().toISOString());
+  // Each Interest group is reordered among the numbers that group already holds, so a reorder in High never touches Medium.
+  const now = new Date().toISOString(), byId = new Map(queueSpace().map(t => [t.id, t])), groups = {};
+  ids.forEach(id => { const t = byId.get(id); if (t) (groups[interestKey(t)] = groups[interestKey(t)] || []).push(id); });
+  let changed = [];
+  INTEREST_KEYS.forEach(k => { if (groups[k]) changed = changed.concat(slotReorder(queueSpace(), groups[k], 'watchlistOrder', now)); });
   if (!changed.length) return 0;
   saveState();
   if (window.PalSync.hasSession()) changed.forEach(t => syncPushTitle(t));
@@ -1699,7 +1790,7 @@ function reorderHint(what) {
 let favDrag = null;
 function favPointerDown(e, id) {
   if (!favDraft || favDrag || (e.pointerType === 'mouse' && e.button !== 0)) return;
-  if (e.target.closest && e.target.closest('button')) return;                                          // ↑ ↓ and the position number are plain buttons
+  if (e.target.closest && e.target.closest('button, select')) return;                                  // ↑ ↓, the position number and the Interest menu are controls, not drag starts
   if (e.pointerType === 'touch' && !(e.target.closest && e.target.closest('.rl-grip'))) return;      // on touch only the ☰ handle drags, so the finger scrolls the list
   favDrag = { id, el: e.currentTarget, pid: e.pointerId, startX: e.clientX, startY: e.clientY, active: false, ghost: null, offX: 0, offY: 0, x: e.clientX, y: e.clientY, raf: 0 };
   window.addEventListener('pointermove', favPointerMove);
@@ -1764,17 +1855,18 @@ function favDragEnd(keep) {
   d.el.classList.remove('dragging');
   favDrag = null;
   if (keep && d.el.isConnected && favDraft) {
-    favDraft = [...d.el.parentNode.querySelectorAll('.fav-card')].map(c => c.dataset.id);   // the list's on-screen order is the new draft
+    const scope = d.el.closest('.reorder-sec') || d.el.closest('#filmsGrid') || d.el.parentNode;       // every group's list, in on-screen order
+    favDraft = [...scope.querySelectorAll('.rl-row')].map(c => c.dataset.id);
     refreshRows(d.el.parentNode);
   }
 }
 // Keyboard route (focus a row, then ↑ / ↓) — also the reliable path for switch/keyboard users.
 function favKeyDown(e, id) {
-  if (!favDraft || e.target.closest('button')) return;
+  if (!favDraft || e.target.closest('button, select')) return;
   const dir = (e.key === 'ArrowUp' || e.key === 'ArrowLeft') ? -1 : (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1 : 0;
   if (!dir) return;
   e.preventDefault();
-  const i = favDraftIds().indexOf(id); if (i < 0) return;
+  const i = draftGroup(id).members.indexOf(id); if (i < 0) return;   // position within the title's group
   const el = moveDraftTo(id, i + dir);
   if (el) el.focus({ preventScroll: true });
 }
@@ -1793,6 +1885,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && fav
 //   confirm(titles) optional — return a question to ask first (destructive actions)
 //   done(n, ctx)    toast text
 let selectMode = false;
+let bulkInterestLevel = 'unrated';
 let selectedIds = new Set();
 let libView = { total: 0, shownIds: [] };
 
@@ -1814,6 +1907,12 @@ const BULK_ACTIONS = [
       return true;
     },
     done: n => `Marked ${n} watched` },
+  { id: 'interest', open: 'openInterestSheet()',
+    label: () => '◐ Set interest…',
+    show: ts => ts.some(t => t.status === 'watchlist'),
+    prepare: () => ({ level: bulkInterestLevel }),
+    apply: (t, ctx) => t.status === 'watchlist' && setInterest(t, ctx.level),
+    done: (n, ctx) => n ? `Interest set to ${INTEREST_LABEL[ctx.level] ? INTEREST_LABEL[ctx.level].toLowerCase() : 'unrated'} on ${n}` : 'Nothing changed' },
   { id: 'favourite',
     label: ts => ts.every(t => t.favourite) ? '♥ Remove favourite' : '♥ Favourite',
     prepare: ts => ({ fav: !ts.every(t => t.favourite) }),
@@ -1821,6 +1920,11 @@ const BULK_ACTIONS = [
     done: (n, ctx) => ctx.fav ? `Favourited ${n}` : `Removed favourite from ${n}` }
 ];
 
+function openInterestSheet() {
+  document.getElementById('interestOptions').innerHTML = INTEREST_KEYS.map(k => `<button class="sheet-opt" onclick="pickInterest('${k}')"><span>${esc(INTEREST_LABEL[k])}<small>${k === 'unrated' ? 'Clear the interest level' : 'Applies to the Want to Watch titles selected'}</small></span></button>`).join('');
+  document.getElementById('modal-interest').classList.remove('hidden');
+}
+function pickInterest(level) { closeModal('modal-interest'); bulkInterestLevel = level; runBulk('interest'); }
 function selectedTitles() {
   return [...selectedIds].map(id => state.titles.find(t => t.id === id && !t._deleted)).filter(Boolean);
 }
@@ -1863,7 +1967,7 @@ function updateBulkBar() {
   const ts = n ? selectedTitles() : [];
   document.getElementById('bulkActions').innerHTML = ts.length
     ? BULK_ACTIONS.filter(a => !a.show || a.show(ts))
-        .map(a => `<button class="modal-btn ${a.danger ? 'danger' : ''}" onclick="runBulk('${a.id}')">${esc(a.label(ts))}</button>`).join('')
+        .map(a => `<button class="modal-btn ${a.danger ? 'danger' : ''}" onclick="${a.open || `runBulk('${a.id}')`}">${esc(a.label(ts))}</button>`).join('')
     : '';
   document.getElementById('selNote').textContent = truncated
     ? `Showing ${ids.length} of ${libView.total.toLocaleString('en-GB')} — selecting covers the titles shown. Use Show more to include others.` : '';
@@ -1897,6 +2001,13 @@ function deleteFromDetail() {
   if (!state.titles.some(t => t.id === id && !t._deleted)) closeDetail();
 }
 
+function quickSetInterest(id, level) {
+  const t = state.titles.find(x => x.id === id); if (!t) return;
+  if (!setInterest(t, level)) return;
+  saveState(); if (window.PalSync.hasSession()) syncPushTitle(t);
+  renderDetail();
+  toast(`Interest: ${INTEREST_LABEL[interestKey(t)].replace(' interest', '').toLowerCase()}`);
+}
 function quickMarkWatched(id) {
   const t = state.titles.find(x => x.id === id); if (!t) return;
   t.status = 'watched';
