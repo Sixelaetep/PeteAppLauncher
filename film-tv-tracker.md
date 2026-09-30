@@ -2,6 +2,18 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.6 (FTT-026) — Favourites reorder: every favourite from the row, and scrolling that works on a phone
+
+Two fixes to the My favourites reorder from v2.3. **No stored data, sync or backup change**; `commitFavouriteOrder` and the slot rule are untouched.
+
+**Reorder from the row now covers every favourite in the shelf.** It used to lay out and rearrange only the first 8 (`FAV_MAX`), with a hint to use See all for the rest. It now loads every favourite in that view's shelf (uncapped), wrapping into a grid as before. Scope follows the view as in v2.4: All = every favourite; Want to Watch = favourites still to watch; Watched = fully-watched favourites. Anything outside the shelf keeps its exact position (same slot rule). The home row still *displays* 8 when not reordering.
+
+**Touch: the ☰ handle drags, the rest of the tile scrolls.** Every reorder tile had `touch-action:none`, so any swipe on a poster tried to pick the card up and the page could barely scroll. Tiles are now `touch-action:pan-y`; on a touch pointer only a press on the ☰ handle starts a drag (the handle is 30px on touch, 20px with a mouse, and carries `touch-action:none`). Mouse and pen still drag from anywhere on the tile; ← / → keyboard reorder is unchanged. The hint text explains the handle on touch screens (`pointer:coarse`).
+
+**Edge auto-scroll.** Dragging near the top or bottom edge now keeps scrolling while the finger is held there (requestAnimationFrame, faster nearer the edge) and keeps re-placing the tile, instead of only nudging on each pointer move.
+
+Tested: `node --check` on the inline scripts. Not tested on a physical iPhone or with the real launcher/Supabase; please confirm on your phone: Reorder, swipe over posters (should scroll), drag a ☰ handle (should move the tile), Done, reload.
+
 ## v2.5 (FTT-025) — Launcher dashcard shows the top 3 favourites
 
 Small addition for the P Apps launcher's Film & TV card (launcher v10.95 / PET-100). **No change to the tracker's screens, stored data, sync or backup format.** One function changed (`writeStatCache`) plus one line at boot; 142 other functions are byte-identical to v2.4.
