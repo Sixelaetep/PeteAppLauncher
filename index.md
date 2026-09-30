@@ -2,6 +2,24 @@
 
 Full version history for `index.html`. As of v10.89, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v10.97 (PET-102) — On Budget card: tappable columns, Food Spend / Bills Spend buttons
+
+Pete's request. On the On Budget home card, the Food & Travel column now opens On Budget on its **Spending** tab and the Bills column opens it on the **Bills** tab (Ledger view — the one whose cleared balance and lowest-projected figures the column shows). Each column label carries a small › as the only cue that it is tappable. The single full-width "+ Add spend" button is replaced by two buttons directly under their own columns: **+ Food Spend** (left, the existing food/travel add sheet — unchanged behaviour) and **+ Bills Spend** (right, the Bills Ledger's own Add transaction sheet). Tapping anywhere else on the card still just opens the app, as before.
+
+**Interpretation to confirm.** "Could the bottom transaction button stay" was read as "the add-transaction buttons stay at the bottom of the card, but split one per side", i.e. the old single button is replaced by the two, not kept alongside them. If the old button was meant to stay as well, it is a one-line addition.
+
+**Implementation.** The buttons are static markup, independent of the stat rendering, so they are present even when the card shows "No data yet" / "Open app to refresh" (the columns are not, since they are part of the stat). The button row is a two-column grid with the same 12px gap as `.ob-grid`, so each button sits exactly under its column (measured: 0.0px offset at 390px and 1280px). New `launchOBAction(e, action)` uses the same ensureLoaded → switchTo → `OB_ACTION` sequence as `launchOBAddSpend`, which is unchanged. Bills Spend deliberately does *not* reuse the existing `openBillsSheet` action — that one opens the *Recurring* bill sheet, not a transaction.
+
+**Cross-file dependency.** Needs `on-budget.html` v3.81 (ON--075), which adds the `openSpendingTab`, `openBillsTab` and `openBillsTxSheet` actions. Deploy them together, or on-budget.html first: a new launcher with the old v3.80 app degrades gracefully (the app opens where it was left, no sheet, no error) but the buttons and columns then don't do what they say.
+
+**Known and unchanged:** if the On Budget card is set to half width in the layout panel, the balance figure is clipped at 390px — identical in v10.96, not caused by this change. The buttons wrap onto two lines there rather than truncating.
+
+Files changed: `index.html` (CSS, card markup, the two column templates in `statOnBudget()`, new `launchOBAction()`, version markers, inline pointer) and `on-budget.html` (v3.81). Every other launcher function is byte-identical to v10.96.
+
+Tested in real headless Chromium against the real launcher with the real on-budget.html in its iframe (Supabase auth stubbed): 28 checks, all passing. At 390px and 1280px: two tappable columns and two buttons, labels correct, each button exactly under its column, no horizontal overflow, no page errors. Left column takes the app from History to Spending with no sheet; right column opens Bills → Ledger with no sheet, and lands on Ledger even if the app was last left on Recurring; Food Spend opens the food sheet (regression); Bills Spend opens Bills Ledger + "Add transaction" and not the food sheet; clicking the card title still opens the app with no sheet; the existing `openBillsSheet` action still opens Bills → Recurring. Card states: Not started (columns still tappable), no dashboard summary (buttons present, no columns, no errors), Decreasing mode (content unchanged). Also checked visually in dark and light themes, and the old-app/new-launcher pairing described above.
+
+Not tested: a physical phone (touch behaviour, safe areas), live Supabase, or saving an actual transaction from either sheet (the sheets were confirmed to open, not submitted).
+
 ## v10.96 (PET-101) — Layout changes now sync between devices
 
 Bug fix, reported directly: launcher layout adjustments (order, width, card/icon visibility, groups, standalone) made on one device never appeared on another.

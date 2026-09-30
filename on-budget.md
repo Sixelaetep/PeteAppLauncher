@@ -2,6 +2,18 @@
 
 Full version history for `on-budget.html`. The app's own inline comment block keeps only the detailed, recent-era releases (v3.44 onward) for quick reference during active work — everything from v1.0 through v3.43 lives here instead. Wording is unchanged from the original inline entries; only the line-wrapping is reflowed. Note: v1.0–v2.8 were never logged as individual entries in the source file — only this one combined summary paragraph — so that's reproduced as-is rather than split up.
 
+## v3.81 (ON--075)
+
+Three new launcher deep-links, added for the launcher's On Budget card (index.html v10.97, PET-102), whose Food & Travel and Bills columns are now tappable and whose single "Add spend" button became "Food Spend" / "Bills Spend". All three go through the existing `OB_ACTION` message listener, alongside `openFoodSheet` and `openBillsSheet`:
+
+- `openSpendingTab` — Spending tab.
+- `openBillsTab` — Bills tab, Ledger view (always Ledger, not whichever Bills sub-view was last open — the card's Bills column shows the Ledger's cleared balance and lowest projected figures).
+- `openBillsTxSheet` — Bills tab, Ledger view, then the Add transaction sheet (`openBtxSheet`), after the same 120ms settle delay `openFoodSheet` uses. Not the Recurring sheet: `openBillsSheet` already opens that and is unchanged.
+
+Additive only. No calculation, data, storage or sync change; `openFoodSheet` and `openBillsSheet` untouched. Version updated everywhere it appears: `<title>`, header badge, inline header comment, `pal-shared.js?v=` cache-buster (this app has bumped it in step with its own version), and the `version` field written into the localStorage save and the JSON backup (display-only — nothing checks it on import beyond showing it in Settings).
+
+Tested in real headless Chromium inside the real launcher: each action from a non-default starting tab lands where intended, Bills Spend opens "Add transaction" on the Bills Ledger and not the food sheet, and the two existing actions behave as before. Not tested: saving a transaction from the sheet, a physical device, or live Supabase.
+
 ## v3.80 (ON--074)
 
 In Increasing (credit card) mode, the hero card and the launcher's Food & Travel card were showing two different numbers for the same account: the app itself led with the spend counter (£67.08 in the screenshots) while the launcher led with the amount left of budget (£682.92). Fixed by leading both with the same figure — the real card balance — with the amount left of the month's budget as a smaller bracketed sub-line underneath.
