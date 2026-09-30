@@ -2,6 +2,21 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.11 (FTT-031) — Unavailable now becomes a full-size group; Delete added to the import tagging window
+
+Two changes from Pete. **No stored data, sync or backup change.** This **replaces the v2.10 (FTT-030) "Unavailable now" mini shelf**, which is removed entirely (its markup, its render block and the small `needs` option on `miniCardHtml` are gone).
+
+**1. All view order.** Small shelves on top, then the normal full-size groups:
+- My favourites (small) → Available to watch (small) → New seasons (small, only when there are any)
+- **Want to Watch** (full cards): Want to Watch titles that are *not* blocked, favourites first, then available, then rent/buy-only and no-data titles.
+- **Unavailable now** (full cards): Want to Watch titles whose only sources are services you haven't ticked (the existing Unavailable filter's rule), favourites first then newest added.
+- **Watched** (full cards, recently added).
+Each group is paged on its own (60, then "Show more"). A group with nothing in it is not shown, so ticking a service moves its titles out of Unavailable now into Want to Watch/Available straight away. The Unavailable filter under More and the flat **Want to Watch tab** are unchanged (that tab is still one list, favourites → available → unavailable last), and searching or filtering still gives one flat list.
+
+**2. Delete in the import tagging window.** A red **🗑 Delete** button sits between Undo and Skip (keyboard: D). It removes the title from the library through the normal tombstone, so the deletion reaches the other device, and takes it off the import list. **Undo** now reads "Undo delete" right after a delete and brings the title back exactly as it was (still untagged, re-synced), as many steps as needed within the session. Wording changed from "tagged" to "done" because a deleted title counts as dealt with: "3 of 8 done · 5 waiting", and the finish screen says "All 8 imported titles dealt with — 6 tagged, 2 deleted". Delete does not ask for confirmation, because Undo is one tap away; say if you would rather have a confirm.
+
+Tested (headless Chromium over `http://`, 390×844 touch, stub `pal-shared.js`): 22 new checks passing (section order and contents, favourites first within groups, normal-size cards, no mini Unavailable shelf, the group disappearing when a service is ticked, the Want to Watch tab staying flat; delete removing from library and import list with a tombstone sent, Undo delete restoring and re-syncing, the D key, counts on the finish screen, deletions persisted to storage, zero JS errors), plus the 37-check import/tagging suite and the 14-check AI prompt suite re-run unchanged apart from the "done" wording, all passing. Not tested: your real library and a physical iPhone.
+
 ## v2.10 (FTT-030) — "Unavailable now" shelf restored on the All view
 
 The pre-v2.0 dashboard had a curated Unavailable row; v2.0 turned it into a filter under More and v2.4's All view never brought it back. It is back as a shelf. **No stored data, sync or backup change**; one function changed (`renderLibrary`, plus a small option on `miniCardHtml`) and one block of markup added.

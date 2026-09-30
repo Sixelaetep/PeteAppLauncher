@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v2.10</title>
+<title>Film &amp; TV Tracker v2.11</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -322,6 +322,7 @@
   .tag-btn.ghost { background:none; }
   .tag-foot { display:flex; justify-content:space-between; margin-top:12px; }
   .tag-foot .see-all:disabled { opacity:0.35; cursor:default; }
+  .tag-foot .see-all.danger { color:var(--red); }
   .tag-done { text-align:center; font-size:15px; font-weight:700; padding:18px 6px 16px; }
   .tag-msg { font-size:13px; color:var(--ink2); line-height:1.5; margin:4px 0 14px; }
   .tag-keys { font-size:11px; color:var(--ink3); text-align:center; margin-top:10px; }
@@ -368,7 +369,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.10</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.11</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -502,10 +503,6 @@
   <div id="discAvail" style="display:none">
     <div class="disc-head"><h2 id="discAvailTitle">Available to watch</h2><button class="see-all" onclick="setLib({status:'watchlist',filter:'available'})">See all →</button></div>
     <div class="h-row" id="discAvailRow"></div>
-  </div>
-  <div id="discUnavail" style="display:none">
-    <div class="disc-head"><h2 id="discUnavailTitle">Unavailable now</h2><button class="see-all" onclick="setLib({status:'watchlist',filter:'unavailable'})">See all →</button></div>
-    <div class="h-row" id="discUnavailRow"></div>
   </div>
   <div id="discNew" style="display:none">
     <div class="disc-head"><h2 id="discNewTitle">New seasons</h2><button class="see-all" onclick="setLib({status:'all',filter:'newseason'})">See all →</button></div>
@@ -722,7 +719,7 @@
 <script src="pal-shared.js?v=1.12"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v2.10 (FTT-001..FTT-030) — see film-tv-tracker.md.
+// FILM & TV TRACKER v2.11 (FTT-001..FTT-031) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -1000,7 +997,7 @@ function miniCardHtml(t, showService, opts) {
     <div ${attrs}>
       ${posterHtml(t, ind)}
       <div class="lc-title one">${esc(t.title)}</div>
-      ${a && (a.cls === 'ok' || (opts.needs && a.cls === 'dim')) ? `<div class="lc-line ${a.cls}">${esc(a.text)}</div>` : ''}
+      ${a && a.cls === 'ok' ? `<div class="lc-line ok">${esc(a.text)}</div>` : ''}
     </div>`;
 }
 
@@ -1023,7 +1020,7 @@ const LIB_PAGE = 60;
 const DISC_MAX = 8;
 const FAV_MAX = 8;
 const LIB_HEADINGS = { watchlist: 'Want to Watch', watched: 'Watched', all: 'All Titles' };
-const lib = { status: 'all', filter: 'all', sort: 'added', sortUser: false, search: '', limit: LIB_PAGE, secLimit: { watchlist: LIB_PAGE, watched: LIB_PAGE } };
+const lib = { status: 'all', filter: 'all', sort: 'added', sortUser: false, search: '', limit: LIB_PAGE, secLimit: { watchlist: LIB_PAGE, unavailable: LIB_PAGE, watched: LIB_PAGE } };
 // Default ordering (an explicit Sort choice always wins):
 //  · Favourites / Available filters: favourites first (saved order), then the rest newest-added first.
 //  · Want to Watch: favourites first, then titles available on a service you have, then the unavailable ones.
@@ -1046,7 +1043,7 @@ let _libSearchT = null;
 
 function setLib(patch) {
   if (favDraft) finishFavReorder();   // the view is about to change under the drag — save what was done
-  Object.assign(lib, patch, { limit: LIB_PAGE, secLimit: { watchlist: LIB_PAGE, watched: LIB_PAGE } });
+  Object.assign(lib, patch, { limit: LIB_PAGE, secLimit: { watchlist: LIB_PAGE, unavailable: LIB_PAGE, watched: LIB_PAGE } });
   renderLibrary();
 }
 function onLibSearch() {
@@ -1079,11 +1076,8 @@ function renderLibrary() {
   // when they have something to show.
   const discoveryOn = !lib.search.trim() && lib.filter === 'all' && !selectMode;
   const available = watchlist.filter(t => resolveAvailability(t).state === 'available').sort(favFirstCmp);   // favourites lead the row
-  // v2.10: the counterpart shelf — Want to Watch titles blocked by a service you don't have (same rule as the Unavailable filter).
-  const unavailable = watchlist.filter(t => resolveAvailability(t).state === 'unavailable').sort(favFirstCmp);
   const newSeasons = titles.filter(t => t.newSeasonsDetected);
   const showAvail = discoveryOn && lib.status !== 'watched' && available.length > 0;
-  const showUnavail = discoveryOn && lib.status !== 'watched' && unavailable.length > 0;
   const showNew = discoveryOn && newSeasons.length > 0;
   // My favourites shelf, scoped to the view: All = every favourite; Want to Watch = favourites still to watch;
   // Watched = favourites that are FULLY watched (a show with seasons still to watch, or a new season, stays out).
@@ -1107,18 +1101,12 @@ function renderLibrary() {
     document.getElementById('favSeeAll').style.display = (!reordering && favs.length > FAV_MAX) ? '' : 'none';
   }
   document.getElementById('discAvail').style.display = showAvail ? '' : 'none';
-  document.getElementById('discUnavail').style.display = showUnavail ? '' : 'none';
   document.getElementById('discNew').style.display = showNew ? '' : 'none';
   // Discovery stays a glance: at most DISC_MAX posters, and "See all" only when there's more than that.
   if (showAvail) {
     document.getElementById('discAvailTitle').textContent = 'Available to watch · ' + available.length;
     document.getElementById('discAvailRow').innerHTML = available.slice(0, DISC_MAX).map(t => miniCardHtml(t, true)).join('');
     document.querySelector('#discAvail .see-all').style.display = available.length > DISC_MAX ? '' : 'none';
-  }
-  if (showUnavail) {
-    document.getElementById('discUnavailTitle').textContent = 'Unavailable now · ' + unavailable.length;
-    document.getElementById('discUnavailRow').innerHTML = unavailable.slice(0, DISC_MAX).map(t => miniCardHtml(t, true, { needs: true })).join('');
-    document.querySelector('#discUnavail .see-all').style.display = unavailable.length > DISC_MAX ? '' : 'none';
   }
   if (showNew) {
     document.getElementById('discNewTitle').textContent = 'New seasons · ' + newSeasons.length;
@@ -1127,7 +1115,8 @@ function renderLibrary() {
   }
 
   // The library itself. The plain All view (no filter, no search) is SECTIONED — after the shelves above:
-  // Want to Watch (favourites → available → unavailable), then Watched (recently added) — each section paged on its own.
+  // Want to Watch (favourites → available → the rest), then Unavailable now (v2.11: Want to Watch titles blocked by a
+  // service you don't have), then Watched (recently added) — each section full size and paged on its own.
   // Every other view is one flat list.
   const query = lib.search.trim();
   const sectioned = lib.status === 'all' && lib.filter === 'all' && !query;
@@ -1136,8 +1125,11 @@ function renderLibrary() {
   if (lib.status === 'watchlist') base = watchlist;
   else if (lib.status === 'watched') base = watched;
   const list = filterAndSort(base, lib.filter, effectiveSort(), lib.search);
+  const wlBlocked = sectioned ? watchlist.filter(t => resolveAvailability(t).state === 'unavailable') : [];
+  const wlRest = sectioned ? watchlist.filter(t => resolveAvailability(t).state !== 'unavailable') : [];
   const secs = sectioned ? [
-    { key: 'watchlist', title: 'Want to Watch', items: filterAndSort(watchlist, 'all', 'priority', '') },
+    { key: 'watchlist', title: 'Want to Watch', items: filterAndSort(wlRest, 'all', 'priority', '') },
+    { key: 'unavailable', title: 'Unavailable now', items: filterAndSort(wlBlocked, 'all', 'priority', '') },
     { key: 'watched', title: 'Watched', items: filterAndSort(watched, 'all', 'added', '') }
   ].filter(x => x.items.length) : null;
   // Reordering the full Favourites list shows every matching favourite (no paging), so any of them can be dragged anywhere.
@@ -2452,7 +2444,7 @@ async function runTitleListImport(entries) {
 }
 
 // ── Tagging window ────────────────────────────────────────────────
-let tagOpen = false, tagQueue = [], tagPos = 0, tagUndo = [], tagTotal = 0, tagFav = false, tagFavFor = null;
+let tagOpen = false, tagQueue = [], tagPos = 0, tagUndo = [], tagTotal = 0, tagFav = false, tagFavFor = null, tagDeleted = 0;
 function pendingImportTitles() {
   return liveTitles().filter(t => t.importPending)
     .sort((a, b) => String(a.dateAdded || '').localeCompare(String(b.dateAdded || '')) || (a.id < b.id ? -1 : 1));
@@ -2468,7 +2460,7 @@ function openTagModal() {
   if (!q.length) { toast('No imported titles waiting to be tagged'); updateTagButton(); return; }
   if (favDraft) finishFavReorder();
   closeDataModal();
-  tagQueue = q.map(t => t.id); tagPos = 0; tagUndo = []; tagTotal = q.length; tagFavFor = null;
+  tagQueue = q.map(t => t.id); tagPos = 0; tagUndo = []; tagTotal = q.length; tagFavFor = null; tagDeleted = 0;
   tagOpen = true;
   document.getElementById('modal-tag').classList.remove('hidden');
   renderTagModal();
@@ -2486,13 +2478,14 @@ function renderTagModal() {
   const body = document.getElementById('tagBody'); if (!body) return;
   const left = tagQueue.length, done = tagTotal - left;
   const bar = `<div class="tag-bar"><div style="width:${tagTotal ? Math.round(done / tagTotal * 100) : 100}%"></div></div>`;
-  const undoBtn = `<button class="see-all" onclick="tagUndoLast()" ${tagUndo.length ? '' : 'disabled'}>↶ Undo last</button>`;
+  const lastWasDelete = tagUndo.length && tagUndo[tagUndo.length - 1].deleted;
+  const undoBtn = `<button class="see-all" onclick="tagUndoLast()" ${tagUndo.length ? '' : 'disabled'}>${lastWasDelete ? '↶ Undo delete' : '↶ Undo last'}</button>`;
   if (!left) {
-    body.innerHTML = `${bar}<div class="tag-done">✓ All ${tagTotal} imported title${tagTotal !== 1 ? 's' : ''} tagged</div><div class="tag-row" style="grid-template-columns:1fr"><button class="tag-btn watched" onclick="closeTagModal()">Close</button></div><div class="tag-foot">${undoBtn}<span></span></div>`;
+    body.innerHTML = `${bar}<div class="tag-done">✓ All ${tagTotal} imported title${tagTotal !== 1 ? 's' : ''} dealt with</div><div class="tag-msg" style="text-align:center">${tagTotal - tagDeleted} tagged${tagDeleted ? `, ${tagDeleted} deleted` : ''}.</div><div class="tag-row" style="grid-template-columns:1fr"><button class="tag-btn watched" onclick="closeTagModal()">Close</button></div><div class="tag-foot">${undoBtn}<span></span></div>`;
     return;
   }
   if (tagPos >= left) {
-    body.innerHTML = `${bar}<div class="tag-msg">${done} of ${tagTotal} tagged. ${left} skipped and still waiting.</div><div class="tag-row"><button class="tag-btn" onclick="tagReviewSkipped()">Go through them</button><button class="tag-btn ghost" onclick="closeTagModal()">Finish later</button></div><div class="tag-foot">${undoBtn}<span></span></div>`;
+    body.innerHTML = `${bar}<div class="tag-msg">${done} of ${tagTotal} done. ${left} skipped and still waiting.</div><div class="tag-row"><button class="tag-btn" onclick="tagReviewSkipped()">Go through them</button><button class="tag-btn ghost" onclick="closeTagModal()">Finish later</button></div><div class="tag-foot">${undoBtn}<span></span></div>`;
     return;
   }
   const t = state.titles.find(x => x.id === tagQueue[tagPos]);
@@ -2502,7 +2495,7 @@ function renderTagModal() {
   const note = t.importMatch === 'none' ? `<div class="tag-note">No TMDB match. Kept as “${esc(t.title)}” so you can still tag it; edit it later if you like.</div>`
     : t.importMatch === 'approx' ? `<div class="tag-note">Best match for “${esc(t.importLabel || t.title)}”. Check it is the right one.</div>` : '';
   body.innerHTML = `
-    <div class="tag-count">${done} of ${tagTotal} tagged · ${left} waiting</div>${bar}
+    <div class="tag-count">${done} of ${tagTotal} done · ${left} waiting</div>${bar}
     <div class="tag-card">
       <div class="tag-poster">${posterHtml(t)}</div>
       <div class="tag-info"><div class="tag-title">${esc(t.title)}</div><div class="tag-meta">${esc(meta)}</div>${note}${t.overview ? `<div class="tag-ov">${esc(t.overview)}</div>` : ''}</div>
@@ -2512,8 +2505,8 @@ function renderTagModal() {
       <button class="tag-btn" onclick="tagChoose('watchlist')">Want to Watch</button>
       <button class="tag-btn watched" onclick="tagChoose('watched')">✓ Watched</button>
     </div>
-    <div class="tag-foot">${undoBtn}<button class="see-all" onclick="tagSkip()">Skip →</button></div>
-    <div class="tag-keys">Keys: 1 Want to Watch · 2 Watched · F favourite · S skip · Z undo</div>`;
+    <div class="tag-foot">${undoBtn}<button class="see-all danger" onclick="tagDelete()">🗑 Delete</button><button class="see-all" onclick="tagSkip()">Skip →</button></div>
+    <div class="tag-keys">Keys: 1 Want to Watch · 2 Watched · F favourite · S skip · D delete · Z undo</div>`;
 }
 function tagToggleFav() {
   tagFav = !tagFav;
@@ -2541,11 +2534,32 @@ function tagChoose(status) {
   tagFavFor = null;
   renderTagModal();
 }
+// Delete: the title is removed from the library (the normal tombstone, so it reaches the other device) and leaves the
+// import list. Undo puts it back exactly, as many steps as needed within this session.
+function tagDelete() {
+  if (!tagOpen || tagPos >= tagQueue.length) return;
+  const id = tagQueue[tagPos];
+  const t = state.titles.find(x => x.id === id);
+  if (!t || t._deleted) { tagQueue.splice(tagPos, 1); renderTagModal(); return; }
+  tagUndo.push({ id, pos: tagPos, deleted: true });
+  t._deleted = true; t.updatedAt = new Date().toISOString();
+  persistOnly();
+  if (window.PalSync.hasSession()) _tTitles.tombstone(t.id, t, 'updatedAt').catch(e => toast('Sync delete failed: ' + window.PalSync.errorHint(e.status, e.message), 'err'));
+  tagQueue.splice(tagPos, 1); tagFavFor = null; tagDeleted++;
+  renderTagModal();
+}
 function tagSkip() { if (!tagOpen || tagPos >= tagQueue.length) return; tagPos++; tagFavFor = null; renderTagModal(); }
 function tagReviewSkipped() { tagPos = 0; tagFavFor = null; renderTagModal(); }
 function tagUndoLast() {
   const u = tagUndo.pop(); if (!u) return;
   const t = state.titles.find(x => x.id === u.id);
+  if (t && u.deleted) {                                   // undo a delete: bring the title back (still untagged) and re-sync it
+    delete t._deleted; t.updatedAt = new Date().toISOString();
+    persistOnly(); syncPushTitle(t); tagDeleted = Math.max(0, tagDeleted - 1);
+    const at = Math.min(u.pos, tagQueue.length);
+    tagQueue.splice(at, 0, u.id); tagPos = at; tagFavFor = null;
+    renderTagModal(); return;
+  }
   if (!t || t._deleted) { renderTagModal(); return; }
   t.status = u.prev.status; t.watched = u.prev.watched; t.favourite = u.prev.favourite;
   if (u.prev.favouriteOrder === undefined) delete t.favouriteOrder; else t.favouriteOrder = u.prev.favouriteOrder;
@@ -2563,7 +2577,7 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
   const k = e.key.toLowerCase();
   if (k === '1') tagChoose('watchlist'); else if (k === '2') tagChoose('watched');
-  else if (k === 'f') tagToggleFav(); else if (k === 's') tagSkip(); else if (k === 'z') tagUndoLast();
+  else if (k === 'f') tagToggleFav(); else if (k === 's') tagSkip(); else if (k === 'd') tagDelete(); else if (k === 'z') tagUndoLast();
 });
 
 // ══════════════════════════════════════════════════════════════════
