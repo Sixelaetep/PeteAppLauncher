@@ -2,6 +2,16 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.10 (FTT-030) — "Unavailable now" shelf restored on the All view
+
+The pre-v2.0 dashboard had a curated Unavailable row; v2.0 turned it into a filter under More and v2.4's All view never brought it back. It is back as a shelf. **No stored data, sync or backup change**; one function changed (`renderLibrary`, plus a small option on `miniCardHtml`) and one block of markup added.
+
+**What it is.** **Unavailable now · N**: Want to Watch titles (films and TV) whose only sources are services you haven't ticked, i.e. exactly the existing Unavailable filter's rule (`resolveAvailability` state `unavailable`), limited to Want to Watch. Titles that can be rented or bought show "Rent / buy" instead and are not in it; titles TMDB has no availability data for are not in it either. Each tile shows what it needs ("Needs Disney Plus") under the title. Favourites lead (saved order), then newest-added first, the same comparator as the Available row; 8 tiles with **See all →** (only when there are more than 8), which opens Want to Watch + the Unavailable filter.
+
+**Where.** All view and Want to Watch view, directly after **Available to watch** and before **New seasons**. Hidden in Watched, while searching, while any filter is on, and in selection mode, like the other shelves. Ticking a service on the Services tab moves its titles out of this shelf and into Available.
+
+Tested (headless Chromium over `http://`, 390×844 touch, seeded titles covering owned, blocked, rent-only, no-data, watched-but-blocked and a blocked favourite): 20 checks passing, plus the 37-check import suite and the 14-check prompt suite re-run and passing. They cover visibility per view, the 11-title count and 8-tile cap, favourite first, exclusions, the "Needs" line, shelf order, tile opens detail, See all landing on Want to Watch + Unavailable with all 11, hiding under search/filter/select, the shelf emptying when a service is ticked, no horizontal overflow, no JS errors. Not tested: your real library and a physical iPhone.
+
 ## v2.9 (FTT-029) — A ready-made AI prompt for the title list import
 
 Checked before deploy: v2.8 had **no** prompt for getting an AI to produce the import JSON, so this adds one. **No stored data, sync or backup change.**
