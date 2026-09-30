@@ -2,6 +2,29 @@
 
 Full version history for `index.html`. As of v10.89, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v10.96 (PET-101) — Layout changes now sync between devices
+
+Bug fix, reported directly: launcher layout adjustments (order, width, card/icon visibility, groups, standalone) made on one device never appeared on another.
+
+**Root cause.** `loadLayoutConfig()` and `saveLayoutConfig()` both only talk to Supabase when `PalSync.hasSession()` is true. But the launcher holds its own Supabase session (`sbSession`) and never handed it to PalSync — PalSync only learns a session from a `PAL_SESSION` postMessage (which the launcher sends *to its iframes*, never to itself) or an explicit `setSession()`. Inside the launcher `hasSession()` was therefore always false, both cloud paths returned early, and the layout lived only in each device's `pal_layout_cache` localStorage. The "Layout saved" toast (PET-095) never showed either, which is consistent with this. The apps' own sync was unaffected — they receive `PAL_SESSION` normally.
+
+**Fix.**
+- New `feedPalSyncSession()` passes `sbSession` to `PalSync.setSession()` on sign-in (before `applyUserView()` → `loadLayoutConfig()`), on every proactive token refresh, and clears it on lock.
+- New `pal_layout_dirty` localStorage flag marks a local edit the cloud hasn't confirmed. While set, the local config wins over the cloud copy on load and is re-pushed. Previously a failed/offline save was overwritten by the older cloud copy on the next load and lost.
+- Cloud read extracted to `syncLayoutFromCloud()`. It now also runs when the launcher returns to the foreground (`visibilitychange`), so a long-open home-screen launcher picks up changes made elsewhere. Skipped while the layout settings panel is open, and a no-op if nothing differs.
+- If the cloud has no layout row yet, the device publishes its existing local layout.
+- Save failures now say why (`PalSync.errorHint`: 401 / 403 / 404) instead of the generic "will sync once back online"; not-signed-in reports "Saved on this device only".
+
+**Behaviour to be aware of on first use.** Because nothing ever reached the cloud before, `pal_layout` is empty. The first device to open v10.96 publishes its layout; other devices then adopt it. Open the device whose layout you want to keep first.
+
+**No data-model, storage-key (other than the new dirty flag), schema, backup or import/export change.** `pal-shared.js` unchanged (its `?v=10.87` cache-buster is deliberately left as-is). Requires the `pal_layout` table and RLS policies from v10.89 to exist in Supabase — if that SQL was never run, saves will now report "table not found" rather than failing silently.
+
+Files changed: `index.html` (5 functions changed, 6 added, version markers, inline pointer), `index.md`. 85 other launcher functions byte-identical to v10.95.
+
+Tested with a two-device simulation (separate storage per device) against a fake Supabase, using the real `pal-shared.js` and the real layout code sliced from the launcher: change on device 1 reaches the cloud; fresh device loads it on sign-in; an already-open device picks it up on return to foreground; a second device's edit updates the same row (no duplicate); offline save keeps the dirty flag, survives a reload against an older cloud copy and is re-pushed; a 404 is reported with a hint; existing local layout is published to an empty cloud. The same suite against v10.95 fails all cloud checks. `node --check` on every inline script block.
+
+Not tested: a real browser, a real Supabase project (RLS, the actual `pal_layout` table), a physical phone, or Lex's view (unaffected by design — layout is Pete-only).
+
 ## v10.95 (PET-100) — Film & TV Tracker card: top 3 favourites
 
 The Film & TV Tracker dashcard now shows the top three favourites under its existing counts line: a small "Top favourites" label and three posters with titles beneath (film/TV glyph behind each poster, so a poster that fails to load falls back to it). They are the first three in the tracker's saved favourite order, i.e. the same three that lead the tracker's My favourites shelf. The counts line ("14 on watchlist · 7 available now · 2 for bedtime") and its green/neutral colouring are unchanged, tapping the card still opens the tracker, and with no favourites the card looks exactly as before. Header badge and `<title>` are both bumped to v10.95 together (the v10.93 drift fix).

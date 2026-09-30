@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v10.95</title>
+<title>P Apps v10.96</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -649,7 +649,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.95</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v10.96</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1313,10 +1313,25 @@ document.getElementById('loginPassword').addEventListener('keydown', e => {
   if (e.key === 'Enter') doLogin();
 });
 
+// PET-101: the launcher holds its own Supabase session (sbSession) but never
+// gave it to PalSync — PalSync only learns a session from a PAL_SESSION
+// postMessage (which the launcher sends to its iframes, never to itself) or
+// an explicit setSession(). So inside the launcher PalSync.hasSession() was
+// always false, and the layout's cloud read/write (both gated on it) never
+// ran: layout only ever lived in this device's localStorage cache.
+function feedPalSyncSession() {
+  try {
+    if (window.PalSync && sbSession && sbSession.access_token && sbSession.user) {
+      window.PalSync.setSession(sbSession.access_token, sbSession.user.id);
+    }
+  } catch (e) { /* non-fatal — layout falls back to local cache */ }
+}
+
 // ── Sign in success ────────────────────────────────────────────────
 function onSignedIn(userInfo, session) {
   currentUser = userInfo;
   sbSession   = session;
+  feedPalSyncSession(); // PET-101 — must precede applyUserView() → loadLayoutConfig()
 
   document.getElementById('lockScreen').classList.add('hidden');
   document.getElementById('loginEmail').value    = '';
@@ -1453,45 +1468,89 @@ function mergeLayoutConfig(saved) {
   return { groups, apps };
 }
 
+// PET-101: 'pal_layout_dirty' marks a local edit the cloud hasn't confirmed
+// yet. While it's set, the local config wins over the cloud copy on load
+// (and is re-pushed) — before this, a failed/offline save was overwritten by
+// the older cloud copy on the next load and lost.
+const LAYOUT_DIRTY_KEY = 'pal_layout_dirty';
+function layoutIsDirty() { try { return localStorage.getItem(LAYOUT_DIRTY_KEY) === '1'; } catch (e) { return false; } }
+function layoutSetDirty(on) { try { on ? localStorage.setItem(LAYOUT_DIRTY_KEY, '1') : localStorage.removeItem(LAYOUT_DIRTY_KEY); } catch (e) {} }
+
+function layoutRenderAll() {
+  applyStandaloneFlags();
+  renderNavIcons();
+  renderHomeGrid();
+  renderLayoutSettings();
+}
+
+// Cloud step, shared by first load and return-to-foreground. Returns quietly
+// if there's no session, the fetch fails, or nothing changed.
+async function syncLayoutFromCloud() {
+  if (!window.PalSync || !window.PalSync.hasSession()) return;
+  try {
+    if (layoutIsDirty()) { await pushLayoutToCloud(true); return; }
+    const uid = window.PalSync.getUserId();
+    const res = await window.PalSync.sbFetch('/pal_layout?user_id=eq.' + uid + '&record_key=eq.layout&select=data', 'GET');
+    if (!res.ok) { console.warn('[layout] cloud read failed: ' + res.status + ' ' + window.PalSync.errorHint(res.status)); return; }
+    const rows = await res.json();
+    if (rows.length && rows[0].data) {
+      const remote = mergeLayoutConfig(rows[0].data);
+      if (JSON.stringify(remote) === JSON.stringify(layoutConfig)) return;
+      layoutConfig = remote;
+      localStorage.setItem('pal_layout_cache', JSON.stringify(layoutConfig));
+      layoutRenderAll();
+    } else if (layoutConfig) {
+      // Nothing in the cloud yet (first device to sync): publish what this device has.
+      await pushLayoutToCloud(true);
+    }
+  } catch (e) { /* offline — cached/default config already rendered */ }
+}
+
 async function loadLayoutConfig() {
   layoutConfig = defaultLayoutConfig();
   try {
     const cached = localStorage.getItem('pal_layout_cache');
     if (cached) layoutConfig = mergeLayoutConfig(JSON.parse(cached));
   } catch (e) { /* no valid cache — defaults stand */ }
-  applyStandaloneFlags();
-  renderNavIcons();
-  renderHomeGrid();
-  renderLayoutSettings();
+  layoutRenderAll();
+  await syncLayoutFromCloud();
+}
 
-  if (!window.PalSync || !window.PalSync.hasSession()) return;
+async function pushLayoutToCloud(quiet) {
+  if (!window.PalSync || !window.PalSync.hasSession()) return false;
   try {
-    const uid = window.PalSync.getUserId();
-    const res = await window.PalSync.sbFetch('/pal_layout?user_id=eq.' + uid + '&record_key=eq.layout&select=data', 'GET');
-    if (!res.ok) return;
-    const rows = await res.json();
-    if (rows.length && rows[0].data) {
-      layoutConfig = mergeLayoutConfig(rows[0].data);
-      localStorage.setItem('pal_layout_cache', JSON.stringify(layoutConfig));
-      applyStandaloneFlags();
-      renderNavIcons();
-      renderHomeGrid();
-      renderLayoutSettings();
-    }
-  } catch (e) { /* offline — cached/default config already rendered above */ }
+    await window.PalSync.table('pal_layout').upsert('layout', layoutConfig);
+    layoutSetDirty(false);
+    if (!quiet) toast('Layout saved');
+    return true;
+  } catch (e) {
+    const hint = e && e.status ? ' (' + window.PalSync.errorHint(e.status, e.message) + ')' : '';
+    console.warn('[layout] cloud save failed' + hint, e);
+    if (!quiet) toast('Saved on this device only' + hint);
+    return false;
+  }
 }
 
 async function saveLayoutConfig() {
   localStorage.setItem('pal_layout_cache', JSON.stringify(layoutConfig));
+  layoutSetDirty(true);
   applyStandaloneFlags();
   renderNavIcons();
   renderHomeGrid();
-  if (!window.PalSync || !window.PalSync.hasSession()) return;
-  try {
-    await window.PalSync.table('pal_layout').upsert('layout', layoutConfig);
-    toast('Layout saved');
-  } catch (e) { toast('Saved locally — will sync once back online'); }
+  if (!window.PalSync || !window.PalSync.hasSession()) { toast('Saved on this device only — not signed in'); return; }
+  await pushLayoutToCloud(false);
 }
+
+// PET-101: pick up a layout changed on another device when this one returns
+// to the foreground (an installed/home-screen launcher can sit open for days
+// and would otherwise only ever read the cloud at sign-in). Skipped while the
+// settings panel is open so the form isn't rebuilt under a half-finished edit.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !currentUser || !currentUser.isPete || !layoutConfig) return;
+  const panel = document.getElementById('layoutSettingsPanel');
+  if (panel && panel.open) return;
+  syncLayoutFromCloud();
+});
 
 // Writes each of the three standalone-toggle apps' flag to the fixed
 // localStorage key its embedding parent already checks at its own
@@ -1759,6 +1818,7 @@ async function lockApp() {
   sbSession   = null;
   currentUser = null;
   localStorage.removeItem('sb_session');
+  try { if (window.PalSync) window.PalSync.setSession(null, null); } catch (e) {} // PET-101
 
   document.getElementById('lockScreen').classList.remove('hidden');
   document.getElementById('loginError').textContent = '';
@@ -1815,6 +1875,7 @@ async function refreshLauncherSession() {
     if (!refreshed) return false;
     sbSession = refreshed;
     localStorage.setItem('sb_session', JSON.stringify(refreshed));
+    feedPalSyncSession(); // PET-101: keep the launcher's own PalSync token fresh
     _lastSessionRefresh = Date.now();
     broadcastSessionToAllFrames();
     return true;
@@ -2712,6 +2773,9 @@ function statFantasy() {
 // every other live-stat card already uses, so the card updates
 // immediately on a squad save rather than waiting for the next
 // sign-in or home-screen return.
+// v10.96 (PET-101): bug fix — layout changes weren't syncing between devices.
+// The launcher never gave its own session to PalSync, so the layout's cloud
+// read/write silently never ran. Full notes in index.md, not duplicated here.
 // v10.94 (PET-099): On Budget's Food & Travel column now leads with the
 // real card balance in Increasing (credit card) mode, with the amount
 // left of the month's budget as a smaller bracketed sub-line — was
