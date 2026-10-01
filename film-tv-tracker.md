@@ -2,6 +2,10 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.6 (FTT-038) — Reorder list stays put when you change a title's Interest
+
+**No data, sync or backup change.** In the grouped reorder list, choosing a level in a row's Interest menu still moves the title to the end of its new group (saved and synced at once, reorder mode stays open), but the screen **no longer jumps to the new position**. The page is kept so that the rows around where you made the choice (e.g. in Unrated) stay exactly where they were on screen; the row that was below the changed one (or above it, if it was last) takes its place. The moved row is still flashed briefly in its new group, and the toast names the new level, but nothing scrolls to it. Applies only to the Interest menu; ↑ ↓, drag and Move to position still keep the moved row in view.
+
 ## v2.6 (FTT-037) — Interest groups for the Available to watch queue
 
 **Interest decides the group; manual order decides the order within it.** One new optional per-title field, `interest`: `'high' | 'medium' | 'low'`; missing = **Unrated**. It is user-set only (never inferred from TMDB, genres, ratings or availability), has no scores or stars, and is independent of `favourite`, `favouriteOrder` and `watchlistOrder`, none of which change meaning. **No migration write**: existing titles have no field, which already reads as Unrated (verified: nothing is rewritten or re-stamped on load, so `state.version` is unchanged), and new titles start Unrated. It rides localStorage, Supabase (per title, like every field) and JSON export/import.
