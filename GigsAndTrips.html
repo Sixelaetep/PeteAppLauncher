@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.81</title>
+<title>Gigs &amp; Trips v7.83</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.81</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.83</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -554,7 +554,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.81"></script>
+<script src="pal-shared.js?v=7.83"></script>
 <!-- GIG-072: Google Calendar sync foundation. GSI script tag included
      explicitly here — PeteGCal's v1.0 shipped without this and every
      sign-in attempt failed silently for several rounds before the cause
@@ -594,6 +594,29 @@ const GCAL_COLOR_MAP = {
   travel:'1', accommodation:'1', attraction:'1', keystop:'1',
   gym:'10', appointment:'1', pets:'6', food:'5', other:'8'
 };
+// GIG-077: foundation for trip/item sync. No script/auth/CALENDAR_ID
+// setup needed here — GIG-072 already covers that, trips and items use
+// exactly the same PalGCal instance and calendar gigs do. The two
+// genuinely new things trips touch: ITEM_TYPES (7 types, items within a
+// trip day — travel/accommodation/attraction/food/keystop/viewpoint/
+// other, a separate set from GIG_TYPES, note 'viewpoint' has no gig
+// equivalent at all) and TRIP_TYPES (3 types, the trip itself —
+// holiday/visit/visitors). Both get their own colorId mapping, since
+// neither overlaps cleanly with GCAL_COLOR_MAP above.
+const GCAL_ITEM_COLOR_MAP = {
+  travel:'1', accommodation:'9', attraction:'4', food:'5', keystop:'11', viewpoint:'2', other:'8'
+};
+const GCAL_TRIP_COLOR_MAP = {
+  holiday:'2', visit:'7', visitors:'6'
+};
+// calendarEventId lives in two places once GIG-078/079 land: the trip
+// object itself (trip.calendarEventId — the one multi-day all-day
+// event spanning the trip) and each item (item.calendarEventId — one
+// event per item, per the "both" decision: the trip and every item
+// inside it are independent real Calendar events, with GigsAndTrips
+// holding the relationship between them). No field initialisation
+// needed here — JS objects don't require pre-declaring properties, and
+// nothing writes either field until those issues actually exist.
 
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -2895,10 +2918,15 @@ function showTripForm(t){
       <div class="form-actions">
         <button class="btn btn-pri" onclick="saveTrip(${t?`'${esc(t.id)}'`:'null'})">Save trip</button>
         ${t&&t.startDate&&t.endDate?(()=>{
-          // v7.8 (GIG-033): simplified — see matching comment in openGigDetail above.
+          // GIG-078: real sync replaces the old URL-popup — same change
+          // openGigDetail's button got in GIG-074. A trip with a stored
+          // calendarEventId has a genuine link; without one, a retry
+          // button (sync is best-effort, never blocks the trip save).
           const _svg=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><rect x="3" y="4" width="18" height="17" rx="2" fill="#fff" stroke="#d2e3fc" stroke-width="1.5"/><path d="M16 2v4M8 2v4M3 9h18" stroke="#1a73e8" stroke-width="1.5" stroke-linecap="round"/></svg>`;
-          const _dupNote=t.calendarAdded?'<div style="font-size:11px;color:var(--ink3);margin-top:4px;line-height:1.4">Opens a new event — delete any previous one in Google Calendar</div>':'';
-          return `<div><a class="btn" style="background:#fff;color:#1a73e8;border:1.5px solid #d2e3fc;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px" href="${gcalTripUrl(t)}" target="_blank" rel="noopener" onclick="markCalendarAdded('${esc(t.id)}')">${_svg}Add to Google Calendar</a>${_dupNote}</div>`;
+          if (t.calendarEventId && t.calendarHtmlLink){
+            return `<a class="btn" style="background:#fff;color:#1a73e8;border:1.5px solid #d2e3fc;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px" href="${esc(t.calendarHtmlLink)}" target="_blank" rel="noopener">${_svg}View in Google Calendar</a>`;
+          }
+          return `<button class="btn" style="background:#fff;color:#1a73e8;border:1.5px solid #d2e3fc;display:flex;align-items:center;justify-content:center;gap:6px" onclick="gcalRetrySyncTrip('${esc(t.id)}')">${_svg}Sync to Google Calendar</button>`;
         })():''}
         ${t?`<button class="btn btn-danger" onclick="confirmDeleteTrip('${esc(t.id)}')">Delete trip</button>`:''}
       </div>
@@ -2950,15 +2978,14 @@ function saveTrip(existingId){
     showToast('Trip updated ✓');
   }
 
-  // Auto-open Google Calendar for new trips and set the flag.
-  // Must happen before closeModal() to stay in the user-gesture stack.
-  if(isNew&&t.startDate&&t.endDate){
-    t.calendarAdded=true;
-    t.updatedAt=new Date().toISOString();
-    window.open(gcalTripUrl(t),'_blank','noopener');
-    copyTripItineraryToClipboard(t); // GIG-036 — see markCalendarAdded for the repeat-send path
-  }
-  saveEvent(t); closeModal();
+  saveEvent(t);
+  // GIG-078: real Calendar sync, fire-and-forget — replaces the old
+  // URL-popup. copyTripItineraryToClipboard still runs for new trips;
+  // that's a GigsAndTrips-only convenience (clipboard text for pasting
+  // elsewhere), unrelated to Calendar sync and not touched by this change.
+  gcalSyncTrip(t, isNew);
+  if(isNew) copyTripItineraryToClipboard(t);
+  closeModal();
   if(!isNew){ _view='tripDetail'; refreshTripDetail(t.id,_curTripTab); }
   else{ _view='tripDetail'; _curTripId=t.id; openTripDetail(t.id,'itinerary'); }
 }
@@ -3022,6 +3049,11 @@ Remove these days?`
 function confirmDeleteTrip(id){
   const t=getEvent(id); if(!t) return;
   if(!confirm(`Delete "${t.name}" and all its days?`)) return;
+  // GIG-078: delete the trip's own real Calendar event too, if it has
+  // one. Item-level events (GIG-079) aren't cascaded here yet — items
+  // don't carry a calendarEventId until that issue exists, so there's
+  // nothing to cascade-delete until then.
+  if(t.calendarEventId) gcalDeleteTrip(t.calendarEventId, t.name);
   deleteEvent(id); closeModal(); _view='list'; showListNav(); showToast('Trip deleted'); render();
 }
 
@@ -6482,18 +6514,11 @@ function timeOptions(selected){
 // tab stamped with a [Sent D Mon] suffix (see gcalGigUrl/gcalTripUrl
 // above), so there's no state to track here beyond the "In Calendar"
 // badge itself.
-function markCalendarAdded(id){
-  const ev=getEvent(id); if(!ev) return;
-  ev.calendarAdded=true;
-  ev.updatedAt=new Date().toISOString();
-  saveEvent(ev);
-  // v7.11 (GIG-036): trips also get their full itinerary copied to the
-  // clipboard on every calendar-add — see copyTripItineraryToClipboard.
-  // The overwritten showToast from that call is fine here; there's
-  // nothing else competing for the toast at this point in the flow.
-  if(ev.type==='trip') copyTripItineraryToClipboard(ev);
-  closeModal(); // close the detail/edit modal after opening calendar tab
-}
+// markCalendarAdded() removed in GIG-078 — its only callers were the
+// old URL-popup buttons for gigs (removed GIG-074) and trips (removed
+// GIG-078), both now replaced by real sync. copyTripItineraryToClipboard
+// still runs for new trips, just called directly from saveTrip() now
+// rather than through this function.
 
 // ═══════════════════════════════════════════════════════════════════
 // GOOGLE CALENDAR LINKS
@@ -6670,6 +6695,76 @@ async function gcalHistoricalBackfill(){
   render();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// GIG-078: trip-level Calendar sync — one multi-day all-day event
+// ═══════════════════════════════════════════════════════════════════
+// Same fire-and-forget shape as gcalSyncGig: the trip is already saved
+// locally and pushed by the time this runs, so Calendar sync never
+// risks the actual save. Always an all-day event (date, not dateTime)
+// spanning startDate to endDate inclusive — end.date is exclusive per
+// Google's own convention, so endDate+1 day. This is the trip's own
+// event only; its items each get their own separate event (GIG-079),
+// per the "both" decision — two independent Calendar events, related
+// only through GigsAndTrips' own data, not nested in Calendar itself.
+async function gcalSyncTrip(t, isNew){
+  if (!PalGCal.hasToken()){
+    syncLog('Calendar sync skipped (not signed in) — "' + t.name + '" saved locally only', 'info');
+    return;
+  }
+  if (!t.startDate || !t.endDate) return;
+
+  const endExclusive = new Date(t.endDate + 'T00:00:00');
+  endExclusive.setDate(endExclusive.getDate() + 1);
+  const tt = tripTypeInfo(t.tripType);
+
+  const eventBody = {
+    summary: tt.icon + ' ' + t.name,
+    location: t.destination || '',
+    description: t.notes || '',
+    colorId: GCAL_TRIP_COLOR_MAP[t.tripType] || GCAL_TRIP_COLOR_MAP.holiday,
+    start: { date: t.startDate },
+    end: { date: localDateStr(endExclusive) }
+  };
+  const meta = { type: t.tripType, tripId: t.id, kind: 'trip' };
+
+  try {
+    let result;
+    if (t.calendarEventId){
+      result = await PalGCal.updateEvent(GCAL_CALENDAR_ID, t.calendarEventId, eventBody, meta);
+    } else {
+      result = await PalGCal.createEvent(GCAL_CALENDAR_ID, eventBody, meta);
+    }
+    const fresh = getEvent(t.id);
+    if (fresh){
+      fresh.calendarEventId = result.id;
+      fresh.calendarHtmlLink = result.htmlLink;
+      fresh.updatedAt = new Date().toISOString();
+      saveEvent(fresh);
+    }
+    syncLog('Calendar ' + (t.calendarEventId ? 'updated' : 'created') + ' (trip): "' + t.name + '"', 'ok');
+  } catch(e){
+    syncLog('Calendar sync failed for trip "' + t.name + '": ' + PalGCal.errorHint(e), 'err');
+  }
+}
+
+// Manual retry from the trip form, mirroring gcalRetrySync for gigs.
+async function gcalRetrySyncTrip(id){
+  const t = getEvent(id); if (!t) return;
+  showToast('Syncing to Calendar…');
+  await gcalSyncTrip(t, !t.calendarEventId);
+  showTripForm(getEvent(id)); // re-render with the refreshed trip
+}
+
+async function gcalDeleteTrip(calendarEventId, name){
+  if (!calendarEventId || !PalGCal.hasToken()) return;
+  try {
+    await PalGCal.deleteEvent(GCAL_CALENDAR_ID, calendarEventId);
+    syncLog('Calendar event deleted (trip): "' + name + '"', 'ok');
+  } catch(e){
+    syncLog('Calendar delete failed for trip "' + name + '": ' + PalGCal.errorHint(e), 'err');
+  }
+}
+
 async function gcalDeleteGig(calendarEventId, name){
   if (!calendarEventId || !PalGCal.hasToken()) return;
   try {
@@ -6680,10 +6775,11 @@ async function gcalDeleteGig(calendarEventId, name){
   }
 }
 
-// gcalGigUrl() removed in GIG-074 — the URL-popup flow it built is
-// fully replaced by gcalSyncGig()'s real create/update calls above.
-// gcalTripUrl() (below) is untouched: trips still use the old flow
-// until GIG-077 gives them the same real-sync treatment gigs just got.
+// gcalGigUrl() removed in GIG-074, gcalTripUrl() removed in GIG-078 —
+// the URL-popup flow both built is fully replaced by gcalSyncGig()/
+// gcalSyncTrip()'s real create/update calls above. Item-level sync
+// (GIG-079) is the one piece of the original URL-popup era not yet
+// replaced — trip items still have no Calendar presence of their own.
 
 // ── Trip itinerary text (GIG-036) ────────────────────────────────────
 // Day-by-day plain-text summary: each day's date as a header line, then
@@ -6744,33 +6840,13 @@ function copyTripItineraryToClipboard(trip){
   }
 }
 
-function gcalTripUrl(t){
-  const sd=t.startDate.replace(/-/g,'');
-  const endExcl=new Date(t.endDate+'T00:00:00');
-  endExcl.setDate(endExcl.getDate()+1);
-  const ed=localDateStr(endExcl).replace(/-/g,'');
-  // v7.8 (GIG-033): always append a [Sent D Mon] suffix (was only added on
-  // "update") — see gcalGigUrl above.
-  const _sentSuffix=' [Sent '+new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})+']';
-  const parts=['https://calendar.google.com/calendar/render?action=TEMPLATE'];
-  parts.push('text='+encodeURIComponent(tripIcon(t)+' '+t.name+_sentSuffix));
-  parts.push('dates='+sd+'/'+ed);
-  // v7.11 (GIG-036): embed the day-by-day itinerary in the calendar
-  // event's own details, truncated to a safe length — Google's calendar
-  // template links can silently fail or truncate well before typical URL
-  // limits once everything is URL-encoded, so this stays conservative.
-  // The full, untruncated text always goes to the clipboard too (see
-  // copyTripItineraryToClipboard), so nothing is lost either way.
-  const MAX_ITINERARY_CHARS=1200;
-  let itinerary=buildTripItinerary(t);
-  if(itinerary.length>MAX_ITINERARY_CHARS){
-    itinerary=itinerary.slice(0,MAX_ITINERARY_CHARS).trim()+'\n…(truncated — full itinerary copied to clipboard)';
-  }
-  const details=[t.destination||'',t.notes||'',itinerary].filter(Boolean).join('\n\n');
-  if(details) parts.push('details='+encodeURIComponent(details));
-  if(t.destination) parts.push('location='+encodeURIComponent(t.destination));
-  return parts.join('&');
-}
+// gcalTripUrl() removed in GIG-078 — confirmed zero remaining callers
+// before deletion. Its itinerary-truncation approach (full text always
+// to clipboard, calendar description capped at a safe length) is noted
+// in gigs-and-trips-gcal-backlog.md as relevant groundwork for the
+// still-open "rich Calendar descriptions" backlog item — gcalSyncTrip()
+// above currently only sends t.notes, same minimal scope GIG-075 gave
+// gigs, not the richer itinerary text this function used to build.
 
 // ═══════════════════════════════════════════════════════════════════
 // COMPLETION PROMPT — fires once per day on first open
