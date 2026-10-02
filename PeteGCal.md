@@ -6,6 +6,24 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.1 — fix: auth errors failed completely silently
+
+Bug fix, found immediately on first real-world use. Pete clicked "Sign in with Google" in Safari and nothing visible happened at all — no popup, no error, no console output.
+
+**Root cause.** `pal-shared.js`'s `toast(msg, type)` looks for `document.getElementById('toast')` and silently returns if it's not found — by design, so a missing toast container never throws, it just no-ops. v1.0 never added that element to `PeteGCal.html`. So every call to `toast('Google sign-in issue: ' + reason, 'error')` in the `onAuthError` handler was generating a real, specific error message internally and then discarding it unseen. Nothing was actually broken in the auth flow itself as far as this fix is concerned — the app just had no way to tell Pete what it already knew.
+
+**Fix.** Added the `#toast` element and its CSS (copied verbatim from `GigsAndTrips.html`'s own `.toast`/`.toast.show` rules, so it matches the suite's existing look) — a bottom-centered pill, 2.8s auto-dismiss. Also added `console.error('[PeteGCal] Google auth error:', reason)` alongside every toast call in `onAuthError`, and a `console.info` note for the expected-silent first attempt, so DevTools shows the real reason even if the on-screen toast is missed or dismissed too quickly to read.
+
+**Not yet known.** This fix makes the *symptom* (total silence) impossible going forward, but doesn't by itself explain Pete's original failure — we don't yet know what Google's actual error reason was, since v1.0 swallowed it. Safari's stricter third-party cookie/popup handling (Intelligent Tracking Prevention, FedCM-related changes) is the leading suspect given the browser involved, but needs the real error string from this fix to confirm rather than assume.
+
+Files changed: `PeteGCal.html` only (CSS addition, one new `<div>`, `onAuthError` handler logic). No change to `pal-gcal.js`, `pal-shared.js`, or the launcher.
+
+**Tested:** `node --check` passes on both inline script blocks.
+
+**Not tested:** Not yet re-run in Safari — this fix exists to make the next attempt diagnosable, not confirmed to fix the underlying sign-in failure itself.
+
+---
+
 ## Before v1.0 — groundwork (not shipped as app versions)
 
 **PGC-001 — OAuth spike.** Google Cloud project created, OAuth consent screen configured (External, Testing mode, Pete + Lex as test users), Calendar API enabled, OAuth Client ID issued for `https://sixelaetep.github.io`. Proven via a throwaway test page (`gcal-test.html`, not part of PeteGCal's own lineage): sign-in, event create, read-back, and silent token refresh all confirmed working from the real GitHub Pages origin — both for Pete and, separately, for Lex signing in with her own Google account.
