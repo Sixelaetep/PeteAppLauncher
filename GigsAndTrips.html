@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.83</title>
+<title>Gigs &amp; Trips v7.84</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.83</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.84</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -554,7 +554,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.83"></script>
+<script src="pal-shared.js?v=7.84"></script>
 <!-- GIG-072: Google Calendar sync foundation. GSI script tag included
      explicitly here — PeteGCal's v1.0 shipped without this and every
      sign-in attempt failed silently for several rounds before the cause
@@ -3019,6 +3019,13 @@ Remove these days?`
       return -1; // sentinel: caller should abort save
     }
   }
+  // GIG-079: removed days can carry items with their own real Calendar
+  // events — without this, shrinking a trip's dates would silently
+  // orphan them, since once a day drops out of trip.days there's
+  // nothing left in GigsAndTrips pointing at those events at all.
+  removed.forEach(day=>(day.items||[]).forEach(it=>{
+    if(it.calendarEventId) gcalDeleteItem(it.calendarEventId, it.name||'');
+  }));
 
   // ── Step 2: Add new days for dates not yet present ───────────────
   const dates=new Set(inRange.map(d=>d.date));
@@ -3049,11 +3056,16 @@ Remove these days?`
 function confirmDeleteTrip(id){
   const t=getEvent(id); if(!t) return;
   if(!confirm(`Delete "${t.name}" and all its days?`)) return;
-  // GIG-078: delete the trip's own real Calendar event too, if it has
-  // one. Item-level events (GIG-079) aren't cascaded here yet — items
-  // don't carry a calendarEventId until that issue exists, so there's
-  // nothing to cascade-delete until then.
+  // GIG-078/079: delete the trip's own real Calendar event, and every
+  // item's, since each is an independent Calendar event in its own
+  // right (not a child of the trip's event in Calendar itself — the
+  // relationship only exists in GigsAndTrips' own data). Deleting the
+  // trip without this would leave every item's event orphaned on the
+  // real calendar with nothing left in GigsAndTrips pointing at it.
   if(t.calendarEventId) gcalDeleteTrip(t.calendarEventId, t.name);
+  (t.days||[]).forEach(day=>(day.items||[]).forEach(it=>{
+    if(it.calendarEventId) gcalDeleteItem(it.calendarEventId, it.name||'');
+  }));
   deleteEvent(id); closeModal(); _view='list'; showListNav(); showToast('Trip deleted'); render();
 }
 
@@ -4156,6 +4168,11 @@ function saveItem(tripId,dayId,type,existingId){
   if(idx>=0) day.items[idx]=it; else day.items.push(it);
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); closeModal(); showToast(isNew?'Added ✓':'Updated ✓');
+  // GIG-079: real Calendar sync, fire-and-forget — same non-blocking
+  // shape as gcalSyncGig/gcalSyncTrip. Looked up fresh by id rather
+  // than passed the local `it`/`trip` closures, since gcalSyncItem
+  // re-reads from storage anyway (see its own comment on why).
+  gcalSyncItem(tripId, dayId, it.id);
   if(newVenueFromItem) syncVenueNow(newVenueFromItem);
   // Duration model: recalculate forward from this item whenever it has
   // enough data to do so — cascadeItemTimes itself checks duration/
@@ -4189,6 +4206,10 @@ function deleteItem(tripId,dayId,itemId){
   const realItemsBefore=sortDayTimeline(day.items.filter(it=>!it._placeholder));
   const deletedIdx=realItemsBefore.findIndex(it=>it.id===itemId);
   const prevItemId=deletedIdx>0?realItemsBefore[deletedIdx-1].id:null;
+  // GIG-079: delete the item's real Calendar event too, if it has one —
+  // captured before the filter below removes the item from the trip.
+  const deletedItem=day.items.find(i=>i.id===itemId);
+  if(deletedItem&&deletedItem.calendarEventId) gcalDeleteItem(deletedItem.calendarEventId, deletedItem.name||'');
   day.items=day.items.filter(i=>i.id!==itemId);
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); showToast('Deleted');
@@ -6762,6 +6783,88 @@ async function gcalDeleteTrip(calendarEventId, name){
     syncLog('Calendar event deleted (trip): "' + name + '"', 'ok');
   } catch(e){
     syncLog('Calendar delete failed for trip "' + name + '": ' + PalGCal.errorHint(e), 'err');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GIG-079: item-level Calendar sync — one event per trip item
+// ═══════════════════════════════════════════════════════════════════
+// Reuses itemTime()/itemLocationName()/typeIcon() — the existing
+// per-type field normalizers — rather than re-deriving the travel/
+// accommodation/food/etc. field differences again here. Accommodation
+// is the one genuinely different case: it spans `nights` nights from
+// its check-in day as a multi-day all-day event, everything else is
+// either a single timed slot (if itemTime() returns one) or a single
+// all-day entry on its own day. Ghost items (the display-only echo of
+// a multi-night stay on its later nights — see itemTime()'s own
+// _ghost check) are skipped entirely: the real accommodation item on
+// its actual check-in day already covers the whole span.
+async function gcalSyncItem(tripId, dayId, itemId){
+  if (!PalGCal.hasToken()){
+    syncLog('Calendar sync skipped (not signed in) — item saved locally only', 'info');
+    return;
+  }
+  const trip = getEvent(tripId); if (!trip) return;
+  const day = (trip.days||[]).find(d=>d.id===dayId); if (!day) return;
+  const it = (day.items||[]).find(i=>i.id===itemId); if (!it || it._ghost) return;
+
+  let startEnd;
+  if (it.type === 'accommodation'){
+    const checkoutDate = new Date(day.date + 'T00:00:00');
+    checkoutDate.setDate(checkoutDate.getDate() + (it.nights || 1));
+    startEnd = { start:{date:day.date}, end:{date:localDateStr(checkoutDate)} };
+  } else {
+    const time = itemTime(it);
+    if (time){
+      const start = new Date(day.date + 'T' + time + ':00');
+      const end = new Date(start.getTime() + (it.durationMinutes || 60) * 60000);
+      startEnd = { start:{dateTime:start.toISOString()}, end:{dateTime:end.toISOString()} };
+    } else {
+      const end = new Date(day.date + 'T00:00:00');
+      end.setDate(end.getDate() + 1);
+      startEnd = { start:{date:day.date}, end:{date:localDateStr(end)} };
+    }
+  }
+
+  const eventBody = Object.assign({
+    summary: typeIcon(it.type) + ' ' + (it.name || '(no title)'),
+    location: itemLocationName(it),
+    description: it.notes || '',
+    colorId: GCAL_ITEM_COLOR_MAP[it.type] || GCAL_ITEM_COLOR_MAP.other
+  }, startEnd);
+  const meta = { type: it.type, tripId:trip.id, dayId:day.id, itemId:it.id, kind:'item' };
+
+  try {
+    let result;
+    if (it.calendarEventId){
+      result = await PalGCal.updateEvent(GCAL_CALENDAR_ID, it.calendarEventId, eventBody, meta);
+    } else {
+      result = await PalGCal.createEvent(GCAL_CALENDAR_ID, eventBody, meta);
+    }
+    // Re-fetch fresh rather than reuse the closures above — other saves
+    // may have happened to this trip while the API call was in flight.
+    const freshTrip = getEvent(tripId);
+    const freshDay = freshTrip && (freshTrip.days||[]).find(d=>d.id===dayId);
+    const freshItem = freshDay && (freshDay.items||[]).find(i=>i.id===itemId);
+    if (freshItem){
+      freshItem.calendarEventId = result.id;
+      freshItem.calendarHtmlLink = result.htmlLink;
+      freshTrip.updatedAt = new Date().toISOString();
+      saveEvent(freshTrip);
+    }
+    syncLog('Calendar ' + (it.calendarEventId ? 'updated' : 'created') + ' (item): "' + (it.name||'') + '"', 'ok');
+  } catch(e){
+    syncLog('Calendar sync failed for item "' + (it.name||'') + '": ' + PalGCal.errorHint(e), 'err');
+  }
+}
+
+async function gcalDeleteItem(calendarEventId, name){
+  if (!calendarEventId || !PalGCal.hasToken()) return;
+  try {
+    await PalGCal.deleteEvent(GCAL_CALENDAR_ID, calendarEventId);
+    syncLog('Calendar event deleted (item): "' + name + '"', 'ok');
+  } catch(e){
+    syncLog('Calendar delete failed for item "' + name + '": ' + PalGCal.errorHint(e), 'err');
   }
 }
 
