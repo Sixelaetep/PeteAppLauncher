@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.77</title>
+<title>Gigs &amp; Trips v7.78</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.77</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.78</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -554,7 +554,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.77"></script>
+<script src="pal-shared.js?v=7.78"></script>
 <!-- GIG-072: Google Calendar sync foundation. GSI script tag included
      explicitly here — PeteGCal's v1.0 shipped without this and every
      sign-in attempt failed silently for several rounds before the cause
@@ -4976,6 +4976,14 @@ function showDataManager(){
         <button class="btn btn-ghost" style="flex:1" onclick="dmPush()">⬆️ Push to cloud</button>
       </div>
 
+      <!-- GIG-073: one-time migration — links gigs already sent via the
+           old URL-based "Add to Calendar" flow (calendarAdded:true) to
+           their real Calendar event, where one can be found. Safe to
+           leave visible permanently; re-running it only ever affects
+           gigs that still have no calendarEventId, so it's harmless to
+           click again later if something was missed. -->
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalMigrateOpen()">🔗 Link existing gigs to Google Calendar</button>
+
       <div class="section-hdr">Sync Log</div>
       <div id="syncLogArea" style="background:var(--surf);border-radius:var(--rsm);padding:8px 10px;min-height:48px;max-height:160px;overflow-y:auto;font-size:12px;color:var(--ink3);font-family:monospace;margin-bottom:12px">
         ${_syncLog.length ? _syncLog.map(e=>'<div style="padding:4px 0;border-bottom:1px solid var(--bdr);color:'+({info:'var(--ink3)',ok:'var(--ok)',err:'var(--danger)',working:'var(--acc)'}[e.type]||'var(--ink3)')+'">'+e.ts+' — '+({info:'',ok:'✓ ',err:'❌ ',working:'⏳ '}[e.type]||'')+esc(e.msg)+'</div>').join('') : '<div style="color:var(--ink4);font-size:11px">Tap Pull or Push above to see results here</div>'}
@@ -5007,6 +5015,139 @@ function dmPush(){
   clearSyncLog();
   syncLog('Pushing to cloud…','working');
   pushAllEventsLogged();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GIG-073: one-time Calendar link-up migration
+// ═══════════════════════════════════════════════════════════════════
+// Finds gigs sent via the old URL-based "Add to Calendar" flow
+// (calendarAdded:true) that have no stored calendarEventId, and offers
+// to link each one to a real Calendar event found by date+title match.
+// Title-contains is a heuristic, not a certainty — the old flow stamped
+// a "[Sent D Mon]" suffix on every send, so exact-title matching would
+// miss gigs sent more than once under slightly different titles. Same
+// reasoning, same per-item-confirm approach (no bulk-link) as
+// reconcile-gigs.html used for PeteGCal — but this one DOES write back,
+// since it's operating on GigsAndTrips' own data directly rather than
+// reaching into another app's storage one-way.
+let _gcalMigrateEvents = [];
+
+function gcalMigrateOpen(){
+  if (!PalGCal.hasToken()){
+    showModal(`<div class="modal-hdr">
+        <div class="modal-title">🔗 Link existing gigs to Calendar</div>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:14px;color:var(--ink2);line-height:1.6;margin-bottom:16px">
+          Sign in with Google first, then this can check which of your gigs already have a matching Calendar event.
+        </p>
+        <button class="btn btn-pri" style="width:100%" onclick="gcalMigrateSignIn()">Sign in with Google</button>
+      </div>`);
+    return;
+  }
+  gcalMigrateRenderShell();
+}
+
+function gcalMigrateSignIn(){
+  PalGCal.init({
+    clientId: GCAL_CLIENT_ID,
+    onAuthChange: function(signedIn){
+      syncLog('Google Calendar: ' + (signedIn ? 'signed in' : 'signed out'), signedIn ? 'ok' : 'info');
+      if (signedIn) gcalMigrateRenderShell();
+    },
+    onTokenRefreshed: function(){ syncLog('Google Calendar: token refreshed', 'info'); },
+    onAuthError: function(reason){ syncLog('Google Calendar auth error: ' + reason, 'err'); },
+    onInitFailed: function(msg){ syncLog('Google Calendar: ' + msg, 'err'); }
+  });
+  PalGCal.signIn();
+}
+
+function gcalMigrateRenderShell(){
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">🔗 Link existing gigs to Calendar</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--ink3);line-height:1.6;margin-bottom:14px">
+        Checks gigs marked "sent to Calendar" the old way, with no real link yet, against what's actually on your Google Calendar — then lets you link each match one at a time. Nothing is created or deleted; this only connects existing records.
+      </p>
+      <button class="btn btn-pri" style="width:100%" onclick="gcalMigrateScan()" id="gcalMigrateScanBtn">Scan</button>
+      <div id="gcalMigrateResults" style="margin-top:14px"></div>
+    </div>`);
+}
+
+async function gcalMigrateScan(){
+  const scanBtn = document.getElementById('gcalMigrateScanBtn');
+  const resultsEl = document.getElementById('gcalMigrateResults');
+  scanBtn.disabled = true;
+  scanBtn.textContent = 'Scanning…';
+  resultsEl.innerHTML = '';
+
+  const candidates = getData().events.filter(e =>
+    e.type === 'gig' && e.calendarAdded && !e.calendarEventId && !e._deleted && !e.missed && e.date
+  );
+
+  if (!candidates.length){
+    scanBtn.style.display = 'none';
+    resultsEl.innerHTML = '<p style="font-size:13px;color:var(--ink3)">Nothing to link — every eligible gig already has a Calendar link, or none were ever sent the old way.</p>';
+    return;
+  }
+
+  const dates = candidates.map(g => g.date).sort();
+  const minDate = new Date(dates[0] + 'T00:00:00');
+  const maxDate = new Date(dates[dates.length-1] + 'T23:59:59');
+  maxDate.setDate(maxDate.getDate() + 1);
+
+  try {
+    _gcalMigrateEvents = await PalGCal.listEvents(GCAL_CALENDAR_ID, minDate.toISOString(), maxDate.toISOString());
+  } catch(e){
+    resultsEl.innerHTML = '<p style="font-size:13px;color:var(--danger)">Calendar fetch failed: ' + esc(PalGCal.errorHint(e)) + '</p>';
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Retry';
+    return;
+  }
+
+  scanBtn.style.display = 'none';
+  let matched = 0, unmatched = 0;
+  const rows = candidates.map(gig => {
+    const needle = (gig.name||'').trim().toLowerCase();
+    const matches = needle ? _gcalMigrateEvents.filter(ev => {
+      const evDate = (ev.start.dateTime || ev.start.date || '').slice(0,10);
+      return evDate === gig.date && (ev.summary||'').toLowerCase().indexOf(needle) !== -1;
+    }) : [];
+    if (matches.length) matched++; else unmatched++;
+
+    const matchInfo = matches.length
+      ? '<div style="font-size:12px;color:var(--ink3);margin-top:4px">Matched: "' + esc(matches[0].summary) + '"' + (matches.length>1 ? ' (+'+(matches.length-1)+' more)' : '') + '</div>'
+      : '<div style="font-size:12px;color:var(--ink3);margin-top:4px">No match — will get a fresh Calendar event next time this gig is saved</div>';
+
+    const action = matches.length
+      ? '<button class="btn btn-ghost" style="margin-top:6px" onclick="gcalMigrateLink(\''+gig.id+'\',\''+matches[0].id+'\',this)">Link</button>'
+      : '';
+
+    return '<div style="padding:10px 0;border-bottom:1px solid var(--bdr)">' +
+      '<div style="font-weight:600;font-size:14px">' + esc(gig.name||'(no title)') + '</div>' +
+      '<div style="font-size:12px;color:var(--ink3)">' + esc(gig.date) + (gig.venue ? ' · '+esc(gig.venue) : '') + '</div>' +
+      matchInfo + action +
+      '</div>';
+  }).join('');
+
+  resultsEl.innerHTML =
+    '<p style="font-size:13px;color:var(--ink2);margin-bottom:10px">' + matched + ' matched, ' + unmatched + ' with no match, of ' + candidates.length + ' checked.</p>' +
+    rows;
+}
+
+async function gcalMigrateLink(gigId, calendarEventId, btnEl){
+  btnEl.disabled = true;
+  btnEl.textContent = 'Linking…';
+  const gig = getEvent(gigId);
+  if (!gig){ btnEl.textContent = 'Gig not found'; return; }
+  gig.calendarEventId = calendarEventId;
+  gig.updatedAt = new Date().toISOString();
+  saveEvent(gig);
+  btnEl.textContent = 'Linked ✓';
+  btnEl.disabled = true;
 }
 
 function dmResetVenues(){
