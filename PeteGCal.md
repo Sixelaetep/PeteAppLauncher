@@ -6,6 +6,22 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.3 — root-cause fix: the GSI script tag was never actually in the file
+
+**The real cause of every sign-in failure since v1.0.** `PeteGCal.html` never included `<script src="https://accounts.google.com/gsi/client" async defer></script>`. `pal-gcal.js` documents this requirement in its own header comment ("Load order: include the Google Identity Services script before this file...") but the file that actually needed to follow that instruction never did. `window.google.accounts.oauth2` was consequently never available, which is exactly what the v1.2 `onInitFailed` timeout correctly detected and reported — v1.2's diagnostics were accurate; the root cause just hadn't been found yet.
+
+**This supersedes the investigation in v1.1/v1.2's entries below and the chat discussion around them.** Safari's Intelligent Tracking Prevention, content-blocker extensions, the launcher's iframe embedding, and network/device-level filtering were all explored as possible causes and were all the wrong layer — the script was never being requested by the page at all, so none of those could have mattered. Confirmed by: direct navigation to the GSI script URL working fine (that request never went through this file), while loading via the app failed identically in Safari, Chrome, standalone, and embedded — consistent with a tag missing from the page itself, not a browser- or network-level block.
+
+**Fix.** Added the one missing script tag, between `pal-shared.js` and `pal-gcal.js`. Nothing else changed — `pal-gcal.js` itself, `CLIENT_ID`, `CALENDAR_ID`, the sign-in/refresh/error-handling logic, and the v1.2 timeout behaviour are all untouched.
+
+Files changed: `PeteGCal.html` only (one added `<script>` tag, version markers).
+
+**Tested:** `node --check` passes. The fix is minimal and mechanical enough to be low-risk, but:
+
+**Not tested:** the actual sign-in flow has not yet been re-run with this fix in place. This is the fix most likely to actually work, given it addresses a confirmed, concrete absence rather than a theory — but "most likely" isn't "confirmed" until it's tried.
+
+---
+
 ## v1.2 — visible version badge; init-failure handling in pal-gcal.js
 
 Prompted by Pete hitting a genuinely ambiguous "Google sign-in issue: not initialised" error after the v1.1 fix, plus a fair complaint: no way to tell which version was actually running in the browser.
