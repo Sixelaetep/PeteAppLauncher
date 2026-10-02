@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.80</title>
+<title>Gigs &amp; Trips v7.81</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.80</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.81</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -554,7 +554,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.80"></script>
+<script src="pal-shared.js?v=7.81"></script>
 <!-- GIG-072: Google Calendar sync foundation. GSI script tag included
      explicitly here — PeteGCal's v1.0 shipped without this and every
      sign-in attempt failed silently for several rounds before the cause
@@ -2558,7 +2558,7 @@ function checkGigFormConflicts(){
     html+=`<div class="conflict-banner"><span>⚠️</span><span>Another event on this date: <strong>${esc(gigClashes.map(g=>g.name+(g.time?' ('+g.time+')':'')).join(', '))}</strong></span></div>`;
   }
   if(dayOff){
-    html+=`<div class="dayoff-banner"><span>📅</span><span>Weekday before 6pm — you may need a day off</span></div>`;
+    html+=`<div class="dayoff-banner"><span>💼</span><span>This is a working day, per Fortnight Tracker</span></div>`;
   }
   el.innerHTML=html;
 }
@@ -4808,12 +4808,45 @@ function unlinkedGigsInTrip(tripId, startDate, endDate, d){
     e.date>=startDate && e.date<=endDate && !e.missed
   );
 }
+// GIG-076: needsDayOff() used to be a blunt "any weekday evening"
+// guess, with no awareness of Pete's actual work pattern — it would
+// flag every single weekday gig regardless of whether that day was
+// really a working day. Replaced with a real read of Fortnight
+// Tracker's own data, same approach PeteGCal already uses: same
+// localStorage key/fallback chain, same "don't re-derive the 9-day
+// pattern, only trust bundles that actually exist" principle, so this
+// never drifts from Fortnight Tracker's own logic.
+const FORTNIGHT_KEYS = ['fn_tracker_v5', 'fn_tracker_v4', 'fn_tracker_v3'];
+
+function getFortnightWorkingDates(){
+  let raw = null;
+  for (let i = 0; i < FORTNIGHT_KEYS.length; i++){
+    raw = localStorage.getItem(FORTNIGHT_KEYS[i]);
+    if (raw) break;
+  }
+  if (!raw) return {};
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch(e){ return {}; }
+  const bundles = (parsed.data && Array.isArray(parsed.data.bundles)) ? parsed.data.bundles
+                 : Array.isArray(parsed.bundles) ? parsed.bundles : [];
+  const map = {};
+  bundles.filter(b => !b._deleted).forEach(b => {
+    (b.days || []).forEach(d => {
+      if (!d.date) return;
+      map[d.date] = !(d.status === 'holiday' || d.status === 'sick');
+    });
+  });
+  return map;
+}
+
+function isWorkingDay(dateStr){
+  const map = getFortnightWorkingDates();
+  return Object.prototype.hasOwnProperty.call(map, dateStr) ? map[dateStr] : null;
+}
+
 function needsDayOff(dateStr,timeStr){
-  if(!dateStr||!timeStr) return false;
-  const d=new Date(dateStr+'T00:00:00');
-  const dow=d.getDay();
-  if(dow===0||dow===6) return false;
-  return parseInt(timeStr.split(':')[0],10)<18;
+  if(!dateStr) return false;
+  return isWorkingDay(dateStr) === true;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -5011,6 +5044,14 @@ function showDataManager(){
            gigs that still have no calendarEventId, so it's harmless to
            click again later if something was missed. -->
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalMigrateOpen()">🔗 Link existing gigs to Google Calendar</button>
+
+      <!-- GIG-076: one-off historical import — the ongoing rolling
+           mirror (14 days back, 180 forward) runs automatically on
+           every load; this covers everything further back, once,
+           on demand. Shows a count and asks before writing anything,
+           since there's no fuzzy match to review item-by-item here,
+           just a potentially large bulk import to confirm. -->
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalHistoricalBackfill()">📜 Import 4 years of Calendar history</button>
 
       <div class="section-hdr">Sync Log</div>
       <div id="syncLogArea" style="background:var(--surf);border-radius:var(--rsm);padding:8px 10px;min-height:48px;max-height:160px;overflow-y:auto;font-size:12px;color:var(--ink3);font-family:monospace;margin-bottom:12px">
@@ -6529,6 +6570,103 @@ async function gcalRetrySync(id){
   openGigDetail(id); // re-render so the button reflects the new state
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// GIG-076: full Calendar mirror — native events imported as real gigs
+// ═══════════════════════════════════════════════════════════════════
+// Matching is exact, not fuzzy, unlike GIG-073's title/date heuristic:
+// every gig created since GIG-074 carries a real calendarEventId, so
+// "does any gig already have this event's id" is a reliable check —
+// PROVIDED GIG-073's migration has already linked anything older.
+// Anything not matched is genuinely new to GigsAndTrips and gets
+// imported as a gig with gigType 'other' (same default PeteGCal uses
+// for anything with no app-specific type), mixed into the normal
+// Upcoming/Past list — full parity with every deliberately-entered gig,
+// including edit/delete, per the decision to mirror fully rather than
+// keep imports in a separate holding area.
+function gcalBuildImportedGig(ev){
+  const isAllDay = !ev.start.dateTime;
+  const startRaw = ev.start.dateTime || ev.start.date;
+  return {
+    id: uid('gat'), type:'gig', gigType:'other',
+    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
+    done:false, missed:false, addedBy:_currentUserKey,
+    name: ev.summary || '(no title)',
+    date: startRaw.slice(0,10),
+    time: isAllDay ? '' : new Date(ev.start.dateTime).toTimeString().slice(0,5),
+    venue: ev.location || '',
+    notes: ev.description || '',
+    ticketUrl:'', ticketPrice:0, ticketNote:'', tripId:null,
+    calendarEventId: ev.id,
+    calendarHtmlLink: ev.htmlLink
+  };
+}
+
+// Returns the events NOT already represented by an existing gig —
+// shared by both the rolling auto-pull and the one-off historical
+// backfill, so the matching logic lives in exactly one place.
+function gcalUnmatchedEvents(calEvents){
+  const known = new Set(
+    getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId).map(e=>e.calendarEventId)
+  );
+  return calEvents.filter(ev=>!known.has(ev.id));
+}
+
+// Rolling mirror — same 14-day-past/180-day-future window as PeteGCal,
+// run automatically on every load (see onUnlocked). Silent unless it
+// actually imports something, so a normal day with nothing new on the
+// calendar doesn't toast on every single app open.
+async function gcalMirrorPull(){
+  if (!PalGCal.hasToken()) return;
+  const now = new Date();
+  const timeMin = new Date(now.getTime() - 14*86400000);
+  const timeMax = new Date(now.getTime() + 180*86400000);
+  try {
+    const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, timeMin.toISOString(), timeMax.toISOString());
+    const unmatched = gcalUnmatchedEvents(events);
+    if (!unmatched.length) return;
+    unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
+    syncLog('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Google Calendar', 'ok');
+    showToast('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Calendar');
+    render();
+  } catch(e){
+    syncLog('Calendar mirror pull failed: ' + PalGCal.errorHint(e), 'err');
+  }
+}
+
+// One-off historical backfill — 4 years back, explicit trigger and
+// confirm (not automatic, not per-item like GIG-073/reconcile-gigs.html
+// — there's no fuzzy match here to second-guess, just a count to
+// confirm before a genuinely large bulk write).
+async function gcalHistoricalBackfill(){
+  if (!PalGCal.hasToken()){
+    showToast('Sign in with Google first');
+    return;
+  }
+  showToast('Checking 4 years of Calendar history…');
+  const now = new Date();
+  const timeMin = new Date(now.getTime() - 4*365*86400000);
+  const timeMax = new Date(now.getTime() + 180*86400000); // overlaps the rolling window on purpose, harmless — already-matched events are skipped either way
+  let events;
+  try {
+    events = await PalGCal.listEvents(GCAL_CALENDAR_ID, timeMin.toISOString(), timeMax.toISOString());
+  } catch(e){
+    showToast('Calendar fetch failed: ' + PalGCal.errorHint(e));
+    syncLog('Historical backfill fetch failed: ' + PalGCal.errorHint(e), 'err');
+    return;
+  }
+  const unmatched = gcalUnmatchedEvents(events);
+  if (!unmatched.length){
+    showToast('Nothing new — everything in range already has a gig');
+    return;
+  }
+  if (!confirm('Found ' + unmatched.length + ' Calendar events with no matching gig, going back 4 years. Import all ' + unmatched.length + ' as gigs?')) return;
+  syncLog('Importing ' + unmatched.length + ' events from 4-year history…', 'working');
+  unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
+  syncLog('Historical backfill complete — ' + unmatched.length + ' gigs imported', 'ok');
+  showToast('Imported ' + unmatched.length + ' events ✓');
+  render();
+}
+
 async function gcalDeleteGig(calendarEventId, name){
   if (!calendarEventId || !PalGCal.hasToken()) return;
   try {
@@ -6816,6 +6954,11 @@ function initGCalSync(){
     clientId: GCAL_CLIENT_ID,
     onAuthChange: function(signedIn){
       syncLog('Google Calendar: ' + (signedIn ? 'signed in' : 'signed out'), signedIn ? 'ok' : 'info');
+      // GIG-076: the rolling mirror runs the moment a token's actually
+      // available — whether from this silent attempt or a later
+      // explicit sign-in — rather than on a fixed timer that might fire
+      // before or after the token is really ready.
+      if (signedIn) gcalMirrorPull();
     },
     onTokenRefreshed: function(){
       syncLog('Google Calendar: token refreshed', 'info');
