@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PeteGCal — OAuth Spike Test</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root{
+    --bg:#f7f7fb; --card:#fff; --border:#e2e2ea; --text:#1b1b23; --muted:#6b6b76;
+    --accent:#4f46e5; --accent-dark:#4338ca; --ok:#15803d; --ok-bg:#dcfce7;
+    --err:#b91c1c; --err-bg:#fee2e2; --warn:#92400e; --warn-bg:#fef3c7;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); padding:24px;
+    padding-top:calc(24px + env(safe-area-inset-top,0px));
+  }
+  .wrap{max-width:640px;margin:0 auto;}
+  h1{font-size:20px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 24px;}
+  .card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:20px; margin-bottom:16px;
+  }
+  .card h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px;}
+  .step-num{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:22px;height:22px;border-radius:50%;background:var(--border);
+    font-size:12px;font-weight:600;flex-shrink:0;
+  }
+  .step-num.done{background:var(--ok-bg);color:var(--ok);}
+  button{
+    background:var(--accent); color:#fff; border:none; border-radius:8px;
+    padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  button:hover{background:var(--accent-dark);}
+  button:disabled{background:#c7c7d1;cursor:not-allowed;}
+  button.secondary{background:var(--border);color:var(--text);}
+  button.secondary:hover{background:#d4d4dc;}
+  input[type=text]{
+    width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:8px;
+    font-size:14px; margin-top:4px; margin-bottom:12px; font-family:inherit;
+  }
+  label{font-size:13px;font-weight:600;color:var(--muted);}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;}
+  .pill.ok{background:var(--ok-bg);color:var(--ok);}
+  .pill.err{background:var(--err-bg);color:var(--err);}
+  .pill.warn{background:var(--warn-bg);color:var(--warn);}
+  .pill.muted{background:var(--border);color:var(--muted);}
+  .log{
+    background:#101018; color:#d4d4e0; font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:12.5px; border-radius:8px; padding:12px; max-height:260px; overflow-y:auto;
+    white-space:pre-wrap; word-break:break-word; line-height:1.5;
+  }
+  .log .t-ok{color:#86efac;}
+  .log .t-err{color:#fca5a5;}
+  .log .t-info{color:#93c5fd;}
+  .muted-text{color:var(--muted);font-size:13px;}
+  .event-link{color:var(--accent);word-break:break-all;font-size:13px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PeteGCal — OAuth Spike (PGC-001)</h1>
+  <p class="sub">Throwaway test page. Not PeteGCal itself — just proving Google sign-in, event create/read, and token refresh work from this domain before anything real gets built.</p>
+
+  <div class="card">
+    <h2><span class="step-num" id="num1">1</span> Sign in with Google</h2>
+    <p class="muted-text">Pete signs in to test against his own calendar (default below). Lex should sign in with <em>her own</em> Google account, then change the calendar field in step 3 to Pete's email — testing write access to his shared calendar, not her own.</p>
+    <div id="signin-area">
+      <button id="signin-btn">Sign in with Google</button>
+    </div>
+    <div id="signed-in-info" style="display:none;margin-top:10px;" class="row">
+      <span class="pill ok">Signed in</span>
+      <button class="secondary" id="signout-btn" style="margin-left:auto;">Sign out</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num" id="num2">2</span> Token status</h2>
+    <div class="row" style="margin-bottom:8px;">
+      <span id="token-pill" class="pill muted">No token yet</span>
+      <span id="token-expiry" class="muted-text"></span>
+    </div>
+    <button class="secondary" id="refresh-btn" disabled>Request new token now (test silent refresh)</button>
+    <p class="muted-text" style="margin-top:8px;">An auto-refresh is also attempted silently about 5 minutes before expiry — watch the log for whether it needs a popup or not.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num" id="num3">3</span> Create a test event</h2>
+    <label for="cal-id">Calendar to write to</label>
+    <input type="text" id="cal-id" value="primary" placeholder="primary, or an email address">
+    <label for="ev-title">Event title</label>
+    <input type="text" id="ev-title" value="PeteGCal spike test event">
+    <button id="create-btn" disabled>Create test event (1hr from now, 30 min long)</button>
+    <div id="create-result" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num" id="num4">4</span> Read it back</h2>
+    <p class="muted-text">Fetches the event just created, by its ID, confirming round-trip read access.</p>
+    <button id="readback-btn" disabled>Read event back</button>
+    <div id="readback-result" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <div class="log" id="log">Waiting for sign-in…</div>
+  </div>
+</div>
+
+<script>
+// Fill in from the Google Cloud Console OAuth Client just created.
+const CLIENT_ID = '417857203939-6novvttk4q4bp72e2nk6j21d4f5jbsoi.apps.googleusercontent.com';
+const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+
+let tokenClient = null;
+let accessToken = null;
+let tokenExpiresAt = null;
+let lastCreatedEventId = null;
+let autoRefreshTimer = null;
+
+function log(msg, type) {
+  const el = document.getElementById('log');
+  const span = document.createElement('div');
+  if (type) span.className = 't-' + type;
+  span.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function markStepDone(n) {
+  const el = document.getElementById('num' + n);
+  if (el) el.classList.add('done');
+}
+
+function updateTokenUI() {
+  const pill = document.getElementById('token-pill');
+  const expiryEl = document.getElementById('token-expiry');
+  if (!accessToken) {
+    pill.textContent = 'No token yet';
+    pill.className = 'pill muted';
+    expiryEl.textContent = '';
+    return;
+  }
+  const secsLeft = Math.round((tokenExpiresAt - Date.now()) / 1000);
+  if (secsLeft <= 0) {
+    pill.textContent = 'Expired';
+    pill.className = 'pill err';
+    expiryEl.textContent = '';
+  } else {
+    pill.textContent = 'Active';
+    pill.className = 'pill ok';
+    expiryEl.textContent = 'expires in ' + Math.floor(secsLeft / 60) + 'm ' + (secsLeft % 60) + 's';
+  }
+}
+setInterval(updateTokenUI, 1000);
+
+function scheduleAutoRefresh(expiresInSec) {
+  if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
+  const refreshInMs = Math.max((expiresInSec - 300) * 1000, 5000);
+  autoRefreshTimer = setTimeout(function () {
+    log('Auto-refresh triggered (5 min before expiry) — requesting new token silently…', 'info');
+    tokenClient.requestAccessToken({ prompt: '' });
+  }, refreshInMs);
+}
+
+function onTokenResponse(resp) {
+  if (resp.error) {
+    log('Token request failed: ' + resp.error, 'err');
+    return;
+  }
+  accessToken = resp.access_token;
+  const expiresIn = parseInt(resp.expires_in, 10) || 3600;
+  tokenExpiresAt = Date.now() + expiresIn * 1000;
+  log('Token received. Expires in ' + expiresIn + 's.', 'ok');
+  updateTokenUI();
+  scheduleAutoRefresh(expiresIn);
+  markStepDone(2);
+  document.getElementById('refresh-btn').disabled = false;
+  document.getElementById('create-btn').disabled = false;
+}
+
+window.onload = function () {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPE,
+    callback: onTokenResponse
+  });
+
+  document.getElementById('signin-btn').addEventListener('click', function () {
+    log('Opening Google sign-in…', 'info');
+    tokenClient.requestAccessToken({ prompt: 'consent' });
+    document.getElementById('signed-in-info').style.display = 'flex';
+    document.getElementById('signin-area').style.display = 'none';
+    markStepDone(1);
+  });
+
+  document.getElementById('signout-btn').addEventListener('click', function () {
+    if (accessToken) {
+      google.accounts.oauth2.revoke(accessToken, function () {
+        log('Token revoked, signed out.', 'info');
+      });
+    }
+    accessToken = null;
+    tokenExpiresAt = null;
+    updateTokenUI();
+    document.getElementById('signed-in-info').style.display = 'none';
+    document.getElementById('signin-area').style.display = 'block';
+    document.getElementById('refresh-btn').disabled = true;
+    document.getElementById('create-btn').disabled = true;
+    document.getElementById('readback-btn').disabled = true;
+  });
+
+  document.getElementById('refresh-btn').addEventListener('click', function () {
+    log('Manual refresh requested (prompt: none — testing silent refresh)…', 'info');
+    tokenClient.requestAccessToken({ prompt: '' });
+  });
+
+  document.getElementById('create-btn').addEventListener('click', createTestEvent);
+  document.getElementById('readback-btn').addEventListener('click', readBackEvent);
+};
+
+async function createTestEvent() {
+  const calId = document.getElementById('cal-id').value.trim() || 'primary';
+  const title = document.getElementById('ev-title').value.trim() || 'PeteGCal spike test event';
+  const resultEl = document.getElementById('create-result');
+  resultEl.innerHTML = '';
+
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+
+  const body = {
+    summary: title,
+    description: 'Created by the PeteGCal OAuth spike test page (PGC-001). Safe to delete.',
+    start: { dateTime: start.toISOString() },
+    end: { dateTime: end.toISOString() },
+    extendedProperties: { private: { source: 'petegcal-spike' } }
+  };
+
+  log('Creating event on calendar "' + calId + '"…', 'info');
+  try {
+    const resp = await fetch(
+      'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(calId) + '/events',
+      {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }
+    );
+    const data = await resp.json();
+    if (!resp.ok) {
+      log('Create failed (' + resp.status + '): ' + (data.error ? data.error.message : JSON.stringify(data)), 'err');
+      resultEl.innerHTML = '<span class="pill err">Failed — ' + resp.status + '</span> <span class="muted-text">' + esc(data.error ? data.error.message : '') + '</span>';
+      return;
+    }
+    lastCreatedEventId = data.id;
+    log('Event created. ID: ' + data.id, 'ok');
+    markStepDone(3);
+    document.getElementById('readback-btn').disabled = false;
+    resultEl.innerHTML =
+      '<span class="pill ok">Created</span><br><br>' +
+      '<strong>Event ID:</strong> ' + esc(data.id) + '<br>' +
+      '<a class="event-link" href="' + esc(data.htmlLink) + '" target="_blank">' + esc(data.htmlLink) + '</a>';
+  } catch (e) {
+    log('Create threw an error: ' + e.message, 'err');
+    resultEl.innerHTML = '<span class="pill err">Request failed</span> <span class="muted-text">' + esc(e.message) + '</span>';
+  }
+}
+
+async function readBackEvent() {
+  const calId = document.getElementById('cal-id').value.trim() || 'primary';
+  const resultEl = document.getElementById('readback-result');
+  resultEl.innerHTML = '';
+
+  if (!lastCreatedEventId) {
+    resultEl.innerHTML = '<span class="pill warn">No event created yet</span>';
+    return;
+  }
+
+  log('Reading event ' + lastCreatedEventId + ' back…', 'info');
+  try {
+    const resp = await fetch(
+      'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(calId) + '/events/' + encodeURIComponent(lastCreatedEventId),
+      { headers: { 'Authorization': 'Bearer ' + accessToken } }
+    );
+    const data = await resp.json();
+    if (!resp.ok) {
+      log('Read-back failed (' + resp.status + '): ' + (data.error ? data.error.message : JSON.stringify(data)), 'err');
+      resultEl.innerHTML = '<span class="pill err">Failed — ' + resp.status + '</span>';
+      return;
+    }
+    log('Read-back succeeded. Title: "' + data.summary + '"', 'ok');
+    markStepDone(4);
+    resultEl.innerHTML =
+      '<span class="pill ok">Read back OK</span><br><br>' +
+      '<strong>Summary:</strong> ' + esc(data.summary) + '<br>' +
+      '<strong>Start:</strong> ' + esc(data.start.dateTime) + '<br>' +
+      '<strong>extendedProperties.private.source:</strong> ' + esc((data.extendedProperties && data.extendedProperties.private && data.extendedProperties.private.source) || '(none)');
+  } catch (e) {
+    log('Read-back threw an error: ' + e.message, 'err');
+    resultEl.innerHTML = '<span class="pill err">Request failed</span> <span class="muted-text">' + esc(e.message) + '</span>';
+  }
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
