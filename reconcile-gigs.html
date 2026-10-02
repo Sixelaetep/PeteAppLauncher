@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<script>
+(function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
+</script>
+<title>Gig → Calendar Reconciliation (one-off)</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --ink:#0f0f1a; --ink2:#3a3a4a; --ink3:#7a7a8c;
+  --surf:#f7f7f9; --card:#fff; --bdr:#e8e8ee;
+  --acc:#4f46e5; --acc-dim:#eef2ff; --acc-dk:#4338ca;
+  --ok:#0a7c5c; --ok-dim:#e6f4f0;
+  --warn:#92400e; --warn-dim:#fffbeb;
+  --danger:#d32f2f; --danger-dim:#fdecea;
+  --r:10px; --rsm:6px;
+  --f:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+}
+:root[data-theme="dark"]{
+  --ink:#e8e8f0; --ink2:#b8b8c8; --ink3:#8a8a9c;
+  --surf:#14141c; --card:#1e1e2a; --bdr:#2e2e3c;
+  --acc:#818cf8; --acc-dim:rgba(129,140,248,.18); --acc-dk:#a5b4fc;
+  --ok:#34d399; --ok-dim:rgba(52,211,153,.15);
+  --warn:#fbbf24; --warn-dim:rgba(251,191,36,.15);
+  --danger:#f87171; --danger-dim:rgba(248,113,113,.15);
+}
+body{font-family:var(--f);background:var(--surf);color:var(--ink);min-height:100vh;font-size:15px;line-height:1.5;
+  padding:20px;padding-top:calc(20px + env(safe-area-inset-top,0px));padding-bottom:calc(20px + env(safe-area-inset-bottom,0px));}
+.wrap{max-width:680px;margin:0 auto;}
+h1{font-size:19px;margin-bottom:4px;}
+.sub{color:var(--ink3);font-size:13.5px;margin-bottom:20px;line-height:1.6;}
+.card{background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);padding:16px;margin-bottom:14px;}
+button{background:var(--acc);color:#fff;border:none;border-radius:var(--rsm);padding:9px 16px;font-size:14px;
+  font-weight:600;cursor:pointer;}
+button:hover{background:var(--acc-dk);}
+button:disabled{background:#c7c7d1;cursor:not-allowed;}
+button.secondary{background:var(--surf);color:var(--ink2);border:1px solid var(--bdr);}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11.5px;font-weight:600;}
+.pill.ok{background:var(--ok-dim);color:var(--ok);}
+.pill.warn{background:var(--warn-dim);color:var(--warn);}
+.pill.danger{background:var(--danger-dim);color:var(--danger);}
+.pill.muted{background:var(--bdr);color:var(--ink3);}
+.gig-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--bdr);}
+.gig-row:last-child{border-bottom:none;}
+.gig-info{flex:1;min-width:0;}
+.gig-name{font-weight:600;font-size:14.5px;}
+.gig-meta{font-size:12.5px;color:var(--ink3);margin-top:3px;}
+.gig-match{font-size:12px;color:var(--ink3);margin-top:6px;}
+.gig-action{flex-shrink:0;}
+.toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  background:#1a1a2e;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:600;z-index:400;
+  opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;max-width:calc(100vw - 32px);text-align:center;}
+.toast.show{opacity:1;}
+#summary{font-size:13.5px;color:var(--ink3);margin-bottom:12px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Gig → Calendar Reconciliation</h1>
+  <p class="sub">One-off check, not a standing feature. Compares GigsAndTrips' gigs (read from this browser's own storage — must be run somewhere GigsAndTrips has actually been used) against your real Google Calendar, and lets you create anything apparently missing, one at a time. Never writes anything back to GigsAndTrips itself.</p>
+
+  <div class="card" id="signinCard">
+    <p style="margin-bottom:12px;">Sign in with Google to check your calendar.</p>
+    <button id="signinBtn">Sign in with Google</button>
+  </div>
+
+  <div class="card" id="scanCard" style="display:none;">
+    <button id="scanBtn">Scan gigs</button>
+    <span id="scanStatus" class="gig-meta" style="margin-left:10px;"></span>
+  </div>
+
+  <div id="summary"></div>
+  <div id="results"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="pal-shared.js?v=1.0"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="pal-gcal.js?v=1"></script>
+<script>
+const CLIENT_ID = '417857203939-6novvttk4q4bp72e2nk6j21d4f5jbsoi.apps.googleusercontent.com';
+const CALENDAR_ID = 'peteshellard@gmail.com';
+const GAT_KEY = 'gat_v1_clean';
+
+// Exhaustive — every GIG_TYPES key from GigsAndTrips.html mapped
+// explicitly, nothing left to fall through silently. Updated: the 7
+// live-event subtypes now map to themselves (kept as distinct types,
+// at Pete's request before deploy) rather than collapsing into one
+// generic 'gig' bucket — matches PeteGCal.html's own EVENT_TYPES (v1.9),
+// which was expanded the same way so both stay consistent. Only the 4
+// trip-item types that can technically appear on a gig record
+// (travel/accommodation/attraction/keystop — not really gig types, just
+// possible stray values) still fall back to 'other'.
+const TYPE_MAP = {
+  music:'music', play:'play', musical:'musical', comedy:'comedy', sport:'sport', festival:'festival', cinema:'cinema',
+  gym:'gym', appointment:'appointment', pets:'pets', food:'food',
+  other:'other', travel:'other', accommodation:'other', attraction:'other', keystop:'other'
+};
+const TYPE_COLOR = {
+  music:'3', play:'4', musical:'5', comedy:'6', sport:'2', festival:'9', cinema:'7',
+  gym:'10', appointment:'1', pets:'6', food:'5', other:'8'
+};
+// Icon prefixed onto the created Calendar event's title — GigsAndTrips'
+// own gcalGigUrl() always did this (icon + name); the reconciliation
+// tool didn't originally, and now does, to match what's already on the
+// calendar from any gig sent via the old URL-based flow.
+const TYPE_ICON = {
+  music:'🎸', play:'🎭', musical:'🎶', comedy:'😂', sport:'⚽', festival:'🎪', cinema:'🎬',
+  gym:'🏋️', appointment:'📅', pets:'🐶', food:'🍽️', other:'📌'
+};
+
+let _allCalEvents = [];
+
+window.onload = function(){
+  PalGCal.init({
+    clientId: CLIENT_ID,
+    onAuthChange: function(signedIn){
+      document.getElementById('signinCard').style.display = signedIn ? 'none' : 'block';
+      document.getElementById('scanCard').style.display = signedIn ? 'block' : 'none';
+    },
+    onAuthError: function(reason){
+      console.error('[Reconcile] Auth error:', reason);
+      toast('Google sign-in issue: ' + reason, 'error');
+    },
+    onInitFailed: function(msg){
+      console.error('[Reconcile] Init failed:', msg);
+      toast('Google sign-in script failed to load', 'error');
+    }
+  });
+  document.getElementById('signinBtn').addEventListener('click', function(){ PalGCal.signIn(); });
+  document.getElementById('scanBtn').addEventListener('click', runScan);
+};
+
+function readGigs(){
+  const raw = localStorage.getItem(GAT_KEY);
+  if (!raw) return null; // distinct from "zero gigs" — means no data found at all
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed.events || []).filter(function(e){ return e.type === 'gig' && !e.missed; });
+  } catch(e){ return null; }
+}
+
+async function runScan(){
+  const statusEl = document.getElementById('scanStatus');
+  const resultsEl = document.getElementById('results');
+  const summaryEl = document.getElementById('summary');
+  resultsEl.innerHTML = '';
+  summaryEl.textContent = '';
+
+  const gigs = readGigs();
+  if (gigs === null){
+    statusEl.textContent = '';
+    summaryEl.innerHTML = '<span class="pill danger">No GigsAndTrips data found in this browser</span> — open GigsAndTrips.html here first, or run this on the device/browser where it\'s actually used.';
+    return;
+  }
+  if (!gigs.length){
+    statusEl.textContent = '';
+    summaryEl.innerHTML = '<span class="pill muted">No gigs found</span> (excluding anything marked missed)';
+    return;
+  }
+
+  statusEl.textContent = 'Fetching calendar…';
+  const dates = gigs.map(function(g){ return g.date; }).filter(Boolean).sort();
+  const minDate = new Date(dates[0] + 'T00:00:00');
+  const maxDate = new Date(dates[dates.length-1] + 'T23:59:59');
+  maxDate.setDate(maxDate.getDate() + 1);
+
+  try {
+    // One bulk fetch covering every gig's date range, rather than one
+    // API call per gig — matching is then done client-side.
+    _allCalEvents = await PalGCal.listEvents(CALENDAR_ID, minDate.toISOString(), maxDate.toISOString());
+  } catch(e){
+    statusEl.textContent = '';
+    summaryEl.innerHTML = '<span class="pill danger">Calendar fetch failed</span> ' + esc(PalGCal.errorHint(e));
+    return;
+  }
+
+  statusEl.textContent = '';
+  renderResults(gigs);
+}
+
+function findMatches(gig){
+  if (!gig.date) return [];
+  const needle = (gig.name || '').trim().toLowerCase();
+  if (!needle) return [];
+  return _allCalEvents.filter(function(ev){
+    const evDate = (ev.start.dateTime || ev.start.date || '').slice(0, 10);
+    if (evDate !== gig.date) return false;
+    return (ev.summary || '').toLowerCase().indexOf(needle) !== -1;
+  });
+}
+
+function renderResults(gigs){
+  const resultsEl = document.getElementById('results');
+  const summaryEl = document.getElementById('summary');
+  let matchedCount = 0, missingCount = 0;
+
+  gigs.forEach(function(gig){
+    const matches = findMatches(gig);
+    if (matches.length) matchedCount++; else missingCount++;
+
+    const row = document.createElement('div');
+    row.className = 'card gig-row';
+
+    const info = document.createElement('div');
+    info.className = 'gig-info';
+    const mappedType = TYPE_MAP[gig.gigType] || 'other';
+    info.innerHTML =
+      '<div class="gig-name">' + esc(gig.name || '(no title)') + '</div>' +
+      '<div class="gig-meta">' + esc(gig.date || '') + (gig.time ? ' · ' + esc(gig.time) : '') +
+        (gig.venue ? ' · ' + esc(gig.venue) : '') + '</div>' +
+      '<div class="gig-meta">Type: ' + esc(gig.gigType || '—') + ' → PeteGCal: ' + esc(mappedType) + '</div>';
+
+    if (matches.length){
+      const m = document.createElement('div');
+      m.className = 'gig-match';
+      m.textContent = 'Matched: "' + matches[0].summary + '"' + (matches.length > 1 ? ' (+' + (matches.length-1) + ' more)' : '');
+      info.appendChild(m);
+    }
+    row.appendChild(info);
+
+    const action = document.createElement('div');
+    action.className = 'gig-action';
+    if (matches.length){
+      action.innerHTML = '<span class="pill ok">Matched</span>';
+    } else {
+      const pill = document.createElement('span');
+      pill.className = 'pill warn';
+      pill.textContent = 'Missing';
+      const btn = document.createElement('button');
+      btn.textContent = 'Create';
+      btn.style.marginLeft = '8px';
+      btn.addEventListener('click', function(){ createFromGig(gig, mappedType, row, btn); });
+      action.appendChild(pill);
+      action.appendChild(document.createElement('br'));
+      action.appendChild(btn);
+    }
+    row.appendChild(action);
+
+    resultsEl.appendChild(row);
+  });
+
+  summaryEl.innerHTML = '<span class="pill ok">' + matchedCount + ' matched</span> &nbsp; <span class="pill warn">' + missingCount + ' missing</span> &nbsp; <span class="gig-meta">of ' + gigs.length + ' gigs checked (title-match is a heuristic, not a certainty — review before creating)</span>';
+}
+
+async function createFromGig(gig, mappedType, rowEl, btn){
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+
+  let startEnd;
+  if (gig.time){
+    const start = new Date(gig.date + 'T' + gig.time + ':00');
+    const end = new Date(start.getTime() + 3 * 60 * 60000); // 3hr default, matching GigsAndTrips' own gcalGigUrl() assumption
+    startEnd = { start:{dateTime:start.toISOString()}, end:{dateTime:end.toISOString()} };
+  } else {
+    const start = new Date(gig.date + 'T00:00:00');
+    const end = new Date(start.getTime() + 86400000);
+    startEnd = { start:{date:gig.date}, end:{date: end.getFullYear()+'-'+String(end.getMonth()+1).padStart(2,'0')+'-'+String(end.getDate()).padStart(2,'0')} };
+  }
+
+  const description = [gig.ticketNote||'', gig.notes||''].filter(Boolean).join('\n');
+  const icon = TYPE_ICON[mappedType] || TYPE_ICON.other;
+  const eventBody = Object.assign({
+    summary: icon + ' ' + (gig.name || '(no title)'),
+    location: gig.venue || '',
+    description: description,
+    colorId: TYPE_COLOR[mappedType] || TYPE_COLOR.other
+  }, startEnd);
+
+  try {
+    await PalGCal.createEvent(CALENDAR_ID, eventBody, { type: mappedType, importedFrom: 'gigsandtrips', gigId: gig.id });
+    btn.textContent = 'Created ✓';
+    toast('Created: ' + (gig.name || '(no title)'));
+    const pillEl = rowEl.querySelector('.pill');
+    if (pillEl){ pillEl.className = 'pill ok'; pillEl.textContent = 'Created'; }
+  } catch(e){
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+    toast(PalGCal.errorHint(e), 'error');
+  }
+}
+
+function esc(s){
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

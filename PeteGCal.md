@@ -14,6 +14,52 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.9 — Event types expanded from 6 to 12, matching GigsAndTrips exactly
+
+Pete's call, made specifically before deploying for real: music/play/musical/comedy/sport/festival/cinema — originally collapsed into one generic "Gig/Event" bucket during PGC-004's "keep it minimal" scoping — are kept as their own distinct types after all. Applied consistently in both places that had a type system, not just the one Pete pointed at: `PeteGCal.html`'s own `EVENT_TYPES` (the create/edit picker and card badges) **and** `reconcile-gigs.html`'s import mapping, since leaving only one updated would have meant an imported "Comedy" gig showing correctly coloured on the real Calendar but badged generic "Other" the moment it's viewed inside PeteGCal itself.
+
+**What actually changed:** type *definitions* only — 6 entries became 12, each with GigsAndTrips' own exact icon and colour (ported directly from `GIG_TYPES`, not reinvented). No change to how types are stored (`extendedProperties`, same as always), no change to the create/edit form's structure, no change to card rendering logic — everything downstream of `EVENT_TYPES` already worked generically off the array, so expanding it was the entire change.
+
+**Google `colorId` assignment:** Google's native palette only has 11 colours for 12 types, so two pairs share (`pets`/`comedy` both Tangerine, `food`/`musical` both Banana) — picked deliberately so the pairs sharing a colour are unlikely to appear side-by-side often, rather than left to chance.
+
+**`reconcile-gigs.html` also gained an icon prefix on created events** (`🎸 Event name`, etc.) — it didn't have one before. GigsAndTrips' own old URL-based "Add to Calendar" flow always prefixed an icon onto the title; matching that now means newly-created imports look consistent with anything already on the calendar from an earlier manual send, rather than introducing a third, unprefixed title style.
+
+Files changed: `PeteGCal.html` (`EVENT_TYPES`, `.type-pill` CSS), `reconcile-gigs.html` (`TYPE_MAP` — now identity for the 7 instead of collapsing, `TYPE_COLOR`, new `TYPE_ICON`, icon prefix in `createFromGig()`).
+
+**Tested:** `node --check` passes on both files; confirmed all 12 keys present in `EVENT_TYPES` by direct grep, not assumption.
+
+**Not tested:** not yet run in a browser — the 12-chip type picker's layout/wrapping, the shared-colorId pairs' actual visual distinctness, and the icon-prefixed titles on newly created imports are all unconfirmed.
+
+---
+
+## Companion one-off tools
+
+**`reconcile-gigs.html`** — not part of `PeteGCal.html` itself, no version number of its own, not added to the launcher. A one-off (run-when-needed, not a standing feature) check: reads GigsAndTrips' real gigs from `localStorage['gat_v1_clean']` in whichever browser it's opened in, fetches real Google Calendar events across that date range in one bulk call, and matches each gig against Calendar by same-date + title-contains (a heuristic, not a certainty — GigsAndTrips' old URL-based "Add to Calendar" flow stamped a `[Sent D Mon]` suffix on every send, so exact-title matching would miss gigs sent more than once under slightly different titles). Shows a review list with per-item **Create** buttons — confirmed as the approach over a single bulk-confirm, given the heuristic's real but occasional mismatch risk. **Strictly one-way**: creates Calendar events, never writes anything back to GigsAndTrips' own data — confirmed as the approach over also marking `calendarAdded` on the source records. `gigType` (16 possible values, including 4 trip-item types that can technically appear on a gig record) is mapped exhaustively onto PeteGCal's 6 types, nothing left to an implicit fallback. Must be run in the same browser GigsAndTrips has actually been used in, since it reads local data directly — the tool says so plainly and shows a distinct message when no GigsAndTrips data is found at all, rather than silently reporting zero gigs.
+
+**Tested:** `node --check` passes; ID cross-check clean; the GSI script tag's presence was explicitly re-verified by direct grep this time, specifically because of the v1.3 miss.
+
+**Not tested:** not yet run against real data — the bulk date-range fetch, the title-matching heuristic's actual hit rate against real gig titles, and the per-item create flow are all unconfirmed in a browser.
+
+---
+
+## v1.8 — Background Fortnight sync, calendar-ID audit, card restyle to match GigsAndTrips
+
+Three separate requests addressed in one pass.
+
+**1. Hidden Fortnight Tracker instance for fresher working-day data.** A hidden `<iframe src="fortnight-tracker.html">` now loads on boot. PeteGCal captures its own incoming `PAL_SESSION`/`PAL_UNLOCKED` message (new — it never listened for this before, having no `PalSync` usage of its own) and relays it to the hidden frame once both the session and the frame are ready, in either order. This is the exact same pattern `fortnight-tracker.html` already uses for its own embedded Claims tab (FT-062), not a new approach — confirmed by reading that file directly rather than assuming the pattern would transfer. **Honest limitation:** only works when PeteGCal itself is embedded in the launcher, since that's the only place it receives a session to relay in the first place. Opened standalone, Fortnight's hidden copy just times out after 3 seconds and runs local-only — a safe no-op, not a failure.
+
+**2. Calendar-ID audit, both read and write paths.** Checked directly rather than asserted from memory: every `PalGCal.listEvents`/`createEvent`/`updateEvent`/`deleteEvent` call site uses the `CALENDAR_ID` constant, with zero stray `'primary'` references anywhere in actual code (one harmless mention survives in an explanatory comment). Confirmed correct for both read and write, for both users, by direct inspection of all four call sites — no code change needed.
+
+**3. Event cards restyled to match GigsAndTrips.** `GigsAndTrips.html` was re-read directly for its actual `.event-card`/`.card-*`/`.type-pill`/`.cal-badge` CSS, and those exact class names and colour values were ported in — not a lookalike under different names, the same vocabulary, so the two apps share one visual language going forward. Type-pill colours now match 1:1 for the four shared type keys (gym, appointment, pets, food, other); the new `gig` key reuses GigsAndTrips' `music` pill colours as the closest fit for a merged "Gig/Event" category. The "native Calendar entry" tag now uses GigsAndTrips' actual `.cal-badge` styling (Google-blue), which turned out to be a class already built for exactly this purpose. Past events now dim (`opacity:.72`), matching GigsAndTrips' own treatment. **One deliberate non-port:** GigsAndTrips shows a per-card date block because it only groups by year/month; PeteGCal already groups by individual day, so a per-card date block would duplicate the day-group header above it — kept the existing compact time line instead, serving the same role without the redundancy.
+
+Files changed: `PeteGCal.html` only (hidden iframe + session relay, `--sh0` token, full card CSS/markup rewrite in `renderEventCard()`).
+
+**Tested:** `node --check` passes; ID cross-check clean; the calendar-ID audit is itself a form of testing (direct inspection of all four call sites, not inference).
+
+**Not tested:** none of this has run in a browser yet. In particular, the session-relay timing (session arriving before vs. after the hidden frame finishes loading, both paths written but not watched happen) and the restyled cards' actual appearance are unconfirmed.
+
+---
+
 ## v1.7 (PGC-005, part 2) — Working-day alert, and PGC-005 is now complete
 
 **PGC-005 is done.** Both halves — event-overlap warning (v1.6) and this one — are built.
