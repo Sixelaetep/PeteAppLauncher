@@ -10,11 +10,10 @@
 // pre-paint pattern every other app in the suite uses.
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<!-- v1.10: agenda restructured to match GigsAndTrips properly — grouped
-     by month (not individual day) with a stacked day/month/weekday date
-     block on every card, not just colour-matched styling. Full version
-     history in PeteGCal.md. -->
-<title>PeteGCal v1.10</title>
+<!-- v1.11: Upcoming/Past split into separate tabs, matching GigsAndTrips
+     — Past sorts most-recent-first, Today button only shown on
+     Upcoming. Full version history in PeteGCal.md. -->
+<title>PeteGCal v1.11</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -55,6 +54,12 @@ header button.icon-btn:hover{background:var(--surf);}
 header button.today-btn{font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;
   border:1px solid var(--bdr);background:var(--surf);color:var(--ink2);cursor:pointer;}
 header button.today-btn:hover{border-color:var(--acc);color:var(--acc);}
+
+.tab-bar{display:flex;gap:4px;background:var(--hdr-bg);border-bottom:1px solid var(--bdr);
+  padding:0 16px;position:sticky;top:58px;z-index:9;}
+.tab-btn{background:none;border:none;padding:12px 4px;margin-right:20px;font-size:14.5px;font-weight:600;
+  color:var(--ink3);cursor:pointer;border-bottom:2px solid transparent;}
+.tab-btn.active{color:var(--acc);border-bottom-color:var(--acc);}
 
 main{max-width:620px;margin:0 auto;padding:16px;}
 
@@ -174,11 +179,16 @@ main{max-width:620px;margin:0 auto;padding:16px;}
 
 <header>
   <div class="icon">🗓️</div>
-  <div class="title">PeteGCal <span class="ver">v1.10</span></div>
+  <div class="title">PeteGCal <span class="ver">v1.11</span></div>
   <div class="sync-pill muted" id="syncPill">Not connected</div>
   <button class="today-btn" id="todayBtn" title="Jump to today" style="display:none;">Today</button>
   <button class="icon-btn" id="refreshBtn" title="Refresh" style="display:none;">⟳</button>
 </header>
+
+<div class="tab-bar" id="tabBar" style="display:none;">
+  <button class="tab-btn active" id="tabUpcoming" data-tab="upcoming">Upcoming</button>
+  <button class="tab-btn" id="tabPast" data-tab="past">Past</button>
+</div>
 
 <main>
   <div id="gate" class="gate">
@@ -389,13 +399,15 @@ function showGate(){
   document.getElementById('refreshBtn').style.display = 'none';
   document.getElementById('todayBtn').style.display = 'none';
   document.getElementById('fabAdd').style.display = 'none';
+  document.getElementById('tabBar').style.display = 'none';
 }
 function showAgenda(){
   document.getElementById('gate').style.display = 'none';
   document.getElementById('agendaRoot').style.display = 'block';
   document.getElementById('refreshBtn').style.display = 'inline-block';
-  document.getElementById('todayBtn').style.display = 'inline-block';
   document.getElementById('fabAdd').style.display = 'flex';
+  document.getElementById('tabBar').style.display = 'flex';
+  updateTodayBtnVisibility();
 }
 
 window.onload = function(){
@@ -451,6 +463,8 @@ window.onload = function(){
   document.getElementById('todayBtn').addEventListener('click', function(){
     scrollToToday(true);
   });
+  document.getElementById('tabUpcoming').addEventListener('click', function(){ switchTab('upcoming'); });
+  document.getElementById('tabPast').addEventListener('click', function(){ switchTab('past'); });
 
   // PGC-004: create/edit/delete wiring.
   renderTypeGrid();
@@ -510,22 +524,70 @@ function formatMonthLabel(d){
   return d.getFullYear() === new Date().getFullYear() ? label : label + ' ' + d.getFullYear();
 }
 
+let _lastEvents = [];
+let _currentTab = 'upcoming';
+
 function renderAgenda(events){
+  _lastEvents = events;
+  renderActiveTab();
+}
+
+function switchTab(tab){
+  _currentTab = tab;
+  document.getElementById('tabUpcoming').classList.toggle('active', tab === 'upcoming');
+  document.getElementById('tabPast').classList.toggle('active', tab === 'past');
+  updateTodayBtnVisibility();
+  renderActiveTab();
+}
+
+function updateTodayBtnVisibility(){
+  // Today only means something on the Upcoming tab — there's no "today"
+  // to jump to on Past.
+  document.getElementById('todayBtn').style.display =
+    (_currentTab === 'upcoming' && document.getElementById('agendaRoot').style.display !== 'none') ? 'inline-block' : 'none';
+}
+
+function renderActiveTab(){
   const root = document.getElementById('agendaRoot');
+  const todayKey = dayKey(new Date());
+
+  const upcoming = [], past = [];
+  _lastEvents.forEach(function(ev){
+    const k = dayKey(new Date(ev.start.dateTime || ev.start.date));
+    (k < todayKey ? past : upcoming).push(ev);
+  });
+  // Past tab reads most-recent-first — matches GigsAndTrips' own Past
+  // tab ordering (sortCmp with forPast:true reverses the comparator).
+  past.reverse();
+
+  const events = _currentTab === 'past' ? past : upcoming;
   root.innerHTML = '';
 
   if (!events.length){
-    root.innerHTML = '<div class="empty-state"><div class="emoji">🌤️</div>Nothing on the calendar in this window.</div>';
+    root.innerHTML = '<div class="empty-state"><div class="emoji">🌤️</div>' +
+      (_currentTab === 'past' ? 'Nothing in the past 14 days.' : 'Nothing upcoming in this window.') + '</div>';
     return;
   }
 
-  // Grouped by month now, not individual day — each card carries its
-  // own date block (below), matching GigsAndTrips' layout rather than a
-  // day-group header. A single "Month YYYY" level is used rather than
-  // GigsAndTrips' nested year+month, since PeteGCal's rolling window
-  // rarely spans more than one year; the label itself includes the year
-  // whenever it isn't the current one, so that boundary still reads
-  // clearly without a second header level.
+  renderEventGroups(events, root);
+
+  if (_currentTab === 'upcoming'){
+    // Default view is today, not the top of the window — wrapped in
+    // rAF so the scroll happens after layout has settled.
+    requestAnimationFrame(function(){ scrollToToday(false); });
+  }
+}
+
+// Grouped by month — each card carries its own date block (below),
+// matching GigsAndTrips' layout rather than a day-group header. A
+// single "Month YYYY" level is used rather than GigsAndTrips' nested
+// year+month, since PeteGCal's rolling window rarely spans more than
+// one year; the label itself includes the year whenever it isn't the
+// current one, so that boundary still reads clearly without a second
+// header level. Shared by both tabs — order of `events` in is the
+// order groups/cards render in, so the caller (renderActiveTab)
+// decides ascending vs. reverse-chronological before calling this.
+function renderEventGroups(events, root){
   const groups = [];
   const groupByKey = {};
 
@@ -557,10 +619,6 @@ function renderAgenda(events){
 
     root.appendChild(section);
   });
-
-  // Default view is today, not the top of the 14-day-past window —
-  // wrapped in rAF so the scroll happens after layout has settled.
-  requestAnimationFrame(function(){ scrollToToday(false); });
 }
 
 function scrollToToday(smooth){

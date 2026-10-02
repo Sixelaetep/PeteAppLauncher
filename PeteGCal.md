@@ -14,6 +14,24 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.11 — Upcoming/Past split into separate tabs
+
+GigsAndTrips shows four tabs (Upcoming/Past/Reviews/Locations); only Upcoming/Past map to anything PeteGCal actually has — Reviews and Locations are GigsAndTrips-specific features (trip reviews, venue management) with no PeteGCal equivalent, so only the two that apply were built, not all four for parity's own sake.
+
+**Behaviour, checked against GigsAndTrips' actual code rather than assumed:** Past sorts most-recent-first — confirmed by reading GigsAndTrips' `sortCmp()`, which reverses its comparator specifically when `forPast` is true. Upcoming keeps ascending order as before. The **Today** button now only shows on the Upcoming tab (there's no "today" to jump to on Past); the FAB stays visible on both, since creating an event shouldn't depend on which tab you happen to be looking at.
+
+**Known limitation, not hidden:** Past only shows the 14 days actually fetched (`WINDOW_PAST_DAYS`) — it is not GigsAndTrips' full unbounded history. The empty state says so plainly ("Nothing in the past 14 days") rather than implying a deeper archive exists. Widening that window is a separate, deliberate change if wanted later, not bundled into this one.
+
+**Implementation note:** the month-grouping/card-rendering logic from v1.10 was factored out into a shared `renderEventGroups()` used by both tabs, rather than duplicated — Upcoming and Past differ only in which events they pass in and in what order.
+
+Files changed: `PeteGCal.html` only — new tab-bar markup/CSS, `renderAgenda()` split into `renderAgenda()` (entry) / `renderActiveTab()` (filter+sort+render) / `renderEventGroups()` (shared rendering), new `switchTab()`/`updateTodayBtnVisibility()`.
+
+**Tested:** `node --check` passes; CSS-comment integrity and brace balance re-verified (0 broken, clean); ID cross-check clean.
+
+**Not tested:** not yet run in a browser — tab switching, the Past-tab reverse ordering, and the Today button correctly hiding on Past are all unconfirmed in practice.
+
+---
+
 ## v1.10 — Agenda restructured to actually match GigsAndTrips: month grouping + per-card date block
 
 v1.8/v1.9.1 ported GigsAndTrips' *colours and class names* but deliberately kept PeteGCal's own day-grouped structure, reasoning a per-card date block would be redundant under a day-group header. Pete asked for the real GigsAndTrips layout anyway — this delivers it properly rather than half-porting it again.
