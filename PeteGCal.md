@@ -6,6 +6,26 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.2 — visible version badge; init-failure handling in pal-gcal.js
+
+Prompted by Pete hitting a genuinely ambiguous "Google sign-in issue: not initialised" error after the v1.1 fix, plus a fair complaint: no way to tell which version was actually running in the browser.
+
+**Version badge.** Header now shows "PeteGCal v1.2" next to the app name, kept in sync with the `<title>` tag and the inline pointer comment on every release going forward — same three-places-at-once discipline the launcher's `index.html` already uses for its own version.
+
+**`pal-gcal.js`: `init()` now has a timeout and a distinct failure path.** Previously, if `window.google.accounts.oauth2` never became available (script blocked by a content blocker, a stale cache, or any other load failure), `init()` retried every 300ms *forever*, in total silence — the app would just sit there, and any `signIn()`/`requestTokenRefresh()` call in that state would fail with a bare `'not-initialised'` code and no further explanation. Now it gives up after ~6 seconds (20 attempts) and calls a new `onInitFailed(msg)` callback with a specific, actionable message — distinct from `onAuthError`, since "the script never loaded" and "a sign-in attempt was made and rejected" are different failure modes that deserve different handling and different user-facing text.
+
+**Readable error text.** `PeteGCal.html` now maps the `'not-initialised'` code to a plain sentence instead of showing the raw code string in the toast.
+
+**Not a confirmed fix for Pete's original Safari issue** — this makes the failure mode diagnosable (loud, specific, timed-out) rather than fixing an unconfirmed root cause. Two live suspects, not yet distinguished: (1) Safari serving a stale cached copy of `PeteGCal.html` from before the v1.1 fix, since the page itself has no cache-busting query string unlike the scripts it loads; (2) a content blocker/extension preventing `accounts.google.com/gsi/client` from loading at all. The next real-world attempt, now with the version badge confirming which code is actually running and a proper hard refresh beforehand, should distinguish between these.
+
+Files changed: `PeteGCal.html` (version badge, `onInitFailed` wiring, `authErrorText()` helper, version markers), `pal-gcal.js` (`init()`/`_tryInit()` restructured with a 20-attempt timeout and new `onInitFailed` callback — backward compatible, defaults to a no-op if a consumer doesn't supply it).
+
+**Tested:** `node --check` passes on both files.
+
+**Not tested:** Not yet re-run against the actual failure. The timeout path (Google script genuinely never loading) hasn't been triggered deliberately to confirm `onInitFailed` fires as designed — only reasoned through against the code.
+
+---
+
 ## v1.1 — fix: auth errors failed completely silently
 
 Bug fix, found immediately on first real-world use. Pete clicked "Sign in with Google" in Safari and nothing visible happened at all — no popup, no error, no console output.

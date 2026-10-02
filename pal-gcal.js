@@ -46,6 +46,9 @@ window.PalGCal = (function () {
   let _onAuthChange = function () {};
   let _onTokenRefreshed = function () {};
   let _onAuthError = function () {};
+  let _onInitFailed = function () {};
+  let _initAttempts = 0;
+  const INIT_MAX_ATTEMPTS = 20; // ~6s at 300ms apart, then give up loudly
 
   // ── Init ──────────────────────────────────────────────────────────────
 
@@ -55,20 +58,32 @@ window.PalGCal = (function () {
     if (opts.onAuthChange) _onAuthChange = opts.onAuthChange;
     if (opts.onTokenRefreshed) _onTokenRefreshed = opts.onTokenRefreshed;
     if (opts.onAuthError) _onAuthError = opts.onAuthError;
+    // Distinct from onAuthError: this fires only if Google's own sign-in
+    // script never becomes available at all (blocked by a content
+    // blocker/extension, stale cache, or a genuine network failure) —
+    // not a sign-in attempt that was made and rejected. Without this,
+    // the retry loop below would wait forever in total silence.
+    if (opts.onInitFailed) _onInitFailed = opts.onInitFailed;
 
-    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-      // Google Identity Services script not loaded yet. Common if this
-      // runs before the <script> tag's async load finishes — retry once
-      // shortly rather than fail silently.
-      setTimeout(function () { init(opts); }, 300);
+    _initAttempts = 0;
+    _tryInit();
+  }
+
+  function _tryInit() {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+      _tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: _clientId,
+        scope: SCOPE,
+        callback: _onTokenResponse
+      });
       return;
     }
-
-    _tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: _clientId,
-      scope: SCOPE,
-      callback: _onTokenResponse
-    });
+    _initAttempts++;
+    if (_initAttempts > INIT_MAX_ATTEMPTS) {
+      _onInitFailed('Google sign-in script never loaded (accounts.google.com/gsi/client) — check for a content blocker/extension, or try a hard refresh.');
+      return;
+    }
+    setTimeout(_tryInit, 300);
   }
 
   function _onTokenResponse(resp) {
