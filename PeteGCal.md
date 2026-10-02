@@ -14,6 +14,24 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.9.1 — Fix: card styling was never actually rendering since v1.8
+
+Found by Pete comparing a live screenshot against GigsAndTrips directly — cards had no background, border, or shadow at all, just plain text with no visual separation, nothing like the ported design v1.8 claimed to add.
+
+**Root cause, confirmed not guessed.** The v1.8 CSS comment explaining the card port contained the literal text `.card-*/.type-pill` — and `*/` is CSS's comment-close sequence. The comment closed right there, mid-sentence, and the rest of its prose (plain English, not valid CSS) got parsed as broken stylesheet content from that point until the parser could resync — which silently dropped `.event-card`, `.card-body`, and the rules immediately following them. The classes were being applied correctly in the DOM (verified by direct inspection of `renderEventCard()` — nothing wrong there) and `.type-pill`/`.cal-badge` further down the stylesheet were unaffected, which is why the type/calendar badges still showed correctly even with the card chrome missing entirely.
+
+**Fix.** Reworded the comment to avoid the `*/` substring (a comma instead of a slash between class names). Verified properly this time: simulated the same non-greedy comment-matching a real CSS parser performs, across the entire stylesheet, and confirmed all 4 comment blocks now close cleanly with nothing malformed inside any of them — not just confirming the one fix, checking for any other instance of the same mistake.
+
+Files changed: `PeteGCal.html` only (one comment reworded).
+
+**Tested:** `node --check` passes; the CSS-comment-closure simulation above is a genuine test of the actual bug mechanism, not just a syntax check.
+
+**Not tested:** not yet confirmed rendering correctly in a real browser — the simulation proves the stylesheet is no longer structurally broken, not that the cards look right.
+
+**Open question for Pete:** the screenshot showed "Gym" events with a plain "📅 Calendar" badge rather than a coloured Gym type-pill — correct if those were pre-existing native Calendar entries never touched by PeteGCal, a bug worth chasing if they were actually created through PeteGCal's own form. Worth confirming which, once the card-chrome fix is visible.
+
+---
+
 ## v1.9 — Event types expanded from 6 to 12, matching GigsAndTrips exactly
 
 Pete's call, made specifically before deploying for real: music/play/musical/comedy/sport/festival/cinema — originally collapsed into one generic "Gig/Event" bucket during PGC-004's "keep it minimal" scoping — are kept as their own distinct types after all. Applied consistently in both places that had a type system, not just the one Pete pointed at: `PeteGCal.html`'s own `EVENT_TYPES` (the create/edit picker and card badges) **and** `reconcile-gigs.html`'s import mapping, since leaving only one updated would have meant an imported "Comedy" gig showing correctly coloured on the real Calendar but badged generic "Other" the moment it's viewed inside PeteGCal itself.
