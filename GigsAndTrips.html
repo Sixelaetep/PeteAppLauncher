@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.78</title>
+<title>Gigs &amp; Trips v7.79</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.78</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.79</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -554,7 +554,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.78"></script>
+<script src="pal-shared.js?v=7.79"></script>
 <!-- GIG-072: Google Calendar sync foundation. GSI script tag included
      explicitly here — PeteGCal's v1.0 shipped without this and every
      sign-in attempt failed silently for several rounds before the cause
@@ -584,6 +584,16 @@ const SK       = 'gat_v1'; // localStorage key
 // wire the actual sync; this issue is foundation only.
 const GCAL_CLIENT_ID = '417857203939-6novvttk4q4bp72e2nk6j21d4f5jbsoi.apps.googleusercontent.com';
 const GCAL_CALENDAR_ID = 'peteshellard@gmail.com';
+// GIG-074: Google's native colorId per gig type, same assignment used
+// in PeteGCal and reconcile-gigs.html for consistency across the whole
+// suite. Icon comes from GIG_TYPES itself (gigTypeInfo(key).icon) —
+// not duplicated here, since that already exists and stays correct if
+// GIG_TYPES ever changes.
+const GCAL_COLOR_MAP = {
+  music:'3', play:'4', musical:'5', comedy:'6', sport:'2', festival:'9', cinema:'7',
+  travel:'1', accommodation:'1', attraction:'1', keystop:'1',
+  gym:'10', appointment:'1', pets:'6', food:'5', other:'8'
+};
 
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -2657,18 +2667,16 @@ function saveGig(){
   saveData(d);
   if(newVenueFromGig) syncVenueNow(newVenueFromGig);
   pushEvent(g);
-  // Auto-open Google Calendar for new gigs and set the flag immediately.
-  // window.open must be called before closeModal() to stay within the
-  // user-gesture stack — browsers block popups called asynchronously.
-  if(isNew){
-    g.calendarAdded=true;
-    g.updatedAt=new Date().toISOString();
-    saveEvent(g);
-    window.open(gcalGigUrl(g),'_blank','noopener');
-  }
+  // GIG-074: real Calendar sync, fire-and-forget — the gig is already
+  // saved locally and pushed by this point (above), so a slow or
+  // failed Calendar call never costs the actual save. No popup window
+  // anymore; the gig detail view's "Sync to Google Calendar" /
+  // "View in Google Calendar" button (above) reflects the real state
+  // once this resolves.
+  gcalSyncGig(g, isNew);
 
   closeModal();
-  showToast(isNew?'Gig added ✓ — Google Calendar opened':'Gig updated ✓');
+  showToast(isNew?'Gig added ✓':'Gig updated ✓');
 
   // GIG-043: if this gig was added from inside a trip's day view, return
   // there instead of the plain list so the new gig is immediately visible
@@ -2701,6 +2709,10 @@ function saveGig(){
 function confirmDeleteGig(id){
   const g=getEvent(id); if(!g) return;
   if(!confirm(`Delete "${g.name}"?`)) return;
+  // GIG-074: delete the real Calendar event too, if this gig has one —
+  // fire-and-forget, same as gcalSyncGig; the gig's own deletion below
+  // never waits on it.
+  if(g.calendarEventId) gcalDeleteGig(g.calendarEventId, g.name);
   deleteEvent(id); closeModal(); showToast('Gig deleted'); render();
 }
 
@@ -2743,15 +2755,18 @@ function openGigDetail(id){
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-pri" onclick="closeModal();openEditGig('${esc(g.id)}')">✏️ Edit</button>
         ${(()=>{
-          // v7.8 (GIG-033): simplified from a 3-state button (blue Add /
-          // amber Update / greyed "In Calendar ✓") down to one always-active
-          // action. It always opens a fresh Google Calendar tab stamped with
-          // a [Sent D Mon] suffix — see gcalGigUrl. The "In Calendar" badge
-          // in the modal title above is the only "has this been sent"
-          // indicator now.
+          // GIG-074: real sync replaces the old always-open-a-new-tab
+          // button. A gig with a stored calendarEventId has a genuine
+          // link — shown as "View in Google Calendar", opening the real
+          // event, not a new one. Without one (not signed in at save
+          // time, or a transient failure — sync is best-effort and
+          // never blocks the save itself), a "Sync to Google Calendar"
+          // button retries it on demand.
           const _svg=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><rect x="3" y="4" width="18" height="17" rx="2" fill="#fff" stroke="#d2e3fc" stroke-width="1.5"/><path d="M16 2v4M8 2v4M3 9h18" stroke="#1a73e8" stroke-width="1.5" stroke-linecap="round"/></svg>`;
-          const _dupNote=g.calendarAdded?'<div style="font-size:11px;color:var(--ink3);margin-top:4px;line-height:1.4">Opens a new event — delete any previous one in Google Calendar</div>':'';
-          return `<div><a class="btn" style="background:#fff;color:#1a73e8;border:1.5px solid #d2e3fc;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px" href="${gcalGigUrl(g)}" target="_blank" rel="noopener" onclick="markCalendarAdded('${esc(g.id)}')">${_svg}Add to Google Calendar</a>${_dupNote}</div>`;
+          if (g.calendarEventId && g.calendarHtmlLink){
+            return `<a class="btn" style="background:#fff;color:#1a73e8;border:1.5px solid #d2e3fc;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px" href="${esc(g.calendarHtmlLink)}" target="_blank" rel="noopener">${_svg}View in Google Calendar</a>`;
+          }
+          return `<button class="btn" style="background:#fff;color:#1a73e8;border:1.5px solid #d2e3fc;display:flex;align-items:center;justify-content:center;gap:6px" onclick="gcalRetrySync('${esc(g.id)}')">${_svg}Sync to Google Calendar</button>`;
         })()}
         ${!g.done&&!g.missed?`<button class="btn btn-ghost" onclick="closeModal();showReviewForm('${esc(g.id)}')">⭐ ${hasReview?'Edit review':'Add review'}</button>`:''}
         ${!g.done&&!g.missed?`<button class="btn" style="background:var(--ok-dim);color:var(--ok);border:1.5px solid #6ee7b7" onclick="markGigDone('${esc(g.id)}')">✓ Mark as done</button>`:''}
@@ -6429,33 +6444,86 @@ function markCalendarAdded(id){
 // ═══════════════════════════════════════════════════════════════════
 // GOOGLE CALENDAR LINKS
 // ═══════════════════════════════════════════════════════════════════
-function gcalGigUrl(g){
-  let dates;
-  if(g.time){
-    const start=new Date(g.date+'T'+g.time+':00');
-    const end=new Date(start.getTime()+3*60*60*1000);
-    const fmt=d=>`${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}${String(d.getUTCDate()).padStart(2,'0')}T${String(d.getUTCHours()).padStart(2,'0')}${String(d.getUTCMinutes()).padStart(2,'0')}00Z`;
-    dates=fmt(start)+'/'+fmt(end);
-  } else {
-    const ds=g.date.replace(/-/g,'');
-    const next=new Date(g.date+'T00:00:00');
-    next.setDate(next.getDate()+1);
-    const nd=localDateStr(next).replace(/-/g,'');
-    dates=ds+'/'+nd;
+// ═══════════════════════════════════════════════════════════════════
+// GIG-074: real Calendar sync — replaces the old URL-popup flow
+// ═══════════════════════════════════════════════════════════════════
+// Deliberately fire-and-forget from saveGig()'s point of view: the
+// local save (saveData/pushEvent) already happened by the time this
+// runs, so a gig is never left unsaved just because Calendar sync is
+// slow, offline, or not signed in. On success this calls saveEvent()
+// again with the real calendarEventId attached — a second, cheap local
+// write, not a second "did it save" risk.
+async function gcalSyncGig(g, isNew){
+  if (!PalGCal.hasToken()){
+    syncLog('Calendar sync skipped (not signed in) — "' + g.name + '" saved locally only', 'info');
+    return;
   }
-  // v7.8 (GIG-033): always append a [Sent D Mon] suffix (was only added on
-  // "update") so every send — first time or repeat — is stamped with the
-  // date it was sent, making duplicates in Google Calendar easy to spot.
-  const _sentSuffix=' [Sent '+new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short'})+']';
-  const parts=['https://calendar.google.com/calendar/render?action=TEMPLATE'];
-  const _gigIcon=gigTypeInfo(g.gigType||'music').icon;
-  parts.push('text='+encodeURIComponent(_gigIcon+' '+g.name+_sentSuffix));
-  parts.push('dates='+dates);
-  const details=[g.ticketNote||'',g.notes||''].filter(Boolean).join('\n');
-  if(details) parts.push('details='+encodeURIComponent(details));
-  if(g.venue) parts.push('location='+encodeURIComponent(g.venue));
-  return parts.join('&');
+
+  const t = gigTypeInfo(g.gigType);
+  let startEnd;
+  if (g.time){
+    const start = new Date(g.date + 'T' + g.time + ':00');
+    const end = new Date(start.getTime() + 3 * 60 * 60000); // 3hr default, matching the old gcalGigUrl()
+    startEnd = { start:{dateTime:start.toISOString()}, end:{dateTime:end.toISOString()} };
+  } else {
+    const start = new Date(g.date + 'T00:00:00');
+    const end = new Date(start.getTime() + 86400000);
+    const fmt = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    startEnd = { start:{date:g.date}, end:{date:fmt(end)} };
+  }
+
+  const description = [g.ticketNote||'', g.notes||''].filter(Boolean).join('\n');
+  const eventBody = Object.assign({
+    summary: t.icon + ' ' + g.name,
+    location: g.venue || '',
+    description: description,
+    colorId: GCAL_COLOR_MAP[g.gigType] || GCAL_COLOR_MAP.other
+  }, startEnd);
+  const meta = { type: g.gigType, gigId: g.id };
+
+  try {
+    let result;
+    if (g.calendarEventId){
+      result = await PalGCal.updateEvent(GCAL_CALENDAR_ID, g.calendarEventId, eventBody, meta);
+    } else {
+      result = await PalGCal.createEvent(GCAL_CALENDAR_ID, eventBody, meta);
+    }
+    const fresh = getEvent(g.id);
+    if (fresh){
+      fresh.calendarEventId = result.id;
+      fresh.calendarHtmlLink = result.htmlLink;
+      fresh.updatedAt = new Date().toISOString();
+      saveEvent(fresh);
+    }
+    syncLog('Calendar ' + (g.calendarEventId ? 'updated' : 'created') + ': "' + g.name + '"', 'ok');
+  } catch(e){
+    syncLog('Calendar sync failed for "' + g.name + '": ' + PalGCal.errorHint(e), 'err');
+  }
 }
+
+// Manual retry from the gig detail view, for a gig that didn't sync
+// automatically (not signed in at save time, or a transient failure).
+async function gcalRetrySync(id){
+  const g = getEvent(id); if (!g) return;
+  showToast('Syncing to Calendar…');
+  await gcalSyncGig(g, !g.calendarEventId);
+  openGigDetail(id); // re-render so the button reflects the new state
+}
+
+async function gcalDeleteGig(calendarEventId, name){
+  if (!calendarEventId || !PalGCal.hasToken()) return;
+  try {
+    await PalGCal.deleteEvent(GCAL_CALENDAR_ID, calendarEventId);
+    syncLog('Calendar event deleted: "' + name + '"', 'ok');
+  } catch(e){
+    syncLog('Calendar delete failed for "' + name + '": ' + PalGCal.errorHint(e), 'err');
+  }
+}
+
+// gcalGigUrl() removed in GIG-074 — the URL-popup flow it built is
+// fully replaced by gcalSyncGig()'s real create/update calls above.
+// gcalTripUrl() (below) is untouched: trips still use the old flow
+// until GIG-077 gives them the same real-sync treatment gigs just got.
 
 // ── Trip itinerary text (GIG-036) ────────────────────────────────────
 // Day-by-day plain-text summary: each day's date as a header line, then
@@ -6740,7 +6808,14 @@ function initGCalSync(){
       syncLog('Google Calendar: ' + msg, 'err');
     }
   });
-  syncLog('Google Calendar sync module loaded (GIG-072 — foundation only, not yet wired to any button)', 'info');
+  syncLog('Google Calendar sync module loaded', 'info');
+  // GIG-074: attempt a silent sign-in shortly after load, same pattern
+  // PeteGCal uses — if the browser's Google session is still valid
+  // (e.g. from the GIG-073 migration tool, or PeteGCal itself on this
+  // device), gig saves sync to Calendar with no visible prompt. If not,
+  // this just fails quietly; saving a gig still works fine either way,
+  // it just won't sync to Calendar until signed in.
+  setTimeout(function(){ PalGCal.requestTokenRefresh(); }, 600);
 }
 
 // Expose for launcher backup
