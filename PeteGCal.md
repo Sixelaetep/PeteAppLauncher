@@ -14,6 +14,26 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.10 — Agenda restructured to actually match GigsAndTrips: month grouping + per-card date block
+
+v1.8/v1.9.1 ported GigsAndTrips' *colours and class names* but deliberately kept PeteGCal's own day-grouped structure, reasoning a per-card date block would be redundant under a day-group header. Pete asked for the real GigsAndTrips layout anyway — this delivers it properly rather than half-porting it again.
+
+**What changed:**
+- **Grouping moved from individual day to month.** `renderAgenda()` now groups by `monthKey()` (`YYYY-MM`) instead of `dayKey()`. Month headers (`.month-hdr`) show the month name and event count, styled at the same visual weight as GigsAndTrips' primary `.year-hdr` — a deliberate adaptation, not a direct copy: GigsAndTrips nests month under year because it covers unbounded history; PeteGCal's rolling window (14 days back, 180 forward) rarely crosses more than one year boundary, so a single "Month YYYY" level does the job without a redundant second nesting level. The label includes the year only when it isn't the current one.
+- **Every card now carries its own stacked date block** (`.card-date-block` — day number large, month and weekday small above/below), ported at GigsAndTrips' exact values, sitting left of the title/location/time/type in a `.card-top` flex row.
+- **"Today" scroll-targeting moved from day-group containers to individual cards.** Each card now carries a `data-datekey` attribute; `scrollToToday()` finds the first card at or after today's date and scrolls to it directly, rather than to a day-group wrapper that no longer exists.
+- **Dead code removed**, not left behind: `formatDayLabel()` (only ever used by the old day-group header) is gone entirely, and the explanatory comment above `.event-card` — which argued *against* a date block — was rewritten to describe why one exists now, rather than left stale and misleading for whoever reads it next.
+
+**Verification habits from the v1.9.1 miss, applied again here rather than only that one time:** re-ran the same CSS-comment-closure simulation across the whole stylesheet after this edit too (0 broken, 87/87 braces balanced) — not just trusting that a bigger structural change didn't reintroduce the same class of bug.
+
+Files changed: `PeteGCal.html` only — CSS (`.month-hdr`/`.card-date-block`/`.card-top`/`.card-info` added; old `.day-group`/`.day-label` removed), `renderAgenda()`, `renderEventCard()`, `scrollToToday()` all rewritten; `formatDayLabel()` deleted.
+
+**Tested:** `node --check` passes; CSS-comment integrity and brace-balance re-verified; ID cross-check clean; grepped for any remaining `day-group`/`day-label` references to confirm nothing stale was left half-migrated.
+
+**Not tested:** not yet run in a browser. Month-header rendering, the date-block's layout alongside the title/meta row, and the today-scroll targeting a specific card rather than a day-group container are all unconfirmed in practice.
+
+---
+
 ## v1.9.1 — Fix: card styling was never actually rendering since v1.8
 
 Found by Pete comparing a live screenshot against GigsAndTrips directly — cards had no background, border, or shadow at all, just plain text with no visual separation, nothing like the ported design v1.8 claimed to add.
