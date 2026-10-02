@@ -6,6 +6,32 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## v1.4 (PGC-004) — Create, edit, delete
+
+**PGC-003 is now confirmed working end to end**, not just reasoned through: Pete signed in, the agenda populated from the real calendar, and — from the earlier chat thread — Lex independently confirmed write access to Pete's shared calendar via the module-based test page. All three gates from PGC-001/002/003 are closed.
+
+**What's new.** A floating "+" button opens a bottom-sheet form to create an event; tapping any existing event card (app-created or native) opens the same form pre-filled, for editing. Delete always removes the real Google Calendar event, with a confirm step first, per the house rule decided during scoping.
+
+**Minimum field set**, agreed before building rather than ported wholesale from GigsAndTrips' larger set: Title, Type, Date/time (or all-day), Location, Notes. Explicitly dropped for this phase: venue autocomplete/Google Maps linking, multi-currency costs, travel/meal sub-types, and anything trip-structural — trips stay deferred to PGC-006 as planned.
+
+**Event types — 6, not 16.** GigsAndTrips has a much larger `GIG_TYPES`/`ITEM_TYPES` set built for its trip-item system; PeteGCal's first pass uses a deliberately small set: 🎫 Gig/Event, 💪 Gym, 📅 Appointment, 🐶 Pets, 🍽️ Food, 📌 Other. Stored via `pal-gcal.js`'s existing `extendedProperties` mechanism (`{type: 'gig'}` etc.), same as before.
+
+**New: type also maps to Google's native `colorId`.** Not explicitly requested, but close to free given Google already supports it — each type sets a native event colour (e.g. Gig/Event → Grape/purple, Gym → Basil/green), so the distinction is visible in the real Google Calendar app on your phone too, not just inside PeteGCal. This is a plain top-level field on the event body, unrelated to the `extendedProperties` metadata.
+
+**Editing a native Calendar entry for the first time** defaults its type to "Other" (no type existed before), consistent with the "every event is first-class regardless of origin" design — enriching it just means picking a real type and saving, same form either way.
+
+**Field-to-Google mapping**, confirming how little custom infrastructure this needed: Title → `summary`, Location → `location`, Notes → `description` — all native Google Calendar fields, no custom venue system required for this minimum version.
+
+**Noted for later, not built yet:** a working-days conflict alert (PGC-005) is now explicitly scoped to **read from the existing `fortnight-tracker.html` pattern** rather than duplicate a separate working-days setting inside PeteGCal — a design decision made during scoping, ahead of actually building PGC-005, specifically to avoid maintaining the same shift pattern in two places.
+
+Files changed: `PeteGCal.html` only (new CSS for the FAB/sheet/type-chips, new sheet markup, `EVENT_TYPES` constant, `openCreateForm`/`openEditForm`/`closeForm`/`handleSave`/`handleDelete` and supporting helpers, `_eventsById` lookup map populated on every load, event cards now clickable). No change to `pal-gcal.js` — its existing `createEvent`/`updateEvent`/`deleteEvent`/`withAppMeta` were already exactly what this phase needed.
+
+**Tested:** `node --check` passes on both inline script blocks. Every `getElementById` call in the file was cross-checked against the actual markup — no ID mismatches (a lesson taken from the v1.3 root-cause miss: verify references exist rather than assume).
+
+**Not tested:** none of the actual create/edit/delete flow has been run in a browser yet — form validation, the all-day toggle, the type picker, the colorId showing correctly in native Google Calendar, editing a native-origin event, and the delete confirm flow are all reasoned through against `pal-gcal.js`'s already-proven CRUD methods, not yet exercised directly.
+
+---
+
 ## v1.3 — root-cause fix: the GSI script tag was never actually in the file
 
 **The real cause of every sign-in failure since v1.0.** `PeteGCal.html` never included `<script src="https://accounts.google.com/gsi/client" async defer></script>`. `pal-gcal.js` documents this requirement in its own header comment ("Load order: include the Google Identity Services script before this file...") but the file that actually needed to follow that instruction never did. `window.google.accounts.oauth2` was consequently never available, which is exactly what the v1.2 `onInitFailed` timeout correctly detected and reported — v1.2's diagnostics were accurate; the root cause just hadn't been found yet.

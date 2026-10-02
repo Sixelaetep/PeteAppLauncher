@@ -10,12 +10,10 @@
 // pre-paint pattern every other app in the suite uses.
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<!-- v1.3: root-cause fix — the Google Identity Services script tag was
-     never actually in this file (present only as a documentation
-     comment inside pal-gcal.js). Added between pal-shared.js and
-     pal-gcal.js. Full version history in PeteGCal.md, not duplicated
-     here. -->
-<title>PeteGCal v1.3</title>
+<!-- v1.4 (PGC-004): create/edit/delete — FAB + bottom sheet form, 6-type
+     picker synced to Google's native colorId, delete always removes the
+     real Calendar event. Full version history in PeteGCal.md. -->
+<title>PeteGCal v1.4</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -89,13 +87,49 @@ main{max-width:620px;margin:0 auto;padding:16px;}
   background:#1a1a2e;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:600;z-index:400;
   opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;max-width:calc(100vw - 32px);text-align:center;}
 .toast.show{opacity:1;}
+
+/* ── PGC-004: create/edit/delete ── */
+.ev-card{cursor:pointer;transition:border-color var(--tr);}
+.ev-card:hover{border-color:var(--acc);}
+.fab{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));width:52px;height:52px;
+  border-radius:50%;background:var(--acc);color:#fff;border:none;font-size:26px;cursor:pointer;
+  box-shadow:var(--sh);display:flex;align-items:center;justify-content:center;z-index:50;}
+.fab:hover{background:var(--acc-dk);}
+
+.sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;display:none;
+  align-items:flex-end;justify-content:center;}
+.sheet-overlay.open{display:flex;}
+.sheet{background:var(--card);border-radius:var(--rlg) var(--rlg) 0 0;width:100%;max-width:620px;
+  max-height:88vh;overflow-y:auto;padding:20px 20px calc(20px + env(safe-area-inset-bottom));}
+.sheet h2{font-size:17px;margin-bottom:16px;}
+.field{margin-bottom:14px;}
+.field label{display:block;font-size:12.5px;font-weight:600;color:var(--ink3);margin-bottom:5px;}
+.field input[type=text], .field input[type=date], .field input[type=time], .field textarea{
+  width:100%;padding:10px 11px;border:1px solid var(--bdr);border-radius:var(--rsm);font-size:14.5px;
+  font-family:inherit;background:var(--surf);color:var(--ink);}
+.field textarea{resize:vertical;min-height:60px;}
+.field-row{display:flex;gap:10px;}
+.field-row .field{flex:1;}
+.checkbox-row{display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13.5px;}
+.type-grid{display:flex;flex-wrap:wrap;gap:8px;}
+.type-chip{border:1.5px solid var(--bdr);border-radius:999px;padding:7px 13px;font-size:13px;cursor:pointer;
+  background:var(--surf);color:var(--ink2);display:flex;align-items:center;gap:6px;}
+.type-chip.sel{border-color:var(--acc);background:var(--acc-dim);color:var(--acc-dk);font-weight:600;}
+.sheet-actions{display:flex;gap:10px;margin-top:18px;}
+.sheet-actions button{flex:1;padding:12px;border-radius:var(--r);font-size:14.5px;font-weight:600;
+  border:none;cursor:pointer;}
+.btn-save{background:var(--acc);color:#fff;}
+.btn-save:hover{background:var(--acc-dk);}
+.btn-cancel{background:var(--surf);color:var(--ink2);border:1px solid var(--bdr) !important;}
+.btn-delete{background:var(--danger-dim);color:var(--danger);flex:0 0 auto;padding:12px 16px;}
+.btn-delete:hover{background:var(--danger);color:#fff;}
 </style>
 </head>
 <body>
 
 <header>
   <div class="icon">🗓️</div>
-  <div class="title">PeteGCal <span class="ver">v1.3</span></div>
+  <div class="title">PeteGCal <span class="ver">v1.4</span></div>
   <div class="sync-pill muted" id="syncPill">Not connected</div>
   <button class="icon-btn" id="refreshBtn" title="Refresh" style="display:none;">⟳</button>
 </header>
@@ -110,6 +144,53 @@ main{max-width:620px;margin:0 auto;padding:16px;}
 
   <div id="agendaRoot" style="display:none;"></div>
 </main>
+
+<button class="fab" id="fabAdd" title="Add event" style="display:none;">+</button>
+
+<div class="sheet-overlay" id="sheetOverlay">
+  <div class="sheet">
+    <h2 id="sheetTitle">New event</h2>
+    <div class="field">
+      <label for="f-title">Title</label>
+      <input type="text" id="f-title" placeholder="e.g. Gig at the Barrowlands">
+    </div>
+    <div class="field">
+      <label>Type</label>
+      <div class="type-grid" id="f-type-grid"></div>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="f-allday">
+      <label for="f-allday" style="margin:0;">All day</label>
+    </div>
+    <div class="field">
+      <label for="f-date">Date</label>
+      <input type="date" id="f-date">
+    </div>
+    <div class="field-row" id="f-time-row">
+      <div class="field">
+        <label for="f-start">Start time</label>
+        <input type="time" id="f-start">
+      </div>
+      <div class="field">
+        <label for="f-end">End time</label>
+        <input type="time" id="f-end">
+      </div>
+    </div>
+    <div class="field">
+      <label for="f-location">Location</label>
+      <input type="text" id="f-location" placeholder="e.g. The Barrowlands, Glasgow">
+    </div>
+    <div class="field">
+      <label for="f-notes">Notes</label>
+      <textarea id="f-notes" placeholder="Optional"></textarea>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-delete" id="f-delete" style="display:none;">Delete</button>
+      <button class="btn-cancel" id="f-cancel">Cancel</button>
+      <button class="btn-save" id="f-save">Save</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast" class="toast"></div>
 
@@ -131,6 +212,28 @@ const WINDOW_FUTURE_DAYS = 180;
 let _silentAttempted = false;
 let _lastSyncedAt = null;
 
+// ── PGC-004: event types ─────────────────────────────────────────────
+// Deliberately small — the full GigsAndTrips app has 16 types plus a
+// separate trip-item type system; this is the cut-down "minimum" set
+// agreed for PeteGCal's first create/edit pass. colorId maps each type
+// to one of Google Calendar's native event colours, so the distinction
+// shows up in the real Google Calendar app too, not just inside
+// PeteGCal — not asked for explicitly, but close to free given Google
+// already supports it natively.
+const EVENT_TYPES = [
+  { key:'gig',         icon:'🎫', label:'Gig/Event',   colorId:'3'  }, // Grape
+  { key:'gym',         icon:'💪', label:'Gym',         colorId:'10' }, // Basil
+  { key:'appointment', icon:'📅', label:'Appointment', colorId:'7'  }, // Peacock
+  { key:'pets',        icon:'🐶', label:'Pets',        colorId:'6'  }, // Tangerine
+  { key:'food',        icon:'🍽️', label:'Food',        colorId:'5'  }, // Banana
+  { key:'other',       icon:'📌', label:'Other',       colorId:'8'  }  // Graphite
+];
+function typeInfo(key){ return EVENT_TYPES.find(function(t){ return t.key === key; }) || EVENT_TYPES[EVENT_TYPES.length-1]; }
+
+let _eventsById = {};      // populated on every load, for the edit form to look up by id
+let _editingEventId = null; // null = create mode; set = editing this event's id
+let _selectedType = EVENT_TYPES[0].key;
+
 // ── Theme (same pattern as every other app in the suite) ────────────────
 function applyTheme(theme){
   applyThemeCore(theme === 'dark', { dark: '#14141c', light: '#f7f7f9' });
@@ -151,11 +254,13 @@ function showGate(){
   document.getElementById('gate').style.display = 'block';
   document.getElementById('agendaRoot').style.display = 'none';
   document.getElementById('refreshBtn').style.display = 'none';
+  document.getElementById('fabAdd').style.display = 'none';
 }
 function showAgenda(){
   document.getElementById('gate').style.display = 'none';
   document.getElementById('agendaRoot').style.display = 'block';
   document.getElementById('refreshBtn').style.display = 'inline-block';
+  document.getElementById('fabAdd').style.display = 'flex';
 }
 
 window.onload = function(){
@@ -209,6 +314,17 @@ window.onload = function(){
     loadEvents();
   });
 
+  // PGC-004: create/edit/delete wiring.
+  renderTypeGrid();
+  document.getElementById('fabAdd').addEventListener('click', function(){ openCreateForm(); });
+  document.getElementById('f-cancel').addEventListener('click', closeForm);
+  document.getElementById('f-save').addEventListener('click', handleSave);
+  document.getElementById('f-delete').addEventListener('click', handleDelete);
+  document.getElementById('f-allday').addEventListener('change', updateTimeRowVisibility);
+  document.getElementById('sheetOverlay').addEventListener('click', function(e){
+    if (e.target.id === 'sheetOverlay') closeForm(); // tap outside the sheet to dismiss
+  });
+
   // Attempt a silent sign-in once the module's ready, so returning to
   // the app doesn't require clicking "Sign in" every single time.
   setTimeout(function(){
@@ -229,6 +345,8 @@ async function loadEvents(){
   try {
     const events = await PalGCal.listEvents(CALENDAR_ID, timeMin.toISOString(), timeMax.toISOString());
     _lastSyncedAt = new Date();
+    _eventsById = {};
+    events.forEach(function(ev){ _eventsById[ev.id] = ev; });
     renderAgenda(events);
   } catch (e) {
     root.innerHTML =
@@ -288,6 +406,7 @@ function renderEventCard(ev){
 
   const card = document.createElement('div');
   card.className = 'ev-card';
+  card.addEventListener('click', function(){ openEditForm(ev.id); });
 
   const time = document.createElement('div');
   time.className = 'ev-time' + (isAllDay ? ' allday' : '');
@@ -306,7 +425,12 @@ function renderEventCard(ev){
   metaRow.className = 'ev-meta';
   const tag = document.createElement('span');
   tag.className = 'ev-tag' + (isApp ? '' : ' native');
-  tag.textContent = isApp ? (meta.type || 'Other') : 'Calendar';
+  if (isApp){
+    const t = typeInfo(meta.type);
+    tag.textContent = t.icon + ' ' + t.label;
+  } else {
+    tag.textContent = '📍 Calendar';
+  }
   metaRow.appendChild(tag);
   body.appendChild(metaRow);
 
@@ -319,6 +443,183 @@ function renderEventCard(ev){
 
   card.appendChild(body);
   return card;
+}
+
+// ── PGC-004: create/edit/delete form ─────────────────────────────────
+
+function renderTypeGrid(){
+  const grid = document.getElementById('f-type-grid');
+  grid.innerHTML = '';
+  EVENT_TYPES.forEach(function(t){
+    const chip = document.createElement('div');
+    chip.className = 'type-chip' + (t.key === _selectedType ? ' sel' : '');
+    chip.textContent = t.icon + ' ' + t.label;
+    chip.addEventListener('click', function(){
+      _selectedType = t.key;
+      grid.querySelectorAll('.type-chip').forEach(function(c){ c.classList.remove('sel'); });
+      chip.classList.add('sel');
+    });
+    grid.appendChild(chip);
+  });
+}
+
+function updateTimeRowVisibility(){
+  document.getElementById('f-time-row').style.display =
+    document.getElementById('f-allday').checked ? 'none' : 'flex';
+}
+
+function pad2(n){ return String(n).padStart(2,'0'); }
+function dateToInputValue(d){ return d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate()); }
+function timeToInputValue(d){ return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+
+function openCreateForm(){
+  _editingEventId = null;
+  document.getElementById('sheetTitle').textContent = 'New event';
+  document.getElementById('f-delete').style.display = 'none';
+  document.getElementById('f-title').value = '';
+  document.getElementById('f-location').value = '';
+  document.getElementById('f-notes').value = '';
+  document.getElementById('f-allday').checked = false;
+
+  const now = new Date();
+  const start = new Date(now.getTime());
+  start.setMinutes(Math.ceil(start.getMinutes() / 15) * 15, 0, 0); // round up to next 15 min
+  const end = new Date(start.getTime() + 60 * 60000); // +1hr default
+
+  document.getElementById('f-date').value = dateToInputValue(start);
+  document.getElementById('f-start').value = timeToInputValue(start);
+  document.getElementById('f-end').value = timeToInputValue(end);
+  updateTimeRowVisibility();
+
+  _selectedType = EVENT_TYPES[0].key;
+  renderTypeGrid();
+
+  document.getElementById('sheetOverlay').classList.add('open');
+}
+
+function openEditForm(id){
+  const ev = _eventsById[id];
+  if (!ev) return;
+  const meta = PalGCal.readAppMeta(ev);
+  const isAllDay = !ev.start.dateTime;
+
+  _editingEventId = id;
+  document.getElementById('sheetTitle').textContent = 'Edit event';
+  document.getElementById('f-delete').style.display = 'block';
+  document.getElementById('f-title').value = ev.summary || '';
+  document.getElementById('f-location').value = ev.location || '';
+  document.getElementById('f-notes').value = ev.description || '';
+  document.getElementById('f-allday').checked = isAllDay;
+
+  const startD = new Date(ev.start.dateTime || ev.start.date);
+  document.getElementById('f-date').value = dateToInputValue(startD);
+  if (!isAllDay){
+    document.getElementById('f-start').value = timeToInputValue(new Date(ev.start.dateTime));
+    document.getElementById('f-end').value = timeToInputValue(new Date(ev.end.dateTime));
+  }
+  updateTimeRowVisibility();
+
+  // Native Calendar entries (no app meta yet) default to "Other" when
+  // enriched for the first time, per the design: every event is a
+  // first-class app item regardless of origin, but one never typed in
+  // the app has no type of its own until you give it one.
+  _selectedType = meta.type || 'other';
+  renderTypeGrid();
+
+  document.getElementById('sheetOverlay').classList.add('open');
+}
+
+function closeForm(){
+  document.getElementById('sheetOverlay').classList.remove('open');
+}
+
+function buildStartEnd(){
+  const dateVal = document.getElementById('f-date').value;
+  if (!dateVal) return null;
+
+  if (document.getElementById('f-allday').checked){
+    const start = new Date(dateVal + 'T00:00:00');
+    const end = new Date(start.getTime() + 86400000); // Google's end.date is exclusive
+    return {
+      start: { date: dateVal },
+      end:   { date: dateToInputValue(end) }
+    };
+  }
+
+  const startVal = document.getElementById('f-start').value;
+  const endVal = document.getElementById('f-end').value;
+  if (!startVal || !endVal) return null;
+
+  const start = new Date(dateVal + 'T' + startVal + ':00');
+  const end = new Date(dateVal + 'T' + endVal + ':00');
+  if (end <= start) return 'end-before-start';
+
+  return {
+    start: { dateTime: start.toISOString() },
+    end:   { dateTime: end.toISOString() }
+  };
+}
+
+async function handleSave(){
+  const title = document.getElementById('f-title').value.trim();
+  if (!title){ toast('Give it a title first', 'error'); return; }
+
+  const times = buildStartEnd();
+  if (times === 'end-before-start'){ toast('End time must be after the start time', 'error'); return; }
+  if (!times){ toast('Pick a date', 'error'); return; }
+
+  const typeMeta = typeInfo(_selectedType);
+  const eventBody = Object.assign({
+    summary: title,
+    location: document.getElementById('f-location').value.trim(),
+    description: document.getElementById('f-notes').value.trim(),
+    colorId: typeMeta.colorId
+  }, times);
+
+  const saveBtn = document.getElementById('f-save');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+
+  try {
+    if (_editingEventId){
+      await PalGCal.updateEvent(CALENDAR_ID, _editingEventId, eventBody, { type: _selectedType });
+      toast('Event updated');
+    } else {
+      await PalGCal.createEvent(CALENDAR_ID, eventBody, { type: _selectedType });
+      toast('Event created');
+    }
+    closeForm();
+    loadEvents();
+  } catch (e) {
+    toast(PalGCal.errorHint(e), 'error');
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save';
+  }
+}
+
+async function handleDelete(){
+  if (!_editingEventId) return;
+  // Always a real delete against Google Calendar, regardless of whether
+  // this event originated in the app or was created natively — the
+  // house rule decided during scoping. Confirmed here since it's now
+  // unambiguously destructive against the real calendar.
+  const ev = _eventsById[_editingEventId];
+  const name = ev ? (ev.summary || '(no title)') : 'this event';
+  if (!confirm('Delete "' + name + '"? This removes it from Google Calendar for everyone, not just PeteGCal.')) return;
+
+  const delBtn = document.getElementById('f-delete');
+  delBtn.disabled = true;
+  try {
+    await PalGCal.deleteEvent(CALENDAR_ID, _editingEventId);
+    toast('Event deleted');
+    closeForm();
+    loadEvents();
+  } catch (e) {
+    toast(PalGCal.errorHint(e), 'error');
+  } finally {
+    delBtn.disabled = false;
+  }
 }
 
 function authErrorText(reason){
