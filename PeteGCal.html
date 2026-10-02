@@ -10,10 +10,10 @@
 // pre-paint pattern every other app in the suite uses.
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<!-- v1.4 (PGC-004): create/edit/delete — FAB + bottom sheet form, 6-type
-     picker synced to Google's native colorId, delete always removes the
-     real Calendar event. Full version history in PeteGCal.md. -->
-<title>PeteGCal v1.4</title>
+<!-- v1.7 (PGC-005, part 2): working-day alert, reading Fortnight
+     Tracker's real localStorage data (fn_tracker_v5) directly rather
+     than a duplicated pattern. Full version history in PeteGCal.md. -->
+<title>PeteGCal v1.7</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -22,6 +22,7 @@
   --acc:#4f46e5; --acc-dim:#eef2ff; --acc-dk:#4338ca;
   --ok:#0a7c5c; --ok-dim:#e6f4f0;
   --danger:#d32f2f; --danger-dim:#fdecea;
+  --warn:#92400e; --warn-dim:#fffbeb;
   --sh:0 4px 12px rgba(0,0,0,.07),0 1px 3px rgba(0,0,0,.04);
   --r:10px; --rsm:6px; --rlg:16px; --tr:.18s ease;
   --hdr-bg:#fff; --hdr-shadow:rgba(0,0,0,.06);
@@ -34,6 +35,7 @@
   --acc:#818cf8; --acc-dim:rgba(129,140,248,.18); --acc-dk:#a5b4fc;
   --ok:#34d399; --ok-dim:rgba(52,211,153,.15);
   --danger:#f87171; --danger-dim:rgba(248,113,113,.15);
+  --warn:#fbbf24; --warn-dim:rgba(251,191,36,.15);
 }
 body{font-family:var(--f);background:var(--surf);color:var(--ink);min-height:100vh;font-size:15px;line-height:1.5;
   padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
@@ -48,6 +50,9 @@ header .sync-pill.ok{color:var(--ok);}
 header .sync-pill.err{color:var(--danger);}
 header button.icon-btn{background:none;border:none;font-size:17px;cursor:pointer;color:var(--ink3);padding:4px 6px;border-radius:6px;}
 header button.icon-btn:hover{background:var(--surf);}
+header button.today-btn{font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;
+  border:1px solid var(--bdr);background:var(--surf);color:var(--ink2);cursor:pointer;}
+header button.today-btn:hover{border-color:var(--acc);color:var(--acc);}
 
 main{max-width:620px;margin:0 auto;padding:16px;}
 
@@ -61,7 +66,7 @@ main{max-width:620px;margin:0 auto;padding:16px;}
 .gate button:hover{background:var(--acc-dk);}
 
 /* ── Agenda ── */
-.day-group{margin-bottom:18px;}
+.day-group{margin-bottom:18px;scroll-margin-top:72px;}
 .day-label{font-size:12.5px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em;
   padding:0 2px 8px;}
 .day-label.today{color:var(--acc);}
@@ -123,14 +128,19 @@ main{max-width:620px;margin:0 auto;padding:16px;}
 .btn-cancel{background:var(--surf);color:var(--ink2);border:1px solid var(--bdr) !important;}
 .btn-delete{background:var(--danger-dim);color:var(--danger);flex:0 0 auto;padding:12px 16px;}
 .btn-delete:hover{background:var(--danger);color:#fff;}
+.conflict-warning{background:var(--warn-dim);color:var(--warn);border-radius:var(--rsm);padding:10px 12px;
+  font-size:13px;line-height:1.5;}
+.workday-badge{display:none;font-size:12px;color:var(--acc-dk);background:var(--acc-dim);
+  padding:6px 10px;border-radius:var(--rsm);margin:-6px 0 14px;}
 </style>
 </head>
 <body>
 
 <header>
   <div class="icon">🗓️</div>
-  <div class="title">PeteGCal <span class="ver">v1.4</span></div>
+  <div class="title">PeteGCal <span class="ver">v1.7</span></div>
   <div class="sync-pill muted" id="syncPill">Not connected</div>
+  <button class="today-btn" id="todayBtn" title="Jump to today" style="display:none;">Today</button>
   <button class="icon-btn" id="refreshBtn" title="Refresh" style="display:none;">⟳</button>
 </header>
 
@@ -166,6 +176,7 @@ main{max-width:620px;margin:0 auto;padding:16px;}
       <label for="f-date">Date</label>
       <input type="date" id="f-date">
     </div>
+    <div class="workday-badge" id="workdayBadge"></div>
     <div class="field-row" id="f-time-row">
       <div class="field">
         <label for="f-start">Start time</label>
@@ -176,6 +187,7 @@ main{max-width:620px;margin:0 auto;padding:16px;}
         <input type="time" id="f-end">
       </div>
     </div>
+    <div class="field conflict-warning" id="conflictWarning" style="display:none;"></div>
     <div class="field">
       <label for="f-location">Location</label>
       <input type="text" id="f-location" placeholder="e.g. The Barrowlands, Glasgow">
@@ -230,6 +242,53 @@ const EVENT_TYPES = [
 ];
 function typeInfo(key){ return EVENT_TYPES.find(function(t){ return t.key === key; }) || EVENT_TYPES[EVENT_TYPES.length-1]; }
 
+// ── PGC-005 (part 2): working-days alert ─────────────────────────────
+// Reads Fortnight Tracker's own data directly (same localStorage key and
+// fallback chain the launcher's statFortnight() already uses) rather
+// than duplicating the 9-day-fortnight pattern here — decided during
+// scoping specifically to avoid two copies of the same shift pattern
+// drifting apart. This deliberately does NOT re-derive the pattern
+// forward for dates beyond whatever bundles already exist; it only
+// reflects real data that's actually there, same "don't reproduce
+// another app's business logic" principle the launcher's own Horizon
+// card comment documents.
+const FORTNIGHT_KEYS = ['fn_tracker_v5', 'fn_tracker_v4', 'fn_tracker_v3'];
+
+function getFortnightWorkingDates(){
+  let raw = null;
+  for (let i = 0; i < FORTNIGHT_KEYS.length; i++){
+    raw = localStorage.getItem(FORTNIGHT_KEYS[i]);
+    if (raw) break;
+  }
+  if (!raw) return {}; // Fortnight Tracker never used on this device/browser
+
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch(e){ return {}; }
+
+  // Mirrors the launcher's own envelope handling: {data:{bundles}} or
+  // legacy flat {bundles}.
+  const bundles = (parsed.data && Array.isArray(parsed.data.bundles)) ? parsed.data.bundles
+                 : Array.isArray(parsed.bundles) ? parsed.bundles
+                 : [];
+
+  const map = {}; // dateStr -> true (working) | false (holiday/sick — off)
+  bundles.filter(function(b){ return !b._deleted; }).forEach(function(b){
+    (b.days || []).forEach(function(d){
+      if (!d.date) return;
+      map[d.date] = !(d.status === 'holiday' || d.status === 'sick');
+    });
+  });
+  return map;
+}
+
+// true = known working day, false = known day off, null = no data for
+// that date (Fortnight Tracker not used, or the date falls outside any
+// bundle that's been created yet).
+function isWorkingDay(dateStr){
+  const map = getFortnightWorkingDates();
+  return Object.prototype.hasOwnProperty.call(map, dateStr) ? map[dateStr] : null;
+}
+
 let _eventsById = {};      // populated on every load, for the edit form to look up by id
 let _editingEventId = null; // null = create mode; set = editing this event's id
 let _selectedType = EVENT_TYPES[0].key;
@@ -254,12 +313,14 @@ function showGate(){
   document.getElementById('gate').style.display = 'block';
   document.getElementById('agendaRoot').style.display = 'none';
   document.getElementById('refreshBtn').style.display = 'none';
+  document.getElementById('todayBtn').style.display = 'none';
   document.getElementById('fabAdd').style.display = 'none';
 }
 function showAgenda(){
   document.getElementById('gate').style.display = 'none';
   document.getElementById('agendaRoot').style.display = 'block';
   document.getElementById('refreshBtn').style.display = 'inline-block';
+  document.getElementById('todayBtn').style.display = 'inline-block';
   document.getElementById('fabAdd').style.display = 'flex';
 }
 
@@ -313,6 +374,9 @@ window.onload = function(){
   document.getElementById('refreshBtn').addEventListener('click', function(){
     loadEvents();
   });
+  document.getElementById('todayBtn').addEventListener('click', function(){
+    scrollToToday(true);
+  });
 
   // PGC-004: create/edit/delete wiring.
   renderTypeGrid();
@@ -321,6 +385,11 @@ window.onload = function(){
   document.getElementById('f-save').addEventListener('click', handleSave);
   document.getElementById('f-delete').addEventListener('click', handleDelete);
   document.getElementById('f-allday').addEventListener('change', updateTimeRowVisibility);
+  document.getElementById('f-allday').addEventListener('change', checkConflicts);
+  ['f-date','f-start','f-end'].forEach(function(id){
+    document.getElementById(id).addEventListener('input', checkConflicts);
+  });
+  document.getElementById('f-date').addEventListener('input', updateWorkdayBadge);
   document.getElementById('sheetOverlay').addEventListener('click', function(e){
     if (e.target.id === 'sheetOverlay') closeForm(); // tap outside the sheet to dismiss
   });
@@ -385,6 +454,7 @@ function renderAgenda(events){
   groups.forEach(function(group){
     const section = document.createElement('div');
     section.className = 'day-group';
+    section.id = 'day-' + group.key;
 
     const label = document.createElement('div');
     label.className = 'day-label' + (group.key === todayKey ? ' today' : '');
@@ -397,6 +467,24 @@ function renderAgenda(events){
 
     root.appendChild(section);
   });
+
+  // Default view is today, not the top of the 14-day-past window —
+  // wrapped in rAF so the scroll happens after layout has settled.
+  requestAnimationFrame(function(){ scrollToToday(false); });
+}
+
+function scrollToToday(smooth){
+  const todayKey = 'day-' + dayKey(new Date());
+  const groups = Array.from(document.querySelectorAll('.day-group'));
+  if (!groups.length) return;
+  // Exact match if today has events; otherwise the nearest upcoming day
+  // (group ids sort lexicographically the same as chronologically,
+  // since dayKey is zero-padded YYYY-MM-DD) — falls back to the last
+  // group if everything in the window is somehow in the past.
+  let target = groups.find(function(g){ return g.id === todayKey; })
+    || groups.find(function(g){ return g.id > todayKey; })
+    || groups[groups.length - 1];
+  target.scrollIntoView({ behavior: smooth ? 'smooth' : 'instant', block: 'start' });
 }
 
 function renderEventCard(ev){
@@ -493,6 +581,8 @@ function openCreateForm(){
 
   _selectedType = EVENT_TYPES[0].key;
   renderTypeGrid();
+  checkConflicts();
+  updateWorkdayBadge();
 
   document.getElementById('sheetOverlay').classList.add('open');
 }
@@ -525,12 +615,69 @@ function openEditForm(id){
   // the app has no type of its own until you give it one.
   _selectedType = meta.type || 'other';
   renderTypeGrid();
+  checkConflicts();
+  updateWorkdayBadge();
 
   document.getElementById('sheetOverlay').classList.add('open');
 }
 
 function closeForm(){
   document.getElementById('sheetOverlay').classList.remove('open');
+}
+
+// ── PGC-005 (part 1): event-overlap conflict detection ──────────────
+// Checked live against everything already loaded in the current window
+// (_eventsById, populated by the last loadEvents() call) — informational
+// only, never blocks Save. All-day events are skipped on both sides for
+// this first pass: a timed gig overlapping an all-day entry (a holiday,
+// say) is a real thing worth surfacing eventually, but day-level overlap
+// needs different handling than a straight time-range check and isn't
+// in this cut.
+function checkConflicts(){
+  const warnEl = document.getElementById('conflictWarning');
+
+  if (document.getElementById('f-allday').checked){ warnEl.style.display = 'none'; return; }
+
+  const dateVal = document.getElementById('f-date').value;
+  const startVal = document.getElementById('f-start').value;
+  const endVal = document.getElementById('f-end').value;
+  if (!dateVal || !startVal || !endVal){ warnEl.style.display = 'none'; return; }
+
+  const start = new Date(dateVal + 'T' + startVal + ':00');
+  const end = new Date(dateVal + 'T' + endVal + ':00');
+  if (end <= start){ warnEl.style.display = 'none'; return; }
+
+  const conflicts = Object.values(_eventsById).filter(function(ev){
+    if (ev.id === _editingEventId) return false;           // don't flag against itself
+    if (!ev.start.dateTime || !ev.end.dateTime) return false; // all-day, skipped for now
+    const evStart = new Date(ev.start.dateTime);
+    const evEnd = new Date(ev.end.dateTime);
+    return start < evEnd && end > evStart; // standard interval-overlap test
+  });
+
+  if (!conflicts.length){ warnEl.style.display = 'none'; return; }
+
+  warnEl.style.display = 'block';
+  warnEl.innerHTML = '⚠️ Clashes with ' + conflicts.map(function(ev){
+    return '<strong>' + esc(ev.summary || '(no title)') + '</strong> (' +
+      formatTime(ev.start.dateTime) + '–' + formatTime(ev.end.dateTime) + ')';
+  }).join(', ');
+}
+
+function updateWorkdayBadge(){
+  const badge = document.getElementById('workdayBadge');
+  const dateVal = document.getElementById('f-date').value;
+  if (!dateVal){ badge.style.display = 'none'; return; }
+
+  const working = isWorkingDay(dateVal);
+  if (working === true){
+    badge.style.display = 'block';
+    badge.textContent = '💼 This is a working day, per Fortnight Tracker';
+  } else {
+    // false (known day off) and null (no data for this date) both stay
+    // quiet — the badge is only worth showing for the alert-worthy case.
+    badge.style.display = 'none';
+  }
 }
 
 function buildStartEnd(){

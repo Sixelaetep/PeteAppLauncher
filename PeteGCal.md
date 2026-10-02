@@ -6,6 +6,62 @@ Launcher-side integration (nav icon, home card, iframe, `LAYOUT_APPS`/`PAL_NAV_S
 
 ---
 
+## Backlog (not scheduled into a phase yet)
+
+**Location field: Google Maps search/autocomplete, not plain text.** GigsAndTrips already has a venue autocomplete + Google Maps linking system (`gmapsSearchUrl()`/`venueLinkHtml()`) that PGC-004 deliberately didn't port over, to keep the first create/edit form minimal. Worth a proper look later. One thing to know going in: this needs the Google Places API, which is a separate enable step from Calendar API in Cloud Console, and typically requires a billing account attached to the project even for usage that stays within the free tier — a new manual setup step, not just code. Scope question for when this gets picked up: does the resolved address just fill the existing plain-text `location` field (simplest, no data-model change), or does it also store `place_id`/coordinates via `extendedProperties` for something richer later (a map preview, say) — the second option is more useful but is additional scope, not free.
+
+**Repeating events.** Google Calendar natively supports recurrence (RRULE), and `pal-gcal.js`'s `listEvents()` already requests `singleEvents: 'true'`, which expands recurring events into individual instances when reading — so recurring events created natively in Google Calendar already display correctly today, with no extra work. What's missing is creating one from inside PeteGCal (a repeat option on the form — None/Daily/Weekly/Monthly, with an end condition) and, the genuinely non-trivial part, **editing** one: Google's API distinguishes editing a single instance (creates an exception) from editing the whole series (targets the recurring event's own ID, not the instance's), and the form/UI needs to ask which the person means, the same way Google Calendar's own UI does with its "this event / this and following / all events" prompt. Worth sizing properly as its own phase rather than folding into a future PGC-004-style pass — closer in shape to the trip-spanning complexity than to a quick form addition.
+
+---
+
+## v1.7 (PGC-005, part 2) — Working-day alert, and PGC-005 is now complete
+
+**PGC-005 is done.** Both halves — event-overlap warning (v1.6) and this one — are built.
+
+**What this reads.** `fortnight-tracker.html` was uploaded and actually read, rather than guessed at — the approach taken after the v1.3 miss. Its day records (`bundle.days[]`, each `{date, status, ...}`) use `status: null|'done'|'training'|'conference'` for an actual rostered working day, and `'holiday'|'sick'` for a day off that was originally rostered. `day.date` is `YYYY-MM-DD`, identical format to PeteGCal's own `dayKey()` — direct string comparison, no parsing translation needed. Data lives under `localStorage['fn_tracker_v5']` (with a `v4`/`v3` fallback chain, same as the launcher's own `statFortnight()`), which PeteGCal can read directly since every app in the suite shares one origin and therefore one `localStorage`.
+
+**Deliberately does not reimplement Fortnight's 9-day pattern.** `buildDays()` in `fortnight-tracker.html` generates working days at fixed offsets (`[0,1,2,3,4,7,8,9,10]` from a bundle's start date — Mon–Fri short-Friday week one, Mon–Thu week two, the alternating-Friday RDO plus both weekends making up the other 5 days of the 14-day cycle). PeteGCal does not re-derive this forward for dates beyond whatever bundles already exist in the data — only real, already-entered bundles are read. A future date with no bundle created for it yet simply shows no alert, rather than PeteGCal guessing at the pattern independently and risking drift from Fortnight's own logic — same principle the launcher's own Horizon card comment documents for exactly this kind of cross-app read.
+
+**UI.** A small badge appears under the Date field, only when the selected date is a confirmed working day (`💼 This is a working day, per Fortnight Tracker`) — silent for a confirmed day off and silent when there's no data for that date either, since the badge is only worth showing for the one alert-worthy case. Checked live on date change and once when the form first opens, same pattern as the conflict-overlap check.
+
+Files changed: `PeteGCal.html` only (`FORTNIGHT_KEYS`, `getFortnightWorkingDates()`, `isWorkingDay()`, `workday-badge` CSS/element, `updateWorkdayBadge()`, wired to `f-date` and called on form open).
+
+**Tested:** `node --check` passes; ID cross-check clean.
+
+**Not tested:** not yet run in a browser. In particular, the cross-app `localStorage` read has not been confirmed to actually find real Fortnight Tracker data on Pete's device — the data shape was read correctly from the uploaded file, but reading your *own* browser's stored data is a different thing from reading the file that produces it.
+
+---
+
+## v1.6 (PGC-005, part 1) — Event-overlap conflict warning
+
+First half of PGC-005. The second half — an alert when an event falls on a working day, read from `fortnight-tracker.html`'s pattern rather than a duplicated setting (decided during PGC-004 scoping) — is **pending**: the launcher's own code only partially reveals that app's data shape (`fn_tracker_v5` in localStorage, `bundles` → `days`, `status` can be `'holiday'`/`'sick'`), not enough to know what actually marks a day as "working" versus a rest day in its 9-day pattern. Asked Pete to upload `fortnight-tracker.html` directly rather than guess — a deliberate change in approach after the v1.3 root-cause miss, where guessing at a dependency's behaviour wasted real debugging time that reading the actual file would have avoided.
+
+**What's built.** The create/edit sheet now checks live, on every date/time change, for overlap against every event already loaded in the current window (`_eventsById`) and shows an inline amber warning naming the clashing event(s) and their times. Purely informational — never blocks Save, since a genuine overlap (two things on at once, deliberately) is a real use case, not an error. Also runs once when the form first opens, so editing an event that already clashes with something shows the warning immediately, not only after the first edit. The event being edited never flags against itself.
+
+**Deliberately out of scope for this pass:** all-day events are skipped on both sides of the check. A timed gig overlapping an all-day entry (a holiday, say) is worth surfacing eventually, but day-level overlap needs different handling than a straight time-range comparison, and this cut keeps to the original ported-overlap-check shape from GigsAndTrips rather than growing it.
+
+Files changed: `PeteGCal.html` only (`conflict-warning` CSS + `--warn`/`--warn-dim` tokens, the `conflictWarning` element in the sheet, `checkConflicts()`, wired to `f-date`/`f-start`/`f-end`/`f-allday` and called once on form open).
+
+**Tested:** `node --check` passes; ID cross-check clean.
+
+**Not tested:** not yet run in a browser — the overlap math, the self-exclusion on edit, and the live-update-on-typing behaviour are reasoned through, not watched happen.
+
+---
+
+## v1.5 — Defaults to today, with a Today button
+
+Small UX gap from v1.4: the agenda always opened at the top of the 14-day-past window, so "today" was buried a couple of scrolls down on every single open — exactly the opposite of what an agenda view should default to.
+
+**Fix.** Every rendered day-group now carries a stable `id` (`day-YYYY-MM-DD`). After each render, the view auto-scrolls to today's group — or, if today has nothing on it, the nearest upcoming day — using an instant (non-animated) scroll so it doesn't feel like a jarring jump on open. A new **Today** button in the header does the same scroll on demand, animated this time, for whenever you've scrolled away to check something further out. `scroll-margin-top` on each day-group accounts for the sticky header so the destination doesn't land hidden underneath it.
+
+Files changed: `PeteGCal.html` only.
+
+**Tested:** `node --check` passes; every `getElementById` reference cross-checked against the markup, no mismatches.
+
+**Not tested:** not yet run in a browser — the scroll targeting (exact-day match, nearest-upcoming fallback, the sticky-header offset) is reasoned through against the DOM structure, not yet watched happen.
+
+---
+
 ## v1.4 (PGC-004) — Create, edit, delete
 
 **PGC-003 is now confirmed working end to end**, not just reasoned through: Pete signed in, the agenda populated from the real calendar, and — from the earlier chat thread — Lex independently confirmed write access to Pete's shared calendar via the module-based test page. All three gates from PGC-001/002/003 are closed.
