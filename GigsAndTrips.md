@@ -6,6 +6,28 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.95 (GIG-092, 095, 096, 097, 098, 099) — Event Class and the Agenda filter
+
+First user-visible step of the event-architecture work.
+
+**Event Class (GIG-092/095).** Every calendar entry now has a class: Gig / Event, Appointment, Trip / Itinerary, Standard, or Other. A gig stores `eventClass` **only when you choose one** (or an import sets it); otherwise it is derived at read time from its type and trip link, so there is no bulk migration, no mass write to Supabase, and no sync churn on Lex's devices. Defaults: music, play, musical, comedy, sport, festival, cinema → Gig / Event; appointment → Appointment; travel, stay, food, key stop → Trip / Itinerary when on a trip, otherwise Appointment; attraction → Trip / Itinerary on a trip, otherwise Gig / Event; gym, pets, other → Standard. Trip items are always Trip / Itinerary. New Calendar imports are stored as Standard. Agenda entries now carry their class.
+
+**Class on the gig form (GIG-096, first part).** New "Calendar class" selector (Auto — from type, or an explicit class). Auto removes any stored class so the default applies. The bulk "needs review" list is not built.
+
+**Filter (GIG-097).** Agenda has a compact scrolling filter bar: All · Important · Gigs · Appts · Trips · Standard. The last choice is remembered in one tiny UI key, `gat_cal_filter` (not event data, and now recognised by the Storage report). Important = Gig / Event, Appointment, Trip / Itinerary, **plus anything placed inside a trip**; Trips = Trip / Itinerary or anything on a trip, so a gig inside a trip appears under both Gigs and Trips.
+
+**Agenda and NOW/NEXT (GIG-098/099).** Agenda defaults to **Important**. A line under NOW/NEXT shows "N hidden by this filter · Show all" whenever something is filtered out, so nothing disappears silently. NOW/NEXT only considers entries that match the filter. Because NOW/NEXT lives on the Agenda, there is no separate Today screen to change.
+
+**Consequence to know about:** existing gigs of type "other" (including everything imported from Google, and any you added manually as "other") are Standard, so they now disappear from the default Agenda view until you switch to All/Standard or give them a class on the gig form. The hidden count tells you how many.
+
+Files changed: `GigsAndTrips.html`, `GigsAndTrips.md`. No launcher, `pal-gcal.js`, Supabase or Google change; no data migration. Upcoming/Past are not filtered (Upcoming refinement is GIG-111).
+
+**Tested — in Node against the real extracted functions with a stubbed DOM:** default class for every type with and without a trip; an explicit valid class wins and an invalid stored value is ignored; each filter against each class (including a Standard item inside a trip); filter default, persistence and fallback on a bad stored value; a full Agenda render on synthetic data for every filter, with correct entries and hidden counts, no hidden line on All, the empty-filter message, and the empty-data case; NOW/NEXT does not pick a filtered-out entry. Inline scripts pass `node --check`; the v7.93 and v7.94 test suites still pass.
+
+**Not tested:** not opened in a real browser; the filter bar's fit at 390px width, its horizontal scroll, and the form selector's appearance are unconfirmed. The class selector was only checked in the source, not by saving a real gig.
+
+---
+
 ## v7.94 (GIG-089, GIG-091 part, AD-9, GIG-110) — Storage write safety, import hygiene, small housekeeping
 
 A batch of small, independent changes.

@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.94</title>
+<title>Gigs &amp; Trips v7.95</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -158,6 +158,12 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .agenda-loc{font-size:13px;color:var(--ink3);margin-top:1px}
 .agenda-duration{font-size:12px;color:var(--ink3);margin-top:1px}
 .agenda-today-row{display:flex;justify-content:flex-end;margin-bottom:8px}
+/* GIG-097/098 — class filter bar + hidden-count line */
+.agenda-filter{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch}
+.agenda-filter button{flex:0 0 auto;background:var(--card);border:1px solid var(--bdr);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;color:var(--ink3);cursor:pointer;font-family:inherit}
+.agenda-filter button.on{background:var(--acc-dim);border-color:var(--acc);color:var(--acc)}
+.agenda-hidden{font-size:12px;color:var(--ink3);padding:6px 2px 0}
+.agenda-hidden a{color:var(--acc);font-weight:600;cursor:pointer}
 .agenda-today-btn{background:var(--card);border:1px solid var(--bdr);border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer}
 .agenda-today-btn:hover{border-color:var(--acc);color:var(--acc)}
 .nownext-card{display:flex;gap:0;background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:16px;overflow:hidden}
@@ -518,7 +524,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.94</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.95</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -579,7 +585,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.94"></script>
+<script src="pal-shared.js?v=7.95"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
@@ -867,6 +873,79 @@ function sortDayTimeline(items){
   return [...untimed.map(x=>x.it),...timed.map(x=>x.it)];
 }
 // ═══════════════════════════════════════════════════════════════════
+// EVENT CLASS (GIG-092/095/096/097) — full history in GigsAndTrips.md
+// ═══════════════════════════════════════════════════════════════════
+// The class says how much a thing matters on the calendar; gigType/item
+// type still says what it is. A gig stores eventClass ONLY when the
+// person chooses one (or an import sets 'standard'); otherwise it is
+// derived from gigType/tripId at read time, so there is no bulk migration
+// and no sync churn for Lex's devices. Trip items are always
+// 'trip_itinerary'.
+const EVENT_CLASSES = [
+  {key:'gig_event',      label:'Gig / Event'},
+  {key:'appointment',    label:'Appointment'},
+  {key:'trip_itinerary', label:'Trip / Itinerary'},
+  {key:'standard',       label:'Standard'},
+  {key:'other',          label:'Other'}
+];
+const GIG_EVENT_TYPES = ['music','play','musical','comedy','sport','festival','cinema'];
+const TRIPPY_TYPES    = ['travel','accommodation','food','keystop','attraction'];
+function defaultEventClassForGig(g){
+  const ty = g && g.gigType;
+  if (GIG_EVENT_TYPES.indexOf(ty)>=0) return 'gig_event';
+  if (ty==='appointment') return 'appointment';
+  if (TRIPPY_TYPES.indexOf(ty)>=0){
+    if (g.tripId) return 'trip_itinerary';
+    return ty==='attraction' ? 'gig_event' : 'appointment';
+  }
+  return 'standard'; // gym, pets, other, unknown
+}
+function eventClassOfGig(g){
+  return (g && EVENT_CLASSES.some(c=>c.key===g.eventClass)) ? g.eventClass : defaultEventClassForGig(g);
+}
+
+// Calendar filter — a tiny UI preference, never event data.
+const CAL_FILTERS = [
+  {key:'all',       label:'All'},
+  {key:'important', label:'Important'},
+  {key:'gigs',      label:'Gigs'},
+  {key:'appts',     label:'Appts'},
+  {key:'trips',     label:'Trips'},
+  {key:'standard',  label:'Standard'}
+];
+const CAL_FILTER_KEY = 'gat_cal_filter';
+function getCalFilter(){
+  try{
+    const v = localStorage.getItem(CAL_FILTER_KEY);
+    if (CAL_FILTERS.some(f=>f.key===v)) return v;
+  }catch(e){}
+  return 'important';
+}
+function setCalFilter(key){
+  try{ localStorage.setItem(CAL_FILTER_KEY, key); }catch(e){}
+  renderAgenda();
+}
+// Important = the three attend-or-don't-miss classes, plus anything
+// placed inside a trip (a trip's content is part of the plan even if its
+// own class is Standard). Trips = trip itinerary or anything with a trip.
+function agendaEntryMatchesFilter(e, f){
+  const c = e.eventClass || 'standard';
+  switch(f){
+    case 'important': return c==='gig_event' || c==='appointment' || c==='trip_itinerary' || !!e.tripId;
+    case 'gigs':      return c==='gig_event';
+    case 'appts':     return c==='appointment';
+    case 'trips':     return c==='trip_itinerary' || !!e.tripId;
+    case 'standard':  return c==='standard' || c==='other';
+    default:          return true; // 'all'
+  }
+}
+function agendaFilterBar(active){
+  return '<div class="agenda-filter">' + CAL_FILTERS.map(f =>
+    '<button class="' + (f.key===active?'on':'') + '" onclick="setCalFilter(\'' + f.key + '\')">' + esc(f.label) + '</button>'
+  ).join('') + '</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // AGENDA DATA LAYER (GIG-083) — full history in GigsAndTrips.md
 // ═══════════════════════════════════════════════════════════════════
 // getAgendaItems() combines standalone gigs and trip items into one
@@ -918,7 +997,8 @@ function agendaEntryFromGig(g){
   return {
     kind:'gig', date:g.date, time:g.time||null,
     title:g.name||'(no title)', icon:ti.icon, typeLabel:ti.label,
-    location:g.venue||'', tripName:null, tripId:null, gigId:g.id
+    location:g.venue||'', tripName:null, tripId:null, gigId:g.id,
+    eventClass:eventClassOfGig(g)
   };
 }
 
@@ -928,7 +1008,8 @@ function agendaEntryFromItem(trip, day, it){
     return {
       kind:'gig', date:day.date, time:it.time||null,
       title:it.name||'(no title)', icon:ti.icon, typeLabel:ti.label,
-      location:it.venue||'', tripName:trip.name, tripId:trip.id, gigId:it.id
+      location:it.venue||'', tripName:trip.name, tripId:trip.id, gigId:it.id,
+      eventClass:eventClassOfGig(it)
     };
   }
   return {
@@ -937,6 +1018,7 @@ function agendaEntryFromItem(trip, day, it){
     typeLabel: typeLabel(it.type) + (it.subtype ? ' — ' + it.subtype : ''),
     location:itemLocationName(it), tripName:trip.name,
     tripId:trip.id, dayId:day.id, itemId:it.id,
+    eventClass:'trip_itinerary',
     // GIG-085: carried through only so "NOW" can use *real* stored
     // duration — never present for a gig, never invented for an item
     // that doesn't have one set.
@@ -960,10 +1042,16 @@ function renderAgenda(){
   const endDate = new Date(today); endDate.setDate(endDate.getDate()+60);
   const endStr = localDateStr(endDate);
 
-  const items = getAgendaItems(todayStr, endStr);
+  // GIG-097/098: class filter (default Important). Everything is still
+  // fetched; filtering is display-only so the hidden count can be shown.
+  const allItems = getAgendaItems(todayStr, endStr);
+  const filter = getCalFilter();
+  const items = allItems.filter(e=>agendaEntryMatchesFilter(e, filter));
+  const hidden = allItems.length - items.length;
+  const filterBar = agendaFilterBar(filter);
 
-  if(!items.length){
-    document.getElementById('appInner').innerHTML = `<div class="empty">Nothing in the next 60 days.</div>`;
+  if(!allItems.length){
+    document.getElementById('appInner').innerHTML = filterBar + `<div class="empty">Nothing in the next 60 days.</div>`;
     return;
   }
 
@@ -984,8 +1072,12 @@ function renderAgenda(){
   // yet — there's no Month/Week grid with "periods" to page through —
   // so it's deliberately not built here rather than invented to match
   // the document's wording.
-  let html = `<div class="agenda-today-row"><button class="agenda-today-btn" onclick="scrollAgendaToToday()">↑ Today</button></div>`;
+  let html = filterBar + `<div class="agenda-today-row"><button class="agenda-today-btn" onclick="scrollAgendaToToday()">↑ Today</button></div>`;
   html += renderNowNext(items, todayStr);
+  if(hidden>0 && filter!=='all'){
+    html += `<div class="agenda-hidden">${hidden} hidden by this filter · <a onclick="setCalFilter('all')">Show all</a></div>`;
+  }
+  if(!items.length) html += `<div class="empty">Nothing matches this filter.</div>`;
   groups.forEach(dateStr=>{
     html += agendaDateHeader(dateStr, todayStr);
     byDate[dateStr].forEach(it=>{ html += agendaRow(it); });
@@ -2880,6 +2972,9 @@ function showGigForm(g){
       <div class="fg"><label>Part of a trip?</label>
         <select class="fi" id="gfTripId" onchange="checkGigFormConflicts()"><option value="">— Not linked —</option>${tripOpts}</select>
       </div>
+      <div class="fg"><label>Calendar class</label>
+        <select class="fi" id="gfEventClass"><option value="">Auto — from type</option>${EVENT_CLASSES.map(c=>`<option value="${c.key}" ${(g&&g.eventClass===c.key)?'selected':''}>${esc(c.label)}</option>`).join('')}</select>
+      </div>
       <div class="fg"><label>Notes</label><textarea class="fi" id="gfNotes" placeholder="Any other notes…">${esc(g?.ticketNote ? (g.ticketNote+(g.notes?'\n'+g.notes:'')) : (g?.notes||''))}</textarea></div>
       <div id="gfErr" class="form-err"></div>
       <div class="form-actions">
@@ -2929,6 +3024,9 @@ function saveGig(){
   // text lingering as a hidden duplicate once it's part of notes.
   g.ticketNote='';
   g.tripId=document.getElementById('gfTripId')?.value||null;
+  // GIG-096: explicit class only when chosen; Auto removes it so the default applies.
+  const _cls=document.getElementById('gfEventClass')?.value||'';
+  if(_cls) g.eventClass=_cls; else delete g.eventClass;
   g.notes=document.getElementById('gfNotes')?.value.trim()||'';
   g.updatedAt=new Date().toISOString();
 
@@ -5407,6 +5505,7 @@ function storageClassify(key){
     'gat_v1_cpChecked':            {owner:'Gigs & Trips', cat:'UI pref',    note:'daily completion-prompt marker'},
     'gat_session':                 {owner:'Gigs & Trips', cat:'Persistent', note:'Supabase session tokens'},
     'gat_gcal_mirror_last_attempt':{owner:'Gigs & Trips', cat:'UI pref',    note:'Calendar pull throttle timestamp'},
+    'gat_cal_filter':              {owner:'Gigs & Trips', cat:'UI pref',    note:'Agenda class filter'},
     'pal_theme':                   {owner:'Suite',        cat:'UI pref',    note:'theme'},
     'pal_retry_queue_v1':          {owner:'Suite',        cat:'Sync queue', note:'pending writes for apps using pal-shared'},
     'pal_nav_request':             {owner:'Suite',        cat:'Temporary',  note:'cross-app navigation hand-off'},
@@ -7146,7 +7245,8 @@ function gcalBuildImportedGig(ev){
     ticketUrl:'', ticketPrice:0, ticketNote:'', tripId:null,
     calendarEventId: ev.id,
     calendarHtmlLink: ev.htmlLink,
-    importedFrom: 'gcal' // GIG-091: lets later work tell imports from manual gigs
+    importedFrom: 'gcal', // GIG-091: lets later work tell imports from manual gigs
+    eventClass: 'standard' // GIG-092: imports default to Standard (reclassify on the gig form)
   };
 }
 
