@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.86</title>
+<title>Gigs &amp; Trips v7.89</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -143,6 +143,19 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .card-info{flex:1;min-width:0}
 .card-name{font-size:16px;font-weight:700;color:var(--ink);letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-sub{font-size:13px;color:var(--ink3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* ── Agenda (GIG-084) — reuses existing card typography values
+   (same font-size/color as .card-name/.card-sub/.card-time) rather
+   than inventing new ones, for visual consistency with Upcoming/Past. */
+.agenda-date-hdr{font-size:12px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em;padding:16px 2px 8px}
+.agenda-date-hdr.today{color:var(--acc)}
+.agenda-trip{font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.03em;padding:10px 14px 0}
+.agenda-row{background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:8px;cursor:pointer;overflow:hidden}
+.agenda-row-main{display:flex;gap:12px;align-items:flex-start;padding:12px 14px}
+.agenda-time{font-size:13px;color:var(--ink3);min-width:48px;flex-shrink:0;padding-top:1px}
+.agenda-time.allday{color:var(--acc);font-weight:600}
+.agenda-info{flex:1;min-width:0}
+.agenda-title{font-size:16px;font-weight:700;color:var(--ink);letter-spacing:-.02em}
+.agenda-loc{font-size:13px;color:var(--ink3);margin-top:1px}
 .card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink3);margin-top:8px}
 .type-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
 .type-pill.music{background:#f3eeff;color:#7c3aed}
@@ -494,11 +507,12 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.86</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.89</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
     <button class="ni on" id="tab-upcoming" onclick="switchTab('upcoming',this)">Upcoming</button>
+    <button class="ni" id="tab-agenda" onclick="switchTab('agenda',this)">Agenda</button>
     <button class="ni" id="tab-past" onclick="switchTab('past',this)">Past</button>
     <button class="ni" id="tab-reviews" onclick="switchTab('reviews',this)">Reviews</button>
     <button class="ni" id="tab-venues" onclick="switchTab('venues',this)">Locations</button>
@@ -554,13 +568,8 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.86"></script>
-<!-- GIG-072: Google Calendar sync foundation. GSI script tag included
-     explicitly here — PeteGCal's v1.0 shipped without this and every
-     sign-in attempt failed silently for several rounds before the cause
-     was found (a bare comment inside pal-gcal.js documenting the
-     requirement isn't the same as the consuming page actually having
-     the tag). Not making that omission twice. -->
+<script src="pal-shared.js?v=7.89"></script>
+<!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
 <script>
@@ -573,50 +582,27 @@ const SB_KEY   = window.PAL_CONFIG ? window.PAL_CONFIG.SB_KEY : '';
 const KNOWN_USERS = window.PAL_CONFIG ? window.PAL_CONFIG.KNOWN_USERS : {};
 const SK       = 'gat_v1'; // localStorage key
 
-// GIG-072: Google Calendar sync foundation. Same OAuth Client ID
-// PeteGCal already uses — one Client ID per origin is correct, this
-// isn't a new Cloud Console registration, GigsAndTrips is just another
-// consumer of the same one. CALENDAR_ID is hardcoded to Pete's actual
-// account, not 'primary' — 'primary' resolves to whichever Google
-// account is signed in, which would silently point Lex at her own
-// calendar instead of Pete's shared one (confirmed the hard way during
-// PeteGCal's build). No behaviour depends on these yet — GIG-073/074
-// wire the actual sync; this issue is foundation only.
+// GIG-072/074/077 — full history in GigsAndTrips.md
+// CALENDAR_ID must stay hardcoded to Pete's actual account, never
+// 'primary' — 'primary' resolves to whichever Google account is signed
+// in, which would silently point Lex at her own calendar instead.
 const GCAL_CLIENT_ID = '417857203939-6novvttk4q4bp72e2nk6j21d4f5jbsoi.apps.googleusercontent.com';
 const GCAL_CALENDAR_ID = 'peteshellard@gmail.com';
-// GIG-074: Google's native colorId per gig type, same assignment used
-// in PeteGCal and reconcile-gigs.html for consistency across the whole
-// suite. Icon comes from GIG_TYPES itself (gigTypeInfo(key).icon) —
-// not duplicated here, since that already exists and stays correct if
-// GIG_TYPES ever changes.
 const GCAL_COLOR_MAP = {
   music:'3', play:'4', musical:'5', comedy:'6', sport:'2', festival:'9', cinema:'7',
   travel:'1', accommodation:'1', attraction:'1', keystop:'1',
   gym:'10', appointment:'1', pets:'6', food:'5', other:'8'
 };
-// GIG-077: foundation for trip/item sync. No script/auth/CALENDAR_ID
-// setup needed here — GIG-072 already covers that, trips and items use
-// exactly the same PalGCal instance and calendar gigs do. The two
-// genuinely new things trips touch: ITEM_TYPES (7 types, items within a
-// trip day — travel/accommodation/attraction/food/keystop/viewpoint/
-// other, a separate set from GIG_TYPES, note 'viewpoint' has no gig
-// equivalent at all) and TRIP_TYPES (3 types, the trip itself —
-// holiday/visit/visitors). Both get their own colorId mapping, since
-// neither overlaps cleanly with GCAL_COLOR_MAP above.
 const GCAL_ITEM_COLOR_MAP = {
   travel:'1', accommodation:'9', attraction:'4', food:'5', keystop:'11', viewpoint:'2', other:'8'
 };
 const GCAL_TRIP_COLOR_MAP = {
   holiday:'2', visit:'7', visitors:'6'
 };
-// calendarEventId lives in two places once GIG-078/079 land: the trip
-// object itself (trip.calendarEventId — the one multi-day all-day
-// event spanning the trip) and each item (item.calendarEventId — one
-// event per item, per the "both" decision: the trip and every item
-// inside it are independent real Calendar events, with GigsAndTrips
-// holding the relationship between them). No field initialisation
-// needed here — JS objects don't require pre-declaring properties, and
-// nothing writes either field until those issues actually exist.
+// trip.calendarEventId (the trip's own multi-day event) and each
+// item's own calendarEventId are independent Calendar events — trip
+// and items are never nested in Calendar itself, only related via
+// GigsAndTrips' own data.
 
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -869,6 +855,143 @@ function sortDayTimeline(items){
   timed.sort((a,b)=>a.t.localeCompare(b.t));
   return [...untimed.map(x=>x.it),...timed.map(x=>x.it)];
 }
+// ═══════════════════════════════════════════════════════════════════
+// AGENDA DATA LAYER (GIG-083) — full history in GigsAndTrips.md
+// ═══════════════════════════════════════════════════════════════════
+// getAgendaItems() combines standalone gigs and trip items into one
+// flat, chronologically sorted stream — reuses sortDayTimeline() and
+// the _linkedGig merge pattern the existing itinerary view already
+// uses (see openTripDay), not a second data model. A gig linked to a
+// trip is folded into that trip's day via _linkedGig, same as the
+// itinerary view already does, and is NOT also added as a standalone
+// entry — each gig/item appears exactly once. Ghost items (multi-
+// night-stay echoes) are excluded, same reasoning as GIG-079's
+// Calendar sync: the real item on its check-in day already covers
+// the span. Data layer only — no rendering; GIG-084 builds the UI.
+function getAgendaItems(startDate, endDate){
+  const d = getData();
+  const entries = [];
+  const trips = d.events.filter(e=>e.type==='trip'&&!e._deleted);
+  const tripIds = new Set(trips.map(t=>t.id));
+
+  d.events.filter(e=>e.type==='gig'&&!e._deleted&&!e.missed&&e.date>=startDate&&e.date<=endDate)
+    .forEach(g=>{
+      if(g.tripId && tripIds.has(g.tripId)) return; // covered via its trip's day below
+      entries.push(agendaEntryFromGig(g));
+    });
+
+  trips.filter(t=>t.status!=='Cancelled').forEach(trip=>{
+    const linkedGigs = d.events.filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===trip.id);
+    (trip.days||[]).forEach(day=>{
+      if(day.date<startDate || day.date>endDate) return;
+      const realItems = (day.items||[]).filter(it=>!it._ghost&&!it._placeholder);
+      const gigsThisDay = linkedGigs.filter(g=>g.date===day.date).map(g=>({...g,_linkedGig:true}));
+      sortDayTimeline([...realItems, ...gigsThisDay]).forEach(it=>{
+        entries.push(agendaEntryFromItem(trip, day, it));
+      });
+    });
+  });
+
+  entries.sort((a,b)=>{
+    if(a.date!==b.date) return a.date.localeCompare(b.date);
+    if(!a.time && b.time) return -1;
+    if(a.time && !b.time) return 1;
+    if(!a.time && !b.time) return 0;
+    return a.time.localeCompare(b.time);
+  });
+  return entries;
+}
+
+function agendaEntryFromGig(g){
+  const ti = gigTypeInfo(g.gigType);
+  return {
+    kind:'gig', date:g.date, time:g.time||null,
+    title:g.name||'(no title)', icon:ti.icon, typeLabel:ti.label,
+    location:g.venue||'', tripName:null, tripId:null, gigId:g.id
+  };
+}
+
+function agendaEntryFromItem(trip, day, it){
+  if(it._linkedGig){
+    const ti = gigTypeInfo(it.gigType||'music');
+    return {
+      kind:'gig', date:day.date, time:it.time||null,
+      title:it.name||'(no title)', icon:ti.icon, typeLabel:ti.label,
+      location:it.venue||'', tripName:trip.name, tripId:trip.id, gigId:it.id
+    };
+  }
+  return {
+    kind:'item', date:day.date, time:itemTime(it),
+    title:it.name||typeLabel(it.type), icon:typeIcon(it.type),
+    typeLabel: typeLabel(it.type) + (it.subtype ? ' — ' + it.subtype : ''),
+    location:itemLocationName(it), tripName:trip.name,
+    tripId:trip.id, dayId:day.id, itemId:it.id
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AGENDA UI (GIG-084) — full history in GigsAndTrips.md
+// ═══════════════════════════════════════════════════════════════════
+// Renders getAgendaItems() (GIG-083) as a date-grouped chronological
+// stream. Empty days are never shown, with no extra filtering needed
+// here — getAgendaItems() only ever returns dates that actually have
+// something on them. Window is today → +60 days; Agenda is a forward-
+// looking view, not a replacement for Past. Trip context renders as a
+// small label ABOVE the item (matching the source spec's own example),
+// deliberately subordinate — never competing with the item's own title.
+function renderAgenda(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = localDateStr(today);
+  const endDate = new Date(today); endDate.setDate(endDate.getDate()+60);
+  const endStr = localDateStr(endDate);
+
+  const items = getAgendaItems(todayStr, endStr);
+
+  if(!items.length){
+    document.getElementById('appInner').innerHTML = `<div class="empty">Nothing in the next 60 days.</div>`;
+    return;
+  }
+
+  const groups = [];
+  const byDate = {};
+  items.forEach(it=>{
+    if(!byDate[it.date]){ byDate[it.date]=[]; groups.push(it.date); }
+    byDate[it.date].push(it);
+  });
+
+  let html = '';
+  groups.forEach(dateStr=>{
+    html += agendaDateHeader(dateStr, todayStr);
+    byDate[dateStr].forEach(it=>{ html += agendaRow(it); });
+  });
+
+  document.getElementById('appInner').innerHTML = html;
+}
+
+function agendaDateHeader(dateStr, todayStr){
+  const d = new Date(dateStr+'T00:00:00');
+  const label = dateStr===todayStr ? 'Today'
+    : d.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'});
+  return `<div class="agenda-date-hdr${dateStr===todayStr?' today':''}">${esc(label)}</div>`;
+}
+
+function agendaRow(it){
+  const timeLabel = it.time || 'All day';
+  const click = it.kind==='gig'
+    ? `openGigDetail('${esc(it.gigId)}')`
+    : `openEditItem('${esc(it.tripId)}','${esc(it.dayId)}','${esc(it.itemId)}')`;
+  return `<div class="agenda-row" onclick="${click}">
+    ${it.tripName ? `<div class="agenda-trip">${esc(it.tripName)}</div>` : ''}
+    <div class="agenda-row-main">
+      <div class="agenda-time${it.time?'':' allday'}">${esc(timeLabel)}</div>
+      <div class="agenda-info">
+        <div class="agenda-title">${it.icon} ${esc(it.title)}</div>
+        ${it.location ? `<div class="agenda-loc">${esc(it.location)}</div>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
 function sym(curr){ const c=CURRENCIES.find(x=>x.c===curr); return c?c.s:'£'; }
 // v7.41 (GIG-053): esc() now comes from pal-utils.js (shared, escapes
 // single quotes too — see that file's header comment for why this is
@@ -2060,6 +2183,7 @@ function render(){
   loadGymXApp(); // GYM-039: refresh gym schedule summary each render
   if(_tab==='reviews'){ showPanel('list',true); renderReviews(); return; }
   if(_tab==='venues'){  showPanel('list',true); renderVenues();  return; }
+  if(_tab==='agenda'){  showPanel('list',true); renderAgenda();  return; }
   showPanel('list',true);
 
   const today=new Date(); today.setHours(0,0,0,0);
@@ -2742,13 +2866,17 @@ function saveGig(){
 // has a seriesId sitting in its data (from before this removal) is
 // simply ignored now — that field becomes inert, same pattern as other
 // removed-field cleanups elsewhere in this app.
-function confirmDeleteGig(id){
+async function confirmDeleteGig(id){
   const g=getEvent(id); if(!g) return;
   if(!confirm(`Delete "${g.name}"?`)) return;
-  // GIG-074: delete the real Calendar event too, if this gig has one —
-  // fire-and-forget, same as gcalSyncGig; the gig's own deletion below
-  // never waits on it.
-  if(g.calendarEventId) gcalDeleteGig(g.calendarEventId, g.name);
+  // GIG-082: await the Calendar delete before removing the local
+  // record — a failed Calendar delete no longer silently proceeds to
+  // delete the local gig anyway, which would strand the real Calendar
+  // event with nothing left in GigsAndTrips pointing at it, un-retryable.
+  if(g.calendarEventId){
+    const ok=await gcalDeleteGig(g.calendarEventId, g.name);
+    if(ok===false && !confirm('Could not delete the Calendar event — delete the gig from GigsAndTrips anyway? (The Calendar event will remain, orphaned.)')) return;
+  }
   deleteEvent(id); closeModal(); showToast('Gig deleted'); render();
 }
 
@@ -3053,19 +3181,32 @@ Remove these days?`
   return added;
 }
 
-function confirmDeleteTrip(id){
+async function confirmDeleteTrip(id){
   const t=getEvent(id); if(!t) return;
   if(!confirm(`Delete "${t.name}" and all its days?`)) return;
-  // GIG-078/079: delete the trip's own real Calendar event, and every
-  // item's, since each is an independent Calendar event in its own
-  // right (not a child of the trip's event in Calendar itself — the
-  // relationship only exists in GigsAndTrips' own data). Deleting the
-  // trip without this would leave every item's event orphaned on the
-  // real calendar with nothing left in GigsAndTrips pointing at it.
-  if(t.calendarEventId) gcalDeleteTrip(t.calendarEventId, t.name);
-  (t.days||[]).forEach(day=>(day.items||[]).forEach(it=>{
-    if(it.calendarEventId) gcalDeleteItem(it.calendarEventId, it.name||'');
-  }));
+  // GIG-078/079/082: delete the trip's own real Calendar event, and
+  // every item's — each is an independent Calendar event in its own
+  // right, not a child of the trip's event in Calendar itself (the
+  // relationship only exists in GigsAndTrips' own data). Every delete
+  // is awaited and failures collected into one summary confirm (not
+  // one confirm per failed item, which would be tedious for a trip
+  // with many items) before the local trip record is actually removed
+  // — a failure no longer silently proceeds to strand the real
+  // Calendar events with nothing left pointing at them.
+  let failCount=0;
+  if(t.calendarEventId){
+    const ok=await gcalDeleteTrip(t.calendarEventId, t.name);
+    if(ok===false) failCount++;
+  }
+  for(const day of (t.days||[])){
+    for(const it of (day.items||[])){
+      if(it.calendarEventId){
+        const ok=await gcalDeleteItem(it.calendarEventId, it.name||'');
+        if(ok===false) failCount++;
+      }
+    }
+  }
+  if(failCount>0 && !confirm(failCount+' Calendar event'+(failCount===1?'':'s')+' could not be deleted — delete the trip from GigsAndTrips anyway? (Those Calendar events will remain, orphaned.)')) return;
   deleteEvent(id); closeModal(); _view='list'; showListNav(); showToast('Trip deleted'); render();
 }
 
@@ -4207,7 +4348,7 @@ function saveItem(tripId,dayId,type,existingId){
   }
 }
 
-function deleteItem(tripId,dayId,itemId){
+async function deleteItem(tripId,dayId,itemId){
   if(!confirm('Delete this item?')) return;
   const trip=getEvent(tripId); if(!trip) return;
   const day=trip.days.find(d=>d.id===dayId); if(!day) return;
@@ -4218,10 +4359,15 @@ function deleteItem(tripId,dayId,itemId){
   const realItemsBefore=sortDayTimeline(day.items.filter(it=>!it._placeholder));
   const deletedIdx=realItemsBefore.findIndex(it=>it.id===itemId);
   const prevItemId=deletedIdx>0?realItemsBefore[deletedIdx-1].id:null;
-  // GIG-079: delete the item's real Calendar event too, if it has one —
-  // captured before the filter below removes the item from the trip.
+  // GIG-079/082: delete the item's real Calendar event too, if it has
+  // one — awaited now, and a failure asks before proceeding rather
+  // than silently removing the local item anyway (captured before the
+  // filter below removes the item from the trip).
   const deletedItem=day.items.find(i=>i.id===itemId);
-  if(deletedItem&&deletedItem.calendarEventId) gcalDeleteItem(deletedItem.calendarEventId, deletedItem.name||'');
+  if(deletedItem&&deletedItem.calendarEventId){
+    const ok=await gcalDeleteItem(deletedItem.calendarEventId, deletedItem.name||'');
+    if(ok===false && !confirm('Could not delete the Calendar event — delete this item from GigsAndTrips anyway? (The Calendar event will remain, orphaned.)')) return;
+  }
   day.items=day.items.filter(i=>i.id!==itemId);
   trip.updatedAt=new Date().toISOString();
   saveEvent(trip); showToast('Deleted');
@@ -4873,14 +5019,10 @@ function unlinkedGigsInTrip(tripId, startDate, endDate, d){
     e.date>=startDate && e.date<=endDate && !e.missed
   );
 }
-// GIG-076: needsDayOff() used to be a blunt "any weekday evening"
-// guess, with no awareness of Pete's actual work pattern — it would
-// flag every single weekday gig regardless of whether that day was
-// really a working day. Replaced with a real read of Fortnight
-// Tracker's own data, same approach PeteGCal already uses: same
-// localStorage key/fallback chain, same "don't re-derive the 9-day
-// pattern, only trust bundles that actually exist" principle, so this
-// never drifts from Fortnight Tracker's own logic.
+// GIG-076 — full history in GigsAndTrips.md. Reads Fortnight Tracker's
+// real data directly (same keys/fallback PeteGCal uses) rather than
+// re-deriving its 9-day pattern — only trusts bundles that actually
+// exist, so this never drifts from Fortnight Tracker's own logic.
 const FORTNIGHT_KEYS = ['fn_tracker_v5', 'fn_tracker_v4', 'fn_tracker_v3'];
 
 function getFortnightWorkingDates(){
@@ -5102,20 +5244,9 @@ function showDataManager(){
         <button class="btn btn-ghost" style="flex:1" onclick="dmPush()">⬆️ Push to cloud</button>
       </div>
 
-      <!-- GIG-073: one-time migration — links gigs already sent via the
-           old URL-based "Add to Calendar" flow (calendarAdded:true) to
-           their real Calendar event, where one can be found. Safe to
-           leave visible permanently; re-running it only ever affects
-           gigs that still have no calendarEventId, so it's harmless to
-           click again later if something was missed. -->
+      <!-- GIG-073/076 — full history in GigsAndTrips.md. Both safe to
+           leave visible permanently and re-run on demand. -->
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalMigrateOpen()">🔗 Link existing gigs to Google Calendar</button>
-
-      <!-- GIG-076: one-off historical import — the ongoing rolling
-           mirror (14 days back, 180 forward) runs automatically on
-           every load; this covers everything further back, once,
-           on demand. Shows a count and asks before writing anything,
-           since there's no fuzzy match to review item-by-item here,
-           just a potentially large bulk import to confirm. -->
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalHistoricalBackfill()">📜 Import 4 years of Calendar history</button>
 
       <div class="section-hdr">Sync Log</div>
@@ -5151,19 +5282,9 @@ function dmPush(){
   pushAllEventsLogged();
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// GIG-073: one-time Calendar link-up migration
-// ═══════════════════════════════════════════════════════════════════
-// Finds gigs sent via the old URL-based "Add to Calendar" flow
-// (calendarAdded:true) that have no stored calendarEventId, and offers
-// to link each one to a real Calendar event found by date+title match.
-// Title-contains is a heuristic, not a certainty — the old flow stamped
-// a "[Sent D Mon]" suffix on every send, so exact-title matching would
-// miss gigs sent more than once under slightly different titles. Same
-// reasoning, same per-item-confirm approach (no bulk-link) as
-// reconcile-gigs.html used for PeteGCal — but this one DOES write back,
-// since it's operating on GigsAndTrips' own data directly rather than
-// reaching into another app's storage one-way.
+// GIG-073 — full history in GigsAndTrips.md. Matching is a date+title
+// heuristic, not a certainty (the old flow stamped varying [Sent D Mon]
+// suffixes) — per-item confirm, never bulk-link.
 let _gcalMigrateEvents = [];
 
 function gcalMigrateOpen(){
@@ -6556,34 +6677,14 @@ function timeOptions(selected){
 // ═══════════════════════════════════════════════════════════════════
 // GOOGLE CALENDAR LINKS
 // ═══════════════════════════════════════════════════════════════════
+// GIG-074 — full history in GigsAndTrips.md. Fire-and-forget: the
+// local save already happened by the time this runs, so sync being
+// slow/offline/not-signed-in never costs the actual save.
 // ═══════════════════════════════════════════════════════════════════
-// GIG-074: real Calendar sync — replaces the old URL-popup flow
-// ═══════════════════════════════════════════════════════════════════
-// Deliberately fire-and-forget from saveGig()'s point of view: the
-// local save (saveData/pushEvent) already happened by the time this
-// runs, so a gig is never left unsaved just because Calendar sync is
-// slow, offline, or not signed in. On success this calls saveEvent()
-// again with the real calendarEventId attached — a second, cheap local
-// write, not a second "did it save" risk.
-// ═══════════════════════════════════════════════════════════════════
-// GIG-081: structured Calendar descriptions
-// ═══════════════════════════════════════════════════════════════════
-// Per the agreed model: Google Calendar is the execution layer (what/
-// when/where/what-you-need-to-know), GigsAndTrips stays the record of
-// truth (full planning, reviews, history). Only fields that materially
-// help someone attend/use the event go in — never internal IDs, review
-// ratings, or anything already native to the event (location is in the
-// Calendar location field, not repeated here; date/time are on the
-// event itself, not repeated either).
-//
-// IMPORTANT DEVIATION from the source document's own example: it shows
-// "Booking ref: ABC123" / "Confirmation: XYZ456" style fields. GigsAndTrips
-// has no booking-reference or confirmation-number field anywhere in its
-// actual data model — not on gigs, not on trips, not on any item type.
-// Rather than invent fields that don't exist, this builds from what's
-// actually there: ticket price/URL for gigs, cost/payment status for
-// items, trip status for trips. If booking-reference tracking gets
-// added to GigsAndTrips later, it slots into this same structure.
+// GIG-081 — full history in GigsAndTrips.md. Note: builds only from
+// fields that actually exist in GigsAndTrips' data model — there's no
+// booking-reference/confirmation-number field anywhere (gigs, trips,
+// or any item type), unlike the source spec's own example.
 function gcalFormatDescription(sections){
   const parts = sections.filter(s => s.lines && s.lines.length).map(s =>
     s.label.toUpperCase() + '\n' + s.lines.join('\n')
@@ -6694,19 +6795,10 @@ async function gcalRetrySync(id){
   openGigDetail(id); // re-render so the button reflects the new state
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// GIG-076: full Calendar mirror — native events imported as real gigs
-// ═══════════════════════════════════════════════════════════════════
-// Matching is exact, not fuzzy, unlike GIG-073's title/date heuristic:
-// every gig created since GIG-074 carries a real calendarEventId, so
-// "does any gig already have this event's id" is a reliable check —
-// PROVIDED GIG-073's migration has already linked anything older.
-// Anything not matched is genuinely new to GigsAndTrips and gets
-// imported as a gig with gigType 'other' (same default PeteGCal uses
-// for anything with no app-specific type), mixed into the normal
-// Upcoming/Past list — full parity with every deliberately-entered gig,
-// including edit/delete, per the decision to mirror fully rather than
-// keep imports in a separate holding area.
+// GIG-076 — full history in GigsAndTrips.md. Matching is exact (real
+// calendarEventId), not fuzzy — relies on GIG-073's migration having
+// already linked anything older. Imports as gigType 'other', full
+// parity with manually-entered gigs.
 function gcalBuildImportedGig(ev){
   const isAllDay = !ev.start.dateTime;
   const startRaw = ev.start.dateTime || ev.start.date;
@@ -6791,17 +6883,9 @@ async function gcalHistoricalBackfill(){
   render();
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// GIG-078: trip-level Calendar sync — one multi-day all-day event
-// ═══════════════════════════════════════════════════════════════════
-// Same fire-and-forget shape as gcalSyncGig: the trip is already saved
-// locally and pushed by the time this runs, so Calendar sync never
-// risks the actual save. Always an all-day event (date, not dateTime)
-// spanning startDate to endDate inclusive — end.date is exclusive per
-// Google's own convention, so endDate+1 day. This is the trip's own
-// event only; its items each get their own separate event (GIG-079),
-// per the "both" decision — two independent Calendar events, related
-// only through GigsAndTrips' own data, not nested in Calendar itself.
+// GIG-078 — full history in GigsAndTrips.md. Always all-day (date, not
+// dateTime), end.date is exclusive per Google's convention (endDate+1).
+// Trip and items are independent Calendar events, never nested.
 async function gcalSyncTrip(t, isNew){
   if (!PalGCal.hasToken()){
     syncLog('Calendar sync skipped (not signed in) — "' + t.name + '" saved locally only', 'info');
@@ -6851,29 +6935,27 @@ async function gcalRetrySyncTrip(id){
   showTripForm(getEvent(id)); // re-render with the refreshed trip
 }
 
+// GIG-082 — full history in GigsAndTrips.md. Returns true/false/
+// 'skipped' so callers can tell success from failure before deciding
+// whether it's safe to remove the local record.
 async function gcalDeleteTrip(calendarEventId, name){
-  if (!calendarEventId || !PalGCal.hasToken()) return;
+  if (!calendarEventId || !PalGCal.hasToken()) return 'skipped';
   try {
     await PalGCal.deleteEvent(GCAL_CALENDAR_ID, calendarEventId);
     syncLog('Calendar event deleted (trip): "' + name + '"', 'ok');
+    return true;
   } catch(e){
     syncLog('Calendar delete failed for trip "' + name + '": ' + PalGCal.errorHint(e), 'err');
+    return false;
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// GIG-079: item-level Calendar sync — one event per trip item
-// ═══════════════════════════════════════════════════════════════════
-// Reuses itemTime()/itemLocationName()/typeIcon() — the existing
-// per-type field normalizers — rather than re-deriving the travel/
-// accommodation/food/etc. field differences again here. Accommodation
-// is the one genuinely different case: it spans `nights` nights from
-// its check-in day as a multi-day all-day event, everything else is
-// either a single timed slot (if itemTime() returns one) or a single
-// all-day entry on its own day. Ghost items (the display-only echo of
-// a multi-night stay on its later nights — see itemTime()'s own
-// _ghost check) are skipped entirely: the real accommodation item on
-// its actual check-in day already covers the whole span.
+// GIG-079 — full history in GigsAndTrips.md. Reuses itemTime()/
+// itemLocationName()/typeIcon() rather than re-deriving per-type field
+// differences. Accommodation spans `nights` nights as a multi-day
+// all-day event; everything else is a single slot or single all-day
+// entry. Ghost items (multi-night-stay echoes) are skipped — the real
+// item on its check-in day already covers the whole span.
 async function gcalSyncItem(tripId, dayId, itemId){
   if (!PalGCal.hasToken()){
     syncLog('Calendar sync skipped (not signed in) — item saved locally only', 'info');
@@ -6942,22 +7024,26 @@ async function gcalRetrySyncItem(tripId, dayId, itemId){
 }
 
 async function gcalDeleteItem(calendarEventId, name){
-  if (!calendarEventId || !PalGCal.hasToken()) return;
+  if (!calendarEventId || !PalGCal.hasToken()) return 'skipped';
   try {
     await PalGCal.deleteEvent(GCAL_CALENDAR_ID, calendarEventId);
     syncLog('Calendar event deleted (item): "' + name + '"', 'ok');
+    return true;
   } catch(e){
     syncLog('Calendar delete failed for item "' + name + '": ' + PalGCal.errorHint(e), 'err');
+    return false;
   }
 }
 
 async function gcalDeleteGig(calendarEventId, name){
-  if (!calendarEventId || !PalGCal.hasToken()) return;
+  if (!calendarEventId || !PalGCal.hasToken()) return 'skipped';
   try {
     await PalGCal.deleteEvent(GCAL_CALENDAR_ID, calendarEventId);
     syncLog('Calendar event deleted: "' + name + '"', 'ok');
+    return true;
   } catch(e){
     syncLog('Calendar delete failed for "' + name + '": ' + PalGCal.errorHint(e), 'err');
+    return false;
   }
 }
 
@@ -7209,20 +7295,14 @@ function onUnlocked(){
   initGCalSync();       // GIG-072: foundation only — no UI change yet
 }
 
-// GIG-072: foundation only. No sign-in prompt, no UI change — just
-// confirms the module itself loads and initialises cleanly, logged to
-// the existing sync log panel (not a new one) so this is checkable
-// without adding anything new to look at. The real sign-in trigger and
-// create/update/delete wiring land in GIG-073/074.
+// GIG-072/076 — full history in GigsAndTrips.md.
 function initGCalSync(){
   PalGCal.init({
     clientId: GCAL_CLIENT_ID,
     onAuthChange: function(signedIn){
       syncLog('Google Calendar: ' + (signedIn ? 'signed in' : 'signed out'), signedIn ? 'ok' : 'info');
-      // GIG-076: the rolling mirror runs the moment a token's actually
-      // available — whether from this silent attempt or a later
-      // explicit sign-in — rather than on a fixed timer that might fire
-      // before or after the token is really ready.
+      // Fires the mirror pull the moment a token's actually available,
+      // silent attempt or later explicit sign-in — not a fixed timer.
       if (signedIn) gcalMirrorPull();
     },
     onTokenRefreshed: function(){
@@ -7236,12 +7316,8 @@ function initGCalSync(){
     }
   });
   syncLog('Google Calendar sync module loaded', 'info');
-  // GIG-074: attempt a silent sign-in shortly after load, same pattern
-  // PeteGCal uses — if the browser's Google session is still valid
-  // (e.g. from the GIG-073 migration tool, or PeteGCal itself on this
-  // device), gig saves sync to Calendar with no visible prompt. If not,
-  // this just fails quietly; saving a gig still works fine either way,
-  // it just won't sync to Calendar until signed in.
+  // GIG-074: silent sign-in attempt, same pattern as PeteGCal — fails
+  // quietly if no valid session; saves still work either way.
   setTimeout(function(){ PalGCal.requestTokenRefresh(); }, 600);
 }
 
