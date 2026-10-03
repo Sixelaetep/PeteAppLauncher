@@ -6,6 +6,28 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.94 (GIG-089, GIG-091 part, AD-9, GIG-110) — Storage write safety, import hygiene, small housekeeping
+
+A batch of small, independent changes.
+
+**GIG-089 — `saveData()` can no longer lose an edit to a full localStorage.** Before: a `QuotaExceededError` threw out of `saveData()`, which aborted `saveEvent()` *before* `pushEvent()`, so the edit reached neither local storage nor Supabase. Now: the main write is tried; if the quota is the cause, the one regenerable duplicate (`gat_v1_clean`, the launcher copy) is removed and the write retried once; if it still fails, a warning toast (rate-limited to once a minute) and a Sync Log entry appear and the caller carries on, so the cloud push still happens. The `_clean` write is now best-effort (the launcher already falls back to `gat_v1`). `saveData()` now returns true/false. **Known limitation:** when storage is genuinely full the app reads from localStorage, so the edit is safe in Supabase but will not show on that device until space is freed; the warning says so.
+
+**GIG-091 (b)(d) — import hygiene, first part.** Calendar imports now carry `importedFrom:'gcal'`. Recurring instances (those Google marks with `recurringEventId`) are **no longer imported** by the rolling pull or the 4-year backfill; the Sync Log, backfill confirm and "nothing new" toast show how many were skipped. Already-imported instances are untouched. Reversible with the single constant `GCAL_SKIP_RECURRING`. Series support (GIG-106) and the one-off collapse of existing instances (GIG-117) come later.
+
+**AD-9 — ownership tag.** The three Calendar metadata objects (gig, trip, item) now include `app:'gigs-and-trips'`. The metadata key stays `petegcal`. Existing Calendar events gain the tag the next time they are synced.
+
+**GIG-110.** The v7.92 entry above is now labelled GIG-087.
+
+**Deliberately not done:** the Europe/London `timeZone` on Google writes (AD-11, approved). Existing one-off events are sent as exact instants, so adding a zone changes nothing for them and could mislabel trips abroad; it is required only for recurring events, so it ships with GIG-116.
+
+Files changed: `GigsAndTrips.html`, `GigsAndTrips.md`. No launcher, `pal-gcal.js` or data-model change.
+
+**Tested — in Node against a quota-limited storage shim:** normal save writes both keys; a save that only fails because of the duplicate recovers by dropping it and the new data persists; genuinely full storage returns false, leaves the old data intact, warns once (second call rate-limited), and does not throw; `saveEvent()` still calls `pushEvent()` when local storage is full or blocked (SecurityError); recurring instances are skipped and counted, one-offs imported, already-known recurring instances untouched; `importedFrom` set; all three metadata objects carry the tag. Inline scripts pass `node --check`; the GIG-088 report tests still pass.
+
+**Not tested:** not run in a real browser or Safari; the toast and the Sync Log wording are unseen on screen; no real Google call made.
+
+---
+
 ## v7.93 (GIG-088) — Read-only storage report
 
 First ticket of the backlog restructure. **Sync & Backup → Storage → "Storage report (read-only)"** lists every localStorage key on the origin (the whole PAD suite shares one), with size, owner and category (Persistent / Cache / Temporary / UI pref / Sync queue / Foreign / Unclassified), by-category totals, and a summary of what is inside `gat_v1`: counts of gigs, trips, days, items, tombstones and venues, the size of the duplicate `gat_v1_clean`, gig types, how many gigs look like Calendar imports, a heuristic count of recurring-looking instances, and the five largest records. It also records whether it ran in the home-screen app or a browser tab, since those keep separate storage. A "Copy report" button copies it as plain text.
@@ -20,7 +42,7 @@ Files changed: `GigsAndTrips.html` only (version strings v7.92 to v7.93 in the t
 
 ---
 
-## v7.92 — Fix: Calendar mirror pull throttled (real bug, found by real testing)
+## v7.92 (GIG-087) — Fix: Calendar mirror pull throttled (real bug, found by real testing)
 
 First real-world finding from actually opening the app: `gcalMirrorPull()` had zero throttling and fired on every single page load. During a day of heavy reloading while building and testing GIG-072–086 — plus the 4-year historical backfill and the migration tool, both sharing the same Google Cloud project's quota with PeteGCal — this hit Google's Calendar API quota (`"The quota has been exceeded"`).
 

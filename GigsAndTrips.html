@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.93</title>
+<title>Gigs &amp; Trips v7.94</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -518,7 +518,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.93</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.94</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -579,7 +579,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.93"></script>
+<script src="pal-shared.js?v=7.94"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
@@ -1274,13 +1274,50 @@ function getData(){
 }
 let _pulling=false; // vestigial as of v5.3 (GT-003) — saveData() no longer auto-pushes venues, so this no longer changes behavior. Left in place at its existing call sites rather than touching them for a pure cleanup.
 
+// GIG-089 — full history in GigsAndTrips.md. A localStorage write used to
+// be unguarded: a QuotaExceededError threw out of saveData(), which
+// aborted saveEvent() BEFORE pushEvent() ran, so the edit reached neither
+// local storage nor Supabase. Now: try the main write; if the quota is
+// the cause, free the one regenerable duplicate (SK+'_clean', launcher
+// copy) and retry once; if it still fails, warn (rate-limited) and carry
+// on so the caller's cloud push still happens. Returns true/false.
+let _lastStorageWarnAt=0;
+function isQuotaError(e){
+  return !!e && (e.name==='QuotaExceededError' || e.name==='NS_ERROR_DOM_QUOTA_REACHED' || e.code===22 || e.code===1014);
+}
+function storageWriteFailed(e){
+  try{ syncLog('Local storage write failed: '+String((e&&e.name)||e)+' — change saved to the cloud only','err'); }catch(_){}
+  const now=Date.now();
+  if(now-_lastStorageWarnAt>60000){
+    _lastStorageWarnAt=now;
+    try{ showToast('⚠️ Device storage is full — saved to the cloud only. See Sync & Backup → Storage report.'); }catch(_){}
+  }
+}
 function saveData(d){
-  localStorage.setItem(SK,JSON.stringify(d));
-  // Also write a tombstone-free copy under SK+'_clean' for the launcher card.
-  // The launcher reads localStorage directly so it must not see _deleted
-  // events or venues.
-  const clean={...d,events:(d.events||[]).filter(ev=>!ev._deleted),venues:(d.venues||[]).filter(v=>!v._deleted)};
-  localStorage.setItem(SK+'_clean',JSON.stringify(clean));
+  const json=JSON.stringify(d);
+  let ok=true;
+  try{ localStorage.setItem(SK,json); }
+  catch(e){
+    ok=false;
+    if(isQuotaError(e)){
+      try{
+        localStorage.removeItem(SK+'_clean'); // regenerable duplicate, launcher falls back to SK
+        localStorage.setItem(SK,json);
+        ok=true;
+        try{ syncLog('Local storage was full — cleared the duplicate launcher copy and saved','info'); }catch(_){}
+      }catch(e2){ e=e2; }
+    }
+    if(!ok) storageWriteFailed(e);
+  }
+  if(ok){
+    // Also write a tombstone-free copy under SK+'_clean' for the launcher card.
+    // The launcher reads localStorage directly so it must not see _deleted
+    // events or venues. Best-effort: the launcher falls back to SK.
+    try{
+      const clean={...d,events:(d.events||[]).filter(ev=>!ev._deleted),venues:(d.venues||[]).filter(v=>!v._deleted)};
+      localStorage.setItem(SK+'_clean',JSON.stringify(clean));
+    }catch(e){ /* non-fatal */ }
+  }
   // v5.3 (GT-003): venues used to push as one whole-list row on a 2s
   // debounce after every save. Now each venue mutation pushes (or
   // tombstones) itself immediately — see addVenueFromInput/deleteVenue/
@@ -1288,6 +1325,7 @@ function saveData(d){
   // Broadcast to launcher
   try{ const bc=new BroadcastChannel('pal_gat_updated'); bc.postMessage({type:'GAT_DATA_UPDATED'}); bc.close(); } catch(e){}
   try{ window.parent.postMessage({type:'GAT_DATA_UPDATED'},window.location.origin); } catch(e){}
+  return ok;
 }
 // v7.41 (GIG-053): uid() now comes from pal-utils.js (shared, prefix
 // passed explicitly at each call site below instead of hardcoded
@@ -7058,7 +7096,7 @@ async function gcalSyncGig(g, isNew){
     description: description,
     colorId: GCAL_COLOR_MAP[g.gigType] || GCAL_COLOR_MAP.other
   }, startEnd);
-  const meta = { type: g.gigType, gigId: g.id };
+  const meta = { app:'gigs-and-trips', type: g.gigType, gigId: g.id };
 
   try {
     let result;
@@ -7107,18 +7145,37 @@ function gcalBuildImportedGig(ev){
     notes: ev.description || '',
     ticketUrl:'', ticketPrice:0, ticketNote:'', tripId:null,
     calendarEventId: ev.id,
-    calendarHtmlLink: ev.htmlLink
+    calendarHtmlLink: ev.htmlLink,
+    importedFrom: 'gcal' // GIG-091: lets later work tell imports from manual gigs
   };
 }
 
 // Returns the events NOT already represented by an existing gig —
 // shared by both the rolling auto-pull and the one-off historical
 // backfill, so the matching logic lives in exactly one place.
+// GIG-091(d): recurring instances (Google sets recurringEventId on every
+// expanded instance) are skipped until the series model exists — importing
+// them creates one gig per occurrence and the rolling window adds more every
+// time it advances. Reversible: set GCAL_SKIP_RECURRING to false. Already
+// imported instances are untouched (they are "known" by calendarEventId).
+const GCAL_SKIP_RECURRING = true;
+let _gcalSkippedRecurring = 0;
+function gcalSkipNote(){
+  const n = _gcalSkippedRecurring;
+  return n ? ' (' + n + ' recurring instance' + (n===1?'':'s') + ' not imported yet)' : '';
+}
 function gcalUnmatchedEvents(calEvents){
   const known = new Set(
     getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId).map(e=>e.calendarEventId)
   );
-  return calEvents.filter(ev=>!known.has(ev.id));
+  let fresh = calEvents.filter(ev=>!known.has(ev.id));
+  _gcalSkippedRecurring = 0;
+  if (GCAL_SKIP_RECURRING){
+    const before = fresh.length;
+    fresh = fresh.filter(ev=>!ev.recurringEventId);
+    _gcalSkippedRecurring = before - fresh.length;
+  }
+  return fresh;
 }
 
 // Rolling mirror — same 14-day-past/180-day-future window as PeteGCal,
@@ -7154,9 +7211,9 @@ async function gcalMirrorPull(force){
   try {
     const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, timeMin.toISOString(), timeMax.toISOString());
     const unmatched = gcalUnmatchedEvents(events);
-    if (!unmatched.length){ syncLog('Calendar mirror pull: nothing new', 'ok'); return; }
+    if (!unmatched.length){ syncLog('Calendar mirror pull: nothing new' + gcalSkipNote(), 'ok'); return; }
     unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
-    syncLog('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Google Calendar', 'ok');
+    syncLog('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Google Calendar' + gcalSkipNote(), 'ok');
     showToast('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Calendar');
     render();
   } catch(e){
@@ -7188,10 +7245,10 @@ async function gcalHistoricalBackfill(){
   }
   const unmatched = gcalUnmatchedEvents(events);
   if (!unmatched.length){
-    showToast('Nothing new — everything in range already has a gig');
+    showToast('Nothing new — everything in range already has a gig' + gcalSkipNote());
     return;
   }
-  if (!confirm('Found ' + unmatched.length + ' Calendar events with no matching gig, going back 4 years. Import all ' + unmatched.length + ' as gigs?')) return;
+  if (!confirm('Found ' + unmatched.length + ' Calendar events with no matching gig, going back 4 years' + gcalSkipNote() + '. Import all ' + unmatched.length + ' as gigs?')) return;
   syncLog('Importing ' + unmatched.length + ' events from 4-year history…', 'working');
   unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
   syncLog('Historical backfill complete — ' + unmatched.length + ' gigs imported', 'ok');
@@ -7221,7 +7278,7 @@ async function gcalSyncTrip(t, isNew){
     start: { date: t.startDate },
     end: { date: localDateStr(endExclusive) }
   };
-  const meta = { type: t.tripType, tripId: t.id, kind: 'trip' };
+  const meta = { app:'gigs-and-trips', type: t.tripType, tripId: t.id, kind: 'trip' };
 
   try {
     let result;
@@ -7305,7 +7362,7 @@ async function gcalSyncItem(tripId, dayId, itemId){
     description: gcalFormatDescription(gcalItemDescriptionFields(trip, it)), // GIG-081
     colorId: GCAL_ITEM_COLOR_MAP[it.type] || GCAL_ITEM_COLOR_MAP.other
   }, startEnd);
-  const meta = { type: it.type, tripId:trip.id, dayId:day.id, itemId:it.id, kind:'item' };
+  const meta = { app:'gigs-and-trips', type: it.type, tripId:trip.id, dayId:day.id, itemId:it.id, kind:'item' };
 
   try {
     let result;
