@@ -1,5 +1,5 @@
 /*
- * pal-gcal.js — PGC-002
+ * pal-gcal.js — PGC-002 (v2: updateEvent gains optional expectEtag, GIG-102)
  * ─────────────────────────────────────────────────────────────────────────
  * Shared Google Calendar access layer. Separate from pal-shared.js on
  * purpose: pal-shared.js is loaded by every app in the suite, and this is
@@ -273,17 +273,31 @@ window.PalGCal = (function () {
   // merges into whatever app metadata the event already has rather than
   // replacing it wholesale — so enriching just the venue on a native
   // Calendar event doesn't require re-sending a type you didn't touch.
-  async function updateEvent(calendarId, eventId, patchBody, meta) {
+  //
+  // opts (optional, added v2): { expectEtag } — if given, the event is fetched
+  // first (reusing the fetch the meta merge already needs, so no extra call
+  // when meta is also passed) and the update is refused with an error whose
+  // code is 'etag-mismatch' (status 412, e.data = the event as it currently
+  // is in Google) if its etag differs. This is how a caller avoids silently
+  // overwriting an edit made in Google since its last sync. Callers that do
+  // not pass opts behave exactly as before.
+  async function updateEvent(calendarId, eventId, patchBody, meta, opts) {
+    opts = opts || {};
     let body = patchBody;
-    if (meta) {
+    if (meta || opts.expectEtag) {
       // Merge against existing meta: fetch-then-merge, since PATCH bodies
       // for extendedProperties replace the whole private map, not just
       // the one key.
       const current = await _apiFetch(
         '/calendars/' + encodeURIComponent(calendarId) + '/events/' + encodeURIComponent(eventId)
       );
-      const existingMeta = readAppMeta(current);
-      body = withAppMeta(patchBody, Object.assign({}, existingMeta, meta));
+      if (opts.expectEtag && current && current.etag && current.etag !== opts.expectEtag) {
+        throw _err('etag-mismatch', 'Event changed in Google Calendar since the last sync', 412, current);
+      }
+      if (meta) {
+        const existingMeta = readAppMeta(current);
+        body = withAppMeta(patchBody, Object.assign({}, existingMeta, meta));
+      }
     }
     return _apiFetch(
       '/calendars/' + encodeURIComponent(calendarId) + '/events/' + encodeURIComponent(eventId),

@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.96</title>
+<title>Gigs &amp; Trips v7.97</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -167,6 +167,12 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 /* GIG-101 — subtle Calendar sync state */
 .gcal-state{font-size:12px;color:var(--ink3);margin:0 0 6px}
 .gcal-state.error{color:var(--danger)}
+/* GIG-102/104/105 — Calendar changes to review */
+.gcal-conf{background:var(--surf);border-radius:var(--rsm);padding:10px 12px;margin-bottom:8px;font-size:13px;color:var(--ink2)}
+.gcal-conf-title{font-weight:700;color:var(--ink);margin-bottom:2px}
+.gcal-conf-diff{font-size:12px;color:var(--ink3);margin:2px 0}
+.gcal-conf-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.gcal-conf-btns button{flex:1 1 auto;font-size:12px;padding:7px 8px}
 .agenda-today-btn{background:var(--card);border:1px solid var(--bdr);border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer}
 .agenda-today-btn:hover{border-color:var(--acc);color:var(--acc)}
 .nownext-card{display:flex;gap:0;background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:16px;overflow:hidden}
@@ -527,7 +533,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.96</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.97</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -588,10 +594,10 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.96"></script>
+<script src="pal-shared.js?v=7.97"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="pal-gcal.js?v=1"></script>
+<script src="pal-gcal.js?v=2"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONFIG
@@ -5498,6 +5504,7 @@ function showDataManager(){
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
 
       <!-- GIG-088 — full history in GigsAndTrips.md. Read-only. -->
+      ${gcalConflictsSectionHtml()}
       ${gcalQueueSectionHtml()}
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalRemoveDuplicateImports()">🧹 Find duplicate Calendar imports</button>
 
@@ -5526,6 +5533,7 @@ function storageClassify(key){
     'gat_gcal_mirror_last_attempt':{owner:'Gigs & Trips', cat:'UI pref',    note:'Calendar pull throttle timestamp'},
     'gat_cal_filter':              {owner:'Gigs & Trips', cat:'UI pref',    note:'Agenda class filter'},
     'gat_gcal_queue':              {owner:'Gigs & Trips', cat:'Sync queue', note:'pending Calendar writes/deletes (GIG-101)'},
+    'gat_gcal_conflicts':          {owner:'Gigs & Trips', cat:'Temporary',  note:'Calendar changes awaiting a decision (GIG-102)'},
     'pal_theme':                   {owner:'Suite',        cat:'UI pref',    note:'theme'},
     'pal_retry_queue_v1':          {owner:'Suite',        cat:'Sync queue', note:'pending writes for apps using pal-shared'},
     'pal_nav_request':             {owner:'Suite',        cat:'Temporary',  note:'cross-app navigation hand-off'},
@@ -7161,6 +7169,7 @@ function gcalClassifyError(e){
   const st = e.status;
   const msg = String(e.message || '');
   const reason = (e.data && e.data.error && e.data.error.errors && e.data.error.errors[0] && e.data.error.errors[0].reason) || '';
+  if (e.code === 'etag-mismatch' || st === 412) return 'conflict';
   if (e.code === 'no-token' || e.code === 'unauthorized' || st === 401) return 'auth';
   if (st === 429 || /rateLimit|quotaExceeded|userRateLimit/i.test(reason) || /quota/i.test(msg)) return 'rate';
   if (!st && !e.code) return 'offline';           // fetch threw before any HTTP response
@@ -7372,6 +7381,297 @@ function gcalRemoveDuplicateImports(){
 }
 // ==GIG-101 END==
 
+// ==GIG-102 BEGIN==
+// GIG-102/103/104/105 (+100 round-trip) — full history in GigsAndTrips.md.
+// Google -> Gigs & Trips for GIGS. Supabase stays the source of truth; Google
+// may change title, date, time, location and notes of a gig, nothing else.
+// Each gig remembers (gcalEtag, gcalSyncedHash): the Google version and a hash
+// of those five fields at the last successful sync. On every Calendar pull:
+//   Google unchanged            -> nothing
+//   no baseline yet (legacy)    -> adopt Google's etag + the app's current state,
+//                                  apply nothing (so no flood of old differences)
+//   Google changed, app didn't  -> apply Google's fields to the gig
+//   both changed                -> NOT overwritten; listed for a decision
+//   event gone from Google      -> listed for a decision (never auto-deleted)
+// Trips and items are only checked for deletion in Google, not for edits.
+function gcalFieldsHash(f){
+  const norm = [f.name||'', f.date||'', f.time||'', f.venue||'', String(f.notes||'').replace(/\r\n/g,'\n').trim()].map(x=>String(x).trim());
+  const str = JSON.stringify(norm);
+  let h = 5381;
+  for (let i=0; i<str.length; i++){ h = ((h<<5) + h + str.charCodeAt(i)) | 0; }
+  return 'h' + (h>>>0).toString(36);
+}
+function gcalGigFields(g){
+  return { name:g.name||'', date:g.date||'', time:g.time||'', venue:g.venue||'', notes:g.notes||'' };
+}
+// The app writes notes into a structured block (GIG-081). Pull them back out;
+// anything that is not our block (a native event, or a description the person
+// rewrote) is treated as notes in full.
+function gcalParseNotes(desc){
+  if (!desc) return '';
+  const d = String(desc).replace(/\r\n/g,'\n');
+  const head = 'GIGS & TRIPS\n';
+  if (d.indexOf(head) !== 0) return d.trim();
+  let body = d.slice(head.length);
+  const footer = '\n────────────────────\nGigs & Trips';
+  const fi = body.lastIndexOf(footer);
+  if (fi >= 0) body = body.slice(0, fi);
+  const lines = body.split('\n');
+  const ni = lines.indexOf('NOTES');
+  if (ni < 0) return '';
+  return lines.slice(ni+1).join('\n').trim();
+}
+// Google event -> the five fields, undoing what this app adds on the way out
+// (the type icon on the title).
+function gcalGoogleGigFields(G, g){
+  const allDay = !(G.start && G.start.dateTime);
+  let name = G.summary || '(no title)';
+  const icon = gigTypeInfo((g && g.gigType) || 'other').icon;
+  if (icon && name.indexOf(icon + ' ') === 0) name = name.slice(icon.length + 1);
+  let date, time;
+  if (allDay){ date = G.start && G.start.date || ''; time = ''; }
+  else { const d = new Date(G.start.dateTime); date = localDateStr(d); time = d.toTimeString().slice(0,5); }
+  return { name:name, date:date, time:time, venue:G.location||'', notes:gcalParseNotes(G.description||'') };
+}
+// action: none | baseline | apply | conflict
+function gcalEvaluateGig(g, G){
+  if (g.gcalEtag && G.etag && G.etag === g.gcalEtag) return { action:'none' };
+  if (!g.gcalSyncedHash) return { action:'baseline' };
+  const gf = gcalGoogleGigFields(G, g);
+  const appH = gcalFieldsHash(gcalGigFields(g));
+  const googH = gcalFieldsHash(gf);
+  if (googH === appH) return { action:'baseline', fields:gf };            // Google edited something we do not own
+  if (appH === g.gcalSyncedHash) return { action:'apply', fields:gf };    // only Google changed
+  return { action:'conflict', fields:gf };                                 // both changed
+}
+function gcalSetBaseline(id, G, fieldsForHash){
+  const fresh = getEvent(id); if (!fresh) return;
+  fresh.gcalEtag = G.etag || fresh.gcalEtag || '';
+  fresh.gcalSyncedHash = gcalFieldsHash(fieldsForHash || gcalGigFields(fresh));
+  if (G.htmlLink) fresh.calendarHtmlLink = G.htmlLink;
+  fresh.updatedAt = new Date().toISOString();
+  saveEvent(fresh);
+}
+function gcalApplyGoogleToGig(id, gf, etag, htmlLink){
+  const fresh = getEvent(id); if (!fresh) return false;
+  fresh.name = gf.name; fresh.date = gf.date; fresh.time = gf.time; fresh.venue = gf.venue; fresh.notes = gf.notes;
+  fresh.calendarHtmlLink = htmlLink || fresh.calendarHtmlLink;
+  fresh.gcalEtag = etag || fresh.gcalEtag || '';
+  fresh.gcalSyncedHash = gcalFieldsHash(gf);
+  fresh.updatedAt = new Date().toISOString();
+  saveEvent(fresh);
+  return true;
+}
+
+// ── review list (device-local; re-derived on every pull, pruned when stale) ──
+const GCAL_CONF_KEY = 'gat_gcal_conflicts';
+function gcalConfLoad(){
+  try { const r = JSON.parse(localStorage.getItem(GCAL_CONF_KEY) || 'null'); if (r && Array.isArray(r.items)) return r; } catch(e){}
+  return { v:1, items:[] };
+}
+function gcalConfSave(c){
+  try { if (c.items.length) localStorage.setItem(GCAL_CONF_KEY, JSON.stringify(c)); else localStorage.removeItem(GCAL_CONF_KEY); } catch(e){}
+}
+function gcalConfAdd(entry){
+  const c = gcalConfLoad();
+  const i = c.items.findIndex(x=>x.key===entry.key);
+  const isNew = i < 0;
+  if (isNew) c.items.push(entry); else c.items[i] = Object.assign({}, c.items[i], entry);
+  gcalConfSave(c);
+  return isNew;
+}
+function gcalConfRemove(key){
+  const c = gcalConfLoad();
+  const n = c.items.length;
+  c.items = c.items.filter(x=>x.key!==key);
+  if (c.items.length !== n) gcalConfSave(c);
+}
+function gcalConfPrune(){
+  const c = gcalConfLoad();
+  const keep = c.items.filter(x=>{
+    if (x.kind === 'gig'){ const g = getEvent(x.id); return !!g && g.calendarEventId === x.calendarEventId; }
+    if (x.kind === 'trip'){ const t = getEvent(x.id); return !!t && t.calendarEventId === x.calendarEventId; }
+    const t = getEvent(x.tripId); const d = t && (t.days||[]).find(dy=>dy.id===x.dayId); const it = d && (d.items||[]).find(i=>i.id===x.itemId);
+    return !!it && it.calendarEventId === x.calendarEventId;
+  });
+  if (keep.length !== c.items.length){ c.items = keep; gcalConfSave(c); }
+}
+function gcalConfKey(reason, kind, ids){ return reason + ':' + kind + ':' + [ids.id, ids.tripId, ids.dayId, ids.itemId].filter(Boolean).join('/'); }
+
+// Handles one linked gig + its Google event. Returns the action taken.
+function gcalHandleGigEvent(g, G){
+  const r = gcalEvaluateGig(g, G);
+  if (r.action === 'baseline'){ gcalSetBaseline(g.id, G, gcalGigFields(g)); return 'baseline'; }
+  if (r.action === 'apply'){ gcalApplyGoogleToGig(g.id, r.fields, G.etag, G.htmlLink); return 'applied'; }
+  if (r.action === 'conflict'){
+    const isNew = gcalConfAdd({
+      key:gcalConfKey('both-changed','gig',{id:g.id}), reason:'both-changed', kind:'gig', id:g.id, calendarEventId:g.calendarEventId,
+      name:g.name, date:g.date, app:gcalGigFields(g), google:r.fields, googleEtag:G.etag||'', googleHtmlLink:G.htmlLink||'',
+      detectedAt:new Date().toISOString()
+    });
+    return isNew ? 'conflict-new' : 'conflict';
+  }
+  return 'none';
+}
+
+// Records whose Calendar event did not come back in the window: check each
+// individually (it may simply have been moved out of the window) and only flag
+// ones Google says are gone. Capped per pull to protect the API quota.
+const GCAL_DELETE_CHECKS_PER_PULL = 10;
+async function gcalDetectDeleted(fetchedIds, timeMin, timeMax){
+  const minD = localDateStr(timeMin), maxD = localDateStr(timeMax);
+  const pendingDel = gcalQueuePendingDeleteIds();
+  const flagged = new Set(gcalConfLoad().items.map(x=>x.key));
+  const cands = [];
+  getData().events.filter(e=>!e._deleted).forEach(e=>{
+    if (e.type==='gig' && e.calendarEventId && e.date>=minD && e.date<=maxD && !fetchedIds.has(e.calendarEventId) && !pendingDel.has(e.calendarEventId))
+      cands.push({kind:'gig', rec:e, ids:{id:e.id}, name:e.name, date:e.date});
+    if (e.type==='trip'){
+      if (e.calendarEventId && e.endDate>=minD && e.startDate<=maxD && !fetchedIds.has(e.calendarEventId) && !pendingDel.has(e.calendarEventId))
+        cands.push({kind:'trip', rec:e, ids:{id:e.id}, name:e.name, date:e.startDate});
+      (e.days||[]).forEach(day=>(day.items||[]).forEach(it=>{
+        if (!it._ghost && it.calendarEventId && day.date>=minD && day.date<=maxD && !fetchedIds.has(it.calendarEventId) && !pendingDel.has(it.calendarEventId))
+          cands.push({kind:'item', rec:it, ids:{tripId:e.id,dayId:day.id,itemId:it.id}, name:it.name||'', date:day.date});
+      }));
+    }
+  });
+  const todo = cands.filter(c=>!flagged.has(gcalConfKey('deleted-in-google', c.kind, c.ids)))
+                    .sort((a,b)=>(a.kind==='gig'?0:1)-(b.kind==='gig'?0:1))
+                    .slice(0, GCAL_DELETE_CHECKS_PER_PULL);
+  let found = 0, moved = 0;
+  for (const c of todo){
+    let G = null, gone = false;
+    try { G = await PalGCal.getEvent(GCAL_CALENDAR_ID, c.rec.calendarEventId); }
+    catch(e){
+      if (e && (e.status===404 || e.status===410)) gone = true;
+      else { syncLog('Calendar deletion check stopped: ' + PalGCal.errorHint(e), 'err'); break; }
+    }
+    if (G && G.status === 'cancelled') gone = true;
+    if (gone){
+      const isNew = gcalConfAdd({
+        key:gcalConfKey('deleted-in-google', c.kind, c.ids), reason:'deleted-in-google', kind:c.kind,
+        id:c.ids.id||null, tripId:c.ids.tripId||null, dayId:c.ids.dayId||null, itemId:c.ids.itemId||null,
+        calendarEventId:c.rec.calendarEventId, name:c.name, date:c.date, detectedAt:new Date().toISOString()
+      });
+      if (isNew) found++;
+    } else if (G && c.kind === 'gig'){
+      moved++; gcalHandleGigEvent(getEvent(c.rec.id) || c.rec, G); // exists, just outside the window (e.g. moved)
+    }
+    await new Promise(r=>setTimeout(r, 250));
+  }
+  return { found:found, moved:moved, unchecked:Math.max(0, cands.filter(c=>!flagged.has(gcalConfKey('deleted-in-google', c.kind, c.ids))).length - todo.length) };
+}
+
+async function gcalReviewLinked(events, timeMin, timeMax){
+  const byId = new Map(); events.forEach(ev=>byId.set(ev.id, ev));
+  const tally = { applied:0, baseline:0, conflictsNew:0 };
+  getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId).forEach(g=>{
+    const G = byId.get(g.calendarEventId); if (!G) return;
+    const a = gcalHandleGigEvent(g, G);
+    if (a==='applied') tally.applied++; else if (a==='baseline') tally.baseline++; else if (a==='conflict-new') tally.conflictsNew++;
+  });
+  const del = await gcalDetectDeleted(new Set(byId.keys()), timeMin, timeMax);
+  gcalConfPrune();
+  const parts = [];
+  if (tally.applied) parts.push(tally.applied + ' updated from Google');
+  if (tally.baseline) parts.push(tally.baseline + ' baselined');
+  if (tally.conflictsNew) parts.push(tally.conflictsNew + ' changed in both places');
+  if (del.found) parts.push(del.found + ' deleted in Google');
+  if (del.unchecked) parts.push(del.unchecked + ' deletion checks left for next time');
+  if (parts.length) syncLog('Calendar review: ' + parts.join(', '), (tally.conflictsNew||del.found) ? 'err' : 'ok');
+  const needs = tally.conflictsNew + del.found;
+  if (tally.applied) render();
+  if (needs) showToast(needs + ' Calendar change' + (needs===1?'':'s') + ' need review — see Sync & Backup');
+  return { tally:tally, del:del };
+}
+
+// A push that finds Google changed in the meantime (lib 'etag-mismatch').
+// e.data is the event as it is in Google right now.
+function gcalHandleEtagMismatch(g, e){
+  const G = e && e.data && e.data.etag ? e.data : null;
+  if (!G){ gcalQueueAdd('upsert','gig',{id:g.id},g.name); return; }
+  const cur = getEvent(g.id) || g;
+  const a = gcalHandleGigEvent(cur, G);
+  if (a==='conflict' || a==='conflict-new' || a==='applied') gcalQueueRemove('upsert','gig',{id:g.id}); // decision / Google wins; do not re-push
+  else gcalQueueAdd('upsert','gig',{id:g.id},g.name); // baseline refreshed — a later drain pushes with the new etag
+  if (a==='conflict-new') showToast('Calendar changed in both places — see Sync & Backup');
+}
+
+function gcalConfLineDiffs(c){
+  if (!c.app || !c.google) return '';
+  const lab = {name:'Title', date:'Date', time:'Time', venue:'Venue', notes:'Notes'};
+  return ['name','date','time','venue','notes'].filter(k=>String(c.app[k]||'').trim()!==String(c.google[k]||'').trim()).map(k=>
+    '<div class="gcal-conf-diff"><b>' + lab[k] + '</b> · Gigs &amp; Trips: ' + esc(String(c.app[k]||'—').slice(0,60)) + ' · Google: ' + esc(String(c.google[k]||'—').slice(0,60)) + '</div>'
+  ).join('');
+}
+function gcalConflictsSectionHtml(){
+  const c = gcalConfLoad();
+  if (!c.items.length) return '';
+  const rows = c.items.map(x=>{
+    const k = esc(x.key);
+    let head, btns;
+    if (x.reason === 'both-changed'){
+      head = 'Changed in both places';
+      btns = '<button class="btn btn-ghost" onclick="gcalResolve(\'' + k + '\',\'app\')">Use Gigs &amp; Trips</button><button class="btn btn-ghost" onclick="gcalResolve(\'' + k + '\',\'google\')">Use Google</button>';
+    } else {
+      head = 'Deleted in Google Calendar';
+      btns = (x.kind==='gig' ? '<button class="btn btn-ghost" onclick="gcalResolve(\'' + k + '\',\'remove\')">Remove here</button>' : '') +
+             '<button class="btn btn-ghost" onclick="gcalResolve(\'' + k + '\',\'recreate\')">Re-create in Google</button>' +
+             '<button class="btn btn-ghost" onclick="gcalResolve(\'' + k + '\',\'unlink\')">Keep, unlink</button>';
+    }
+    return '<div class="gcal-conf"><div class="gcal-conf-title">' + esc(x.name||'(no title)') + ' <span style="font-weight:400;color:var(--ink3)">· ' + esc(x.date||'') + '</span></div>' +
+           '<div class="gcal-conf-diff">' + head + (x.kind!=='gig' ? ' (' + esc(x.kind) + ')' : '') + '</div>' + gcalConfLineDiffs(x) +
+           '<div class="gcal-conf-btns">' + btns + '</div></div>';
+  }).join('');
+  return '<div class="section-hdr">Calendar changes to review (' + c.items.length + ')</div>' + rows;
+}
+
+function gcalClearLink(rec){
+  delete rec.calendarEventId; delete rec.calendarHtmlLink; delete rec.gcalEtag; delete rec.gcalSyncedHash;
+}
+async function gcalResolve(key, choice){
+  const c = gcalConfLoad();
+  const x = c.items.find(i=>i.key===key);
+  if (!x) return;
+  try {
+    if (x.reason === 'both-changed'){
+      const g = getEvent(x.id);
+      if (g){
+        if (choice === 'google'){
+          gcalApplyGoogleToGig(x.id, x.google, x.googleEtag, x.googleHtmlLink);
+          showToast('Updated from Google ✓');
+        } else {
+          const fresh = getEvent(x.id); fresh.gcalEtag = x.googleEtag; saveEvent(fresh); // accept Google's version number, then overwrite it
+          gcalQueueReset('gig',{id:x.id});
+          showToast('Sending Gigs & Trips version to Google…');
+          gcalConfRemove(key);
+          await gcalSyncGig(getEvent(x.id), false);
+        }
+      }
+    } else if (x.kind === 'gig'){
+      const g = getEvent(x.id);
+      if (g){
+        if (choice === 'remove'){ deleteEvent(x.id); showToast('Removed from Gigs & Trips'); } // local + Supabase only; Google already lacks it
+        else if (choice === 'recreate'){ const f = {...g}; gcalClearLink(f); saveEvent(f); gcalConfRemove(key); await gcalSyncGig(getEvent(x.id), true); }
+        else { const f = {...g}; gcalClearLink(f); saveEvent(f); showToast('Unlinked from Calendar'); }
+      }
+    } else if (x.kind === 'trip'){
+      const t = getEvent(x.id);
+      if (t){ const f = {...t}; gcalClearLink(f); saveEvent(f); gcalConfRemove(key); if (choice === 'recreate') await gcalSyncTrip(getEvent(x.id), true); else showToast('Unlinked from Calendar'); }
+    } else {
+      const t = getEvent(x.tripId);
+      const day = t && (t.days||[]).find(d=>d.id===x.dayId);
+      const it = day && (day.items||[]).find(i=>i.id===x.itemId);
+      if (it){ gcalClearLink(it); t.updatedAt = new Date().toISOString(); saveEvent(t); gcalConfRemove(key); if (choice === 'recreate') await gcalSyncItem(x.tripId, x.dayId, x.itemId); else showToast('Unlinked from Calendar'); }
+    }
+  } catch(e){ syncLog('Resolving Calendar change failed: ' + String(e), 'err'); }
+  gcalConfRemove(key);
+  render();
+  showDataManager();
+}
+// ==GIG-102 END==
+
+
 // GIG-081 — full history in GigsAndTrips.md. Note: builds only from
 // fields that actually exist in GigsAndTrips' data model — there's no
 // booking-reference/confirmation-number field anywhere (gigs, trips,
@@ -7461,7 +7761,8 @@ async function gcalSyncGig(g, isNew){
   try {
     let result;
     if (g.calendarEventId){
-      result = await PalGCal.updateEvent(GCAL_CALENDAR_ID, g.calendarEventId, eventBody, meta);
+      // GIG-102: refuse to overwrite an edit made in Google since the last sync
+      result = await PalGCal.updateEvent(GCAL_CALENDAR_ID, g.calendarEventId, eventBody, meta, (g.gcalEtag && g.gcalSyncedHash) ? {expectEtag:g.gcalEtag} : undefined);
     } else {
       result = await PalGCal.createEvent(GCAL_CALENDAR_ID, eventBody, meta);
     }
@@ -7469,6 +7770,7 @@ async function gcalSyncGig(g, isNew){
     if (fresh){
       fresh.calendarEventId = result.id;
       fresh.calendarHtmlLink = result.htmlLink;
+      if (result.etag){ fresh.gcalEtag = result.etag; fresh.gcalSyncedHash = gcalFieldsHash(gcalGigFields(g)); } // baseline = what was just sent
       fresh.updatedAt = new Date().toISOString();
       saveEvent(fresh);
     }
@@ -7477,6 +7779,11 @@ async function gcalSyncGig(g, isNew){
     return true;
   } catch(e){
     _gcalLastErr = e;
+    if (gcalClassifyError(e) === 'conflict'){
+      syncLog('Calendar changed in Google since last sync — "' + g.name + '" not overwritten', 'err');
+      gcalHandleEtagMismatch(g, e);
+      return false;
+    }
     syncLog('Calendar sync failed for "' + g.name + '": ' + PalGCal.errorHint(e), 'err');
     gcalQueueAdd('upsert','gig',{id:g.id},g.name,gcalClassifyError(e),PalGCal.errorHint(e));
     return false;
@@ -7513,6 +7820,8 @@ function gcalBuildImportedGig(ev){
     calendarEventId: ev.id,
     calendarHtmlLink: ev.htmlLink,
     importedFrom: 'gcal', // GIG-091: lets later work tell imports from manual gigs
+    gcalEtag: ev.etag || '', // GIG-102: baseline so later Google edits are detected
+    gcalSyncedHash: gcalFieldsHash({name:ev.summary||'(no title)', date:startRaw.slice(0,10), time:isAllDay?'':new Date(ev.start.dateTime).toTimeString().slice(0,5), venue:ev.location||'', notes:ev.description||''}),
     eventClass: 'standard' // GIG-092: imports default to Standard (reclassify on the gig form)
   };
 }
@@ -7588,11 +7897,16 @@ async function gcalMirrorPull(force){
   try {
     const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, timeMin.toISOString(), timeMax.toISOString());
     const unmatched = gcalUnmatchedEvents(events);
-    if (!unmatched.length){ syncLog('Calendar mirror pull: nothing new' + gcalSkipNote(), 'ok'); return; }
-    unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
-    syncLog('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Google Calendar' + gcalSkipNote(), 'ok');
-    showToast('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Calendar');
-    render();
+    if (!unmatched.length){ syncLog('Calendar mirror pull: nothing new' + gcalSkipNote(), 'ok'); }
+    else {
+      unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
+      syncLog('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Google Calendar' + gcalSkipNote(), 'ok');
+      showToast('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Calendar');
+      render();
+    }
+    // GIG-102: now look at the events already linked to a gig (edits / deletions in Google)
+    try { await gcalReviewLinked(events, timeMin, timeMax); }
+    catch(e){ syncLog('Calendar review failed: ' + PalGCal.errorHint(e), 'err'); }
   } catch(e){
     syncLog('Calendar mirror pull failed: ' + PalGCal.errorHint(e), 'err');
   }
