@@ -6,6 +6,22 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.91 (GIG-086) — Agenda navigation + secondary metadata, and the trip-sync plan is now complete
+
+Last piece of the original Agenda/Today build (GIG-081–086, all from the source spec).
+
+**Navigation:** a small "↑ Today" button at the top of Agenda, scrolling the list back to its top. **Deliberately not built:** previous/next-*period* paging, which the source document also suggested — Agenda's current design is a fixed forward-rolling window with no Month/Week grid behind it, so there's no "period" to page through yet. Scope noted explicitly rather than inventing paging just to match the document's wording; worth revisiting if/when Week or Month views ever get built.
+
+**Secondary metadata:** item rows now show duration (e.g. "1h 5m") when real `durationMinutes` data exists — matching the document's own travel-item example — and only then. Nothing else added: no cost, no booking status, no internal fields. The document's rule was "only what materially helps," not "show everything available," and that's held to here the same as everywhere else in this line of work.
+
+Files changed: `GigsAndTrips.html` only — `.agenda-today-row`/`.agenda-today-btn` + `scrollAgendaToToday()`, `.agenda-duration` line in `agendaRow()`.
+
+**Tested — genuinely.** Ran `agendaRow()` against synthetic data with and without `durationMinutes` set: duration line renders correctly formatted when present, is cleanly absent (no stray markup) when not.
+
+**Not tested:** the Today button's actual scroll behaviour in a real browser.
+
+---
+
 ## v7.90 (GIG-085) — Today mode: NOW/NEXT
 
 A compact NOW/NEXT card at the top of the Agenda tab — not a separate tab, per the source spec's own preference against maintaining "two visually identical concepts." Reuses the items `renderAgenda()` already fetched; no second data call.
