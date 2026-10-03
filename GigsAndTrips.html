@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.85</title>
+<title>Gigs &amp; Trips v7.86</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -494,7 +494,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.85</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.86</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -554,7 +554,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.85"></script>
+<script src="pal-shared.js?v=7.86"></script>
 <!-- GIG-072: Google Calendar sync foundation. GSI script tag included
      explicitly here — PeteGCal's v1.0 shipped without this and every
      sign-in attempt failed silently for several rounds before the cause
@@ -6565,6 +6565,76 @@ function timeOptions(selected){
 // slow, offline, or not signed in. On success this calls saveEvent()
 // again with the real calendarEventId attached — a second, cheap local
 // write, not a second "did it save" risk.
+// ═══════════════════════════════════════════════════════════════════
+// GIG-081: structured Calendar descriptions
+// ═══════════════════════════════════════════════════════════════════
+// Per the agreed model: Google Calendar is the execution layer (what/
+// when/where/what-you-need-to-know), GigsAndTrips stays the record of
+// truth (full planning, reviews, history). Only fields that materially
+// help someone attend/use the event go in — never internal IDs, review
+// ratings, or anything already native to the event (location is in the
+// Calendar location field, not repeated here; date/time are on the
+// event itself, not repeated either).
+//
+// IMPORTANT DEVIATION from the source document's own example: it shows
+// "Booking ref: ABC123" / "Confirmation: XYZ456" style fields. GigsAndTrips
+// has no booking-reference or confirmation-number field anywhere in its
+// actual data model — not on gigs, not on trips, not on any item type.
+// Rather than invent fields that don't exist, this builds from what's
+// actually there: ticket price/URL for gigs, cost/payment status for
+// items, trip status for trips. If booking-reference tracking gets
+// added to GigsAndTrips later, it slots into this same structure.
+function gcalFormatDescription(sections){
+  const parts = sections.filter(s => s.lines && s.lines.length).map(s =>
+    s.label.toUpperCase() + '\n' + s.lines.join('\n')
+  );
+  if (!parts.length) return 'GIGS & TRIPS\n────────────────────\nGigs & Trips';
+  return 'GIGS & TRIPS\n' + parts.join('\n') + '\n────────────────────\nGigs & Trips';
+}
+
+function gcalGigDescriptionFields(g){
+  const sections = [];
+  if (g.tripId){
+    const trip = getEvent(g.tripId);
+    if (trip) sections.push({label:'Trip', lines:[trip.name]});
+  }
+  sections.push({label:'Type', lines:[gigTypeInfo(g.gigType).label]});
+  if (g.ticketUrl) sections.push({label:'Ticket', lines:[g.ticketUrl]});
+  if (g.ticketPrice > 0) sections.push({label:'Cost', lines:['£' + g.ticketPrice.toFixed(2)]});
+  if (g.notes) sections.push({label:'Notes', lines:[g.notes]});
+  return sections;
+}
+
+function gcalTripDescriptionFields(t){
+  const sections = [];
+  sections.push({label:'Type', lines:[tripTypeInfo(t.tripType).label]});
+  if (t.status) sections.push({label:'Status', lines:[t.status]});
+  if (t.notes) sections.push({label:'Notes', lines:[t.notes]});
+  return sections;
+}
+
+function gcalItemDescriptionFields(trip, it){
+  const sections = [];
+  if (trip) sections.push({label:'Trip', lines:[trip.name]});
+  sections.push({label:'Type', lines:[typeLabel(it.type) + (it.subtype ? ' — ' + it.subtype : '')]});
+
+  if (it.type === 'accommodation'){
+    if (it.nights) sections.push({label:'Stay', lines:[it.nights + ' night' + (it.nights===1?'':'s')]});
+    const costLines = [];
+    if (it.costPerNight > 0) costLines.push('£' + it.costPerNight.toFixed(2) + ' / night');
+    if (it.paymentStatus) costLines.push(it.paymentStatus.charAt(0).toUpperCase() + it.paymentStatus.slice(1));
+    if (costLines.length) sections.push({label:'Cost', lines:costLines});
+  } else {
+    const costLines = [];
+    if (it.cost > 0) costLines.push('£' + it.cost.toFixed(2));
+    if (typeof it.paid === 'boolean') costLines.push(it.paid ? 'Paid' : 'Not paid');
+    if (costLines.length) sections.push({label:'Cost', lines:costLines});
+  }
+
+  if (it.notes) sections.push({label:'Notes', lines:[it.notes]});
+  return sections;
+}
+
 async function gcalSyncGig(g, isNew){
   if (!PalGCal.hasToken()){
     syncLog('Calendar sync skipped (not signed in) — "' + g.name + '" saved locally only', 'info');
@@ -6584,16 +6654,9 @@ async function gcalSyncGig(g, isNew){
     startEnd = { start:{date:g.date}, end:{date:fmt(end)} };
   }
 
-  // GIG-075: ticketNote folded into notes at the form level now, so
-  // this no longer needs to concatenate both — g.notes alone already
-  // carries everything for a gig saved since that change. A gig edited
-  // before GIG-075 and not yet re-saved may still have old ticketNote
-  // text sitting separately; harmless, it just won't appear in the
-  // Calendar description until that gig is next saved.
-  // Backlog (not yet built — see gigs-and-trips-gcal-backlog.md):
-  // description should eventually summarise every Supabase-only field
-  // (ticket price/link, trip membership, reviews), not just notes.
-  const description = g.notes || '';
+  // GIG-081: structured description (trip/type/ticket/cost/notes) —
+  // supersedes the GIG-075-era notes-only version.
+  const description = gcalFormatDescription(gcalGigDescriptionFields(g));
   const eventBody = Object.assign({
     summary: t.icon + ' ' + g.name,
     location: g.venue || '',
@@ -6753,7 +6816,7 @@ async function gcalSyncTrip(t, isNew){
   const eventBody = {
     summary: tt.icon + ' ' + t.name,
     location: t.destination || '',
-    description: t.notes || '',
+    description: gcalFormatDescription(gcalTripDescriptionFields(t)), // GIG-081
     colorId: GCAL_TRIP_COLOR_MAP[t.tripType] || GCAL_TRIP_COLOR_MAP.holiday,
     start: { date: t.startDate },
     end: { date: localDateStr(endExclusive) }
@@ -6841,7 +6904,7 @@ async function gcalSyncItem(tripId, dayId, itemId){
   const eventBody = Object.assign({
     summary: typeIcon(it.type) + ' ' + (it.name || '(no title)'),
     location: itemLocationName(it),
-    description: it.notes || '',
+    description: gcalFormatDescription(gcalItemDescriptionFields(trip, it)), // GIG-081
     colorId: GCAL_ITEM_COLOR_MAP[it.type] || GCAL_ITEM_COLOR_MAP.other
   }, startEnd);
   const meta = { type: it.type, tripId:trip.id, dayId:day.id, itemId:it.id, kind:'item' };
