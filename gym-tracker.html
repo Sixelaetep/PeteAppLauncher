@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.108</title>
+<title>Gym Tracker v2.109</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.108</div></span>
+      <span>Gym Tracker<div class="ver">v2.109</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -952,11 +952,23 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.108"></script>
+<script src="pal-shared.js?v=2.109"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.109: remove a whole circuit. The plan editor and the live session
+// screen could only drop a circuit's exercises one at a time (✕ on each
+// member). Both circuit blocks now have a circuit-level 🗑 button that
+// removes the circuit and all of its exercises in one step, after a
+// confirm showing how many exercises go with it. Plan editor:
+// removePlanCircuit() (draft only — commits on Save Plan like every
+// other plan edit). Session: removeSessionCircuit() — stops a running
+// timer if it belongs to a removed exercise, otherwise re-points it
+// after the indices shift, and drops the circuit from
+// _activeSession.circuits. Existing per-exercise ✕ and "Not in a
+// circuit" are unchanged. No data-model, localStorage, sync or JSON
+// export/import changes.
 // v2.108 (GYM-094): two small UX fixes. (1) Plan selection (the
 // schedule / edit picker) now auto-collapses once a plan is chosen:
 // only the selected plan stays visible, with a "Show other plans"
@@ -1447,7 +1459,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.108';
+const VERSION = '2.109';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3423,6 +3435,7 @@ function planCircuitBlockHtml(circuit, memberIdxs, isFirstBlock, isLastBlock) {
         <button class="pib-reorder" onclick="moveCircuitBlock('${circuit.id}',-1)" ${isFirstBlock?'disabled':''} title="Move circuit up">▲</button>
         <button class="pib-reorder" onclick="moveCircuitBlock('${circuit.id}',1)" ${isLastBlock?'disabled':''} title="Move circuit down">▼</button>
       </span>
+      <button class="pib-remove" onclick="removePlanCircuit('${circuit.id}')" title="Remove circuit and its exercises">🗑</button>
       <button class="btn btn-secondary btn-sm" style="flex-basis:100%" onclick="saveCircuitAsTemplate('${circuit.id}')">💾 Save as Template</button>
     </div>
     ${membersHtml}
@@ -3770,6 +3783,18 @@ function updatePlanSetTime(idx, si, unit, val) {
 // GYM-091: if this was the last member of its circuit, clean up the now-
 // empty circuit record too, rather than leaving an orphaned 0-member
 // circuit sitting in _planCircuits with nothing left to display it.
+// v2.109: removes a whole circuit — its record and every member item —
+// from the plan draft. Nothing is committed until Save Plan, same as
+// removePlanItem(). (To keep the exercises and just dissolve the
+// circuit, use each member's "Not in a circuit" picker instead.)
+function removePlanCircuit(circuitId) {
+  const n = _planItems.filter(i => i.circuitId === circuitId).length;
+  const circuit = _planCircuits.find(c => c.id === circuitId);
+  if (!confirm('Remove "' + (circuit ? circuit.name : 'this circuit') + '" and its ' + n + ' exercise' + (n===1?'':'s') + ' from this plan?')) return;
+  _planItems = _planItems.filter(i => i.circuitId !== circuitId);
+  _planCircuits = _planCircuits.filter(c => c.id !== circuitId);
+  renderPlanItemsList();
+}
 function removePlanItem(idx) {
   const circuitId = _planItems[idx].circuitId;
   _planItems.splice(idx,1);
@@ -4718,6 +4743,25 @@ function addExerciseToSession(exerciseId) {
   renderSessionItems();
 }
 
+// v2.109: removes a whole circuit — its record and every member item —
+// from the live session. Removing items shifts the indices of those
+// after them, so a running timer is stopped if it belongs to a removed
+// item and otherwise re-pointed at its item's new index.
+function removeSessionCircuit(circuitId) {
+  if (!_activeSession) return;
+  const items = _activeSession.items;
+  const removeIdxs = items.map((it,i)=>i).filter(i => items[i].circuitId === circuitId);
+  const circuit = (_activeSession.circuits||[]).find(c => c.id === circuitId);
+  const n = removeIdxs.length;
+  if (!confirm('Remove "' + (circuit ? circuit.name : 'this circuit') + '" and its ' + n + ' exercise' + (n===1?'':'s') + ' from the session?')) return;
+  if (_activeTimer) {
+    if (removeIdxs.includes(_activeTimer.ii)) stopSetTimer(true);
+    else _activeTimer.ii -= removeIdxs.filter(i => i < _activeTimer.ii).length;
+  }
+  _activeSession.items = items.filter(it => it.circuitId !== circuitId);
+  _activeSession.circuits = (_activeSession.circuits||[]).filter(c => c.id !== circuitId);
+  renderSessionItems();
+}
 function removeSessionItem(ii) {
   if (!confirm('Remove this exercise from the session?')) return;
   if (_activeTimer && _activeTimer.ii === ii) stopSetTimer(true); // index would be left dangling otherwise
@@ -4999,6 +5043,7 @@ function sessionCircuitBlockHtml(circuit, memberIdxs) {
   return `<div class="track-ex-card" style="border-color:var(--accent5)">
     <div class="tec-head">
       <span class="tec-name">🔁 ${escHtml(circuit ? circuit.name : 'Circuit')} <span style="font-weight:400;font-size:11px;color:var(--ink2)">— ${rounds} rounds</span></span>
+      ${circuit ? `<button class="tec-remove" onclick="removeSessionCircuit('${circuit.id}')" title="Remove circuit and its exercises">🗑</button>` : ''}
     </div>
     ${roundBlocks.join('')}
     ${extrasHtml}
