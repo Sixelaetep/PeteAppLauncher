@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.97</title>
+<title>Gigs &amp; Trips v7.98</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -533,7 +533,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.97</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.98</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -594,7 +594,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.97"></script>
+<script src="pal-shared.js?v=7.98"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=2"></script>
@@ -5506,7 +5506,7 @@ function showDataManager(){
       <!-- GIG-088 — full history in GigsAndTrips.md. Read-only. -->
       ${gcalConflictsSectionHtml()}
       ${gcalQueueSectionHtml()}
-      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalRemoveDuplicateImports()">🧹 Find duplicate Calendar imports</button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openDuplicateTool()">🧹 Find duplicates</button>
 
       <div class="section-hdr">Storage</div>
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="openStorageReport()">🔍 Storage report (read-only)</button>
@@ -7358,25 +7358,154 @@ function gcalCollectOwnIds(){
   });
   return ids;
 }
-// Gigs that are really copies of a trip's/item's own Calendar event (created by the
-// old mirror, which only checked gigs). Only plain, unedited ones are removable.
-function gcalDuplicateImports(){
-  const own = gcalCollectOwnIds();
-  const dups = getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId&&own.has(e.calendarEventId));
-  const safe = dups.filter(g=>g.gigType==='other' && !g.tripId && !g.review && !g.ticketUrl && !g.ticketPrice && !g.done);
-  return { all:dups, safe:safe, kept:dups.length - safe.length };
+// ── Duplicate finder (v7.98 — replaces the id-only version from v7.96) ──────────
+// Why broader: most duplicates do NOT share a Calendar id. The old "add to Calendar"
+// link opened a new Google event every time it was used (title suffixed "[Sent 4 Jul]" /
+// "[Updated - 14 Jul]"), and the mirror/backfill then imported every one of those events
+// as its own gig. So matching is by DATE + NORMALISED TITLE (icon and suffix stripped),
+// plus the id-sharing case. Conservative on purpose: only a "plain" gig (type other,
+// not on a trip, no review/tickets, not reclassified) is ever removable, and one record
+// of every group is always kept.
+function gcalNormTitle(t){
+  let x = String(t == null ? '' : t);
+  for (let i=0; i<3; i++) x = x.replace(/\s*\[(?:sent|updated)\b[^\]]*\]\s*$/i, '');
+  try { x = x.replace(/^[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D\s]+/u, ''); } catch(e){}
+  return x.toLowerCase().replace(/\s+/g,' ').trim();
 }
-function gcalRemoveDuplicateImports(){
-  const r = gcalDuplicateImports();
-  if (!r.all.length){ showToast('No duplicate imports found ✓'); return; }
-  if (!r.safe.length){ showToast(r.all.length + ' found, but all have been edited — left alone'); return; }
-  const names = r.safe.slice(0,8).map(g=>'• ' + (g.name||'(no title)') + ' — ' + g.date).join('\n');
-  if (!confirm('Found ' + r.safe.length + ' gig' + (r.safe.length===1?'':'s') + ' that are copies of your own trip/item Calendar events' + (r.kept ? ' (' + r.kept + ' more were edited and will be left alone)' : '') + ':\n\n' + names + (r.safe.length>8?'\n…':'') + '\n\nRemove them from Gigs & Trips? Your Google Calendar events are NOT touched. A backup first is wise.')) return;
-  // deleteEvent() is local + Supabase only. It must NEVER be replaced with the confirmDeleteGig
-  // path here, which would delete the real Calendar event the trip/item still owns.
-  r.safe.forEach(g=>deleteEvent(g.id));
-  showToast('Removed ' + r.safe.length + ' duplicate' + (r.safe.length===1?'':'s') + ' ✓');
+function gcalHasCopySuffix(t){ return /\[(?:sent|updated)\b[^\]]*\]\s*$/i.test(String(t||'')); }
+function gcalDupKey(date, title){ return (date||'') + '|' + gcalNormTitle(title); }
+function gcalIsPlainGig(g){
+  return g.type==='gig' && g.gigType==='other' && !g.tripId && !g.review && !g.ticketUrl && !g.ticketPrice &&
+         (!g.eventClass || g.eventClass==='standard') && !g.seriesId;
+}
+// records the app itself owns that a Google copy could duplicate: trip items and trips
+function gcalOwnedKeyIndex(){
+  const idx = new Map();
+  const add = (date, title, time, label) => {
+    if (!date || !title) return;
+    const k = gcalDupKey(date, title);
+    if (!idx.has(k)) idx.set(k, []);
+    idx.get(k).push({ time:time||'', label:label });
+  };
+  getData().events.filter(e=>!e._deleted).forEach(e=>{
+    if (e.type !== 'trip') return;
+    add(e.startDate, e.name, '', 'trip');
+    (e.days||[]).forEach(d=>(d.items||[]).forEach(it=>{ if (!it._ghost && !it._placeholder) add(d.date, it.name||'', itemTime(it)||'', 'item'); }));
+  });
+  return idx;
+}
+function gcalDuplicateAnalysis(){
+  const d = getData();
+  const live = d.events.filter(e=>e.type==='gig' && !e._deleted);
+  const owned = gcalOwnedKeyIndex();
+  const ownIds = gcalCollectOwnIds();
+  const removable = new Map();   // gig id -> {gig, reason, keep}
+  const groups = [];
+  const protectedIds = new Set(ownIds);
+
+  // A) same Calendar id as a trip/item
+  live.filter(g=>g.calendarEventId && ownIds.has(g.calendarEventId) && gcalIsPlainGig(g))
+      .forEach(g=>removable.set(g.id, { gig:g, reason:'same Calendar event as a trip/item', keep:'(the trip/item)' }));
+
+  // B) same date + normalised title
+  const byKey = new Map();
+  live.forEach(g=>{ const k = gcalDupKey(g.date, g.name); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(g); });
+  byKey.forEach((members, k)=>{
+    const own = owned.get(k) || [];
+    if (members.length < 2 && !own.length) return;
+    const rank = g => [gcalIsPlainGig(g)?1:0, gcalHasCopySuffix(g.name)?1:0, g.importedFrom==='gcal'?1:0, g.createdAt||''];
+    const sorted = members.slice().sort((x,y)=>{ const a=rank(x), b=rank(y); for (let i=0;i<3;i++) if (a[i]!==b[i]) return a[i]-b[i]; return String(a[3]).localeCompare(String(b[3])); });
+    const keeper = own.length ? null : sorted[0];
+    const rest = own.length ? sorted : sorted.slice(1);
+    const grp = { key:k, date:members[0].date, keep: keeper ? keeper.name : '(' + own[0].label + ')', remove:[], left:[] };
+    rest.forEach(g=>{
+      if (removable.has(g.id)) { grp.remove.push(g); return; }
+      const ref = keeper ? [{ time:keeper.time||'' }] : own;
+      const timeOk = gcalHasCopySuffix(g.name) || (keeper && gcalHasCopySuffix(keeper.name)) || !g.time || ref.some(r=>!r.time || r.time===(g.time||''));
+      if (gcalIsPlainGig(g) && timeOk){ removable.set(g.id, { gig:g, reason:'same date and title', keep:grp.keep }); grp.remove.push(g); }
+      else grp.left.push(g);
+    });
+    if (keeper && keeper.calendarEventId) protectedIds.add(keeper.calendarEventId);
+    if (grp.remove.length || grp.left.length) groups.push(grp);
+  });
+  live.forEach(g=>{ if (!removable.has(g.id) && g.calendarEventId) protectedIds.add(g.calendarEventId); });
+
+  // C) repeating titles on many dates (information only — handled by the series work)
+  const rec = new Map();
+  live.filter(g=>!removable.has(g.id)).forEach(g=>{
+    const n = gcalNormTitle(g.name); if (!n) return;
+    if (!rec.has(n)) rec.set(n, { name:g.name, dates:new Set(), importLike:0 });
+    const r = rec.get(n); r.dates.add(g.date); if (g.importedFrom==='gcal' || (g.gigType==='other' && g.calendarEventId)) r.importLike++;
+  });
+  const repeating = [...rec.values()].filter(r=>r.dates.size >= 4 && r.importLike >= 3).sort((a,b)=>b.dates.size-a.dates.size);
+
+  const googleIds = new Set();
+  removable.forEach(({gig})=>{ if (gig.calendarEventId && !protectedIds.has(gig.calendarEventId)) googleIds.add(gig.calendarEventId); });
+  return { live:live.length, removable:[...removable.values()], groups:groups, repeating:repeating, googleIds:[...googleIds] };
+}
+function gcalDuplicateReportText(r){
+  const L = [];
+  L.push('DUPLICATE CHECK — ' + r.live + ' gigs');
+  L.push('Removable duplicates: ' + r.removable.length + ' · extra Google events that could also be deleted: ' + r.googleIds.length);
+  L.push('');
+  if (r.groups.length){
+    L.push('SAME DATE + TITLE (' + r.groups.length + ' group' + (r.groups.length===1?'':'s') + ')');
+    r.groups.slice(0,14).forEach(gr=>{
+      L.push('  ' + gr.date + ' · keep ' + gr.keep);
+      gr.remove.slice(0,3).forEach(g=>L.push('      remove: ' + (g.name||'') + (g.time?' '+g.time:'')));
+      if (gr.remove.length>3) L.push('      …and ' + (gr.remove.length-3) + ' more');
+      gr.left.slice(0,2).forEach(g=>L.push('      left alone: ' + (g.name||'') + (g.time?' '+g.time:'') + ' (edited or different time)'));
+    });
+    if (r.groups.length>14) L.push('  …and ' + (r.groups.length-14) + ' more groups');
+    L.push('');
+  }
+  if (r.repeating.length){
+    L.push('REPEATING TITLES ON MANY DATES (not removed here)');
+    r.repeating.slice(0,8).forEach(x=>L.push('  ' + x.dates.size + ' dates × ' + x.name));
+    L.push('  These are recurring Google events imported one gig per occurrence; the recurring-series work will collapse them.');
+  }
+  if (!r.groups.length && !r.removable.length && !r.repeating.length) L.push('Nothing found.');
+  return L.join('\n');
+}
+let _gcalDupLast = null;
+function openDuplicateTool(){
+  let r, text;
+  try { r = gcalDuplicateAnalysis(); text = gcalDuplicateReportText(r); }
+  catch(e){ r = null; text = 'Duplicate check failed: ' + String(e); }
+  _gcalDupLast = r;
+  const n = r ? r.removable.length : 0, gn = r ? r.googleIds.length : 0;
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">🧹 Duplicate check</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Nothing changes until you choose below. One record of every group is always kept, and only plain imported-style gigs can be removed. Download a backup first if you have not recently.</div>
+      <pre id="dupReportPre" style="background:var(--surf);border-radius:var(--rsm);padding:10px;font-size:11px;line-height:1.45;color:var(--ink2);white-space:pre-wrap;word-break:break-word;max-height:48vh;overflow-y:auto;margin-bottom:12px">${esc(text)}</pre>
+      ${n ? `<button class="btn btn-pri" style="width:100%;margin-bottom:8px" onclick="gcalDupRemove(false)">Remove ${n} duplicate${n===1?'':'s'} here</button>` : ''}
+      ${gn ? `<button class="btn btn-ghost" style="width:100%;margin-bottom:8px" onclick="gcalDupRemove(true)">Remove ${n} here and delete ${gn} extra event${gn===1?'':'s'} from Google Calendar</button>` : ''}
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:8px" onclick="copyDupReport()">📋 Copy report</button>
+      <button class="btn btn-ghost" style="width:100%" onclick="showDataManager()">← Back</button>
+    </div>`);
+}
+function copyDupReport(){
+  const el = document.getElementById('dupReportPre'); if (!el) return;
+  const text = el.textContent;
+  const fb = function(){ const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');showToast('Report copied ✓');}catch(e){showToast('Select the text and copy manually');} document.body.removeChild(ta); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function(){ showToast('Report copied ✓'); }, fb); else fb();
+}
+function gcalDupRemove(alsoGoogle){
+  const r = gcalDuplicateAnalysis(); // re-run so we act on current data, not on a stale preview
+  if (!r.removable.length){ showToast('Nothing to remove'); return; }
+  const msg = 'Remove ' + r.removable.length + ' duplicate gig' + (r.removable.length===1?'':'s') + ' from Gigs & Trips' +
+    (alsoGoogle ? ' and delete ' + r.googleIds.length + ' extra event' + (r.googleIds.length===1?'':'s') + ' from Google Calendar' : '') + '?\n\nOne record of each group is kept.';
+  if (!confirm(msg)) return;
+  // deleteEvent() is local + Supabase only. It must NEVER be swapped for confirmDeleteGig here,
+  // which would delete a Calendar event the kept record may still own.
+  r.removable.forEach(x=>deleteEvent(x.gig.id));
+  if (alsoGoogle) r.googleIds.forEach(id=>{ const x = r.removable.find(y=>y.gig.calendarEventId===id); gcalQueueAdd('delete','gig',{calendarEventId:id}, x ? x.gig.name : ''); });
+  showToast('Removed ' + r.removable.length + (alsoGoogle ? ' · ' + r.googleIds.length + ' Calendar deletes queued' : '') + ' ✓');
   render();
+  if (alsoGoogle) setTimeout(function(){ gcalQueueDrain(false); }, 800);
   showDataManager();
 }
 // ==GIG-101 END==
@@ -7836,9 +7965,11 @@ function gcalBuildImportedGig(ev){
 // imported instances are untouched (they are "known" by calendarEventId).
 const GCAL_SKIP_RECURRING = true;
 let _gcalSkippedRecurring = 0;
+let _gcalSkippedDuplicates = 0;
 function gcalSkipNote(){
-  const n = _gcalSkippedRecurring;
-  return n ? ' (' + n + ' recurring instance' + (n===1?'':'s') + ' not imported yet)' : '';
+  const n = _gcalSkippedRecurring, m = _gcalSkippedDuplicates;
+  return (n ? ' (' + n + ' recurring instance' + (n===1?'':'s') + ' not imported yet)' : '') +
+         (m ? ' (' + m + ' likely duplicate' + (m===1?'':'s') + ' not imported)' : '');
 }
 function gcalUnmatchedEvents(calEvents){
   const known = new Set(
@@ -7855,6 +7986,29 @@ function gcalUnmatchedEvents(calEvents){
     const m = (PalGCal.readAppMeta && PalGCal.readAppMeta(ev)) || {};
     return !(m.kind==='trip' || m.kind==='item');
   });
+  // v7.98: also never import an event that is a likely copy (same date + normalised title,
+  // same time or a "[Sent]/[Updated]" copy) of a gig, trip or item we already hold. This is
+  // what stops the old URL-flow copies, and any extra Google events left after a cleanup,
+  // coming back. A heuristic used only to SUPPRESS an import; the event stays in Google.
+  _gcalSkippedDuplicates = 0;
+  if (fresh.length){
+    const idx = gcalOwnedKeyIndex();
+    getData().events.filter(e=>e.type==='gig'&&!e._deleted).forEach(g=>{
+      const k = gcalDupKey(g.date, g.name); if (!idx.has(k)) idx.set(k, []); idx.get(k).push({ time:g.time||'', label:'gig' });
+    });
+    const seen = new Map(); // two copies arriving in the same batch: import at most one
+    fresh = fresh.filter(ev=>{
+      const allDay = !(ev.start && ev.start.dateTime);
+      const date = allDay ? (ev.start && ev.start.date) : localDateStr(new Date(ev.start.dateTime));
+      const time = allDay ? '' : new Date(ev.start.dateTime).toTimeString().slice(0,5);
+      const k = gcalDupKey(date, ev.summary || '');
+      const same = (idx.get(k) || []).concat(seen.get(k) || []);
+      const copy = gcalHasCopySuffix(ev.summary);
+      if (same.some(x=>copy || !time || !x.time || x.time===time)){ _gcalSkippedDuplicates++; return false; }
+      if (!seen.has(k)) seen.set(k, []); seen.get(k).push({ time:time });
+      return true;
+    });
+  }
   _gcalSkippedRecurring = 0;
   if (GCAL_SKIP_RECURRING){
     const before = fresh.length;

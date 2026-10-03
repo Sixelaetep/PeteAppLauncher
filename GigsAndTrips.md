@@ -6,6 +6,29 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.98 (GIG-118 follow-up) — Duplicate finder that matches what the duplicates actually are
+
+**Why.** v7.96's cleanup only found gigs that share a Calendar id with a trip/item, and it found nothing on real data. Most duplicates do not share an id. The old "add to Calendar" link created a **new** Google event every time it was used (title suffixed `[Sent 4 Jul]` / `[Updated - 14 Jul]`), and the mirror and 4-year backfill then imported every one of those events as its own gig. This is a diagnosis from the code and the old changelog, not yet confirmed against your data; the finder shows its findings before anything is changed so a wrong guess costs nothing.
+
+**New "🧹 Find duplicates" (Sync & Backup)** replaces the v7.96 button. It opens a report and changes nothing until you choose:
+- **Same date + title**, ignoring the icon and any `[Sent …]` / `[Updated …]` suffix, among gigs, and against trip items and trips (a trip is matched on its start date). One record of every group is always kept (a record you edited, reviewed, reclassified or put on a trip always wins; then one without a suffix; then the older).
+- **Same Calendar id as a trip/item** (the v7.96 case).
+- Two records on the same day with different times and no suffix are treated as different events and left alone (listed as "left alone").
+- **Repeating titles on many dates** (for example a weekly bin day) are reported but never removed; they are recurring Google events imported one gig per occurrence and belong to the series work.
+- Only "plain" gigs can be removed: type other, not on a trip, no review, no ticket data, not reclassified.
+
+**Two removal choices.** "Remove N here" removes them from Gigs & Trips and Supabase only; Google Calendar is not touched. "Remove N here and delete M extra events from Google Calendar" also queues the deletes through the v7.96 retry queue (rate-limit aware, visible under Calendar sync queue). A Google event is never deleted if a record you are keeping still owns it. The result is re-computed when you press the button, so it acts on current data. Take a JSON backup first.
+
+**Copies can no longer come back (import guard).** The Calendar import now skips any event that is a likely copy of a gig, trip or item you already hold (same date and normalised title, and either the same time, no time, or a `[Sent]/[Updated]` copy). That stops old URL-flow copies, and extra Google events you chose to keep, being re-imported on the next pull. Two copies arriving in one batch import at most one. It is a heuristic used only to *suppress* an import; the event stays in Google. The Sync Log reports how many were skipped.
+
+Files changed: `GigsAndTrips.html`, `GigsAndTrips.md`. No `pal-gcal.js`, launcher or data-model change.
+
+**Tested — in Node:** title normalisation (suffixes, stacked suffixes, icons, ZWJ emoji, other brackets left alone); the URL-flow pile (real gig kept, three copies including one at a different time removed, the kept gig's own Google event protected); two identical imported events (older unsuffixed kept); different-time pair left alone; reviewed and reclassified records never removed and chosen as keeper; trip and item copies removed while the trip's and item's own Calendar events are protected, a different-time unsuffixed gig kept, a gig sharing an item's id removed but its id protected; repeating titles reported not removed; local-only removal makes zero Google calls; "also Google" queues deletes for the extra events only; running it twice finds nothing; the import guard suppresses the four copies and imports the two genuinely new events, with recurring instances still counted separately. All earlier suites (v7.93–v7.97, library) still pass; scripts pass `node --check`.
+
+**Not tested:** not run on your data or in a browser. How many duplicates it finds, and whether any are a pattern it does not cover, is unknown until you open the report. The modal layout and the Google deletes against real Google are unconfirmed.
+
+---
+
 ## v7.97 (GIG-100 part, 102, 103, 104 part, 105, 115) — Two-way sync for gigs
 
 **Google → Gigs & Trips, for gigs.** Supabase stays the source of truth. Google may change a gig's **title, date, time, location and notes**; nothing else (trip link, tickets, cost, reviews, class) is ever touched. Each gig now remembers `gcalEtag` (Google's version number) and `gcalSyncedHash` (a hash of those five fields) from the last successful sync. On every Calendar pull (the existing 10-minute-throttled mirror, or "Pull from Calendar now"):
