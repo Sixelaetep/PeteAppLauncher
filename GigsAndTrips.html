@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.95</title>
+<title>Gigs &amp; Trips v7.96</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -164,6 +164,9 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .agenda-filter button.on{background:var(--acc-dim);border-color:var(--acc);color:var(--acc)}
 .agenda-hidden{font-size:12px;color:var(--ink3);padding:6px 2px 0}
 .agenda-hidden a{color:var(--acc);font-weight:600;cursor:pointer}
+/* GIG-101 — subtle Calendar sync state */
+.gcal-state{font-size:12px;color:var(--ink3);margin:0 0 6px}
+.gcal-state.error{color:var(--danger)}
 .agenda-today-btn{background:var(--card);border:1px solid var(--bdr);border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer}
 .agenda-today-btn:hover{border-color:var(--acc);color:var(--acc)}
 .nownext-card{display:flex;gap:0;background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:16px;overflow:hidden}
@@ -524,7 +527,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.95</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.96</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -585,7 +588,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.95"></script>
+<script src="pal-shared.js?v=7.96"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
@@ -3095,7 +3098,9 @@ async function confirmDeleteGig(id){
   // event with nothing left in GigsAndTrips pointing at it, un-retryable.
   if(g.calendarEventId){
     const ok=await gcalDeleteGig(g.calendarEventId, g.name);
-    if(ok===false && !confirm('Could not delete the Calendar event — delete the gig from GigsAndTrips anyway? (The Calendar event will remain, orphaned.)')) return;
+    if(ok===false && !confirm('Could not delete the Calendar event — delete the gig from GigsAndTrips anyway? (Gigs & Trips will keep retrying the Calendar delete.)')) return;
+    if(ok!==true) gcalQueueAdd('delete','gig',{calendarEventId:g.calendarEventId},g.name); // GIG-101: no silent orphans
+    gcalQueueRemove('upsert','gig',{id:g.id});
   }
   deleteEvent(id); closeModal(); showToast('Gig deleted'); render();
 }
@@ -3138,7 +3143,7 @@ function openGigDetail(id){
       </div>`:''}
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-pri" onclick="closeModal();openEditGig('${esc(g.id)}')">✏️ Edit</button>
-        ${(()=>{
+        ${gcalStateBadge('gig',{id:g.id},g)}${(()=>{
           // GIG-074: real sync replaces the old always-open-a-new-tab
           // button. A gig with a stored calendarEventId has a genuine
           // link — shown as "View in Google Calendar", opening the real
@@ -3265,7 +3270,7 @@ function showTripForm(t){
       <div id="tfErr" class="form-err"></div>
       <div class="form-actions">
         <button class="btn btn-pri" onclick="saveTrip(${t?`'${esc(t.id)}'`:'null'})">Save trip</button>
-        ${t&&t.startDate&&t.endDate?(()=>{
+        ${t&&t.startDate&&t.endDate?gcalStateBadge('trip',{id:t.id},t):''}${t&&t.startDate&&t.endDate?(()=>{
           // GIG-078: real sync replaces the old URL-popup — same change
           // openGigDetail's button got in GIG-074. A trip with a stored
           // calendarEventId has a genuine link; without one, a retry
@@ -3372,7 +3377,12 @@ Remove these days?`
   // orphan them, since once a day drops out of trip.days there's
   // nothing left in GigsAndTrips pointing at those events at all.
   removed.forEach(day=>(day.items||[]).forEach(it=>{
-    if(it.calendarEventId) gcalDeleteItem(it.calendarEventId, it.name||'');
+    if(it.calendarEventId){
+      // GIG-101: closes the GIG-082 known gap — a cascade delete that does not succeed is queued, not lost.
+      const _cid=it.calendarEventId, _nm=it.name||'';
+      gcalDeleteItem(_cid,_nm).then(r=>{ if(r!==true) gcalQueueAdd('delete','item',{calendarEventId:_cid},_nm); });
+      gcalQueueRemove('upsert','item',{tripId:trip.id,dayId:day.id,itemId:it.id});
+    }
   }));
 
   // ── Step 2: Add new days for dates not yet present ───────────────
@@ -3414,19 +3424,23 @@ async function confirmDeleteTrip(id){
   // — a failure no longer silently proceeds to strand the real
   // Calendar events with nothing left pointing at them.
   let failCount=0;
+  const _toQueue=[]; // GIG-101: anything not confirmed deleted gets queued once the person commits
   if(t.calendarEventId){
     const ok=await gcalDeleteTrip(t.calendarEventId, t.name);
     if(ok===false) failCount++;
+    if(ok!==true) _toQueue.push(['trip',t.calendarEventId,t.name]);
   }
   for(const day of (t.days||[])){
     for(const it of (day.items||[])){
       if(it.calendarEventId){
         const ok=await gcalDeleteItem(it.calendarEventId, it.name||'');
         if(ok===false) failCount++;
+        if(ok!==true) _toQueue.push(['item',it.calendarEventId,it.name||'']);
       }
     }
   }
-  if(failCount>0 && !confirm(failCount+' Calendar event'+(failCount===1?'':'s')+' could not be deleted — delete the trip from GigsAndTrips anyway? (Those Calendar events will remain, orphaned.)')) return;
+  if(failCount>0 && !confirm(failCount+' Calendar event'+(failCount===1?'':'s')+' could not be deleted — delete the trip from GigsAndTrips anyway? (Gigs & Trips will keep retrying the Calendar deletes.)')) return;
+  _toQueue.forEach(q=>gcalQueueAdd('delete',q[0],{calendarEventId:q[1]},q[2]));
   deleteEvent(id); closeModal(); _view='list'; showListNav(); showToast('Trip deleted'); render();
 }
 
@@ -4410,7 +4424,7 @@ function showItemForm(tripId,dayId,type,it){
       <div id="ifErr" class="form-err"></div>
       <div class="form-actions">
         <button class="btn btn-pri" onclick="saveItem('${esc(tripId)}','${esc(dayId)}','${esc(type)}',${it?`'${esc(it.id)}'`:'null'})">Save</button>
-        ${it&&!it._ghost?(()=>{
+        ${it&&!it._ghost?gcalStateBadge('item',{tripId:tripId,dayId:dayId,itemId:it.id},it):''}${it&&!it._ghost?(()=>{
           // GIG-080: same real-sync-state button gigs (GIG-074) and
           // trips (GIG-078) already got. Only shown for an existing,
           // non-ghost item — a brand-new unsaved item has nothing to
@@ -4586,7 +4600,9 @@ async function deleteItem(tripId,dayId,itemId){
   const deletedItem=day.items.find(i=>i.id===itemId);
   if(deletedItem&&deletedItem.calendarEventId){
     const ok=await gcalDeleteItem(deletedItem.calendarEventId, deletedItem.name||'');
-    if(ok===false && !confirm('Could not delete the Calendar event — delete this item from GigsAndTrips anyway? (The Calendar event will remain, orphaned.)')) return;
+    if(ok===false && !confirm('Could not delete the Calendar event — delete this item from GigsAndTrips anyway? (Gigs & Trips will keep retrying the Calendar delete.)')) return;
+    if(ok!==true) gcalQueueAdd('delete','item',{calendarEventId:deletedItem.calendarEventId},deletedItem.name||''); // GIG-101
+    gcalQueueRemove('upsert','item',{tripId:tripId,dayId:dayId,itemId:itemId});
   }
   day.items=day.items.filter(i=>i.id!==itemId);
   trip.updatedAt=new Date().toISOString();
@@ -5482,6 +5498,9 @@ function showDataManager(){
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
 
       <!-- GIG-088 — full history in GigsAndTrips.md. Read-only. -->
+      ${gcalQueueSectionHtml()}
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalRemoveDuplicateImports()">🧹 Find duplicate Calendar imports</button>
+
       <div class="section-hdr">Storage</div>
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="openStorageReport()">🔍 Storage report (read-only)</button>
 
@@ -5506,6 +5525,7 @@ function storageClassify(key){
     'gat_session':                 {owner:'Gigs & Trips', cat:'Persistent', note:'Supabase session tokens'},
     'gat_gcal_mirror_last_attempt':{owner:'Gigs & Trips', cat:'UI pref',    note:'Calendar pull throttle timestamp'},
     'gat_cal_filter':              {owner:'Gigs & Trips', cat:'UI pref',    note:'Agenda class filter'},
+    'gat_gcal_queue':              {owner:'Gigs & Trips', cat:'Sync queue', note:'pending Calendar writes/deletes (GIG-101)'},
     'pal_theme':                   {owner:'Suite',        cat:'UI pref',    note:'theme'},
     'pal_retry_queue_v1':          {owner:'Suite',        cat:'Sync queue', note:'pending writes for apps using pal-shared'},
     'pal_nav_request':             {owner:'Suite',        cat:'Temporary',  note:'cross-app navigation hand-off'},
@@ -5583,6 +5603,11 @@ function storageAuditCollect(store){
         importLikeBytes: importLike.reduce((n,g)=>n+JSON.stringify(g).length*2, 0),
         legacyAddedNoId: gigs.filter(g=>g.calendarAdded && !g.calendarEventId).length
       };
+      // Gigs sharing a Calendar id with a trip or trip item are duplicates created by
+      // the mirror re-importing events this app wrote itself (fixed in v7.96).
+      const ownIds = new Set();
+      trips.forEach(t=>{ if(t.calendarEventId) ownIds.add(t.calendarEventId); (t.days||[]).forEach(dy=>(dy.items||[]).forEach(it=>{ if(it.calendarEventId) ownIds.add(it.calendarEventId); })); });
+      gat.calendar.duplicateOfTripOrItem = gigs.filter(g=>g.calendarEventId && ownIds.has(g.calendarEventId)).length;
 
       // Recurring-instance heuristic: Google instance ids look like <masterId>_<YYYYMMDD[THHMMSSZ]>
       const groups = {};
@@ -5642,6 +5667,7 @@ function storageReportText(r, ctx){
     L.push('  gigs with a Calendar id: ' + g.calendar.linked);
     L.push('  import-looking (type other, linked, not on a trip): ' + g.calendar.importLike + ' · ' + storageFmt(g.calendar.importLikeBytes));
     L.push('  marked calendarAdded but never linked: ' + g.calendar.legacyAddedNoId);
+    L.push('  duplicate-looking imports (same Calendar id as a trip/item): ' + g.calendar.duplicateOfTripOrItem);
     L.push('  recurring-looking (heuristic on id pattern): ' + g.recurring.instances + ' instances in ' + g.recurring.groups + ' series');
     g.recurring.top.forEach(t=>L.push('    ' + t.count + ' × ' + t.sample));
     L.push('');
@@ -7112,6 +7138,240 @@ function timeOptions(selected){
 // local save already happened by the time this runs, so sync being
 // slow/offline/not-signed-in never costs the actual save.
 // ═══════════════════════════════════════════════════════════════════
+
+// ==GIG-101 BEGIN==
+// GIG-101 — full history in GigsAndTrips.md. Persistent queue of Calendar
+// writes/deletes that could not be sent (signed out, offline, rate-limited,
+// Google error). Supabase is the source of truth and is already saved before
+// any of this runs; the queue only decides when Google catches up. Entries
+// store ids only — an upsert re-reads the CURRENT record when it is replayed,
+// so it always sends the latest state. Sync state is DERIVED from the queue
+// plus calendarEventId (nothing extra is written onto records).
+const GCAL_QUEUE_KEY = 'gat_gcal_queue';
+const GCAL_QUEUE_MAX_ATTEMPTS = 6;
+const GCAL_QUEUE_MIN_GAP_MS = 60 * 1000;           // automatic drains at most once a minute
+const GCAL_QUEUE_RATE_BACKOFF_MS = 10 * 60 * 1000; // after a rate/quota error
+let _gcalDraining = false;
+let _gcalLastAutoDrain = 0;
+let _gcalLastErr = null;
+
+// auth | rate | offline | transient | missing | permanent
+function gcalClassifyError(e){
+  if (!e) return 'transient';
+  const st = e.status;
+  const msg = String(e.message || '');
+  const reason = (e.data && e.data.error && e.data.error.errors && e.data.error.errors[0] && e.data.error.errors[0].reason) || '';
+  if (e.code === 'no-token' || e.code === 'unauthorized' || st === 401) return 'auth';
+  if (st === 429 || /rateLimit|quotaExceeded|userRateLimit/i.test(reason) || /quota/i.test(msg)) return 'rate';
+  if (!st && !e.code) return 'offline';           // fetch threw before any HTTP response
+  if (st >= 500) return 'transient';
+  if (st === 404 || st === 410) return 'missing';
+  return 'permanent';                              // 400, non-rate 403, etc.
+}
+
+function gcalQueueLoad(){
+  try {
+    const r = JSON.parse(localStorage.getItem(GCAL_QUEUE_KEY) || 'null');
+    if (r && Array.isArray(r.items)) return r;
+  } catch(e){}
+  return { v:1, nextAt:0, items:[] };
+}
+function gcalQueueSave(q){
+  try {
+    if (q.items.length) localStorage.setItem(GCAL_QUEUE_KEY, JSON.stringify(q));
+    else localStorage.removeItem(GCAL_QUEUE_KEY);
+  } catch(e){ try{ syncLog('Could not store the Calendar sync queue (storage full?)', 'err'); }catch(_){} }
+}
+function gcalQueueKey(op, kind, ids){
+  const tail = op==='delete' ? (ids.calendarEventId||'') : [ids.id, ids.tripId, ids.dayId, ids.itemId].filter(Boolean).join('/');
+  return op + ':' + kind + ':' + tail;
+}
+// cls = failure class (omit for a plain "not signed in" queueing)
+function gcalQueueAdd(op, kind, ids, name, cls, hint){
+  const q = gcalQueueLoad();
+  const key = gcalQueueKey(op, kind, ids);
+  let e = q.items.find(x=>x.key===key);
+  if (!e){
+    e = { key:key, op:op, kind:kind, id:ids.id||null, tripId:ids.tripId||null, dayId:ids.dayId||null, itemId:ids.itemId||null,
+          calendarEventId:ids.calendarEventId||null, name:name||'', queuedAt:new Date().toISOString(),
+          attempts:0, state:'pending', lastError:'', lastClass:'' };
+    q.items.push(e);
+  }
+  if (name) e.name = name;
+  if (cls){
+    e.lastClass = cls; e.lastError = hint || '';
+    if (cls !== 'auth' && cls !== 'offline') e.attempts++;
+    if (cls === 'permanent' || cls === 'missing' || e.attempts >= GCAL_QUEUE_MAX_ATTEMPTS) e.state = 'error';
+    if (cls === 'rate') q.nextAt = Date.now() + GCAL_QUEUE_RATE_BACKOFF_MS;
+  }
+  gcalQueueSave(q);
+  return e;
+}
+function gcalQueueRemove(op, kind, ids){
+  const q = gcalQueueLoad();
+  const key = gcalQueueKey(op, kind, ids);
+  const n = q.items.length;
+  q.items = q.items.filter(x=>x.key!==key);
+  if (q.items.length !== n) gcalQueueSave(q);
+}
+// Manual retry from a record: back to a clean pending state.
+function gcalQueueReset(kind, ids){
+  const q = gcalQueueLoad();
+  const key = gcalQueueKey('upsert', kind, ids);
+  const e = q.items.find(x=>x.key===key);
+  if (e){ e.state = 'pending'; e.attempts = 0; e.lastError = ''; gcalQueueSave(q); }
+}
+function gcalQueueSummary(){
+  const q = gcalQueueLoad();
+  return { pending:q.items.filter(e=>e.state==='pending').length, failed:q.items.filter(e=>e.state==='error').length, items:q.items };
+}
+function gcalQueuePendingDeleteIds(){
+  return new Set(gcalQueueLoad().items.filter(e=>e.op==='delete'&&e.calendarEventId).map(e=>e.calendarEventId));
+}
+// 'pending' | 'error' | 'synced' | 'unlinked'
+function gcalSyncState(kind, ids, rec){
+  const e = gcalQueueLoad().items.find(x=>x.key===gcalQueueKey('upsert', kind, ids));
+  if (e) return e.state === 'error' ? 'error' : 'pending';
+  return (rec && rec.calendarEventId) ? 'synced' : 'unlinked';
+}
+function gcalStateBadge(kind, ids, rec){
+  const st = gcalSyncState(kind, ids, rec);
+  if (st === 'pending') return '<div class="gcal-state">⏳ Calendar update waiting to send</div>';
+  if (st === 'error'){
+    const e = gcalQueueLoad().items.find(x=>x.key===gcalQueueKey('upsert', kind, ids));
+    return '<div class="gcal-state error">⚠ Calendar sync failed' + (e && e.lastError ? ' — ' + esc(e.lastError) : '') + '</div>';
+  }
+  return '';
+}
+
+async function gcalQueueReplayOne(e){
+  const okRes = { ok:true }, bad = cls => ({ ok:false, cls:cls });
+  if (e.op === 'delete'){
+    const fn = e.kind==='trip' ? gcalDeleteTrip : e.kind==='item' ? gcalDeleteItem : gcalDeleteGig;
+    const r = await fn(e.calendarEventId, e.name);
+    if (r === true){ gcalQueueRemove('delete', e.kind, {calendarEventId:e.calendarEventId}); return okRes; }
+    if (r === 'skipped') return bad('auth');
+    const cls = gcalClassifyError(_gcalLastErr);
+    gcalQueueAdd('delete', e.kind, {calendarEventId:e.calendarEventId}, e.name, cls, PalGCal.errorHint(_gcalLastErr));
+    return bad(cls);
+  }
+  // upserts: the sync functions update/clear the queue entry themselves
+  let r;
+  if (e.kind === 'gig'){
+    const g = getEvent(e.id);
+    if (!g){ gcalQueueRemove('upsert','gig',{id:e.id}); return okRes; }
+    r = await gcalSyncGig(g, !g.calendarEventId);
+  } else if (e.kind === 'trip'){
+    const t = getEvent(e.id);
+    if (!t){ gcalQueueRemove('upsert','trip',{id:e.id}); return okRes; }
+    r = await gcalSyncTrip(t, !t.calendarEventId);
+  } else {
+    const t = getEvent(e.tripId);
+    const day = t && (t.days||[]).find(d=>d.id===e.dayId);
+    const it = day && (day.items||[]).find(i=>i.id===e.itemId);
+    if (!it || it._ghost){ gcalQueueRemove('upsert','item',{tripId:e.tripId,dayId:e.dayId,itemId:e.itemId}); return okRes; }
+    r = await gcalSyncItem(e.tripId, e.dayId, e.itemId);
+  }
+  if (r === true || r === null || r === undefined) return okRes;
+  if (r === 'skipped') return bad('auth');
+  return bad(gcalClassifyError(_gcalLastErr));
+}
+
+// force = the manual "Retry now" button: also revives failed entries and
+// ignores the automatic spacing/back-off. Automatic drains stop on the first
+// rate-limit or auth problem rather than hammering Google.
+async function gcalQueueDrain(force){
+  if (_gcalDraining) return null;
+  if (!PalGCal.hasToken()){ if (force) showToast('Sign in to Google first'); return null; }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false){ if (force) showToast('Offline — will retry later'); return null; }
+  let q = gcalQueueLoad();
+  if (!q.items.length){ if (force) showToast('Nothing pending'); return null; }
+  const now = Date.now();
+  if (!force){
+    if (now < q.nextAt || now - _gcalLastAutoDrain < GCAL_QUEUE_MIN_GAP_MS) return null;
+  } else {
+    q.items.forEach(e=>{ if (e.state==='error'){ e.state='pending'; e.attempts=0; e.lastError=''; } });
+    q.nextAt = 0; gcalQueueSave(q);
+  }
+  _gcalLastAutoDrain = now;
+  _gcalDraining = true;
+  let done = 0, failed = 0, stopped = '';
+  try {
+    const todo = gcalQueueLoad().items.filter(e=>e.state==='pending');
+    for (const e of todo){
+      const res = await gcalQueueReplayOne(e);
+      if (res.ok) done++;
+      else { failed++; if (res.cls==='rate' || res.cls==='auth'){ stopped = res.cls; break; } }
+      await new Promise(r=>setTimeout(r, 350));
+    }
+  } finally { _gcalDraining = false; }
+  const msg = 'Calendar queue: ' + done + ' sent' + (failed ? ', ' + failed + ' not sent' : '') + (stopped==='rate' ? ' (Google rate limit — pausing 10 min)' : stopped==='auth' ? ' (sign-in needed)' : '');
+  syncLog(msg, failed ? 'err' : 'ok');
+  if (force) showToast(msg);
+  return { done:done, failed:failed, stopped:stopped };
+}
+
+async function gcalQueueRetryNow(){
+  await gcalQueueDrain(true);
+  showDataManager();
+}
+function gcalQueueClearFailed(){
+  const q = gcalQueueLoad();
+  const bad = q.items.filter(e=>e.state==='error');
+  if (!bad.length) return;
+  if (!confirm('Discard ' + bad.length + ' failed Calendar change' + (bad.length===1?'':'s') + '? Your Gigs & Trips data is not affected, but Google Calendar will not be updated for these.')) return;
+  q.items = q.items.filter(e=>e.state!=='error');
+  gcalQueueSave(q);
+  showDataManager();
+}
+function gcalQueueSectionHtml(){
+  const sm = gcalQueueSummary();
+  const rows = sm.items.slice(0,8).map(e=>
+    '<div style="padding:4px 0;border-bottom:1px solid var(--bdr);font-size:12px;color:' + (e.state==='error'?'var(--danger)':'var(--ink3)') + '">' +
+    (e.op==='delete'?'🗑 delete':'⬆ send') + ' · ' + esc(e.name||e.kind) + (e.state==='error' && e.lastError ? ' — ' + esc(e.lastError) : '') + '</div>'
+  ).join('');
+  return '<div class="section-hdr">Calendar sync queue</div>' +
+    '<div class="info-row"><span class="info-label">Waiting</span><span class="info-val">' + sm.pending + '</span></div>' +
+    '<div class="info-row"><span class="info-label">Failed</span><span class="info-val">' + sm.failed + '</span></div>' +
+    (rows ? '<div style="margin:6px 0 10px">' + rows + (sm.items.length>8 ? '<div style="font-size:12px;color:var(--ink3);padding-top:4px">…and ' + (sm.items.length-8) + ' more</div>' : '') + '</div>' : '') +
+    '<div style="display:flex;gap:8px;margin:10px 0">' +
+      '<button class="btn btn-ghost" style="flex:1" onclick="gcalQueueRetryNow()">🔁 Retry now' + (sm.pending+sm.failed ? ' (' + (sm.pending+sm.failed) + ')' : '') + '</button>' +
+      (sm.failed ? '<button class="btn btn-ghost" style="flex:1" onclick="gcalQueueClearFailed()">Discard failed</button>' : '') +
+    '</div>';
+}
+
+// Calendar ids owned by a trip or trip item (so the mirror never imports them as gigs)
+function gcalCollectOwnIds(){
+  const ids = new Set();
+  getData().events.filter(e=>e.type==='trip'&&!e._deleted).forEach(t=>{
+    if (t.calendarEventId) ids.add(t.calendarEventId);
+    (t.days||[]).forEach(d=>(d.items||[]).forEach(it=>{ if (it.calendarEventId) ids.add(it.calendarEventId); }));
+  });
+  return ids;
+}
+// Gigs that are really copies of a trip's/item's own Calendar event (created by the
+// old mirror, which only checked gigs). Only plain, unedited ones are removable.
+function gcalDuplicateImports(){
+  const own = gcalCollectOwnIds();
+  const dups = getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId&&own.has(e.calendarEventId));
+  const safe = dups.filter(g=>g.gigType==='other' && !g.tripId && !g.review && !g.ticketUrl && !g.ticketPrice && !g.done);
+  return { all:dups, safe:safe, kept:dups.length - safe.length };
+}
+function gcalRemoveDuplicateImports(){
+  const r = gcalDuplicateImports();
+  if (!r.all.length){ showToast('No duplicate imports found ✓'); return; }
+  if (!r.safe.length){ showToast(r.all.length + ' found, but all have been edited — left alone'); return; }
+  const names = r.safe.slice(0,8).map(g=>'• ' + (g.name||'(no title)') + ' — ' + g.date).join('\n');
+  if (!confirm('Found ' + r.safe.length + ' gig' + (r.safe.length===1?'':'s') + ' that are copies of your own trip/item Calendar events' + (r.kept ? ' (' + r.kept + ' more were edited and will be left alone)' : '') + ':\n\n' + names + (r.safe.length>8?'\n…':'') + '\n\nRemove them from Gigs & Trips? Your Google Calendar events are NOT touched. A backup first is wise.')) return;
+  // deleteEvent() is local + Supabase only. It must NEVER be replaced with the confirmDeleteGig
+  // path here, which would delete the real Calendar event the trip/item still owns.
+  r.safe.forEach(g=>deleteEvent(g.id));
+  showToast('Removed ' + r.safe.length + ' duplicate' + (r.safe.length===1?'':'s') + ' ✓');
+  render();
+  showDataManager();
+}
+// ==GIG-101 END==
+
 // GIG-081 — full history in GigsAndTrips.md. Note: builds only from
 // fields that actually exist in GigsAndTrips' data model — there's no
 // booking-reference/confirmation-number field anywhere (gigs, trips,
@@ -7169,8 +7429,9 @@ function gcalItemDescriptionFields(trip, it){
 
 async function gcalSyncGig(g, isNew){
   if (!PalGCal.hasToken()){
-    syncLog('Calendar sync skipped (not signed in) — "' + g.name + '" saved locally only', 'info');
-    return;
+    syncLog('Calendar sync queued (not signed in) — "' + g.name + '" saved; will send when signed in', 'info');
+    gcalQueueAdd('upsert','gig',{id:g.id},g.name);
+    return 'skipped';
   }
 
   const t = gigTypeInfo(g.gigType);
@@ -7212,8 +7473,13 @@ async function gcalSyncGig(g, isNew){
       saveEvent(fresh);
     }
     syncLog('Calendar ' + (g.calendarEventId ? 'updated' : 'created') + ': "' + g.name + '"', 'ok');
+    gcalQueueRemove('upsert','gig',{id:g.id});
+    return true;
   } catch(e){
+    _gcalLastErr = e;
     syncLog('Calendar sync failed for "' + g.name + '": ' + PalGCal.errorHint(e), 'err');
+    gcalQueueAdd('upsert','gig',{id:g.id},g.name,gcalClassifyError(e),PalGCal.errorHint(e));
+    return false;
   }
 }
 
@@ -7222,6 +7488,7 @@ async function gcalSyncGig(g, isNew){
 async function gcalRetrySync(id){
   const g = getEvent(id); if (!g) return;
   showToast('Syncing to Calendar…');
+  gcalQueueReset('gig',{id:g.id});
   await gcalSyncGig(g, !g.calendarEventId);
   openGigDetail(id); // re-render so the button reflects the new state
 }
@@ -7268,7 +7535,17 @@ function gcalUnmatchedEvents(calEvents){
   const known = new Set(
     getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId).map(e=>e.calendarEventId)
   );
-  let fresh = calEvents.filter(ev=>!known.has(ev.id));
+  // v7.96 (GIG-101): the mirror used to check gigs only, so every trip and trip-item
+  // event this app wrote to Calendar looked "new" and was re-imported as a duplicate
+  // gig. Also never resurrect an event whose delete is still queued, and skip anything
+  // this app tagged itself as a trip/item.
+  gcalCollectOwnIds().forEach(id=>known.add(id));
+  gcalQueuePendingDeleteIds().forEach(id=>known.add(id));
+  let fresh = calEvents.filter(ev=>{
+    if (known.has(ev.id)) return false;
+    const m = (PalGCal.readAppMeta && PalGCal.readAppMeta(ev)) || {};
+    return !(m.kind==='trip' || m.kind==='item');
+  });
   _gcalSkippedRecurring = 0;
   if (GCAL_SKIP_RECURRING){
     const before = fresh.length;
@@ -7361,10 +7638,11 @@ async function gcalHistoricalBackfill(){
 // Trip and items are independent Calendar events, never nested.
 async function gcalSyncTrip(t, isNew){
   if (!PalGCal.hasToken()){
-    syncLog('Calendar sync skipped (not signed in) — "' + t.name + '" saved locally only', 'info');
-    return;
+    syncLog('Calendar sync queued (not signed in) — "' + t.name + '" saved; will send when signed in', 'info');
+    gcalQueueAdd('upsert','trip',{id:t.id},t.name);
+    return 'skipped';
   }
-  if (!t.startDate || !t.endDate) return;
+  if (!t.startDate || !t.endDate) return null;
 
   const endExclusive = new Date(t.endDate + 'T00:00:00');
   endExclusive.setDate(endExclusive.getDate() + 1);
@@ -7395,8 +7673,13 @@ async function gcalSyncTrip(t, isNew){
       saveEvent(fresh);
     }
     syncLog('Calendar ' + (t.calendarEventId ? 'updated' : 'created') + ' (trip): "' + t.name + '"', 'ok');
+    gcalQueueRemove('upsert','trip',{id:t.id});
+    return true;
   } catch(e){
+    _gcalLastErr = e;
     syncLog('Calendar sync failed for trip "' + t.name + '": ' + PalGCal.errorHint(e), 'err');
+    gcalQueueAdd('upsert','trip',{id:t.id},t.name,gcalClassifyError(e),PalGCal.errorHint(e));
+    return false;
   }
 }
 
@@ -7404,6 +7687,7 @@ async function gcalSyncTrip(t, isNew){
 async function gcalRetrySyncTrip(id){
   const t = getEvent(id); if (!t) return;
   showToast('Syncing to Calendar…');
+  gcalQueueReset('trip',{id:t.id});
   await gcalSyncTrip(t, !t.calendarEventId);
   showTripForm(getEvent(id)); // re-render with the refreshed trip
 }
@@ -7418,6 +7702,8 @@ async function gcalDeleteTrip(calendarEventId, name){
     syncLog('Calendar event deleted (trip): "' + name + '"', 'ok');
     return true;
   } catch(e){
+    _gcalLastErr = e;
+    if (e && (e.status===404 || e.status===410)){ syncLog('Calendar event already gone (trip): "' + name + '"', 'info'); return true; }
     syncLog('Calendar delete failed for trip "' + name + '": ' + PalGCal.errorHint(e), 'err');
     return false;
   }
@@ -7430,13 +7716,18 @@ async function gcalDeleteTrip(calendarEventId, name){
 // entry. Ghost items (multi-night-stay echoes) are skipped — the real
 // item on its check-in day already covers the whole span.
 async function gcalSyncItem(tripId, dayId, itemId){
+  const _qIds = {tripId:tripId, dayId:dayId, itemId:itemId};
   if (!PalGCal.hasToken()){
-    syncLog('Calendar sync skipped (not signed in) — item saved locally only', 'info');
-    return;
+    const _t0 = getEvent(tripId), _d0 = _t0 && (_t0.days||[]).find(d=>d.id===dayId), _i0 = _d0 && (_d0.items||[]).find(i=>i.id===itemId);
+    if (_i0 && !_i0._ghost){
+      syncLog('Calendar sync queued (not signed in) — item saved; will send when signed in', 'info');
+      gcalQueueAdd('upsert','item',_qIds,_i0.name||'');
+    }
+    return 'skipped';
   }
-  const trip = getEvent(tripId); if (!trip) return;
-  const day = (trip.days||[]).find(d=>d.id===dayId); if (!day) return;
-  const it = (day.items||[]).find(i=>i.id===itemId); if (!it || it._ghost) return;
+  const trip = getEvent(tripId); if (!trip) return null;
+  const day = (trip.days||[]).find(d=>d.id===dayId); if (!day) return null;
+  const it = (day.items||[]).find(i=>i.id===itemId); if (!it || it._ghost) return null;
 
   let startEnd;
   if (it.type === 'accommodation'){
@@ -7483,8 +7774,13 @@ async function gcalSyncItem(tripId, dayId, itemId){
       saveEvent(freshTrip);
     }
     syncLog('Calendar ' + (it.calendarEventId ? 'updated' : 'created') + ' (item): "' + (it.name||'') + '"', 'ok');
+    gcalQueueRemove('upsert','item',_qIds);
+    return true;
   } catch(e){
+    _gcalLastErr = e;
     syncLog('Calendar sync failed for item "' + (it.name||'') + '": ' + PalGCal.errorHint(e), 'err');
+    gcalQueueAdd('upsert','item',_qIds,it.name||'',gcalClassifyError(e),PalGCal.errorHint(e));
+    return false;
   }
 }
 
@@ -7492,6 +7788,7 @@ async function gcalSyncItem(tripId, dayId, itemId){
 // gcalRetrySyncTrip (trips).
 async function gcalRetrySyncItem(tripId, dayId, itemId){
   showToast('Syncing to Calendar…');
+  gcalQueueReset('item',{tripId:tripId,dayId:dayId,itemId:itemId});
   await gcalSyncItem(tripId, dayId, itemId);
   openEditItem(tripId, dayId, itemId); // re-render with the refreshed item
 }
@@ -7503,6 +7800,8 @@ async function gcalDeleteItem(calendarEventId, name){
     syncLog('Calendar event deleted (item): "' + name + '"', 'ok');
     return true;
   } catch(e){
+    _gcalLastErr = e;
+    if (e && (e.status===404 || e.status===410)){ syncLog('Calendar event already gone (item): "' + name + '"', 'info'); return true; }
     syncLog('Calendar delete failed for item "' + name + '": ' + PalGCal.errorHint(e), 'err');
     return false;
   }
@@ -7515,6 +7814,8 @@ async function gcalDeleteGig(calendarEventId, name){
     syncLog('Calendar event deleted: "' + name + '"', 'ok');
     return true;
   } catch(e){
+    _gcalLastErr = e;
+    if (e && (e.status===404 || e.status===410)){ syncLog('Calendar event already gone: "' + name + '"', 'info'); return true; }
     syncLog('Calendar delete failed for "' + name + '": ' + PalGCal.errorHint(e), 'err');
     return false;
   }
@@ -7776,7 +8077,10 @@ function initGCalSync(){
       syncLog('Google Calendar: ' + (signedIn ? 'signed in' : 'signed out'), signedIn ? 'ok' : 'info');
       // Fires the mirror pull the moment a token's actually available,
       // silent attempt or later explicit sign-in — not a fixed timer.
-      if (signedIn) gcalMirrorPull();
+      if (signedIn){
+        gcalMirrorPull();
+        setTimeout(function(){ gcalQueueDrain(false); }, 1500); // GIG-101: send anything that was waiting
+      }
     },
     onTokenRefreshed: function(){
       syncLog('Google Calendar: token refreshed', 'info');
@@ -7789,6 +8093,11 @@ function initGCalSync(){
     }
   });
   syncLog('Google Calendar sync module loaded', 'info');
+  // GIG-101: coming back to the app is a natural moment to catch Google up.
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible') gcalQueueDrain(false);
+  });
+  window.addEventListener('online', function(){ gcalQueueDrain(false); });
   // GIG-074: silent sign-in attempt, same pattern as PeteGCal — fails
   // quietly if no valid session; saves still work either way.
   setTimeout(function(){ PalGCal.requestTokenRefresh(); }, 600);
