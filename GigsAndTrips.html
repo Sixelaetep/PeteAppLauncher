@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.89</title>
+<title>Gigs &amp; Trips v7.90</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -156,6 +156,13 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .agenda-info{flex:1;min-width:0}
 .agenda-title{font-size:16px;font-weight:700;color:var(--ink);letter-spacing:-.02em}
 .agenda-loc{font-size:13px;color:var(--ink3);margin-top:1px}
+.nownext-card{display:flex;gap:0;background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:16px;overflow:hidden}
+.nownext-block{flex:1;padding:12px 14px}
+.nownext-block:first-child{border-right:1px solid var(--bdr)}
+.nownext-label{font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.nownext-item{font-size:14px;font-weight:700;color:var(--ink)}
+.nownext-loc{font-size:12px;color:var(--ink3);margin-top:1px}
+.nownext-empty{font-size:13px;color:var(--ink3)}
 .card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink3);margin-top:8px}
 .type-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
 .type-pill.music{background:#f3eeff;color:#7c3aed}
@@ -507,7 +514,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.89</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.90</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -568,7 +575,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.89"></script>
+<script src="pal-shared.js?v=7.90"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
@@ -925,7 +932,11 @@ function agendaEntryFromItem(trip, day, it){
     title:it.name||typeLabel(it.type), icon:typeIcon(it.type),
     typeLabel: typeLabel(it.type) + (it.subtype ? ' — ' + it.subtype : ''),
     location:itemLocationName(it), tripName:trip.name,
-    tripId:trip.id, dayId:day.id, itemId:it.id
+    tripId:trip.id, dayId:day.id, itemId:it.id,
+    // GIG-085: carried through only so "NOW" can use *real* stored
+    // duration — never present for a gig, never invented for an item
+    // that doesn't have one set.
+    durationMinutes: it.durationMinutes!=null ? it.durationMinutes : null
   };
 }
 
@@ -959,13 +970,57 @@ function renderAgenda(){
     byDate[it.date].push(it);
   });
 
-  let html = '';
+  let html = renderNowNext(items, todayStr);
   groups.forEach(dateStr=>{
     html += agendaDateHeader(dateStr, todayStr);
     byDate[dateStr].forEach(it=>{ html += agendaRow(it); });
   });
 
   document.getElementById('appInner').innerHTML = html;
+}
+
+// GIG-085 — full history in GigsAndTrips.md. "NOW" only ever fires for
+// an entry with real, stored timing data — a gig has no duration field
+// at all (never eligible), an item needs an explicitly-set
+// durationMinutes (never defaulted here). No active item just means
+// "No current item", a normal state, not an error. "NEXT" skips
+// anything already started or finished today and any all-day-today
+// entry (ambiguous as "next"), picking the first genuinely upcoming
+// timed item or future day. Reuses the items renderAgenda() already
+// fetched — no second getAgendaItems() call.
+function renderNowNext(items, todayStr){
+  const now = new Date();
+  const nowMins = now.getHours()*60 + now.getMinutes();
+
+  let activeNow = null;
+  for(const it of items){
+    if(it.date!==todayStr || it.kind!=='item' || !it.time || it.durationMinutes==null) continue;
+    const startMins = timeStrToMinutes(it.time);
+    if(startMins==null) continue;
+    if(nowMins>=startMins && nowMins<startMins+it.durationMinutes){ activeNow=it; break; }
+  }
+
+  let next = null;
+  for(const it of items){
+    if(activeNow && it===activeNow) continue;
+    if(it.date>todayStr){ next=it; break; }
+    if(it.date===todayStr && it.time){
+      const startMins = timeStrToMinutes(it.time);
+      if(startMins!=null && startMins>nowMins){ next=it; break; }
+    }
+  }
+
+  const nowLine = activeNow
+    ? `<div class="nownext-item">${activeNow.icon} ${esc(activeNow.title)}</div>${activeNow.location?`<div class="nownext-loc">${esc(activeNow.location)}</div>`:''}`
+    : `<div class="nownext-empty">No current item</div>`;
+  const nextLine = next
+    ? `<div class="nownext-item">${esc(next.time||'')}${next.time?' · ':''}${next.icon} ${esc(next.title)}</div>${next.location?`<div class="nownext-loc">${esc(next.location)}</div>`:''}`
+    : `<div class="nownext-empty">Nothing else scheduled</div>`;
+
+  return `<div class="nownext-card">
+    <div class="nownext-block"><div class="nownext-label">Now</div>${nowLine}</div>
+    <div class="nownext-block"><div class="nownext-label">Next</div>${nextLine}</div>
+  </div>`;
 }
 
 function agendaDateHeader(dateStr, todayStr){

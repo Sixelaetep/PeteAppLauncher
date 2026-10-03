@@ -6,6 +6,20 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.90 (GIG-085) — Today mode: NOW/NEXT
+
+A compact NOW/NEXT card at the top of the Agenda tab — not a separate tab, per the source spec's own preference against maintaining "two visually identical concepts." Reuses the items `renderAgenda()` already fetched; no second data call.
+
+**The spec's "never invent an end time" rule shaped the actual logic, not just the prose.** A gig has no duration field anywhere in its data model — never eligible for "NOW," full stop. A trip item is only eligible if it has a real, explicitly-set `durationMinutes` (confirmed as genuine user-settable data, not a sync-only default, before using it) — an item whose start time has already passed but has no stored duration is correctly never shown as active, even though a cruder "has it started" check would have wrongly flagged it. "NEXT" skips anything already started/finished today and any all-day-today entry (ambiguous as "next"), picking the first genuinely upcoming timed item or future day.
+
+Files changed: `GigsAndTrips.html` only — `durationMinutes` added to the item agenda-entry shape (GIG-083's `agendaEntryFromItem`, small additive change), `renderNowNext()`, new `.nownext-*` CSS.
+
+**Tested — genuinely, with real timing logic exercised, not just read.** Built a synthetic test with items positioned relative to the actual current wall-clock time (so the test is deterministic regardless of when it's run) covering: a gig at a "currently active" time (correctly never shown as NOW), an item with no stored duration at a similar time (correctly never shown as NOW despite its start time having passed), an item with real duration genuinely in its active window (correctly shown as NOW), and a correct "NEXT" pick over a later same-day alternative. Also tested the fully-empty state ("No current item" / "Nothing else scheduled").
+
+**Not tested:** not yet opened in a real browser against real GigsAndTrips data — only synthetic data confirmed in Node.
+
+---
+
 ## v7.89 (GIG-084) — Agenda UI
 
 New **Agenda** tab, added to the existing tab bar between Upcoming and Past, using the exact same `switchTab()`/`.ni` pattern Upcoming/Past/Reviews/Locations already use — not a bolted-on separate thing. Renders `getAgendaItems()` (GIG-083) as a date-grouped chronological stream: "Today" or "Weekday D Month" headers, then each entry as time → icon+title → location, with trip context (when applicable) rendered as a small uppercase label **above** the entry — matching the source spec's own example precisely, deliberately subordinate, never competing with the item's own title.
