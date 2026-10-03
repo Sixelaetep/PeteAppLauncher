@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.91</title>
+<title>Gigs &amp; Trips v7.92</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -518,7 +518,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.91</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.92</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -579,7 +579,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.91"></script>
+<script src="pal-shared.js?v=7.92"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
@@ -5328,8 +5328,11 @@ function showDataManager(){
         <button class="btn btn-ghost" style="flex:1" onclick="dmPush()">⬆️ Push to cloud</button>
       </div>
 
-      <!-- GIG-073/076 — full history in GigsAndTrips.md. Both safe to
-           leave visible permanently and re-run on demand. -->
+      <!-- GIG-073/076/087 — full history in GigsAndTrips.md. All safe to
+           leave visible permanently and re-run on demand. The rolling
+           pull is throttled automatically (10 min) — this button forces
+           an immediate check past that, for when you actually want one. -->
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalMirrorPull(true)">🔄 Pull from Calendar now</button>
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalMigrateOpen()">🔗 Link existing gigs to Google Calendar</button>
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="gcalHistoricalBackfill()">📜 Import 4 years of Calendar history</button>
 
@@ -6915,15 +6918,36 @@ function gcalUnmatchedEvents(calEvents){
 // run automatically on every load (see onUnlocked). Silent unless it
 // actually imports something, so a normal day with nothing new on the
 // calendar doesn't toast on every single app open.
-async function gcalMirrorPull(){
+// GIG-087 fix: throttled, found via a real quota-exceeded error during
+// testing. gcalMirrorPull() used to fire on every single page load with
+// no limit at all — fine occasionally, expensive across many reloads in
+// one session, and GigsAndTrips shares its Google Cloud project's quota
+// with PeteGCal, so load adds up across both. Throttle is keyed on last
+// ATTEMPT, not last success — specifically so a quota-exceeded state
+// doesn't keep retrying on every reload while the quota's still
+// exhausted, which would only make it worse. force:true (the manual
+// button in Sync & Backup) bypasses this for an on-demand check.
+const GCAL_MIRROR_THROTTLE_MS = 10 * 60 * 1000; // 10 minutes
+const GCAL_MIRROR_LAST_KEY = 'gat_gcal_mirror_last_attempt';
+
+async function gcalMirrorPull(force){
   if (!PalGCal.hasToken()) return;
+  if (!force){
+    const last = parseInt(localStorage.getItem(GCAL_MIRROR_LAST_KEY)||'0', 10);
+    const minsAgo = Math.round((Date.now()-last)/60000);
+    if (Date.now()-last < GCAL_MIRROR_THROTTLE_MS){
+      syncLog('Calendar mirror pull skipped (ran ' + minsAgoLabel(minsAgo) + ' ago — throttled to avoid hitting API limits on every reload)', 'info');
+      return;
+    }
+  }
+  localStorage.setItem(GCAL_MIRROR_LAST_KEY, String(Date.now()));
   const now = new Date();
   const timeMin = new Date(now.getTime() - 14*86400000);
   const timeMax = new Date(now.getTime() + 180*86400000);
   try {
     const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, timeMin.toISOString(), timeMax.toISOString());
     const unmatched = gcalUnmatchedEvents(events);
-    if (!unmatched.length) return;
+    if (!unmatched.length){ syncLog('Calendar mirror pull: nothing new', 'ok'); return; }
     unmatched.forEach(ev => saveEvent(gcalBuildImportedGig(ev)));
     syncLog('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Google Calendar', 'ok');
     showToast('Imported ' + unmatched.length + ' event' + (unmatched.length===1?'':'s') + ' from Calendar');
@@ -6932,6 +6956,7 @@ async function gcalMirrorPull(){
     syncLog('Calendar mirror pull failed: ' + PalGCal.errorHint(e), 'err');
   }
 }
+function minsAgoLabel(m){ return m<1 ? 'under a minute' : m===1 ? '1 minute' : m+' minutes'; }
 
 // One-off historical backfill — 4 years back, explicit trigger and
 // confirm (not automatic, not per-item like GIG-073/reconcile-gigs.html

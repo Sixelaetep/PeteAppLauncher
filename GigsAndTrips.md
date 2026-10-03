@@ -6,6 +6,22 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.92 — Fix: Calendar mirror pull throttled (real bug, found by real testing)
+
+First real-world finding from actually opening the app: `gcalMirrorPull()` had zero throttling and fired on every single page load. During a day of heavy reloading while building and testing GIG-072–086 — plus the 4-year historical backfill and the migration tool, both sharing the same Google Cloud project's quota with PeteGCal — this hit Google's Calendar API quota (`"The quota has been exceeded"`).
+
+**Worth being clear about:** nothing was lost or corrupted. The pull is read-only, and `syncLog` reported the failure exactly as designed, rather than silently swallowing it — the error-reporting discipline built through this whole line of work did its job.
+
+**Fix.** Throttled to once per 10 minutes, keyed on the *last attempt* (not last success) — specifically so a quota-exceeded state doesn't keep retrying on every reload while the quota's still exhausted, which would only extend the problem. A new **"🔄 Pull from Calendar now"** button in Sync & Backup bypasses the throttle for an on-demand check, since the automatic version alone would otherwise mean no way to force a fresh pull inside the 10-minute window.
+
+Files changed: `GigsAndTrips.html` only — `gcalMirrorPull()` gained a `force` parameter and throttle check, new `minsAgoLabel()` helper, new manual button.
+
+**Tested — genuinely, against the actual failure scenario.** Extracted the throttle logic into a standalone Node test with a `localStorage` shim and confirmed: a fresh call runs; an immediate reload right after (the exact quota-error-then-reload pattern from the real report) is correctly throttled; the manual force button correctly bypasses the throttle; and an automatic reload right after a manual pull is correctly throttled again.
+
+**Not tested:** whether this actually resolves the quota error in practice depends on Google's own quota window resetting — that's outside anything the app controls. Worth trying the app again once some time has passed, and using the new manual button rather than repeated reloads if checking again soon.
+
+---
+
 ## v7.91 (GIG-086) — Agenda navigation + secondary metadata, and the trip-sync plan is now complete
 
 Last piece of the original Agenda/Today build (GIG-081–086, all from the source spec).
