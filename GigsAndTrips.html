@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.92</title>
+<title>Gigs &amp; Trips v7.93</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -518,7 +518,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.92</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.93</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -579,7 +579,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.92"></script>
+<script src="pal-shared.js?v=7.93"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=1"></script>
@@ -5345,10 +5345,217 @@ function showDataManager(){
       <button class="btn btn-pri" style="margin-bottom:10px;width:100%" onclick="closeModal();exportJSON()">⬇️ Download backup (JSON)</button>
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
 
+      <!-- GIG-088 — full history in GigsAndTrips.md. Read-only. -->
+      <div class="section-hdr">Storage</div>
+      <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="openStorageReport()">🔍 Storage report (read-only)</button>
+
       <div class="section-hdr">Danger zone</div>
       <button class="btn btn-danger" style="width:100%" onclick="confirmClearAll()">🗑 Clear all data</button>
     </div>`);
 }
+
+
+// ==GIG-088 BEGIN==
+// GIG-088 — full history in GigsAndTrips.md. READ-ONLY storage report:
+// lists every localStorage key on this origin (the whole PAD suite shares
+// one), classifies it, and summarises what is inside gat_v1. Never calls
+// setItem/removeItem/saveData. Pure collectors take the storage object
+// as a parameter so they can be tested against a shim.
+function storageClassify(key){
+  const exact = {
+    'gat_v1':                      {owner:'Gigs & Trips', cat:'Persistent', note:'working copy of events/venues'},
+    'gat_v1_clean':                {owner:'Gigs & Trips', cat:'Cache',      note:'duplicate of gat_v1 minus tombstones (launcher card)'},
+    'gat_v1_lastPullAt':           {owner:'Gigs & Trips', cat:'Cache',      note:'incremental pull cursor'},
+    'gat_v1_cpChecked':            {owner:'Gigs & Trips', cat:'UI pref',    note:'daily completion-prompt marker'},
+    'gat_session':                 {owner:'Gigs & Trips', cat:'Persistent', note:'Supabase session tokens'},
+    'gat_gcal_mirror_last_attempt':{owner:'Gigs & Trips', cat:'UI pref',    note:'Calendar pull throttle timestamp'},
+    'pal_theme':                   {owner:'Suite',        cat:'UI pref',    note:'theme'},
+    'pal_retry_queue_v1':          {owner:'Suite',        cat:'Sync queue', note:'pending writes for apps using pal-shared'},
+    'pal_nav_request':             {owner:'Suite',        cat:'Temporary',  note:'cross-app navigation hand-off'},
+    'gym_pal_xapp':                {owner:'Gym Tracker',  cat:'Foreign',    note:'cross-app hand-off'},
+    'fn_tracker_v3':               {owner:'Fortnight Tracker', cat:'Foreign', note:'legacy'},
+    'fn_tracker_v4':               {owner:'Fortnight Tracker', cat:'Foreign', note:'legacy'},
+    'fn_tracker_v5':               {owner:'Fortnight Tracker', cat:'Foreign', note:'current'}
+  };
+  if (exact[key]) return exact[key];
+  if (key.indexOf('gat_')===0)  return {owner:'Gigs & Trips', cat:'Unclassified', note:'unrecognised gat_ key'};
+  if (key.indexOf('pal_')===0)  return {owner:'Suite',        cat:'Unclassified', note:'unrecognised pal_ key'};
+  if (key.indexOf('fn_')===0)   return {owner:'Fortnight Tracker', cat:'Foreign', note:''};
+  if (key.indexOf('gym_')===0)  return {owner:'Gym Tracker',  cat:'Foreign',    note:''};
+  return {owner:'Other / unknown', cat:'Foreign', note:'not recognised'};
+}
+
+function storageFmt(bytes){
+  if (bytes >= 1048576) return (bytes/1048576).toFixed(2)+' MB';
+  return (bytes/1024).toFixed(1)+' KB';
+}
+
+function storageAuditCollect(store){
+  store = store || localStorage;
+  const keys = [];
+  let total = 0;
+  for (let i=0; i<store.length; i++){
+    const k = store.key(i);
+    let v = '';
+    try { v = store.getItem(k) || ''; } catch(e){}
+    const bytes = (k.length + v.length) * 2; // UTF-16, same convention as pal-shared trimIfLarge
+    total += bytes;
+    keys.push(Object.assign({key:k, bytes:bytes}, storageClassify(k)));
+  }
+  keys.sort((a,b)=>b.bytes-a.bytes);
+
+  const byCat = {};
+  keys.forEach(k=>{ byCat[k.cat] = (byCat[k.cat]||0) + k.bytes; });
+
+  // ── inside gat_v1 ──
+  let gat = null;
+  const rawMain = store.getItem('gat_v1');
+  const rawClean = store.getItem('gat_v1_clean');
+  if (rawMain){
+    gat = { parseError:false, bytes:(('gat_v1').length + rawMain.length)*2,
+            cleanBytes: rawClean ? (('gat_v1_clean').length + rawClean.length)*2 : 0 };
+    try {
+      const d = JSON.parse(rawMain);
+      const events = Array.isArray(d.events) ? d.events : [];
+      const venues = Array.isArray(d.venues) ? d.venues : [];
+      const live = events.filter(e=>!e._deleted);
+      const gigs = live.filter(e=>e.type==='gig');
+      const trips = live.filter(e=>e.type==='trip');
+      let days = 0, items = 0;
+      trips.forEach(t=>{ (t.days||[]).forEach(dy=>{ days++; items += (dy.items||[]).filter(it=>!it._placeholder).length; }); });
+      gat.counts = {
+        gigs: gigs.length, trips: trips.length, days: days, items: items,
+        tombstones: events.length - live.length,
+        venues: venues.filter(v=>!(v && v._deleted)).length,
+        venueTombstones: venues.filter(v=>v && v._deleted).length
+      };
+      gat.eventsBytes = JSON.stringify(events).length * 2;
+      gat.venuesBytes = JSON.stringify(venues).length * 2;
+
+      // gig types
+      const types = {};
+      gigs.forEach(g=>{ const t = g.gigType || '(none)'; types[t] = (types[t]||0)+1; });
+      gat.gigTypes = types;
+
+      // Calendar-linked / import-looking gigs (heuristic: gigType other + linked + not on a trip)
+      const linked = gigs.filter(g=>g.calendarEventId);
+      const importLike = gigs.filter(g=>g.gigType==='other' && g.calendarEventId && !g.tripId);
+      gat.calendar = {
+        linked: linked.length,
+        importLike: importLike.length,
+        importLikeBytes: importLike.reduce((n,g)=>n+JSON.stringify(g).length*2, 0),
+        legacyAddedNoId: gigs.filter(g=>g.calendarAdded && !g.calendarEventId).length
+      };
+
+      // Recurring-instance heuristic: Google instance ids look like <masterId>_<YYYYMMDD[THHMMSSZ]>
+      const groups = {};
+      importLike.forEach(g=>{
+        const m = /^(.+)_(\d{8}(?:T\d{6}Z?)?)$/.exec(g.calendarEventId);
+        if (m){ (groups[m[1]] = groups[m[1]] || []).push(g); }
+      });
+      const rec = Object.keys(groups).map(k=>({master:k, count:groups[k].length, sample:groups[k][0].name || '(no title)'}))
+                        .filter(r=>r.count>=2).sort((a,b)=>b.count-a.count);
+      gat.recurring = {
+        groups: rec.length,
+        instances: rec.reduce((n,r)=>n+r.count,0),
+        top: rec.slice(0,5)
+      };
+
+      // Largest individual records
+      gat.largest = events.map(e=>({id:e.id, type:e.type, name:e.name||'(no name)', bytes:JSON.stringify(e).length*2, deleted:!!e._deleted}))
+                          .sort((a,b)=>b.bytes-a.bytes).slice(0,5);
+    } catch(e){ gat.parseError = true; }
+  }
+
+  return { keys:keys, total:total, byCat:byCat, gat:gat };
+}
+
+function storageReportText(r, ctx){
+  ctx = ctx || {};
+  const L = [];
+  const NOMINAL = 5*1048576;
+  L.push('GIGS & TRIPS — STORAGE REPORT (GIG-088)');
+  L.push('App ' + (ctx.version||'?') + ' · ' + (ctx.when||'') );
+  L.push('Mode: ' + (ctx.mode||'?') + ' · Origin: ' + (ctx.origin||'?'));
+  L.push('');
+  L.push('TOTAL: ' + r.keys.length + ' keys · ' + storageFmt(r.total) + ' (~' + Math.round(r.total/NOMINAL*100) + '% of a nominal 5 MB — rough only; real limit varies by browser)');
+  L.push('');
+  L.push('BY CATEGORY');
+  Object.keys(r.byCat).sort((a,b)=>r.byCat[b]-r.byCat[a]).forEach(c=>L.push('  ' + c + ': ' + storageFmt(r.byCat[c])));
+  L.push('');
+  L.push('KEYS (largest first)');
+  r.keys.forEach(k=>L.push('  ' + storageFmt(k.bytes).padStart(9) + '  ' + k.key + '  [' + k.owner + ' · ' + k.cat + ']' + (k.note ? ' — ' + k.note : '')));
+  const g = r.gat;
+  L.push('');
+  if (!g){
+    L.push('gat_v1: not present on this origin/mode');
+  } else if (g.parseError){
+    L.push('gat_v1: PRESENT BUT NOT VALID JSON (' + storageFmt(g.bytes) + ')');
+  } else {
+    L.push('INSIDE gat_v1 (' + storageFmt(g.bytes) + ')');
+    L.push('  gigs ' + g.counts.gigs + ' · trips ' + g.counts.trips + ' · days ' + g.counts.days + ' · items ' + g.counts.items);
+    L.push('  tombstones ' + g.counts.tombstones + ' · venues ' + g.counts.venues + ' (venue tombstones ' + g.counts.venueTombstones + ')');
+    L.push('  events JSON ' + storageFmt(g.eventsBytes) + ' · venues JSON ' + storageFmt(g.venuesBytes));
+    L.push('  duplicate gat_v1_clean: ' + (g.cleanBytes ? storageFmt(g.cleanBytes) + ' (' + Math.round(g.cleanBytes/g.bytes*100) + '% of gat_v1)' : 'not present'));
+    L.push('');
+    L.push('GIG TYPES');
+    Object.keys(g.gigTypes).sort((a,b)=>g.gigTypes[b]-g.gigTypes[a]).forEach(t=>L.push('  ' + t + ': ' + g.gigTypes[t]));
+    L.push('');
+    L.push('CALENDAR-LINKED');
+    L.push('  gigs with a Calendar id: ' + g.calendar.linked);
+    L.push('  import-looking (type other, linked, not on a trip): ' + g.calendar.importLike + ' · ' + storageFmt(g.calendar.importLikeBytes));
+    L.push('  marked calendarAdded but never linked: ' + g.calendar.legacyAddedNoId);
+    L.push('  recurring-looking (heuristic on id pattern): ' + g.recurring.instances + ' instances in ' + g.recurring.groups + ' series');
+    g.recurring.top.forEach(t=>L.push('    ' + t.count + ' × ' + t.sample));
+    L.push('');
+    L.push('LARGEST RECORDS');
+    g.largest.forEach(e=>L.push('  ' + storageFmt(e.bytes).padStart(9) + '  ' + e.type + ' · ' + e.name + (e.deleted ? ' (tombstone)' : '')));
+  }
+  return L.join('\n');
+}
+
+function storageReportContext(){
+  const standalone = (window.navigator.standalone === true) || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  const embedded = (window.parent !== window);
+  return {
+    version: (document.querySelector('#hdrTitle .ver')||{}).textContent || '',
+    when: new Date().toISOString(),
+    mode: (standalone ? 'Home-screen app' : 'Browser tab') + (embedded ? ' (inside launcher)' : ''),
+    origin: location.origin
+  };
+}
+
+function openStorageReport(){
+  let text;
+  try { text = storageReportText(storageAuditCollect(localStorage), storageReportContext()); }
+  catch(e){ text = 'Storage report failed: ' + String(e); }
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">🔍 Storage report</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Read-only. Nothing is changed or deleted. Safari tab and the home-screen app keep separate storage, so run this in each.</div>
+      <pre id="storageReportPre" style="background:var(--surf);border-radius:var(--rsm);padding:10px;font-size:11px;line-height:1.45;color:var(--ink2);white-space:pre-wrap;word-break:break-word;max-height:55vh;overflow-y:auto;margin-bottom:12px">${esc(text)}</pre>
+      <button class="btn btn-pri" style="width:100%;margin-bottom:10px" onclick="copyStorageReport()">📋 Copy report</button>
+      <button class="btn btn-ghost" style="width:100%" onclick="showDataManager()">← Back</button>
+    </div>`);
+}
+
+function copyStorageReport(){
+  const el = document.getElementById('storageReportPre'); if (!el) return;
+  const text = el.textContent;
+  const fallback = function(){
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); showToast('Report copied ✓'); } catch(e){ showToast('Select the text and copy manually'); }
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){ showToast('Report copied ✓'); }, fallback);
+  } else { fallback(); }
+}
+// ==GIG-088 END==
 
 // Data manager actions — keep modal open, log results in the status area
 async function dmPull(){

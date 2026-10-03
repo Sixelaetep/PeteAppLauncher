@@ -6,6 +6,20 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.93 (GIG-088) — Read-only storage report
+
+First ticket of the backlog restructure. **Sync & Backup → Storage → "Storage report (read-only)"** lists every localStorage key on the origin (the whole PAD suite shares one), with size, owner and category (Persistent / Cache / Temporary / UI pref / Sync queue / Foreign / Unclassified), by-category totals, and a summary of what is inside `gat_v1`: counts of gigs, trips, days, items, tombstones and venues, the size of the duplicate `gat_v1_clean`, gig types, how many gigs look like Calendar imports, a heuristic count of recurring-looking instances, and the five largest records. It also records whether it ran in the home-screen app or a browser tab, since those keep separate storage. A "Copy report" button copies it as plain text.
+
+**It changes nothing.** No `setItem`/`removeItem`/`saveData` is called; the collectors take the storage object as a parameter so they can be tested against a shim that throws on any write.
+
+Files changed: `GigsAndTrips.html` only (version strings v7.92 to v7.93 in the title, header and `pal-shared.js` cache-bust; new button; new functions between `// ==GIG-088 BEGIN==` and `END` markers). No data-model, sync, Calendar or launcher change.
+
+**Tested, in Node against a storage shim:** totals equal the sum of (key + value) x 2 bytes; the shim is byte-identical before and after (and throws on any write); counts of gigs/trips/days/items/tombstones/venues; import-looking and recurring-looking detection (trip-linked gigs excluded); classification of known, `gat_`-unknown and foreign keys; duplicate-size reporting; corrupt `gat_v1` JSON and empty storage do not throw; mode detection. The whole inline script passes `node --check`.
+
+**Not tested:** not opened in a real browser or on Safari/iOS. The nominal 5 MB figure is a rough guide only; the report deliberately does not probe the real quota (that would write to storage). The recurring-looking count relies on Google's instance-id pattern, which is a heuristic until GIG-117 confirms it with Google's own data.
+
+---
+
 ## v7.92 — Fix: Calendar mirror pull throttled (real bug, found by real testing)
 
 First real-world finding from actually opening the app: `gcalMirrorPull()` had zero throttling and fired on every single page load. During a day of heavy reloading while building and testing GIG-072–086 — plus the 4-year historical backfill and the migration tool, both sharing the same Google Cloud project's quota with PeteGCal — this hit Google's Calendar API quota (`"The quota has been exceeded"`).
