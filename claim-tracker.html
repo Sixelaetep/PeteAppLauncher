@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.19</title>
+<title>Claim Tracker v2.20</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -267,7 +267,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.19</div>
+        <div class="ver">v2.20</div>
       </div>
     </div>
     <div class="header-actions">
@@ -548,7 +548,7 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=2.19"></script>
+<script src="pal-shared.js?v=2.20"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -585,6 +585,28 @@
 // setSyncState() to show "N pending sync" instead of a bare error while
 // a retry is queued. Every sync error log message now also runs through
 // the shared PalSync.errorHint() instead of a bare err.message.
+// v2.20 (CLA-017): local cache trim on sync. Same shared mechanism
+// rolled out across the suite this round (Test & Issues' TI-086, Film
+// & TV Tracker's FTT-039, and several others) — pal-shared.js gained
+// PalSync.trimIfLarge(key, maxKB), which deletes a localStorage key
+// once it exceeds a threshold, letting this app's own existing
+// syncPull() repopulate it fresh. Safe because local storage is only
+// ever a cache of Supabase for an app using table()'s upsert/pull
+// properly — never the sole copy — provided nothing is still waiting
+// to push up, which PalSync.retryQueueLength() already tracks; the
+// trim skips entirely if anything's pending. Wired into onSession,
+// awaited after syncPull() completes (onSession is now async).
+// Threshold set at 500KB, a standard default — this app's real
+// current size wasn't confirmed as a large contributor to the
+// original problem (a shared Safari storage-quota error found via a
+// different app, GigsAndTrips). This app runs both standalone and
+// nested inside Fortnight Tracker (FT-062) — the trim is unrelated to
+// that embedding (localStorage is origin-scoped, not iframe-scoped),
+// so no special handling needed either way. Tested: node --check;
+// trimIfLarge()'s own branches were verified against synthetic data
+// in Node when first built — not re-tested per app, since the
+// function itself doesn't change, only the key/threshold passed in.
+// Not tested: not yet run in a real browser, standalone or nested.
 // v2.19 (CLA-016): switched from three separate script tags
 // (pal-config.js, pal-sync.js, pal-utils.js) to one combined
 // pal-shared.js — same three files concatenated in the same
@@ -882,12 +904,16 @@ function applyTheme(theme) {
 // banner timing) moved to pal-sync.js — same behaviour, shared code.
 // ═══════════════════════════════════════════════════════════════════
 window.PalSync.initSession({
-  onSession: function () {
+  // CLA-017: see the v2.20 entry in the changelog near the top of this
+  // file for the full reasoning.
+  onSession: async function () {
     document.getElementById('syncBanner').classList.remove('visible');
     addLog('PAL_SESSION received — starting sync', 'info');
     setSyncState('connecting');
-    syncPull();
+    await syncPull();
     reportToLauncher();
+    const trimResult = window.PalSync.trimIfLarge('claim_tracker_v1', 500);
+    if (trimResult.trimmed) addLog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
   },
   onRetryFlushed: function (result) {
     if (result.flushed) addLog(`Retrying ${result.flushed} queued change(s) after reconnect — done`, 'ok');

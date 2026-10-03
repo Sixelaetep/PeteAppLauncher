@@ -2,6 +2,20 @@
 
 Full version history for `fortnight-tracker.html`. The app's own inline comment block keeps only the 15 most recent releases for quick reference during active work — everything else lives here. Wording is unchanged from the original inline entries. Resequenced strictly newest-to-oldest by version number, since the original inline order mixed an ascending run with a later descending run and wasn't actually chronological as written; no content was reworded.
 
+## v3.73 (FT-065) — 3 Oct 2026
+
+Local cache trim on sync. Same shared mechanism rolled out across the suite this round (Test & Issues' TI-086, Film & TV Tracker's FTT-039, and several others) — `pal-shared.js` gained `PalSync.trimIfLarge(key, maxKB)`, which deletes a localStorage key once it exceeds a threshold, letting this app's own existing `pullFromCloud()` repopulate it fresh. Safe because local storage is only ever a cache of Supabase for an app using `table()`'s upsert/pull properly — never the sole copy — provided nothing is still waiting to push up, which `PalSync.retryQueueLength()` already tracks; the trim skips entirely if anything's pending.
+
+Wired into `onSession`, inside `pullFromCloud()`'s success callback (after `render()`) rather than via async/await — this app's pull is callback-style, not promise-based.
+
+**Worth knowing:** this app's storage key (`fn_tracker_v5`) is also read directly by PeteGCal and GigsAndTrips for the working-day alert feature. Trimming here just forces this app's own next load to re-pull fresh — it doesn't remove the key for longer than the moment before this same pull rewrites it, so those other apps' reads are unaffected in practice.
+
+Threshold set at 500KB, a standard default — this app's real current size wasn't confirmed as a large contributor to the original problem (a shared Safari storage-quota error found via a different app, GigsAndTrips, traced to per-origin storage pressure across the whole suite).
+
+Files changed: `pal-shared.js` (new `trimIfLarge()`, shared across the suite, not specific to this app), `fortnight-tracker.html` (trim call added inside the `pullFromCloud()` success callback).
+
+Tested: `node --check`. `trimIfLarge()`'s own branches (missing key, under/over threshold, pending-writes-blocks-trim) were verified against synthetic data in Node when first built for TI-086 — not re-tested per app, since the function itself doesn't change, only the key/threshold passed in. Not tested: not yet run in a real browser against real Fortnight Tracker data, and the cross-app read from PeteGCal/GigsAndTrips wasn't re-verified against this specific change.
+
 ## v3.72 (FT-062) — 29 Sep 2026
 
 New timesheet weeks now start with three default code rows instead of an empty matrix: DSA Architecture, DSA Strategy and Other Meetings (the Team Meetings / OTHER_MEETINGS code), all code 0001, in that order. Applies when a new fortnight bundle is created, to both Week 1 and Week 2. The rows are zero-minute placeholders on the first day of each week (day 1 and day 6 of the bundle) — the same mechanism the Timesheet tab's own "add code" picker already uses — so they appear in the matrix at 0 and add nothing to any day, week or capex/opex totals until hours are entered. They can be removed per week with the existing ✕ button like any other row, and existing bundles are untouched (no migration; the JSON backup/import format and Supabase schema are unchanged, the rows ride along inside each day's existing `alloc` array). The three codes are matched by their fixed seed ids (`seed_dsa_arch`, `seed_dsa_strat`, `seed_tm_meet`, in `DEFAULT_TS_CODE_IDS`); a default that has been deleted or archived is skipped rather than recreated.

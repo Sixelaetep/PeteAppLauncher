@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.109</title>
+<title>Gym Tracker v2.110</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.109</div></span>
+      <span>Gym Tracker<div class="ver">v2.110</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -952,11 +952,40 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.109"></script>
+<script src="pal-shared.js?v=2.110"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.110 (GYM-096): local cache trim on sync. Same shared mechanism as
+// Test & Issues' TI-086 and Film & TV Tracker's FTT-039 — pal-shared.js
+// gained a new PalSync.trimIfLarge(key, maxKB) utility that deletes a
+// localStorage key once it exceeds a threshold, letting this app's own
+// existing pullFromCloud() repopulate it fresh. Safe because local
+// storage is only ever a cache of Supabase for an app using table()'s
+// upsert/pull properly — never the sole copy — provided nothing is
+// still waiting to push up, which PalSync.retryQueueLength() already
+// tracks; the trim skips entirely if anything's pending. Wired into
+// this app's onSession callback, inside the pullFromCloud() success
+// callback (after renderAll()) rather than via async/await — this
+// app's pull is callback-style, not promise-based, unlike several
+// other apps in the suite that got the same fix this round. Threshold
+// set at 1536KB (1.5MB), deliberately above gym_tracker_v1's confirmed
+// real current size (~713KB) — found via a real Safari storage-quota
+// error in a different app (GigsAndTrips), traced to shared per-origin
+// pressure across the whole suite, not any one app's fault. This is a
+// safety net against future unbounded growth, not an active trim
+// today — at the real current size, this app's own data wasn't a
+// meaningful contributor to the original problem. Not wired into
+// GigsAndTrips itself — confirmed first that it has its own bespoke
+// sync layer never routing through PalSync.table(), so the same
+// pending-write check wouldn't actually mean anything there.
+// Tested: node --check; trimIfLarge()'s four branches (missing key,
+// under threshold, over threshold with/without pending writes) were
+// verified against synthetic data in Node when first built for TI-086
+// — not re-tested per app, since the function itself doesn't change,
+// only the key/threshold passed in. Not tested: not yet run in a real
+// browser against real gym-tracker data.
 // v2.109: remove a whole circuit. The plan editor and the live session
 // screen could only drop a circuit's exercises one at a time (✕ on each
 // member). Both circuit blocks now have a circuit-level 🗑 button that
@@ -2446,7 +2475,12 @@ window.PalSync.initSession({
     if (bannerEl) bannerEl.style.display = 'none';
     adjustBodyScrollTop();
     setSyncStatus('connecting');
-    pullFromCloud(() => { renderAll(); });
+    // GYM-096: see the v2.110 changelog entry above for the full reasoning.
+    pullFromCloud(() => {
+      renderAll();
+      const trimResult = window.PalSync.trimIfLarge('gym_tracker_v1', 1536);
+      if (trimResult.trimmed) slog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
+    });
   },
   onRetryFlushed: function (result) {
     if (result.flushed) slog('Retrying '+result.flushed+' queued change(s) after reconnect — done','ok');

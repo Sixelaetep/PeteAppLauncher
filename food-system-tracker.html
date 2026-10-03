@@ -10,7 +10,7 @@
 // Apply any explicit global theme preference before first paint (suite pattern).
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Food System v1.8</title>
+<title>Food System v1.9</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='18' text-anchor='middle'>🥫</text></svg>">
 <style>
   :root {
@@ -198,7 +198,7 @@
 <body>
 
 <nav id="nav">
-  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.8</span></div>
+  <div class="nav-title">🥫 <span>Food</span> System <span class="nav-ver" id="navVer">v1.9</span></div>
   <div class="nav-spacer"></div>
   <button class="sync-pill" id="syncPill" onclick="go('settings');document.getElementById('sec-sync').scrollIntoView()" title="Sync status"><span class="sync-dot"></span><span id="syncLabel">Local</span></button>
 </nav>
@@ -363,7 +363,7 @@
      offline consumption on two devices merges without losing either.
      Requires the fs_records migration (see release notes) before cloud
      sync will work; runs local-only until then. -->
-<script src="pal-shared.js?v=1.8"></script>
+<script src="pal-shared.js?v=1.9"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // FOOD SYSTEM TRACKER  (app id: food-system-tracker, issue prefix FS)
@@ -378,6 +378,29 @@
 //   consumption evidence (see rotationFor's hasEvidence note) — that
 //   default made Rotation Risk fire on nearly everything once logging
 //   stopped being the norm.
+// v1.9 (FS-073): local cache trim on sync. Same shared mechanism
+//   rolled out across the suite this round (Test & Issues' TI-086,
+//   Film & TV Tracker's FTT-039, and several others) — pal-shared.js
+//   gained PalSync.trimIfLarge(key, maxKB), which deletes a
+//   localStorage key once it exceeds a threshold, letting this app's
+//   own existing syncNow() repopulate it fresh. Safe because local
+//   storage is only ever a cache of Supabase for an app using
+//   table()'s upsert/pull properly — never the sole copy — provided
+//   nothing is still waiting to push up, which
+//   PalSync.retryQueueLength() already tracks; the trim skips
+//   entirely if anything's pending. Wired into onSession, awaited
+//   after syncNow() completes (onSession is now async, restructured
+//   from its previous one-line arrow-function form). Threshold set
+//   at 500KB — fs_v1's confirmed real current size (~91KB) is well
+//   under this, so this is a standard default, not a size tuned to a
+//   known-large dataset. Found via a shared Safari storage-quota
+//   error in a different app (GigsAndTrips), traced to per-origin
+//   pressure across the whole suite. Tested: node --check;
+//   trimIfLarge()'s own branches were verified against synthetic
+//   data in Node when first built — not re-tested per app, since the
+//   function itself doesn't change, only the key/threshold passed
+//   in. Not tested: not yet run in a real browser against real
+//   food-system-tracker data.
 // v1.8 (FS-072): switched from three separate script tags
 //   (pal-config.js, pal-sync.js, pal-utils.js) to one combined
 //   pal-shared.js — same three files concatenated in the same
@@ -1432,7 +1455,14 @@ function initSync() {
     return;
   }
   window.PalSync.initSession({
-    onSession: () => { syncLog('Session received from launcher — syncing', 'info'); syncNow(); },
+    // FS-073: see the v1.9 entry in the changelog near the top of
+    // this file for the full reasoning.
+    onSession: async () => {
+      syncLog('Session received from launcher — syncing', 'info');
+      await syncNow();
+      const trimResult = window.PalSync.trimIfLarge('fs_v1', 500);
+      if (trimResult.trimmed) syncLog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
+    },
     onRetryFlushed: (r) => { if (r && r.flushed) syncLog('Retried ' + r.flushed + ' queued change(s) after reconnect', 'ok'); renderSyncPill(); },
     onNoSession: () => { setSyncState('local'); syncLog('No launcher session — running locally', 'info'); },
     noSessionMs: 3000
