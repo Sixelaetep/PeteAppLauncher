@@ -2,6 +2,22 @@
 
 Full version history for `film-tv-tracker.html`. As of v1.2, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v2.7 (FTT-039) — Local cache trim on sync
+
+Same mechanism as Test & Issues' TI-086, part of a suite-wide rollout to every app using `PalSync.table()` — see `pal-shared.js`'s `trimIfLarge()` for the shared implementation and its own reasoning.
+
+**Genuinely different situation here, worth being upfront about.** `ftt_v1`'s ~1.2MB is your *actual current library* — real titles, synopses, tags, season data from TMDB imports — not accumulated stale history the way Test & Issues' size was. Trimming and re-pulling here can't reduce anything; it would just re-fetch the same ~1.2MB straight back from Supabase. Wired in anyway, as Pete's explicit call, as a safety net against future *unbounded* growth rather than an active fix for today's size. Threshold set at 2048KB — deliberately well above the current real size, so this won't fire on a normal boot, only if the library (or something else) grows unexpectedly large.
+
+**Wiring:** `onSession` made `async`, trim call added after `syncPull()` completes — never before, and never in `onNoSession` (no Supabase session there to restore from, so trimming would be real data loss). Same safety shape as TI-086: skips entirely if `PalSync.retryQueueLength()` shows anything still pending.
+
+Files changed: `film-tv-tracker.html` only (`pal-shared.js` itself already shipped with TI-086 — this just adopts it here too).
+
+**Tested:** `node --check` passes. `trimIfLarge()`'s own logic (all four branches, including the critical pending-writes-blocks-trim case) was already verified in Node against synthetic data as part of TI-086 — not re-tested per-app, since the function itself doesn't change between apps, only the key/threshold passed in.
+
+**Not tested:** not yet run in a real browser against real Film & TV Tracker data.
+
+---
+
 ## v2.6 (FTT-038) — Reorder list stays put when you change a title's Interest
 
 **No data, sync or backup change.** In the grouped reorder list, choosing a level in a row's Interest menu still moves the title to the end of its new group (saved and synced at once, reorder mode stays open), but the screen **no longer jumps to the new position**. The page is kept so that the rows around where you made the choice (e.g. in Unrated) stay exactly where they were on screen; the row that was below the changed one (or above it, if it was last) takes its place. The moved row is still flashed briefly in its new group, and the toast names the new level, but nothing scrolls to it. Applies only to the Interest menu; ↑ ↓, drag and Move to position still keep the moved row in view.

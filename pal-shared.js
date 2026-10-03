@@ -751,6 +751,39 @@ window.PalSync = (function () {
     return { upsert: upsert, tombstone: tombstone, pull: pull };
   }
 
+  // Trims (deletes) a localStorage key if it's grown past maxKB, so the
+  // app's own existing pull-from-Supabase boot logic repopulates it
+  // fresh — local storage is a cache of Supabase for any app using
+  // table()'s upsert/pull properly, never the only copy, so clearing it
+  // is safe PROVIDED nothing is still waiting to push up. That's exactly
+  // what retryQueueLength() tracks — skips the trim if anything's
+  // pending, rather than risk a write that hasn't reached Supabase yet.
+  //
+  // Only meaningful for apps that actually route writes through
+  // table()'s own upsert/retry path — retryQueueLength() reflects
+  // nothing about an app with its own separate bespoke sync layer (e.g.
+  // GigsAndTrips), so calling this there would be a false sense of
+  // safety, not a real one. Call this once per boot, after your own
+  // data has already loaded — never before, since deleting the key
+  // first would just make the app start from nothing.
+  //
+  // Returns a result object rather than logging itself, since each app
+  // has its own place to report it (syncLog, console, a toast) — this
+  // function doesn't assume any of them exist.
+  function trimIfLarge(key, maxKB) {
+    try {
+      if (retryQueueLength() > 0) return { trimmed: false, reason: 'pending-writes', pending: retryQueueLength() };
+      const raw = localStorage.getItem(key);
+      if (raw == null) return { trimmed: false, reason: 'not-found' };
+      const sizeKB = (key.length + raw.length) * 2 / 1024; // UTF-16 bytes
+      if (sizeKB <= maxKB) return { trimmed: false, reason: 'under-threshold', sizeKB: sizeKB };
+      localStorage.removeItem(key);
+      return { trimmed: true, sizeKB: sizeKB };
+    } catch (e) {
+      return { trimmed: false, reason: 'error', error: e };
+    }
+  }
+
   return {
     initSession:      initSession,
     hasSession:       hasSession,
@@ -763,7 +796,8 @@ window.PalSync = (function () {
     table:            table,
     errorHint:        errorHint,
     flushRetryQueue:  flushRetryQueue,
-    retryQueueLength: retryQueueLength
+    retryQueueLength: retryQueueLength,
+    trimIfLarge:      trimIfLarge
   };
 })();
 
