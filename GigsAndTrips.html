@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.103</title>
+<title>Gigs &amp; Trips v7.104</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -548,7 +548,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.103</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.104</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -609,7 +609,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.103"></script>
+<script src="pal-shared.js?v=7.104"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=3"></script>
@@ -1389,6 +1389,9 @@ function recurMonthlyOptions(dateStr){
   return opts;
 }
 function gfRepeatHtml(g, dateStr){
+  if (g && recurIsGoogleManaged(g)){
+    return '<div class="fg"><label>Repeats</label><div class="rep-note">📅 Managed in Google Calendar: the repeat rule, title, time and place are changed there and refresh here. Only the class and local notes below can differ.</div></div>';
+  }
   if (g && g.recurrenceOf){
     return '<div class="fg"><label>Repeats</label><div class="rep-note">🔁 This is a changed occurrence of a repeating event. To change the whole series, open the series and choose “Edit all events”.</div></div>';
   }
@@ -1495,10 +1498,12 @@ function openOccurrenceDetail(id){
       </div>
       ${m.notes ? `<div style="font-size:13px;color:var(--ink2);margin-bottom:14px;line-height:1.6">${esc(m.notes)}</div>` : ''}
       <div style="display:flex;flex-direction:column;gap:8px">
+        ${recurIsGoogleManaged(m) ? `<div class="rep-note">📅 This repeat is managed in Google Calendar. Change it there and it refreshes here (daily, or from Sync &amp; Backup).</div>
+        ${m.calendarHtmlLink ? `<a class="btn btn-ghost" style="text-align:center;text-decoration:none" target="_blank" href="${esc(m.calendarHtmlLink)}">Open in Google Calendar ↗</a>` : ''}` : `
         <button class="btn btn-pri" onclick="recurEditThis('${esc(m.id)}','${esc(sp.date)}')">✏️ Edit this event only</button>
         <button class="btn btn-ghost" onclick="closeModal();openEditGig('${esc(m.id)}')">✏️ Edit all events</button>
-        <button class="btn btn-ghost" onclick="recurCancelThis('${esc(m.id)}','${esc(sp.date)}')">🚫 Cancel this event only</button>
-        <button class="btn btn-danger" onclick="recurDeleteSeries('${esc(m.id)}')">🗑 Delete all events</button>
+        <button class="btn btn-ghost" onclick="recurCancelThis('${esc(m.id)}','${esc(sp.date)}')">🚫 Cancel this event only</button>`}
+        <button class="btn btn-danger" onclick="recurDeleteSeries('${esc(m.id)}')">🗑 Delete all events${recurIsGoogleManaged(m) ? ' (also from Google Calendar)' : ''}</button>
       </div>
     </div>`);
 }
@@ -1512,6 +1517,7 @@ function recurAddExdate(masterId, dateStr){
 }
 function recurEditThis(masterId, dateStr){
   const m = getEvent(masterId); if (!m || !m.recurrence) return;
+  if (recurIsGoogleManaged(m)){ showToast('This repeat is managed in Google Calendar — change it there'); return; }
   let ex = getData().events.find(e=>e.type==='gig' && !e._deleted && e.recurrenceOf === masterId && e.recurrenceOriginalDate === dateStr);
   if (!ex){
     const now = new Date().toISOString();
@@ -1525,6 +1531,8 @@ function recurEditThis(masterId, dateStr){
   render();
 }
 function recurCancelThis(masterId, dateStr){
+  const _m = getEvent(masterId);
+  if (_m && recurIsGoogleManaged(_m)){ showToast('This repeat is managed in Google Calendar — change it there'); return; }
   if (!confirm('Cancel just this event? The rest of the series is unaffected.')) return;
   recurAddExdate(masterId, dateStr);
   closeModal(); showToast('This event cancelled'); render();
@@ -3703,7 +3711,7 @@ function saveGig(){
   if(_cls){ g.eventClass=_cls; g.classReviewed=true; } else delete g.eventClass; // choosing a class counts as reviewing it
   g.notes=document.getElementById('gfNotes')?.value.trim()||'';
   // GIG-106: repeat settings. A changed occurrence (recurrenceOf) can't itself repeat.
-  if(!g.recurrenceOf){
+  if(!g.recurrenceOf && !recurIsGoogleManaged(g)){   // a Google-managed series keeps the rule Google gave it
     const rf=gfReadRepeat(date);
     if(rf.error){ if(err) err.textContent=rf.error; return; }
     if(rf.rec){
@@ -6194,6 +6202,8 @@ function showDataManager(){
 
       <div class="section-hdr">Checks</div>
       <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="openGcalScan()">🔎 Scan Google recurring events (read-only)</button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="openSeriesConvert()">🔁 Fold imported repeats into series…</button>
+      ${getData().events.some(e=>!e._deleted&&recurIsGoogleManaged(e)) ? `<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="gcalRefreshSeriesNow()">↻ Refresh Google-managed series now</button>` : ''}
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openRecurSelfCheck()">✅ Check repeating events (runs here)</button>
 
       <div class="section-hdr">Storage</div>
@@ -6237,6 +6247,7 @@ function storageClassify(key){
     'pal_standalone_vault':        K('Launcher','UI pref','standalone-mode flag','Owned by the launcher: never touched'),
     'gat_storage_limit':           K('Gigs & Trips','UI pref','measured browser storage limit','Keep (tiny); re-measure any time'),
     'gat_storage_warned':          K('Gigs & Trips','UI pref','day the storage warning last showed','Keep (tiny)'),
+    'gat_series_refreshed':        K('Gigs & Trips','UI pref','day Google-managed series were last refreshed','Keep (tiny)'),
     'gym_pal_xapp':                K('Gym Tracker','Foreign','cross-app hand-off','Not this app\'s: never touched'),
     'fn_tracker_v3':               K('Fortnight Tracker','Foreign','legacy','Not this app\'s: never touched'),
     'fn_tracker_v4':               K('Fortnight Tracker','Foreign','legacy','Not this app\'s: never touched'),
@@ -8378,7 +8389,7 @@ async function gcalScanRecurring(opts){
     bytesRemoved:imp.reduce((n,r)=>n + r.locals.filter(gcalIsPlainGig).reduce((m,g)=>m + sz(g), 0), 0),
     bytesAdded:imp.reduce((n,r)=>n + sz(gcalSeriesFromMaster(r.ev, r.parsed.rec, r.startDate, r.startTime)), 0)
   };
-  return { rows:rows, overrides:overrides.length, cancelled:cancelled.length, checks:checks, scanned:events.length, plan:plan };
+  return { rows:rows, overrides:overrides.length, cancelled:cancelled.length, overrideEvents:overrides, cancelledEvents:cancelled, checks:checks, scanned:events.length, plan:plan, at:Date.now() };
 }
 function gcalScanReportText(r){
   const kb = n => (n / 1024).toFixed(0) + ' KB';
@@ -8393,9 +8404,12 @@ function gcalScanReportText(r){
   L.push('  Series it would create: ' + p.series + ' (' + p.withImports + ' replacing imported gigs, ' + p.activeOnly + ' still-running series not imported yet)');
   L.push('  Imported gigs replaced: ' + p.replaced + ' · kept as changed occurrences: ' + p.keptAsChanged + ' · Google-changed occurrences recorded as exceptions: ' + p.overridesToExceptions + ' · cancelled dates recorded: ' + p.cancelledDates);
   L.push('  Local storage: −' + kb(p.bytesRemoved) + ' removed, +' + kb(p.bytesAdded) + ' added = net ' + (p.bytesAdded - p.bytesRemoved <= 0 ? '−' : '+') + kb(Math.abs(p.bytesAdded - p.bytesRemoved)));
-  const withLocals = r.rows.filter(x=>x.locals.length).sort((a,b)=>b.locals.length - a.locals.length);
+  const isTidy = x => x.parsed.ok && x.locals.length === 1 && !x.verify.idBad.length && !x.verify.notEngine.length;
+  const withLocals = r.rows.filter(x=>x.locals.length && !isTidy(x)).sort((a,b)=>b.locals.length - a.locals.length);
+  const tidy = r.rows.filter(x=>x.locals.length && isTidy(x));
+  if (tidy.length){ L.push(''); L.push('ONE IMPORTED GIG EACH, ALL CLEAN (' + tidy.length + '): id and date match on every one — ' + tidy.slice(0, 6).map(x=>x.title).join('; ') + (tidy.length > 6 ? '; …and ' + (tidy.length - 6) + ' more' : '')); }
   if (withLocals.length){
-    L.push(''); L.push('SERIES ALREADY IMPORTED HERE (' + withLocals.length + ')');
+    L.push(''); L.push('SERIES WITH SEVERAL IMPORTED GIGS, OR ANYTHING TO LOOK AT (' + withLocals.length + ')');
     withLocals.forEach(x=>{
       const v = x.verify;
       L.push((x.parsed.ok ? '✅ ' : '⚠️ ') + x.title + ' — ' + (x.parsed.ok ? recurDescribe(x.parsed.rec, x.startDate) : 'NOT supported: ' + x.parsed.reason) + (x.status === 'ended' ? ' [ended]' : ''));
@@ -8445,6 +8459,209 @@ async function openGcalScan(){
     </div>`);
 }
 // ==GIG-115 END==
+
+
+// ==GIG-117 BEGIN==
+// GIG-117 — full history in GigsAndTrips.md. Bring Google's recurring events in as SERIES (one record each)
+// and collapse the per-occurrence gigs that earlier imports created. Every change here is local + Supabase:
+// nothing in this block ever writes to or deletes from Google Calendar.
+// A series made this way is GOOGLE-MANAGED (importedFrom 'gcal' + the Google series id): Google is where it is
+// edited, and it is refreshed from Google (daily, and by the button). Series made inside the app are untouched.
+function recurIsGoogleManaged(g){ return !!(g && g.recurrence && !g.recurrenceOf && g.importedFrom === 'gcal' && g.calendarEventId); }
+function gcalWallOf(ev, tz){
+  if (!ev) return null;
+  if (ev.dateTime){ const w = recurUtcMsToWall(new Date(ev.dateTime).getTime(), tz); return { date:w.date, time:w.time }; }
+  return ev.date ? { date:ev.date, time:'' } : null;
+}
+// the date an instance id stands for (its ORIGINAL slot): "…_20261017T060000Z" or "…_20261017"
+function gcalInstanceOriginalDate(suffix, tz){
+  if (/^\d{8}$/.test(suffix)) return suffix.slice(0,4) + '-' + suffix.slice(4,6) + '-' + suffix.slice(6,8);
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(suffix);
+  return m ? recurUtcMsToWall(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]), tz).date : null;
+}
+// May a conversion run? Only if what this app computes agrees with what Google actually did.
+function gcalScanVerdict(res){
+  const why = [];
+  const real = res.checks.filter(c=>!c.error && c.instances > 0);
+  if (!real.length) why.push('no live check could compare real Google instances');
+  res.checks.forEach(c=>{
+    if (c.error) why.push(c.title + ': live check failed (' + c.error + ')');
+    else if (c.instances > 0 && (c.idBad > 0 || c.onlyGoogle.length || c.onlyMine.length)) why.push(c.title + ': live check differs from Google');
+    else if (c.instances === 0 && c.onlyMine.length) why.push(c.title + ': Google returned no instances for a running series');
+  });
+  res.rows.filter(r=>r.status !== 'unsupported' && (r.locals.length || r.status === 'active')).forEach(r=>{
+    if (r.verify.idBad.length > r.overrides) why.push(r.title + ': ' + r.verify.idBad.length + ' imported ids differ but only ' + r.overrides + ' occurrence(s) were changed in Google');
+    if (r.verify.notEngine.length > r.overrides) why.push(r.title + ': ' + r.verify.notEngine.length + ' imported dates are not in this app\'s engine but only ' + r.overrides + ' occurrence(s) were changed in Google');
+  });
+  if (!res.plan.series) why.push('nothing to convert');
+  return { ok:!why.length, why:why };
+}
+// Applies the plan to the local data in ONE save (so it is all-or-nothing locally), then pushes the changed records
+// to Supabase. Idempotent: running it again finds nothing left to do.
+function gcalApplySeriesFromGoogle(res){
+  const d = getData(), now = new Date().toISOString();
+  const stats = { created:0, updated:0, exceptions:0, removed:0, keptAsExceptions:0, skipped:0 };
+  const changed = [];
+  const findAny = id => d.events.find(e=>e.id === id);
+  const live = fn => d.events.filter(e=>e.type === 'gig' && !e._deleted && fn(e));
+  const put = rec => { const i = d.events.findIndex(e=>e.id === rec.id); if (i >= 0) d.events[i] = rec; else d.events.push(rec); changed.push(rec); };
+  const tomb = g => { g._deleted = true; g.updatedAt = now; changed.push(g); };
+  const pick = x => JSON.stringify([x.name, x.date, x.time, x.venue, x.notes, x.recurrence, x.gcalEtag]);
+
+  res.rows.filter(r=>r.parsed.ok).forEach(r=>{
+    let ser = live(e=>e.recurrence && !e.recurrenceOf && e.calendarEventId === r.id)[0];
+    // loose per-occurrence gigs only: anything already linked to a series (recurrenceOf) was handled on an earlier run
+    const locals = live(e=>e.calendarEventId && !e.recurrenceOf && String(e.calendarEventId).indexOf(r.id + '_') === 0);
+    const wanted = !!ser || locals.length > 0 || r.status === 'active';
+    if (!wanted) return;
+    if (ser && ser.importedFrom !== 'gcal'){ stats.skipped++; return; }          // an app-made series is never overwritten
+    if (!ser && findAny('gcal_' + r.id)){ stats.skipped++; return; }               // a deleted series is not resurrected
+    const tz = r.tz, serId = ser ? ser.id : 'gcal_' + r.id;
+    const exd = new Set((r.parsed.rec.exdates || []).concat(ser ? (ser.recurrence.exdates || []) : []));
+    (res.cancelledEvents || []).filter(o=>o.recurringEventId === r.id).forEach(o=>{ const w = gcalWallOf(o.originalStartTime || o.start, tz); if (w) exd.add(w.date); });
+
+    // exceptions: occurrences changed in Google
+    const ovs = (res.overrideEvents || []).filter(o=>o.recurringEventId === r.id);
+    const ovIds = new Set(ovs.map(o=>o.id));
+    const keepers = new Set(locals.filter(g=>ovIds.has(g.calendarEventId) && !gcalIsPlainGig(g)).map(g=>g.calendarEventId));
+    ovs.forEach(o=>{
+      const ow = gcalWallOf(o.originalStartTime, tz), nw = gcalWallOf(o.start, tz); if (!ow || !nw) return;
+      exd.add(ow.date);
+      if (keepers.has(o.id)) return;                                               // a gig you edited already stands for it
+      if (findAny('gcal_' + o.id)) return;                                         // already there (or deliberately deleted)
+      put({ id:'gcal_' + o.id, type:'gig', gigType:'other', name:o.summary || r.title, date:nw.date, time:nw.time, venue:o.location || '', notes:gcalParseNotes(o.description || ''),
+            ticketUrl:'', ticketPrice:0, tripId:null, eventClass:'standard', importedFrom:'gcal', done:false, missed:false, recurrenceOf:serId, recurrenceOriginalDate:ow.date,
+            calendarEventId:o.id, calendarHtmlLink:o.htmlLink || '', gcalEtag:o.etag || '', createdAt:now, updatedAt:now, addedBy:_currentUserKey });
+      stats.exceptions++;
+    });
+    // the gigs earlier imports made, one per occurrence
+    locals.forEach(g=>{
+      const isOv = ovIds.has(g.calendarEventId);
+      if (gcalIsPlainGig(g)){ tomb(g); stats.removed++; return; }
+      const o = isOv ? ovs.find(x=>x.id === g.calendarEventId) : null;
+      const od = o ? (gcalWallOf(o.originalStartTime, tz) || {}).date : gcalInstanceOriginalDate(String(g.calendarEventId).slice(r.id.length + 1), tz);
+      if (od) exd.add(od);
+      put(Object.assign({}, g, { recurrenceOf:serId, recurrenceOriginalDate:od || g.date, updatedAt:now }));   // edited/reviewed/reclassified: kept as a changed occurrence
+      stats.keptAsExceptions++;
+    });
+    // the series itself
+    const rec = Object.assign({}, r.parsed.rec, { exdates:[...exd].sort() });
+    if (!ser){ ser = gcalSeriesFromMaster(r.ev, rec, r.startDate, r.startTime); put(ser); stats.created++; }
+    else {
+      const next = Object.assign({}, ser, { name:r.title, date:r.startDate, time:r.startTime, venue:r.ev.location || '', notes:gcalParseNotes(r.ev.description || ''), recurrence:rec,
+                                            gcalEtag:r.ev.etag || ser.gcalEtag, calendarHtmlLink:r.ev.htmlLink || ser.calendarHtmlLink });
+      if (pick(next) !== pick(ser)){ next.updatedAt = now; put(next); stats.updated++; }
+    }
+  });
+  if (!changed.length) return { ok:true, stats:stats, changed:0 };
+  if (saveData(d) === false) return { ok:false, reason:'could not save locally (storage full?) — nothing was changed', stats:stats, changed:0 };
+  changed.forEach(rec=>{ try { pushEvent(rec); } catch(e){} });
+  return { ok:true, stats:stats, changed:changed.length };
+}
+// A Google-managed series whose series id is no longer among Google's: ask Google directly; only if it says gone, list it for a decision.
+async function gcalDetectDeletedSeries(res){
+  const present = new Set(res.rows.map(r=>r.id));
+  const missing = getData().events.filter(e=>e.type === 'gig' && !e._deleted && recurIsGoogleManaged(e) && !present.has(e.calendarEventId)).slice(0, 5);
+  let found = 0;
+  for (const g of missing){
+    let gone = false;
+    try { const G = await PalGCal.getEvent(GCAL_CALENDAR_ID, g.calendarEventId); if (G && G.status === 'cancelled') gone = true; }
+    catch(e){ if (e && (e.status === 404 || e.status === 410)) gone = true; else break; }
+    if (gone && gcalConfAdd({ key:gcalConfKey('deleted-in-google','gig',{id:g.id}), reason:'deleted-in-google', kind:'gig', id:g.id, tripId:null, dayId:null, itemId:null,
+                              calendarEventId:g.calendarEventId, name:g.name, date:g.date, detectedAt:new Date().toISOString() })) found++;
+  }
+  return found;
+}
+const GCAL_SERIES_REFRESH_KEY = 'gat_series_refreshed';
+// Daily and silent. Does nothing until a conversion has been done once (no Google-managed series = no change of behaviour).
+async function gcalAutoRefreshSeries(force){
+  try {
+    if (!PalGCal.hasToken() || typeof PalGCal.listInstances !== 'function') return null;
+    if (!getData().events.some(e=>!e._deleted && recurIsGoogleManaged(e))) return null;
+    const day = localDateStr(new Date());
+    if (!force && localStorage.getItem(GCAL_SERIES_REFRESH_KEY) === day) return null;
+    const res = await gcalScanRecurring({ skipChecks:true });
+    const out = gcalApplySeriesFromGoogle(res);
+    if (out.ok){
+      try { localStorage.setItem(GCAL_SERIES_REFRESH_KEY, day); } catch(e){}
+      const dels = await gcalDetectDeletedSeries(res);
+      const st = out.stats;
+      if (out.changed || dels){
+        syncLog('Series refreshed from Google: ' + st.created + ' new, ' + st.updated + ' updated, ' + st.exceptions + ' changed occurrence(s), ' + st.removed + ' old gig(s) folded in' + (dels ? ', ' + dels + ' deleted in Google (see Sync & Backup)' : ''), 'ok');
+        render();
+      }
+    } else syncLog('Series refresh: ' + out.reason, 'err');
+    return out;
+  } catch(e){ try { syncLog('Series refresh failed: ' + PalGCal.errorHint(e), 'err'); } catch(_){} return null; }
+}
+
+async function gcalRefreshSeriesNow(){
+  showToast('Refreshing from Google…');
+  const out = await gcalAutoRefreshSeries(true);
+  if (!out) showToast('Could not refresh — sign in to Google first');
+  else if (!out.ok) showToast(out.reason);
+  else showToast(out.changed ? 'Refreshed ✓ (' + out.changed + ' change' + (out.changed === 1 ? '' : 's') + ')' : 'Already up to date ✓');
+  showDataManager();
+}
+// ── the opt-in conversion screen ──
+let _gcalConvert = null;
+function gcalConvertText(res, verdict){
+  const p = res.plan, kb = n => (n / 1024).toFixed(0) + ' KB';
+  const L = [];
+  L.push(verdict.ok ? '✅ CHECKS PASSED — what this app computes agrees with what Google did' : '⛔ NOT SAFE YET — conversion is switched off');
+  verdict.why.forEach(w=>L.push('   • ' + w));
+  L.push('');
+  L.push('WHAT WOULD CHANGE (here only)');
+  L.push('  New series: ' + p.series + ' (' + p.withImports + ' replace imported gigs, ' + p.activeOnly + ' are running series not imported before)');
+  L.push('  Imported per-occurrence gigs folded into them: ' + p.replaced + ' · kept as changed occurrences (you edited them): ' + p.keptAsChanged);
+  L.push('  Occurrences changed in Google recorded as exceptions: ' + p.overridesToExceptions + ' · cancelled dates recorded: ' + p.cancelledDates);
+  L.push('  Local storage: net ' + (p.bytesAdded - p.bytesRemoved <= 0 ? '−' : '+') + kb(Math.abs(p.bytesAdded - p.bytesRemoved)));
+  L.push('');
+  L.push('WHAT WILL NOT HAPPEN');
+  L.push('  • Nothing is written to or deleted from Google Calendar.');
+  L.push('  • Series made this way are managed in Google: change them there. They refresh from Google daily (and from this screen).');
+  L.push('  • Series you made inside this app are never touched.');
+  return L.join('\n');
+}
+async function openSeriesConvert(){
+  if (typeof PalGCal.listInstances !== 'function'){ showToast('Reload the page: pal-gcal.js v3 is needed'); return; }
+  if (!PalGCal.hasToken()){ showToast('Sign in to Google first'); return; }
+  showToast('Checking Google Calendar…');
+  let res, verdict, text;
+  try { res = await gcalScanRecurring(); verdict = gcalScanVerdict(res); text = gcalConvertText(res, verdict); _gcalConvert = { res:res, at:Date.now(), backedUp:false, verdict:verdict }; }
+  catch(e){ text = 'Check failed: ' + PalGCal.errorHint(e); verdict = { ok:false }; _gcalConvert = null; }
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">🔁 Fold imported repeats into series</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre style="background:var(--surf);border-radius:var(--rsm);padding:10px;font-size:11px;line-height:1.45;color:var(--ink2);white-space:pre-wrap;word-break:break-word;max-height:48vh;overflow-y:auto;margin-bottom:12px">${esc(text)}</pre>
+      ${verdict.ok ? `<button class="btn btn-ghost" style="width:100%;margin-bottom:8px" onclick="gcalConvertBackup()">1 · Download a backup first</button>
+      <button class="btn btn-pri" id="cvGo" style="width:100%;margin-bottom:8px" disabled onclick="gcalConvertNow()">2 · Convert now</button>` : ''}
+      <button class="btn btn-ghost" style="width:100%" onclick="showDataManager()">← Back</button>
+    </div>`);
+}
+function gcalConvertBackup(){
+  exportJSON();
+  if (_gcalConvert) _gcalConvert.backedUp = true;
+  const b = document.getElementById('cvGo'); if (b) b.disabled = false;
+}
+async function gcalConvertNow(){
+  const c = _gcalConvert;
+  if (!c || !c.backedUp){ showToast('Download the backup first'); return; }
+  if (!c.verdict.ok){ showToast('Checks did not pass'); return; }
+  if (Date.now() - c.at > 15 * 60 * 1000){ showToast('That check is out of date — run it again'); return; }
+  if (!confirm('Convert now? ' + c.res.plan.replaced + ' imported gigs are folded into ' + c.res.plan.series + ' series, in Gigs & Trips only. Google Calendar is not changed.')) return;
+  const out = gcalApplySeriesFromGoogle(c.res);
+  _gcalConvert = null;
+  if (!out.ok){ showToast(out.reason); return; }
+  try { localStorage.setItem(GCAL_SERIES_REFRESH_KEY, localDateStr(new Date())); } catch(e){}
+  const st = out.stats;
+  syncLog('Series conversion: ' + st.created + ' series created, ' + st.removed + ' imported gigs folded in, ' + st.exceptions + ' exceptions, ' + st.keptAsExceptions + ' kept as changed occurrences', 'ok');
+  closeModal(); render();
+  showToast('Done: ' + st.created + ' series, ' + st.removed + ' gigs folded in ✓');
+}
+// ==GIG-117 END==
 
 // ==GIG-102 BEGIN==
 // GIG-102/103/104/105 (+100 round-trip) — full history in GigsAndTrips.md.
@@ -9490,6 +9707,7 @@ function initGCalSync(){
       if (signedIn){
         gcalMirrorPull();
         setTimeout(function(){ gcalQueueDrain(false); }, 1500); // GIG-101: send anything that was waiting
+        setTimeout(function(){ gcalAutoRefreshSeries(false); }, 4000); // GIG-117: daily, only once a conversion has been done
       }
     },
     onTokenRefreshed: function(){
