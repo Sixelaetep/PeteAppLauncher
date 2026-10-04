@@ -6,6 +6,34 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.101 (STORAGE-001/002/004, CLASS-001, RECUR-TEST-001/002/003) — Storage completion, Needs Review queue, repeat self-check
+
+A batch that follows the post-v7.100 review.
+
+**STORAGE-001 — the duplicate dataset is retired.** `saveData()` no longer writes `gat_v1_clean`; one copy of the data is kept locally. Why it is safe: the launcher already read `gat_v1_clean` *with a fallback to `gat_v1`* and filtered tombstones itself, so the second copy only doubled local storage (it existed for the launcher card, not for quota recovery). A stale copy left by an older version is removed once at startup, which also stops an older cached launcher reading frozen data. The quota-recovery path from v7.94 is kept and still frees a stale duplicate if one is found. The optional launcher release (v10.99) reads `gat_v1` directly; **the app is safe with either launcher version**, so upload order does not matter.
+
+**STORAGE-002 — every key has a category and a retention rule.** The Storage report now ends each key with its rule (for example "Keep. Never auto-deleted", "Removed only when sent or discarded", "Not this app's: never touched"). Known keys are all classified; anything unrecognised is reported as Unclassified. There are no "Migration" keys at present. No cleanup was added beyond the duplicate and leftover test keys, because there is nothing else of this app's that is large or stale; retention work (STORAGE-003) should wait for a real report.
+
+**STORAGE-004 — measure the real limit on the device.** The Storage report has a new opt-in **"Measure real limit"** button. It confirms, then writes temporary 64K-character chunks until the browser refuses, removes every chunk, checks storage is still writable, and appends the measured limit to the report. It is the only storage feature that writes. Leftover chunks (for example if the page was killed mid-test) are removed at startup.
+
+**CLASS-001 — Needs Review queue.** A gig needs review when its class is a guess: anything imported from Google, or with no class chosen and an ambiguous type (other, gym, pets, or travel/stay/food/key stop/attraction not on a trip). It is derived each time; the only thing stored is `classReviewed:true`. **Sync & Backup → "Review classes (N)"** (and a link on the Upcoming hidden-count line) opens a list, upcoming first, with one-tap Gig / Appointment / Standard / ✓ Keep per row, 30 at a time, plus "Keep all N as they are". Saving a gig with an explicit class also counts as reviewing it. Keep does not invent a stored class.
+
+**RECUR-TEST-001 — the repeat engine can check itself on your device.** **Sync & Backup → "Check repeating events"** runs 22 cases in memory in the browser you are using (so Safari and the home-screen app are covered, not just my Node runs): daily every day and every 2 days across the UK clock changes, weekly one/several days and every 2 weeks, monthly by date / first Monday / last Friday, the 31st and 30th skipping short months, yearly anniversary, 29 Feb and 2100, leap and non-leap February, COUNT, inclusive UNTIL, a cancelled or changed date being skipped, COUNT not reduced by a cancelled date, window slicing, and the safety cap. It shows ✅/❌ with expected vs actual and a Copy button, and never reads or writes your data.
+
+**RECUR-003 — time zone on the series.** `recurrence.timeZone` (default `Europe/London`) is stored on the series, never on occurrences, and preserved when a series is edited. The engine itself works in wall-clock dates, so a 09:00 event stays 09:00 across BST/GMT; the zone is what the Google projection will use. Series made in v7.100 have none stored and default to Europe/London when read (no migration write).
+
+**RECUR-002 — one engine everywhere.** There is exactly one expansion implementation (`recurOccurrences`, used through `recurExpandAll`). Agenda, Upcoming, Now/Next, search and the class filter already used it. **New:** clash warnings (a new gig on a date, the gig form's date check, occurrence cards) now include occurrences of repeating events, without a series clashing with itself or with a cancelled date. Known places that do not show occurrences by design or not yet: Past, Reviews, completion prompts, the launcher card (series records are skipped there; changed occurrences count), trip link pickers and venue statistics (the series record counts once).
+
+**Not done:** STORAGE-003 broader retention (nothing justifies it yet), Google recurrence (waits on the testing and unified-engine items above, per the review), collapsing already-imported recurring events.
+
+Files changed: `GigsAndTrips.html`, `GigsAndTrips.md`; optional launcher `index.html` v10.99. No `pal-gcal.js` or schema change.
+
+**Tested — in Node:** one copy written, tombstones kept in the working copy, startup cleanup removes only the stale duplicate and test keys (other keys untouched), a simulated launcher read works with and without a stale `_clean`, a genuinely full store still degrades safely; every known key has a category and retention rule and none are Unclassified; the report prints the rules; the self-test against a quota-limited store (hits the limit, removes every chunk, existing data untouched, stays writable, reports honestly when the ceiling is reached first, cleans up even when a write throws something unexpected); the repeat self-check passes all cases **and is proven able to fail** (a deliberately broken engine is caught) and does not touch storage; time zone default / preserved / legacy; clash detection for a new gig, the series itself, an occurrence card, a non-Friday and a cancelled date; exactly one expansion function exists and no RRULE generation is duplicated; review rules for every type and flag, ordering, Keep vs choose, bulk keep leaves other records alone, paging and empty state; entry points present. Launcher v10.99 card logic tested separately (reads `gat_v1`, drops tombstones, skips series records, counts changed occurrences, shows "Nothing upcoming" for series-only, ignores a lingering `_clean`). All earlier suites pass; scripts pass `node --check`.
+
+**Not tested:** none of this has run in a browser. In particular the real storage limit (that is what the new button measures), whether Safari/the home-screen app behave differently, how the review list and the two new buttons look on a phone, and the launcher card on screen.
+
+---
+
 ## v7.100 (GIG-106, GIG-107) — Repeating events, stage 1: in the app
 
 First stage of recurrence. **Repeating events now work inside Gigs & Trips; they are not sent to Google Calendar yet** (stage 2). This is deliberately not the GIG-048 design that was removed in GIG-060.

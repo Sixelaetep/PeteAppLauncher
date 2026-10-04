@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.100</title>
+<title>Gigs &amp; Trips v7.101</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -548,7 +548,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.100</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.101</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -609,7 +609,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.100"></script>
+<script src="pal-shared.js?v=7.101"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=2"></script>
@@ -928,6 +928,73 @@ function eventClassOfGig(g){
   return (g && EVENT_CLASSES.some(c=>c.key===g.eventClass)) ? g.eventClass : defaultEventClassForGig(g);
 }
 
+
+// ==CLASS-001 BEGIN==
+// CLASS-001 — full history in GigsAndTrips.md. A gig "needs review" when its class is a guess:
+// anything imported from Google (always starts as Standard), or with no class chosen and a type
+// whose default is ambiguous (other, gym, pets, a travel/stay/food/key-stop/attraction not on a trip).
+// Derived each time; the only thing stored is classReviewed:true once you have looked at it.
+function gigNeedsClassReview(g){
+  if (!g || g.type !== 'gig' || g._deleted || g.classReviewed) return false;
+  if (g.importedFrom === 'gcal') return true;
+  if (g.eventClass) return false;
+  const ty = g.gigType;
+  if (!ty || ty === 'other' || ty === 'gym' || ty === 'pets') return true;
+  if (!g.tripId && TRIPPY_TYPES.indexOf(ty) >= 0) return true;
+  return false;
+}
+function classReviewList(){
+  const today = localDateStr(new Date());
+  const all = getData().events.filter(gigNeedsClassReview);
+  const up = all.filter(g=>(g.date||'') >= today).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const past = all.filter(g=>(g.date||'') < today).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return up.concat(past);
+}
+let _crLimit = 30;
+function classReviewRowHtml(g){
+  const ti = gigTypeInfo(g.gigType || 'music');
+  const cur = (EVENT_CLASSES.find(c=>c.key === eventClassOfGig(g)) || {}).label || '';
+  const btn = (key, label) => '<button class="btn btn-ghost" onclick="classReviewSet(\'' + esc(g.id) + '\',\'' + key + '\')">' + label + '</button>';
+  return '<div class="gcal-conf" id="cr-' + esc(g.id) + '"><div class="gcal-conf-title">' + ti.icon + ' ' + esc(g.name || '(no title)') + (g.recurrence ? ' 🔁' : '') + ' <span style="font-weight:400;color:var(--ink3)">· ' + esc(g.date || '') + '</span></div>' +
+    '<div class="gcal-conf-diff">Now: ' + esc(cur) + (g.importedFrom === 'gcal' ? ' · from Google' : '') + '</div>' +
+    '<div class="gcal-conf-btns">' + btn('gig_event','Gig / Event') + btn('appointment','Appointment') + btn('standard','Standard') + btn('keep','✓ Keep') + '</div></div>';
+}
+function openClassReview(limit){
+  if (limit) _crLimit = limit; else _crLimit = 30;
+  const list = classReviewList();
+  const shown = list.slice(0, _crLimit);
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">🏷 Review classes (<span id="crCount">${list.length}</span>)</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:10px">The class decides where an event shows (Important, Gigs, Appts, Standard). Pick one, or ✓ Keep to accept what it is now. Upcoming ones come first.</div>
+      ${list.length ? `<button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="classReviewConfirmAll()">✓ Keep all ${list.length} as they are</button>` : '<div class="empty" style="padding:20px 0">Nothing needs review ✓</div>'}
+      <div id="crRows">${shown.map(classReviewRowHtml).join('')}</div>
+      ${list.length > shown.length ? `<button class="btn btn-ghost" style="width:100%;margin-top:6px" onclick="openClassReview(${_crLimit + 30})">Show more (${list.length - shown.length} left)</button>` : ''}
+      <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="showDataManager()">← Back</button>
+    </div>`);
+}
+function classReviewSet(id, choice){
+  const g = getEvent(id); if (!g) return;
+  const f = Object.assign({}, g, { classReviewed:true, updatedAt:new Date().toISOString() });
+  if (choice !== 'keep') f.eventClass = choice;
+  saveEvent(f);
+  const row = document.getElementById('cr-' + id); if (row) row.remove();
+  const c = document.getElementById('crCount'); if (c) c.textContent = String(Math.max(0, (parseInt(c.textContent,10) || 1) - 1));
+  render();
+}
+function classReviewConfirmAll(){
+  const list = classReviewList();
+  if (!list.length) return;
+  if (!confirm('Keep all ' + list.length + ' as they are? Each is marked reviewed with its current class.')) return;
+  const now = new Date().toISOString();
+  list.forEach(g=>saveEvent(Object.assign({}, g, { classReviewed:true, updatedAt:now })));
+  showToast(list.length + ' marked reviewed ✓');
+  render(); openClassReview();
+}
+// ==CLASS-001 END==
+
 // Calendar filter — a tiny UI preference, never event data.
 const CAL_FILTERS = [
   {key:'all',       label:'All'},
@@ -979,7 +1046,9 @@ function agendaFilterBar(active){
 // date through recurrence.exdates (so does cancelling one). Dates are plain calendar
 // dates (YYYY-MM-DD) with a wall-clock time, so clock changes never move an occurrence.
 // Stage 1 does NOT send series to Google Calendar yet.
+const RECUR_DEFAULT_TZ = 'Europe/London';
 const RECUR_DAYS = ['SU','MO','TU','WE','TH','FR','SA'];
+function recurTimeZone(rec){ return (rec && rec.timeZone) || RECUR_DEFAULT_TZ; }
 const RECUR_DAY_NAMES = {SU:'Sunday',MO:'Monday',TU:'Tuesday',WE:'Wednesday',TH:'Thursday',FR:'Friday',SA:'Saturday'};
 const RECUR_UPCOMING_DAYS = 120;
 const RECUR_MAX_OCCURRENCES = 400;
@@ -993,6 +1062,9 @@ function recurValidDate(str){ return /^\d{4}-\d{2}-\d{2}$/.test(String(str||''))
 function recurNormalise(rec, startStr){
   if (!rec || ['DAILY','WEEKLY','MONTHLY','YEARLY'].indexOf(rec.freq) < 0) return null;
   const out = { freq:rec.freq, interval:Math.min(99, Math.max(1, parseInt(rec.interval,10) || 1)) };
+  // RECUR-003: the zone belongs to the series, never to an occurrence. Dates/times are wall-clock,
+  // so 09:00 stays 09:00 across BST/GMT; the zone is what Google needs when this is projected.
+  out.timeZone = (typeof rec.timeZone === 'string' && rec.timeZone) ? rec.timeZone : RECUR_DEFAULT_TZ;
   const byday = Array.isArray(rec.byday) ? rec.byday : [];
   if (rec.freq === 'WEEKLY'){
     const codes = [...new Set(byday.map(c=>String(c).toUpperCase()).filter(c=>RECUR_DAYS.indexOf(c) >= 0))];
@@ -1102,6 +1174,87 @@ function recurExpandAll(fromStr, toStr, cap){
   recurMasters().forEach(m=>{ recurOccurrences(m, fromStr, toStr, cap).forEach(ds=>all.push(recurOccurrenceGig(m, ds))); });
   all.sort((a,b)=> a.date !== b.date ? a.date.localeCompare(b.date) : String(a.time||'').localeCompare(String(b.time||'')));
   return all.slice(0, cap);
+}
+
+
+// RECUR-TEST-001 — a built-in check of the repeat engine that runs IN THIS BROWSER (Safari / the
+// home-screen app included), because that is where date handling can differ from my own testing.
+// Pure: builds scratch series in memory, never reads or writes your data.
+function recurSelfCheck(){
+  const mk = (date, rec) => ({ date:date, time:'09:00', recurrence:rec });
+  const cases = [
+    // Daily
+    ['Daily: every day (across the UK clock change on 25 Oct 2026)', mk('2026-10-23',{freq:'DAILY',interval:1}), '2026-10-23','2026-10-27', ['2026-10-23','2026-10-24','2026-10-25','2026-10-26','2026-10-27']],
+    ['Daily: every 2 days', mk('2026-11-01',{freq:'DAILY',interval:2}), '2026-11-01','2026-11-09', ['2026-11-01','2026-11-03','2026-11-05','2026-11-07','2026-11-09']],
+    // Weekly
+    ['Weekly: one day', mk('2026-11-20',{freq:'WEEKLY',interval:1,byday:['FR']}), '2026-11-20','2026-12-12', ['2026-11-20','2026-11-27','2026-12-04','2026-12-11']],
+    ['Weekly: several days', mk('2026-11-16',{freq:'WEEKLY',interval:1,byday:['MO','WE','FR']}), '2026-11-16','2026-11-22', ['2026-11-16','2026-11-18','2026-11-20']],
+    ['Weekly: every 2 weeks, Sun+Mon (weeks start Monday)', mk('2026-11-01',{freq:'WEEKLY',interval:2,byday:['SU','MO']}), '2026-10-01','2026-12-01', ['2026-11-01','2026-11-09','2026-11-15','2026-11-23','2026-11-29']],
+    ['Weekly: across the spring clock change (28 Mar 2027)', mk('2027-03-21',{freq:'WEEKLY',interval:1,byday:['SU']}), '2027-03-21','2027-04-04', ['2027-03-21','2027-03-28','2027-04-04']],
+    // Monthly
+    ['Monthly: day of month', mk('2026-01-15',{freq:'MONTHLY',interval:1,byday:[]}), '2026-01-01','2026-04-30', ['2026-01-15','2026-02-15','2026-03-15','2026-04-15']],
+    ['Monthly: first Monday', mk('2026-11-02',{freq:'MONTHLY',interval:1,byday:['1MO']}), '2026-11-01','2027-02-28', ['2026-11-02','2026-12-07','2027-01-04','2027-02-01']],
+    ['Monthly: last Friday', mk('2026-11-27',{freq:'MONTHLY',interval:1,byday:['-1FR']}), '2026-11-01','2027-02-28', ['2026-11-27','2026-12-25','2027-01-29','2027-02-26']],
+    ['Monthly: the 31st skips short months', mk('2027-01-31',{freq:'MONTHLY',interval:1,byday:[]}), '2027-01-01','2027-06-30', ['2027-01-31','2027-03-31','2027-05-31']],
+    ['Monthly: the 30th skips February', mk('2026-12-30',{freq:'MONTHLY',interval:1,byday:[]}), '2026-12-01','2027-04-30', ['2026-12-30','2027-01-30','2027-03-30','2027-04-30']],
+    // Yearly
+    ['Yearly: anniversary', mk('2026-06-14',{freq:'YEARLY',interval:1}), '2026-01-01','2029-12-31', ['2026-06-14','2027-06-14','2028-06-14','2029-06-14']],
+    ['Yearly: 29 Feb birthday only in leap years', mk('2024-02-29',{freq:'YEARLY',interval:1}), '2024-01-01','2033-12-31', ['2024-02-29','2028-02-29','2032-02-29']],
+    ['Yearly: 29 Feb skips 2100 (not a leap year)', mk('2096-02-29',{freq:'YEARLY',interval:1}), '2096-01-01','2105-12-31', ['2096-02-29','2104-02-29']],
+    // Leap year
+    ['Leap year: daily through 29 Feb 2028', mk('2028-02-27',{freq:'DAILY',interval:1}), '2028-02-27','2028-03-02', ['2028-02-27','2028-02-28','2028-02-29','2028-03-01','2028-03-02']],
+    ['Non-leap year: daily through February 2027', mk('2027-02-27',{freq:'DAILY',interval:1}), '2027-02-27','2027-03-02', ['2027-02-27','2027-02-28','2027-03-01','2027-03-02']],
+    // Limits
+    ['COUNT: 3 times', mk('2026-11-20',{freq:'DAILY',interval:1,count:3}), '2026-01-01','2027-12-31', ['2026-11-20','2026-11-21','2026-11-22']],
+    ['UNTIL is inclusive', mk('2026-11-20',{freq:'WEEKLY',interval:1,byday:['FR'],until:'2026-12-04'}), '2026-01-01','2027-12-31', ['2026-11-20','2026-11-27','2026-12-04']],
+    // Exceptions (the engine side: a cancelled or changed date is skipped)
+    ['Cancelled / changed date is skipped', mk('2026-11-20',{freq:'WEEKLY',interval:1,byday:['FR'],exdates:['2026-11-27']}), '2026-11-20','2026-12-11', ['2026-11-20','2026-12-04','2026-12-11']],
+    ['COUNT is not reduced by a cancelled date', mk('2026-11-20',{freq:'WEEKLY',interval:1,byday:['FR'],count:3,exdates:['2026-11-27']}), '2026-01-01','2027-12-31', ['2026-11-20','2026-12-04']]
+  ];
+  const res = [];
+  cases.forEach(c=>{
+    let got; try { got = recurOccurrences(c[1], c[2], c[3], 500); } catch(e){ got = ['ERROR ' + e]; }
+    res.push({ name:c[0], ok:JSON.stringify(got) === JSON.stringify(c[4]), got:got, want:c[4] });
+  });
+  // Window slicing must equal filtering the full expansion (catches off-by-one at window edges)
+  const rules = [{freq:'DAILY',interval:2},{freq:'WEEKLY',interval:3,byday:['MO','TH','SA']},{freq:'MONTHLY',interval:1,byday:['2WE']},{freq:'MONTHLY',interval:2,byday:[]},{freq:'YEARLY',interval:1}];
+  let sliceOk = true, sliceWhy = '';
+  rules.forEach(r=>{
+    const m = mk('2026-03-05', r), full = recurOccurrences(m,'2026-01-01','2029-12-31',5000);
+    [['2026-09-10','2026-10-20'],['2027-05-01','2027-05-31'],['2028-12-25','2029-03-01']].forEach(w=>{
+      const a = recurOccurrences(m,w[0],w[1],5000), b = full.filter(x=>x>=w[0]&&x<=w[1]);
+      if (JSON.stringify(a) !== JSON.stringify(b)){ sliceOk = false; sliceWhy = r.freq + ' ' + w[0]; }
+    });
+  });
+  res.push({ name:'Window slices agree with the full expansion', ok:sliceOk, got:[sliceWhy], want:[] });
+  const capped = recurOccurrences(mk('2026-01-01',{freq:'DAILY',interval:1}),'2026-01-01','2030-12-31',50).length;
+  res.push({ name:'Cap stops runaway series', ok:capped === 50, got:[String(capped)], want:['50'] });
+  return res;
+}
+function recurSelfCheckText(res){
+  const bad = res.filter(r=>!r.ok);
+  const L = ['REPEATING-EVENT CHECK — ' + (res.length - bad.length) + ' of ' + res.length + ' passed'];
+  L.push('Browser: ' + (typeof navigator !== 'undefined' ? navigator.userAgent : '?'));
+  try { L.push('Time zone here: ' + Intl.DateTimeFormat().resolvedOptions().timeZone + ' (UTC offset now ' + (-new Date().getTimezoneOffset() / 60) + 'h)'); } catch(e){}
+  L.push('');
+  res.forEach(r=>{
+    L.push((r.ok ? '✅ ' : '❌ ') + r.name);
+    if (!r.ok){ L.push('     expected: ' + r.want.join(', ')); L.push('     got:      ' + r.got.join(', ')); }
+  });
+  return L.join('\n');
+}
+function openRecurSelfCheck(){
+  let text; try { text = recurSelfCheckText(recurSelfCheck()); } catch(e){ text = 'Check failed to run: ' + String(e); }
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">✅ Repeating-event check</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Runs entirely in memory on sample series. Nothing you have saved is read or changed.</div>
+      <pre id="recurCheckPre" style="background:var(--surf);border-radius:var(--rsm);padding:10px;font-size:11px;line-height:1.45;color:var(--ink2);white-space:pre-wrap;word-break:break-word;max-height:55vh;overflow-y:auto;margin-bottom:12px">${esc(text)}</pre>
+      <button class="btn btn-pri" style="width:100%;margin-bottom:10px" onclick="(function(){const t=document.getElementById('recurCheckPre').textContent; if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){showToast('Copied ✓');});}else{showToast('Select the text and copy manually');}})()">📋 Copy result</button>
+      <button class="btn btn-ghost" style="width:100%" onclick="showDataManager()">← Back</button>
+    </div>`);
 }
 
 // ── Form: "Repeats" section ──────────────────────────────────────────────
@@ -1714,6 +1867,16 @@ function storageWriteFailed(e){
     try{ showToast('⚠️ Device storage is full — saved to the cloud only. See Sync & Backup → Storage report.'); }catch(_){}
   }
 }
+// Runs once at startup. Removes only things this app itself created and no longer needs:
+// the retired duplicate dataset and any leftover storage self-test chunks.
+function storageStartupCleanup(){
+  try{
+    localStorage.removeItem(SK+'_clean');
+    const stale=[];
+    for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k && k.indexOf('gat_selftest_')===0) stale.push(k); }
+    stale.forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+  }catch(e){}
+}
 function saveData(d){
   const json=JSON.stringify(d);
   let ok=true;
@@ -1730,15 +1893,10 @@ function saveData(d){
     }
     if(!ok) storageWriteFailed(e);
   }
-  if(ok){
-    // Also write a tombstone-free copy under SK+'_clean' for the launcher card.
-    // The launcher reads localStorage directly so it must not see _deleted
-    // events or venues. Best-effort: the launcher falls back to SK.
-    try{
-      const clean={...d,events:(d.events||[]).filter(ev=>!ev._deleted),venues:(d.venues||[]).filter(v=>!v._deleted)};
-      localStorage.setItem(SK+'_clean',JSON.stringify(clean));
-    }catch(e){ /* non-fatal */ }
-  }
+  // v7.101 (STORAGE-001): the second, tombstone-free copy (SK+'_clean') that used to be
+  // written here for the launcher card is retired. The launcher already falls back to SK and
+  // filters tombstones itself, so the copy only doubled local storage. The stale key is
+  // removed at startup (storageStartupCleanup).
   // v5.3 (GT-003): venues used to push as one whole-list row on a 2s
   // debounce after every save. Now each venue mutation pushes (or
   // tombstones) itself immediately — see addVenueFromInput/deleteVenue/
@@ -2820,7 +2978,7 @@ function render(){
   }
   const classHeader = _searchQuery ? '' :
     agendaFilterBar(clsFilter) +
-    ((hiddenByClass>0 && clsFilter!=='all') ? '<div class="agenda-hidden" style="padding:0 2px 8px">' + hiddenByClass + ' hidden by this filter · <a onclick="setCalFilter(\'all\')">Show all</a></div>' : '');
+    ((hiddenByClass>0 && clsFilter!=='all') ? '<div class="agenda-hidden" style="padding:0 2px 8px">' + hiddenByClass + ' hidden by this filter · <a onclick="setCalFilter(\'all\')">Show all</a>' + (classReviewList().length ? ' · <a onclick="openClassReview()">Review classes</a>' : '') + '</div>' : '');
 
   // Update results label
   const lbl=document.getElementById('searchResultsLabel');
@@ -3421,7 +3579,7 @@ function saveGig(){
   g.tripId=document.getElementById('gfTripId')?.value||null;
   // GIG-096: explicit class only when chosen; Auto removes it so the default applies.
   const _cls=document.getElementById('gfEventClass')?.value||'';
-  if(_cls) g.eventClass=_cls; else delete g.eventClass;
+  if(_cls){ g.eventClass=_cls; g.classReviewed=true; } else delete g.eventClass; // choosing a class counts as reviewing it
   g.notes=document.getElementById('gfNotes')?.value.trim()||'';
   // GIG-106: repeat settings. A changed occurrence (recurrenceOf) can't itself repeat.
   if(!g.recurrenceOf){
@@ -3429,6 +3587,7 @@ function saveGig(){
     if(rf.error){ if(err) err.textContent=rf.error; return; }
     if(rf.rec){
       rf.rec.exdates=(g.recurrence&&g.recurrence.exdates)||[];   // keep cancelled / changed dates
+      rf.rec.timeZone=recurTimeZone(g.recurrence);               // RECUR-003: zone stays on the series
       g.recurrence=rf.rec; g.tripId=null;                        // a series can't be part of a trip
     } else delete g.recurrence;
   }
@@ -5635,10 +5794,16 @@ function gigsConflictingTrips(gigDate, gigTripId, d){
 }
 function gigsOnSameDate(gigId, gigDate, d){
   if(!gigDate) return [];
-  return (d.events||[]).filter(e=>
+  const real=(d.events||[]).filter(e=>
     e.type==='gig' && !e._deleted && !e.recurrence &&
     e.id!==gigId && e.date===gigDate && !e.missed
   );
+  // RECUR-002: occurrences of repeating events count too, via the one shared engine. The series being
+  // edited (or the occurrence being shown) is never a clash with itself.
+  const sp=recurSplitId(gigId); const selfSeries=sp?sp.masterId:gigId;
+  const occ=recurMasters().filter(m=>m.id!==selfSeries && recurOccurrences(m,gigDate,gigDate,1).length)
+                          .map(m=>recurOccurrenceGig(m,gigDate));
+  return real.concat(occ);
 }
 function tripsOverlapping(tripId, startDate, endDate, d){
   if(!startDate||!endDate) return [];
@@ -5901,9 +6066,13 @@ function showDataManager(){
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="closeModal();document.getElementById('importFile').click()">📂 Import backup (JSON)</button>
 
       <!-- GIG-088 — full history in GigsAndTrips.md. Read-only. -->
+      ${(()=>{ const n=classReviewList().length; return n ? `<button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openClassReview()">🏷 Review classes (${n})</button>` : ''; })()}
       ${gcalConflictsSectionHtml()}
       ${gcalQueueSectionHtml()}
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openDuplicateTool()">🧹 Find duplicates</button>
+
+      <div class="section-hdr">Checks</div>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openRecurSelfCheck()">✅ Check repeating events (runs here)</button>
 
       <div class="section-hdr">Storage</div>
       <button class="btn btn-ghost" style="margin-bottom:10px;width:100%" onclick="openStorageReport()">🔍 Storage report (read-only)</button>
@@ -5921,30 +6090,32 @@ function showDataManager(){
 // setItem/removeItem/saveData. Pure collectors take the storage object
 // as a parameter so they can be tested against a shim.
 function storageClassify(key){
+  const K = (owner, cat, note, keep) => ({owner:owner, cat:cat, note:note, keep:keep});
   const exact = {
-    'gat_v1':                      {owner:'Gigs & Trips', cat:'Persistent', note:'working copy of events/venues'},
-    'gat_v1_clean':                {owner:'Gigs & Trips', cat:'Cache',      note:'duplicate of gat_v1 minus tombstones (launcher card)'},
-    'gat_v1_lastPullAt':           {owner:'Gigs & Trips', cat:'Cache',      note:'incremental pull cursor'},
-    'gat_v1_cpChecked':            {owner:'Gigs & Trips', cat:'UI pref',    note:'daily completion-prompt marker'},
-    'gat_session':                 {owner:'Gigs & Trips', cat:'Persistent', note:'Supabase session tokens'},
-    'gat_gcal_mirror_last_attempt':{owner:'Gigs & Trips', cat:'UI pref',    note:'Calendar pull throttle timestamp'},
-    'gat_cal_filter':              {owner:'Gigs & Trips', cat:'UI pref',    note:'Agenda class filter'},
-    'gat_gcal_queue':              {owner:'Gigs & Trips', cat:'Sync queue', note:'pending Calendar writes/deletes (GIG-101)'},
-    'gat_gcal_conflicts':          {owner:'Gigs & Trips', cat:'Temporary',  note:'Calendar changes awaiting a decision (GIG-102)'},
-    'pal_theme':                   {owner:'Suite',        cat:'UI pref',    note:'theme'},
-    'pal_retry_queue_v1':          {owner:'Suite',        cat:'Sync queue', note:'pending writes for apps using pal-shared'},
-    'pal_nav_request':             {owner:'Suite',        cat:'Temporary',  note:'cross-app navigation hand-off'},
-    'gym_pal_xapp':                {owner:'Gym Tracker',  cat:'Foreign',    note:'cross-app hand-off'},
-    'fn_tracker_v3':               {owner:'Fortnight Tracker', cat:'Foreign', note:'legacy'},
-    'fn_tracker_v4':               {owner:'Fortnight Tracker', cat:'Foreign', note:'legacy'},
-    'fn_tracker_v5':               {owner:'Fortnight Tracker', cat:'Foreign', note:'current'}
+    'gat_v1':                      K('Gigs & Trips','Persistent','working copy of events/venues','Keep. Never auto-deleted (also held in Supabase)'),
+    'gat_v1_clean':                K('Gigs & Trips','Cache','RETIRED duplicate of gat_v1 (launcher card)','Removed automatically at startup since v7.101'),
+    'gat_v1_lastPullAt':           K('Gigs & Trips','Cache','incremental pull cursor','Safe to clear: the next pull re-fetches'),
+    'gat_v1_cpChecked':            K('Gigs & Trips','UI pref','daily completion-prompt marker','Keep (tiny)'),
+    'gat_session':                 K('Gigs & Trips','Persistent','Supabase session tokens','Keep (signing in again if lost)'),
+    'gat_gcal_mirror_last_attempt':K('Gigs & Trips','UI pref','Calendar pull throttle timestamp','Keep (tiny)'),
+    'gat_cal_filter':              K('Gigs & Trips','UI pref','Agenda/Upcoming class filter','Keep (tiny)'),
+    'gat_gcal_queue':              K('Gigs & Trips','Sync queue','pending Calendar writes/deletes','Removed only when sent or discarded'),
+    'gat_gcal_conflicts':          K('Gigs & Trips','Temporary','Calendar changes awaiting a decision','Pruned automatically when resolved or stale'),
+    'pal_theme':                   K('Suite','UI pref','theme','Keep (tiny)'),
+    'pal_retry_queue_v1':          K('Suite','Sync queue','pending writes for apps using pal-shared','Owned by those apps; never touched here'),
+    'pal_nav_request':             K('Suite','Temporary','cross-app navigation hand-off','Cleared by the app that reads it'),
+    'gym_pal_xapp':                K('Gym Tracker','Foreign','cross-app hand-off','Not this app\'s: never touched'),
+    'fn_tracker_v3':               K('Fortnight Tracker','Foreign','legacy','Not this app\'s: never touched'),
+    'fn_tracker_v4':               K('Fortnight Tracker','Foreign','legacy','Not this app\'s: never touched'),
+    'fn_tracker_v5':               K('Fortnight Tracker','Foreign','current','Not this app\'s: never touched')
   };
   if (exact[key]) return exact[key];
-  if (key.indexOf('gat_')===0)  return {owner:'Gigs & Trips', cat:'Unclassified', note:'unrecognised gat_ key'};
-  if (key.indexOf('pal_')===0)  return {owner:'Suite',        cat:'Unclassified', note:'unrecognised pal_ key'};
-  if (key.indexOf('fn_')===0)   return {owner:'Fortnight Tracker', cat:'Foreign', note:''};
-  if (key.indexOf('gym_')===0)  return {owner:'Gym Tracker',  cat:'Foreign',    note:''};
-  return {owner:'Other / unknown', cat:'Foreign', note:'not recognised'};
+  if (key.indexOf('gat_selftest_')===0) return K('Gigs & Trips','Temporary','storage self-test chunk','Removed right after the test and at startup');
+  if (key.indexOf('gat_')===0)  return K('Gigs & Trips','Unclassified','unrecognised gat_ key','Unknown: report it');
+  if (key.indexOf('pal_')===0)  return K('Suite','Unclassified','unrecognised pal_ key','Unknown: report it');
+  if (key.indexOf('fn_')===0)   return K('Fortnight Tracker','Foreign','','Not this app\'s: never touched');
+  if (key.indexOf('gym_')===0)  return K('Gym Tracker','Foreign','','Not this app\'s: never touched');
+  return K('Other / unknown','Foreign','not recognised','Not this app\'s: never touched');
 }
 
 function storageFmt(bytes){
@@ -6051,7 +6222,7 @@ function storageReportText(r, ctx){
   Object.keys(r.byCat).sort((a,b)=>r.byCat[b]-r.byCat[a]).forEach(c=>L.push('  ' + c + ': ' + storageFmt(r.byCat[c])));
   L.push('');
   L.push('KEYS (largest first)');
-  r.keys.forEach(k=>L.push('  ' + storageFmt(k.bytes).padStart(9) + '  ' + k.key + '  [' + k.owner + ' · ' + k.cat + ']' + (k.note ? ' — ' + k.note : '')));
+  r.keys.forEach(k=>L.push('  ' + storageFmt(k.bytes).padStart(9) + '  ' + k.key + '  [' + k.owner + ' · ' + k.cat + ']' + (k.note ? ' — ' + k.note : '') + (k.keep ? '  ➜ ' + k.keep : '')));
   const g = r.gat;
   L.push('');
   if (!g){
@@ -6093,6 +6264,45 @@ function storageReportContext(){
   };
 }
 
+
+// STORAGE-004 — measures how much more this browser/PWA will actually store, by writing
+// temporary 64K-character chunks until the browser refuses, then removing every chunk.
+// It is the ONLY storage feature that writes, so it is opt-in (button + confirm). The loop
+// is synchronous, so nothing else in this page can write in the middle of it.
+function storageSelfTest(store, opts){
+  store = store || localStorage; opts = opts || {};
+  const PFX = 'gat_selftest_', chunkChars = opts.chunkChars || 65536, maxChunks = opts.maxChunks || 160;
+  const chunk = 'x'.repeat(chunkChars);
+  let n = 0, hit = false, err = '';
+  try { for (; n < maxChunks; n++) store.setItem(PFX + n, chunk); }
+  catch(e){ hit = true; err = (e && e.name) || String(e); }
+  finally { for (let i = 0; i <= n; i++){ try { store.removeItem(PFX + i); } catch(e){} } }
+  let usableAfter = true;
+  try { store.setItem(PFX + 'ok', '1'); store.removeItem(PFX + 'ok'); } catch(e){ usableAfter = false; }
+  return { chunks:n, chunkChars:chunkChars, chars:n * chunkChars, hitLimit:hit, error:err, max:maxChunks, usableAfter:usableAfter };
+}
+function storageSelfTestText(r, usedChars){
+  const mb = c => (c * 2 / 1048576).toFixed(2) + ' MB';
+  const L = ['MEASURED STORAGE LIMIT'];
+  L.push('  Spare space written then removed: ' + (r.chars / 1000000).toFixed(2) + ' M characters (≈ ' + mb(r.chars) + ' as UTF-16) in ' + r.chunks + ' chunks of ' + r.chunkChars + (r.hitLimit ? '' : ' — stopped at the test ceiling, so the real limit is higher'));
+  L.push('  Browser refused further writes: ' + (r.hitLimit ? 'yes (' + r.error + ')' : 'no'));
+  if (r.hitLimit){
+    L.push('  Data already stored here: ' + (usedChars / 1000000).toFixed(2) + ' M characters (≈ ' + mb(usedChars) + ')');
+    L.push('  Estimated total limit: ≈ ' + ((usedChars + r.chars) / 1000000).toFixed(2) + ' M characters (± one chunk)');
+  }
+  L.push('  Test chunks removed and storage still writable: ' + (r.usableAfter ? 'yes' : 'NO — reload the app and run the Storage report'));
+  return L.join('\n');
+}
+function runStorageSelfTest(){
+  if (!confirm('This briefly fills the spare local storage for this site to measure the real limit, then removes everything it wrote (a few seconds). Close other tabs of this app first. Continue?')) return;
+  let usedChars = 0;
+  for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); usedChars += k.length + (localStorage.getItem(k) || '').length; }
+  const r = storageSelfTest(localStorage);
+  const el = document.getElementById('storageReportPre');
+  if (el) el.textContent = el.textContent + '\n\n' + storageSelfTestText(r, usedChars);
+  showToast(r.usableAfter ? 'Measured — test data removed ✓' : 'Test finished — check the report');
+}
+
 function openStorageReport(){
   let text;
   try { text = storageReportText(storageAuditCollect(localStorage), storageReportContext()); }
@@ -6105,6 +6315,7 @@ function openStorageReport(){
       <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Read-only. Nothing is changed or deleted. Safari tab and the home-screen app keep separate storage, so run this in each.</div>
       <pre id="storageReportPre" style="background:var(--surf);border-radius:var(--rsm);padding:10px;font-size:11px;line-height:1.45;color:var(--ink2);white-space:pre-wrap;word-break:break-word;max-height:55vh;overflow-y:auto;margin-bottom:12px">${esc(text)}</pre>
       <button class="btn btn-pri" style="width:100%;margin-bottom:10px" onclick="copyStorageReport()">📋 Copy report</button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="runStorageSelfTest()">📏 Measure real limit (briefly writes, then cleans up)</button>
       <button class="btn btn-ghost" style="width:100%" onclick="showDataManager()">← Back</button>
     </div>`);
 }
@@ -8930,6 +9141,7 @@ function onUnlocked(){
   // Show search bar for the default upcoming tab
   const sb=document.getElementById('searchBar');
   if(sb) sb.classList.add('visible');
+  storageStartupCleanup(); // STORAGE-001: retire the duplicate dataset / leftover test keys
   render();
   pullFromSupabase();  // initial pull
   startPoll();         // then poll every 60s in background
