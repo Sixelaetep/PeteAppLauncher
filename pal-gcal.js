@@ -1,5 +1,7 @@
 /*
- * pal-gcal.js — PGC-002 (v2: updateEvent gains optional expectEtag, GIG-102)
+ * pal-gcal.js — PGC-002 (v2: updateEvent gains optional expectEtag, GIG-102;
+ * v3: listEvents gains singleEvents/showDeleted/updatedMin options and listInstances is added, GIG-115 —
+ * all optional, defaults unchanged, so existing callers behave exactly as before)
  * ─────────────────────────────────────────────────────────────────────────
  * Shared Google Calendar access layer. Separate from pal-shared.js on
  * purpose: pal-shared.js is loaded by every app in the suite, and this is
@@ -238,18 +240,31 @@ window.PalGCal = (function () {
   // paginating internally — callers get one flat array back, no manual
   // nextPageToken handling. No filtering: every event on the calendar in
   // range comes back, per the "full mirror, no exclusions" design.
+  //
+  // opts (all optional, added v3):
+  //   singleEvents (default true)  false = return recurring MASTERS (with their `recurrence` lines)
+  //                                plus any individually changed/cancelled instances as separate
+  //                                events (they carry recurringEventId + originalStartTime), instead
+  //                                of one expanded event per occurrence.
+  //   showDeleted  (default false) true = also return cancelled events (needed to see a single
+  //                                occurrence cancelled in Google).
+  //   updatedMin   ISO time: only events changed since then.
+  // orderBy=startTime is only valid when singleEvents is true, so it is sent only then.
   async function listEvents(calendarId, timeMinISO, timeMaxISO, opts) {
     opts = opts || {};
+    const expand = opts.singleEvents !== false;
     let all = [];
     let pageToken = null;
     do {
       const params = new URLSearchParams({
         timeMin: timeMinISO,
         timeMax: timeMaxISO,
-        singleEvents: 'true',   // expand recurring events into instances
-        orderBy: 'startTime',
+        singleEvents: expand ? 'true' : 'false',   // default: expand recurring events into instances
         maxResults: String(opts.pageSize || 250)
       });
+      if (expand) params.set('orderBy', 'startTime');
+      if (opts.showDeleted) params.set('showDeleted', 'true');
+      if (opts.updatedMin) params.set('updatedMin', opts.updatedMin);
       if (pageToken) params.set('pageToken', pageToken);
 
       const data = await _apiFetch(
@@ -259,6 +274,30 @@ window.PalGCal = (function () {
       pageToken = data.nextPageToken || null;
     } while (pageToken);
 
+    return all;
+  }
+
+  // Every instance of ONE recurring event within [timeMinISO, timeMaxISO), paginated into a flat
+  // array (added v3). Each carries its own id, its start, and originalStartTime (the slot it
+  // occupies in the series even if it was moved). showDeleted:true also returns cancelled ones.
+  async function listInstances(calendarId, masterEventId, timeMinISO, timeMaxISO, opts) {
+    opts = opts || {};
+    let all = [];
+    let pageToken = null;
+    do {
+      const params = new URLSearchParams({
+        timeMin: timeMinISO,
+        timeMax: timeMaxISO,
+        maxResults: String(opts.pageSize || 250)
+      });
+      if (opts.showDeleted) params.set('showDeleted', 'true');
+      if (pageToken) params.set('pageToken', pageToken);
+      const data = await _apiFetch(
+        '/calendars/' + encodeURIComponent(calendarId) + '/events/' + encodeURIComponent(masterEventId) + '/instances?' + params.toString()
+      );
+      all = all.concat(data.items || []);
+      pageToken = data.nextPageToken || null;
+    } while (pageToken);
     return all;
   }
 
@@ -335,6 +374,7 @@ window.PalGCal = (function () {
     withAppMeta: withAppMeta,
     readAppMeta: readAppMeta,
     listEvents: listEvents,
+    listInstances: listInstances,
     createEvent: createEvent,
     updateEvent: updateEvent,
     deleteEvent: deleteEvent,

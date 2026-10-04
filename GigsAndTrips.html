@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.101</title>
+<title>Gigs &amp; Trips v7.102</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -548,7 +548,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.101</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.102</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -609,10 +609,10 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.101"></script>
+<script src="pal-shared.js?v=7.102"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="pal-gcal.js?v=2"></script>
+<script src="pal-gcal.js?v=3"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONFIG
@@ -1257,6 +1257,107 @@ function openRecurSelfCheck(){
     </div>`);
 }
 
+
+// ── GIG-115: Google recurrence codec (pure — nothing here calls Google or touches storage) ──
+// Series <-> RFC 5545 lines as Google stores them, plus the id Google gives each occurrence.
+// Only the rule shapes this app can represent are accepted from Google; anything else is
+// reported as unsupported with a reason instead of being guessed at.
+function recurTzOffsetMin(utcMs, tz){
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone:tz, hourCycle:'h23', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const p = {}; f.formatToParts(new Date(utcMs)).forEach(x=>{ p[x.type] = x.value; });
+  return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - utcMs) / 60000;
+}
+// wall-clock date+time in a zone -> UTC milliseconds (DST-correct)
+function recurWallToUtcMs(dateStr, timeStr, tz){
+  const d = String(dateStr).split('-').map(Number), t = String(timeStr || '00:00:00').split(':').map(Number);
+  const naive = Date.UTC(d[0], d[1]-1, d[2], t[0]||0, t[1]||0, t[2]||0);
+  const o1 = recurTzOffsetMin(naive, tz);
+  let ms = naive - o1 * 60000;
+  const o2 = recurTzOffsetMin(ms, tz);
+  if (o2 !== o1) ms = naive - o2 * 60000;
+  return ms;
+}
+function recurUtcMsToWall(ms, tz){
+  const off = recurTzOffsetMin(ms, tz), w = new Date(ms + off * 60000);
+  return { date:recurFmt(Date.UTC(w.getUTCFullYear(), w.getUTCMonth(), w.getUTCDate())), time:String(w.getUTCHours()).padStart(2,'0') + ':' + String(w.getUTCMinutes()).padStart(2,'0'), sec:w.getUTCSeconds() };
+}
+function recurUtcStamp(ms){ const d = new Date(ms); return recurFmt(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).replace(/-/g,'') + 'T' + String(d.getUTCHours()).padStart(2,'0') + String(d.getUTCMinutes()).padStart(2,'0') + String(d.getUTCSeconds()).padStart(2,'0') + 'Z'; }
+// Google's id for one occurrence of a recurring event: master id + "_" + its ORIGINAL start
+// (UTC stamp for timed events, plain date for all-day ones).
+function gcalInstanceId(masterId, dateStr, timeStr, tz){
+  if (!timeStr) return masterId + '_' + dateStr.replace(/-/g,'');
+  return masterId + '_' + recurUtcStamp(recurWallToUtcMs(dateStr, timeStr + ':00', tz || RECUR_DEFAULT_TZ));
+}
+
+// Series -> the `recurrence` array Google expects for a master event.
+function recurToRRULE(rec, startStr, timeStr){
+  const tz = recurTimeZone(rec), allDay = !timeStr, parts = ['FREQ=' + rec.freq];
+  if (rec.interval > 1) parts.push('INTERVAL=' + rec.interval);
+  if (rec.byday && rec.byday.length) parts.push('BYDAY=' + rec.byday.join(','));
+  if (rec.until){
+    // all-day: a date. timed: the end of that day in the series zone, as the UTC instant Google requires.
+    parts.push('UNTIL=' + (allDay ? rec.until.replace(/-/g,'') : recurUtcStamp(recurWallToUtcMs(rec.until, '23:59:59', tz))));
+  } else if (rec.count) parts.push('COUNT=' + rec.count);
+  const lines = ['RRULE:' + parts.join(';')];
+  const ex = (rec.exdates || []).slice().sort();
+  if (ex.length){
+    if (allDay) lines.push('EXDATE;VALUE=DATE:' + ex.map(d=>d.replace(/-/g,'')).join(','));
+    else lines.push('EXDATE;TZID=' + tz + ':' + ex.map(d=>d.replace(/-/g,'') + 'T' + timeStr.replace(':','') + '00').join(','));
+  }
+  return lines;
+}
+// Google `recurrence` lines -> a series rule, or {ok:false, reason}.
+function recurFromRRULE(lines, startStr, timeStr, tz){
+  tz = tz || RECUR_DEFAULT_TZ;
+  const allDay = !timeStr;
+  const rr = (lines || []).filter(l=>/^RRULE:/i.test(l));
+  if (rr.length !== 1) return { ok:false, reason: rr.length ? 'more than one RRULE' : 'no RRULE' };
+  if ((lines || []).some(l=>/^RDATE/i.test(l))) return { ok:false, reason:'has RDATE (extra dates)' };
+  const kv = {};
+  for (const part of rr[0].slice(6).split(';')){ const i = part.indexOf('='); if (i > 0) kv[part.slice(0,i).toUpperCase()] = part.slice(i+1); }
+  const bad = Object.keys(kv).find(k=>['FREQ','INTERVAL','COUNT','UNTIL','BYDAY','WKST'].indexOf(k) < 0);
+  if (bad) return { ok:false, reason:'uses ' + bad };
+  if (['DAILY','WEEKLY','MONTHLY','YEARLY'].indexOf(kv.FREQ) < 0) return { ok:false, reason:'repeats ' + (kv.FREQ || '?').toLowerCase() };
+  if (kv.COUNT && kv.UNTIL) return { ok:false, reason:'has both COUNT and UNTIL' };
+  const interval = kv.INTERVAL ? parseInt(kv.INTERVAL, 10) : 1;
+  if (!(interval >= 1 && interval <= 99)) return { ok:false, reason:'interval out of range' };
+  if (kv.WKST && kv.WKST.toUpperCase() !== 'MO' && kv.FREQ === 'WEEKLY' && interval > 1) return { ok:false, reason:'weeks start on ' + kv.WKST };
+  const rec = { freq:kv.FREQ, interval:interval, timeZone:tz };
+  const days = kv.BYDAY ? kv.BYDAY.toUpperCase().split(',') : [];
+  if (kv.FREQ === 'WEEKLY'){
+    if (days.some(d=>RECUR_DAYS.indexOf(d) < 0)) return { ok:false, reason:'weekly BYDAY has positions' };
+    rec.byday = days;
+  } else if (kv.FREQ === 'MONTHLY'){
+    if (days.length > 1) return { ok:false, reason:'several monthly weekdays' };
+    if (days.length === 1 && !/^(-1|[1-4])(SU|MO|TU|WE|TH|FR|SA)$/.test(days[0])) return { ok:false, reason:'monthly BYDAY ' + days[0] };
+    rec.byday = days;
+  } else if (days.length) return { ok:false, reason:kv.FREQ.toLowerCase() + ' with BYDAY' };
+  if (kv.COUNT){ const n = parseInt(kv.COUNT, 10); if (!(n >= 1)) return { ok:false, reason:'bad COUNT' }; rec.count = n; }
+  if (kv.UNTIL){
+    const u = kv.UNTIL;
+    if (/^\d{8}$/.test(u)) rec.until = u.slice(0,4) + '-' + u.slice(4,6) + '-' + u.slice(6,8);
+    else if (/^\d{8}T\d{6}Z$/.test(u)){
+      const ms = Date.UTC(+u.slice(0,4), +u.slice(4,6) - 1, +u.slice(6,8), +u.slice(9,11), +u.slice(11,13), +u.slice(13,15));
+      const w = recurUtcMsToWall(ms, tz);
+      rec.until = (!allDay && w.time + ':00' < (timeStr + ':00')) ? recurFmt(recurParseDate(w.date) - RECUR_DAY_MS) : w.date;   // ended before that day's slot
+    } else return { ok:false, reason:'UNTIL format' };
+  }
+  const ex = [];
+  for (const l of (lines || []).filter(l=>/^EXDATE/i.test(l))){
+    const m = /^EXDATE([^:]*):(.*)$/i.exec(l); if (!m) return { ok:false, reason:'EXDATE format' };
+    for (const v of m[2].split(',')){
+      if (/^\d{8}$/.test(v)) ex.push(v.slice(0,4) + '-' + v.slice(4,6) + '-' + v.slice(6,8));
+      else if (/^\d{8}T\d{6}$/.test(v)) ex.push(v.slice(0,4) + '-' + v.slice(4,6) + '-' + v.slice(6,8));                      // TZID form: already wall-clock
+      else if (/^\d{8}T\d{6}Z$/.test(v)) ex.push(recurUtcMsToWall(Date.UTC(+v.slice(0,4), +v.slice(4,6) - 1, +v.slice(6,8), +v.slice(9,11), +v.slice(11,13), +v.slice(13,15)), tz).date);
+      else return { ok:false, reason:'EXDATE format' };
+    }
+  }
+  rec.exdates = ex;
+  const norm = recurNormalise(rec, startStr);
+  if (!norm) return { ok:false, reason:'rule not usable' };
+  return { ok:true, rec:norm };
+}
+
 // ── Form: "Repeats" section ──────────────────────────────────────────────
 function recurMonthlyOptions(dateStr){
   if (!recurValidDate(dateStr)) return [{key:'dom', label:'On the same day each month'}];
@@ -1872,6 +1973,7 @@ function storageWriteFailed(e){
 function storageStartupCleanup(){
   try{
     localStorage.removeItem(SK+'_clean');
+    ['gat_calAgendaShowEmpty','gat_itemSortMode','gat_hideTripGigs','gat_calView'].forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} }); // v7.102: keys of removed features
     const stale=[];
     for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k && k.indexOf('gat_selftest_')===0) stale.push(k); }
     stale.forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
@@ -6072,6 +6174,7 @@ function showDataManager(){
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openDuplicateTool()">🧹 Find duplicates</button>
 
       <div class="section-hdr">Checks</div>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:10px" onclick="openGcalScan()">🔎 Scan Google recurring events (read-only)</button>
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openRecurSelfCheck()">✅ Check repeating events (runs here)</button>
 
       <div class="section-hdr">Storage</div>
@@ -6089,6 +6192,9 @@ function showDataManager(){
 // one), classifies it, and summarises what is inside gat_v1. Never calls
 // setItem/removeItem/saveData. Pure collectors take the storage object
 // as a parameter so they can be tested against a shim.
+// Keys left behind by features removed long ago (the Calendar tab, the hide-trip-gigs toggle, the item sort toggle).
+// Nothing reads them any more; they are removed at startup.
+const STORAGE_RETIRED_KEYS = ['gat_calAgendaShowEmpty','gat_itemSortMode','gat_hideTripGigs','gat_calView'];
 function storageClassify(key){
   const K = (owner, cat, note, keep) => ({owner:owner, cat:cat, note:note, keep:keep});
   const exact = {
@@ -6104,6 +6210,14 @@ function storageClassify(key){
     'pal_theme':                   K('Suite','UI pref','theme','Keep (tiny)'),
     'pal_retry_queue_v1':          K('Suite','Sync queue','pending writes for apps using pal-shared','Owned by those apps; never touched here'),
     'pal_nav_request':             K('Suite','Temporary','cross-app navigation hand-off','Cleared by the app that reads it'),
+    'pal_layout_cache':            K('Launcher','Cache','last-loaded launcher layout','Owned by the launcher: never touched'),
+    'pal_ftt_stat':                K('Launcher','Cache','tracker stat shown on the launcher card','Owned by the launcher: never touched'),
+    'pal_device_id':               K('Suite','Persistent','this device\'s id','Owned by the suite: never touched'),
+    'pal_standalone_horizon':      K('Launcher','UI pref','standalone-mode flag','Owned by the launcher: never touched'),
+    'pal_standalone_claims':       K('Launcher','UI pref','standalone-mode flag','Owned by the launcher: never touched'),
+    'pal_standalone_vault':        K('Launcher','UI pref','standalone-mode flag','Owned by the launcher: never touched'),
+    'gat_storage_limit':           K('Gigs & Trips','UI pref','measured browser storage limit','Keep (tiny); re-measure any time'),
+    'gat_storage_warned':          K('Gigs & Trips','UI pref','day the storage warning last showed','Keep (tiny)'),
     'gym_pal_xapp':                K('Gym Tracker','Foreign','cross-app hand-off','Not this app\'s: never touched'),
     'fn_tracker_v3':               K('Fortnight Tracker','Foreign','legacy','Not this app\'s: never touched'),
     'fn_tracker_v4':               K('Fortnight Tracker','Foreign','legacy','Not this app\'s: never touched'),
@@ -6111,11 +6225,14 @@ function storageClassify(key){
   };
   if (exact[key]) return exact[key];
   if (key.indexOf('gat_selftest_')===0) return K('Gigs & Trips','Temporary','storage self-test chunk','Removed right after the test and at startup');
+  if (STORAGE_RETIRED_KEYS.indexOf(key)>=0) return K('Gigs & Trips','Cache','RETIRED key of a removed feature','Removed automatically at startup since v7.102');
   if (key.indexOf('gat_')===0)  return K('Gigs & Trips','Unclassified','unrecognised gat_ key','Unknown: report it');
   if (key.indexOf('pal_')===0)  return K('Suite','Unclassified','unrecognised pal_ key','Unknown: report it');
-  if (key.indexOf('fn_')===0)   return K('Fortnight Tracker','Foreign','','Not this app\'s: never touched');
-  if (key.indexOf('gym_')===0)  return K('Gym Tracker','Foreign','','Not this app\'s: never touched');
-  return K('Other / unknown','Foreign','not recognised','Not this app\'s: never touched');
+  const owners = [ ['ff_','Fantasy Football Tracker'], ['gym_','Gym Tracker'], ['fn_','Fortnight Tracker'], ['claim_tracker','Claim Tracker'],
+                   ['reading-tracker','Reading Tracker'], ['meal_planner','Meal Planner'], ['horizon_','Horizon'] ];
+  for (const o of owners) if (key.indexOf(o[0]) === 0) return K(o[1],'Foreign','','Not this app\'s: never touched');
+  const pre = /^([a-z]+)[_-]/i.exec(key);
+  return K('Another app' + (pre ? ' (' + pre[1] + ')' : ''),'Foreign','','Not this app\'s: never touched');
 }
 
 function storageFmt(bytes){
@@ -6211,12 +6328,15 @@ function storageAuditCollect(store){
 function storageReportText(r, ctx){
   ctx = ctx || {};
   const L = [];
-  const NOMINAL = 5*1048576;
   L.push('GIGS & TRIPS — STORAGE REPORT (GIG-088)');
   L.push('App ' + (ctx.version||'?') + ' · ' + (ctx.when||'') );
   L.push('Mode: ' + (ctx.mode||'?') + ' · Origin: ' + (ctx.origin||'?'));
   L.push('');
-  L.push('TOTAL: ' + r.keys.length + ' keys · ' + storageFmt(r.total) + ' (~' + Math.round(r.total/NOMINAL*100) + '% of a nominal 5 MB — rough only; real limit varies by browser)');
+  const lim = ctx.limit || null;
+  if (lim) L.push('TOTAL: ' + r.keys.length + ' keys · ' + storageFmt(r.total) + ' = ' + Math.round(r.total / 2 / lim.chars * 100) + '% of the limit measured on ' + lim.at + ' (' + (lim.chars / 1000000).toFixed(2) + ' M characters)');
+  else L.push('TOTAL: ' + r.keys.length + ' keys · ' + storageFmt(r.total) + ' (limit not measured on this device yet — use Measure real limit; a fixed 5 MB guess would be misleading)');
+  const mine = r.keys.filter(k=>k.owner === 'Gigs & Trips').reduce((n,k)=>n + k.bytes, 0);
+  L.push('Gigs & Trips uses ' + storageFmt(mine) + ' of that (' + Math.round(mine / Math.max(1, r.total) * 100) + '%); the rest belongs to other apps sharing this origin.');
   L.push('');
   L.push('BY CATEGORY');
   Object.keys(r.byCat).sort((a,b)=>r.byCat[b]-r.byCat[a]).forEach(c=>L.push('  ' + c + ': ' + storageFmt(r.byCat[c])));
@@ -6260,7 +6380,8 @@ function storageReportContext(){
     version: (document.querySelector('#hdrTitle .ver')||{}).textContent || '',
     when: new Date().toISOString(),
     mode: (standalone ? 'Home-screen app' : 'Browser tab') + (embedded ? ' (inside launcher)' : ''),
-    origin: location.origin
+    origin: location.origin,
+    limit: storageLimitInfo()
   };
 }
 
@@ -6269,6 +6390,24 @@ function storageReportContext(){
 // temporary 64K-character chunks until the browser refuses, then removing every chunk.
 // It is the ONLY storage feature that writes, so it is opt-in (button + confirm). The loop
 // is synchronous, so nothing else in this page can write in the middle of it.
+const STORAGE_LIMIT_KEY = 'gat_storage_limit';
+function storageLimitInfo(store){
+  try { const r = JSON.parse((store || localStorage).getItem(STORAGE_LIMIT_KEY) || 'null'); if (r && r.chars > 0) return r; } catch(e){}
+  return null;
+}
+// Early warning: once a day, if everything on this origin (every app shares it) is above 85% of the
+// MEASURED limit, say so. Needs a measurement first; with none it stays silent rather than guess.
+function storageHealthCheck(){
+  try {
+    const lim = storageLimitInfo(); if (!lim) return null;
+    let used = 0;
+    for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); used += k.length + (localStorage.getItem(k) || '').length; }
+    const pct = Math.round(used / lim.chars * 100);
+    const day = new Date().toISOString().slice(0,10), warnKey = 'gat_storage_warned';
+    if (pct >= 85 && localStorage.getItem(warnKey) !== day){ localStorage.setItem(warnKey, day); showToast('⚠️ Browser storage is ' + pct + '% full (all apps share it). See Sync & Backup → Storage report.'); }
+    return { used:used, pct:pct };
+  } catch(e){ return null; }
+}
 function storageSelfTest(store, opts){
   store = store || localStorage; opts = opts || {};
   const PFX = 'gat_selftest_', chunkChars = opts.chunkChars || 65536, maxChunks = opts.maxChunks || 160;
@@ -6298,6 +6437,7 @@ function runStorageSelfTest(){
   let usedChars = 0;
   for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); usedChars += k.length + (localStorage.getItem(k) || '').length; }
   const r = storageSelfTest(localStorage);
+  if (r.hitLimit && r.usableAfter){ try { localStorage.setItem(STORAGE_LIMIT_KEY, JSON.stringify({ chars:usedChars + r.chars, at:new Date().toISOString().slice(0,10) })); } catch(e){} }
   const el = document.getElementById('storageReportPre');
   if (el) el.textContent = el.textContent + '\n\n' + storageSelfTestText(r, usedChars);
   showToast(r.usableAfter ? 'Measured — test data removed ✓' : 'Test finished — check the report');
@@ -8118,6 +8258,105 @@ function gcalDupRemove(alsoGoogle){
 }
 // ==GIG-101 END==
 
+
+// ==GIG-115 BEGIN==
+// GIG-115 — full history in GigsAndTrips.md. READ-ONLY scan of the recurring events in Google
+// Calendar. It never writes to Google or to this app's data. It exists to (1) show what the
+// recurring-event collapse would do before anything is changed, and (2) check my assumptions about
+// how Google represents recurring events (instance ids, rule shapes, which dates exist) against
+// your real calendar, so the later sync is built on observed behaviour rather than assumption.
+function gcalLocalInstancesOf(masterId){
+  return getData().events.filter(g=>g.type==='gig' && !g._deleted && g.calendarEventId && g.calendarEventId.indexOf(masterId + '_') === 0);
+}
+async function gcalScanRecurring(opts){
+  opts = opts || {};
+  const now = new Date();
+  const min = new Date(now.getFullYear() - 4, now.getMonth(), now.getDate()).toISOString();
+  const max = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate()).toISOString();
+  const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, min, max, { singleEvents:false });
+  const masters = events.filter(e=>Array.isArray(e.recurrence) && e.recurrence.length);
+  const overrides = events.filter(e=>e.recurringEventId);
+  const rows = masters.map(m=>{
+    const allDay = !(m.start && m.start.dateTime);
+    let startDate, startTime = '';
+    const tz = (m.start && m.start.timeZone) || RECUR_DEFAULT_TZ;
+    if (allDay) startDate = m.start && m.start.date;
+    else { const w = recurUtcMsToWall(new Date(m.start.dateTime).getTime(), tz); startDate = w.date; startTime = w.time; }
+    const parsed = recurFromRRULE(m.recurrence, startDate, startTime, tz);
+    const locals = gcalLocalInstancesOf(m.id);
+    return { id:m.id, title:m.summary || '(no title)', rule:m.recurrence.join(' | '), parsed:parsed, startDate:startDate, startTime:startTime, tz:tz, allDay:allDay,
+             locals:locals, plain:locals.filter(gcalIsPlainGig).length, overrides:overrides.filter(o=>o.recurringEventId === m.id).length, ev:m };
+  });
+  // Check my assumptions against Google for up to 3 supported series: do the instance ids match the
+  // format I compute, and does my engine produce the same occurrence dates Google reports?
+  const checks = [];
+  if (!opts.skipChecks){
+    const win0 = new Date(now.getTime() - 30*86400000), win1 = new Date(now.getTime() + 90*86400000);
+    for (const r of rows.filter(r=>r.parsed.ok && r.startDate).slice(0, 3)){
+      try {
+        const inst = await PalGCal.listInstances(GCAL_CALENDAR_ID, r.id, win0.toISOString(), win1.toISOString());
+        let idOk = 0, idBad = 0; const gdates = new Set();
+        inst.forEach(i=>{
+          const os = i.originalStartTime || i.start; if (!os) return;
+          const iAll = !os.dateTime;
+          let d, t = '';
+          if (iAll) d = os.date; else { const w = recurUtcMsToWall(new Date(os.dateTime).getTime(), r.tz); d = w.date; t = w.time; }
+          gdates.add(d);
+          if (gcalInstanceId(r.id, d, iAll ? '' : t, r.tz) === i.id) idOk++; else idBad++;
+        });
+        const mine = recurOccurrences({ date:r.startDate, recurrence:r.parsed.rec }, localDateStr(win0), localDateStr(win1), 1000);
+        const g = [...gdates].sort(), mset = new Set(mine);
+        const onlyG = g.filter(x=>!mset.has(x)), onlyM = mine.filter(x=>!gdates.has(x));
+        checks.push({ title:r.title, instances:inst.length, idOk:idOk, idBad:idBad, onlyGoogle:onlyG, onlyMine:onlyM });
+      } catch(e){ checks.push({ title:r.title, error:PalGCal.errorHint(e) }); }
+    }
+  }
+  return { rows:rows, overrides:overrides.length, checks:checks, scanned:events.length };
+}
+function gcalScanReportText(r){
+  const L = ['GOOGLE RECURRING-EVENT SCAN (read-only)', 'Looked at ' + r.scanned + ' calendar entries (4 years back, 1 year ahead, series not expanded).', ''];
+  const sup = r.rows.filter(x=>x.parsed.ok), uns = r.rows.filter(x=>!x.parsed.ok);
+  const locals = r.rows.reduce((n,x)=>n+x.locals.length, 0), plain = r.rows.reduce((n,x)=>n+x.plain, 0);
+  const bytes = r.rows.reduce((n,x)=>n + x.locals.reduce((m,g)=>m + JSON.stringify(g).length * 2, 0), 0);
+  L.push('Recurring events in Google: ' + r.rows.length + ' (' + sup.length + ' this app can represent, ' + uns.length + ' it cannot) · individually changed instances: ' + r.overrides);
+  L.push('Already imported here as separate gigs: ' + locals + ' (' + plain + ' plain, safe to collapse) ≈ ' + (bytes / 1024).toFixed(0) + ' KB of local storage');
+  L.push('');
+  r.rows.slice().sort((a,b)=>b.locals.length - a.locals.length).forEach(x=>{
+    const when = x.startDate + (x.startTime ? ' ' + x.startTime : ' all day');
+    L.push((x.parsed.ok ? '✅ ' : '⚠️ ') + x.title + ' — ' + (x.parsed.ok ? recurDescribe(x.parsed.rec, x.startDate) : 'NOT supported: ' + x.parsed.reason));
+    L.push('     starts ' + when + ' · ' + x.locals.length + ' imported here (' + x.plain + ' plain) · ' + x.overrides + ' changed in Google');
+    L.push('     ' + x.rule.slice(0, 140));
+  });
+  if (r.checks.length){
+    L.push(''); L.push('CHECKS AGAINST GOOGLE');
+    r.checks.forEach(c=>{
+      if (c.error){ L.push('  ' + c.title + ': could not check (' + c.error + ')'); return; }
+      L.push('  ' + c.title + ': ' + c.instances + ' instances · id format ' + (c.idBad === 0 ? 'matches on all ' + c.idOk : 'MISMATCH on ' + c.idBad + ' of ' + (c.idOk + c.idBad)) +
+        ' · dates ' + (!c.onlyGoogle.length && !c.onlyMine.length ? 'identical to this app\'s engine' : 'DIFFER (Google only: ' + (c.onlyGoogle.join(',') || 'none') + '; engine only: ' + (c.onlyMine.join(',') || 'none') + ')'));
+    });
+  }
+  return L.join('\n');
+}
+async function openGcalScan(){
+  if (typeof PalGCal.listInstances !== 'function'){ showToast('Reload the page: pal-gcal.js v3 is needed'); return; }
+  if (!PalGCal.hasToken()){ showToast('Sign in to Google first'); return; }
+  showToast('Scanning Google Calendar…');
+  let text;
+  try { text = gcalScanReportText(await gcalScanRecurring()); }
+  catch(e){ text = 'Scan failed: ' + PalGCal.errorHint(e); }
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">🔎 Google recurring events</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Read-only. Nothing in Google Calendar or in Gigs &amp; Trips is changed.</div>
+      <pre id="gcalScanPre" style="background:var(--surf);border-radius:var(--rsm);padding:10px;font-size:11px;line-height:1.45;color:var(--ink2);white-space:pre-wrap;word-break:break-word;max-height:58vh;overflow-y:auto;margin-bottom:12px">${esc(text)}</pre>
+      <button class="btn btn-pri" style="width:100%;margin-bottom:10px" onclick="(function(){const t=document.getElementById('gcalScanPre').textContent; if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){showToast('Copied ✓');});}else{showToast('Select the text and copy manually');}})()">📋 Copy result</button>
+      <button class="btn btn-ghost" style="width:100%" onclick="showDataManager()">← Back</button>
+    </div>`);
+}
+// ==GIG-115 END==
+
 // ==GIG-102 BEGIN==
 // GIG-102/103/104/105 (+100 round-trip) — full history in GigsAndTrips.md.
 // Google -> Gigs & Trips for GIGS. Supabase stays the source of truth; Google
@@ -9147,6 +9386,7 @@ function onUnlocked(){
   startPoll();         // then poll every 60s in background
   // Check for past items needing completion — delay so initial pull can settle
   setTimeout(checkCompletionPrompt, 1800);
+  setTimeout(storageHealthCheck, 4000);   // v7.102: early warning against the measured limit
   initGCalSync();       // GIG-072: foundation only — no UI change yet
 }
 
