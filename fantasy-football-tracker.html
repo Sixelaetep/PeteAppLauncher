@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.47</title>
+<title>Fantasy Football Tracker v1.48</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -422,7 +422,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.47</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.48</span></div>
 </nav>
 
 <div class="tabs">
@@ -559,11 +559,39 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.47"></script>
+<script src="pal-shared.js?v=1.48"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.48 [FF-020] — Locked-in / planned transfers no longer linger once
+ * the same transfer is confirmed by FPL. ROOT CAUSE: in
+ * syncTransfersFromFPL() the "already in the log" check
+ * (existingIds.has(id) → return) ran BEFORE the step that upgrades a
+ * matching planned/locked-in entry. So once an FPL transfer had been
+ * synced into the log, it could never absorb a locked-in entry that
+ * existed (or was created) afterwards — the manual entry stayed
+ * alongside its confirmed twin forever, double-counting in the
+ * running total and the free-transfer slot usage. Separately,
+ * pullRemoteTransferLog() merges by id (union), so a manual entry
+ * removed on one device could be resurrected from another device's
+ * copy. FIX: new reconcileTransferLog() — one idempotent pass that
+ * pairs each manual planned/locked/made entry with a synced FPL ('auto')
+ * entry for the same player out + player in (one-to-one, so a genuine
+ * second identical swap is not swallowed; ignores FPL transfers from
+ * a gameweek clearly before the plan), keeps the FPL entry as the
+ * source of truth (real date, cost, gameweek, rating support), carries
+ * the manual entry's note across if the FPL one has none, and removes
+ * the manual one. It runs after every sync, after loading the log from
+ * cache, after the cross-device merge (and re-persists if it changed
+ * anything, so Supabase heals too) and when a lock-in is added for a
+ * swap FPL already shows. Sync no longer does its own in-place
+ * upgrade — it adds new FPL entries and lets the same reconcile pass
+ * do all matching, so there is exactly one code path. Also fixed: the
+ * export backup's appVersion was a hard-coded '1.46' that had
+ * drifted; it now reads FF_VERSION. No data-model change, no Supabase
+ * schema change, existing logs heal automatically on first load.
  *
  * v1.47 [FF-019] — switched from three separate script tags
  * (pal-config.js, pal-sync.js, pal-utils.js) to one combined
@@ -1666,7 +1694,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.47';
+const FF_VERSION = '1.48';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1829,7 +1857,7 @@ function saveSettings() {
 function exportData() {
   const wrapper = {
     version: 1,               // backup schema version — unrelated to app version below
-    appVersion: '1.46',
+    appVersion: FF_VERSION,   // was a hard-coded '1.46' that had drifted from the other version locations (FF-020)
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
     data: { settings: _settings }
@@ -3085,6 +3113,11 @@ function loadTransferLogFromCache() {
     const raw = localStorage.getItem(scopedKey('ff_transfer_log'));
     if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) _transferLog = parsed; }
   } catch (e) {}
+  // FF-020: heal logs that already contain locked-in entries sitting
+  // beside their confirmed FPL twin (written by v1.47 and earlier).
+  try {
+    if (reconcileTransferLog().length) persistTransferLog();
+  } catch (e) { console.error('Transfer log reconcile failed:', e); }
   renderTransferList();
 }
 
@@ -3097,7 +3130,12 @@ async function pullRemoteTransferLog() {
     (_transferLog || []).forEach(t => { merged[t.id] = t; });
     remote.data.entries.forEach(t => { merged[t.id] = t; }); // remote wins on id conflict
     _transferLog = Object.values(merged);
+    // FF-020: the union above can resurrect a manual entry that another
+    // device had already folded into its FPL twin — reconcile again and,
+    // if anything moved, push the cleaned log back so Supabase heals too.
+    const remoteHealed = reconcileTransferLog().length > 0;
     try { localStorage.setItem(scopedKey('ff_transfer_log'), JSON.stringify(_transferLog)); } catch (e) {}
+    if (remoteHealed) persistTransferLog();
     renderTransferList();
   } catch (e) { console.error('Transfer log pull from Supabase failed:', e); }
 }
@@ -3416,6 +3454,9 @@ function addManualTransfer(status) {
     costDelta, note, status: status, source: 'manual', gwId: currentPlanningGw()
   };
   _transferLog.push(entry);
+  // FF-020: if FPL has already synced this exact swap, fold straight
+  // into it rather than adding a duplicate that waits for the next sync.
+  const alreadyOnFpl = reconcileTransferLog().length > 0;
   persistTransferLog();
   renderTransferList();
   document.getElementById('txfOutSearch').value = '';
@@ -3427,7 +3468,8 @@ function addManualTransfer(status) {
   // would project — if it's currently being shown, refresh it so it
   // doesn't look stale relative to what was just added.
   if (_squadViewMode === 'planned') refreshSquadDisplay();
-  safeToast(status === 'locked' ? 'Locked-in transfer recorded' : 'Planned transfer added');
+  safeToast(alreadyOnFpl ? 'Already on FPL — matched to the synced transfer'
+    : (status === 'locked' ? 'Locked-in transfer recorded' : 'Planned transfer added'));
 }
 
 function deleteTransferEntry(id) {
@@ -3453,6 +3495,52 @@ function markTransferMade(id) {
   renderTransferList();
   if (_squadViewMode === 'planned') refreshSquadDisplay();
   safeToast('Marked as made');
+}
+
+// FF-020: one idempotent pass that folds manually-entered transfers
+// (planned / locked in / marked made by hand) into the matching
+// transfer synced from FPL ('auto'). The FPL entry is the source of
+// truth and is kept; the manual twin is removed. Safe to call any
+// number of times and from anywhere — it only acts on exact matches
+// (same player out AND same player in) and pairs one-to-one, so two
+// genuinely separate identical swaps are not collapsed into one.
+// An FPL transfer from a gameweek more than one before the manual
+// entry's own gameweek is treated as a different, older move and is
+// not matched (one GW of tolerance: a transfer made just before a
+// deadline is often logged just after it). Manual entries with no
+// player ids (pre-picker, free-text) can't be matched and are left
+// for the user. Returns [{manualId, autoId}] for what was folded in.
+function reconcileTransferLog() {
+  const log = _transferLog || [];
+  const pairIds = e => {
+    const ids = extractTransferPlayerIds(e);
+    return ids ? { outId: Number(ids.outId), inId: Number(ids.inId) } : null;
+  };
+  const autos = log.filter(t => t.status === 'made' && t.source === 'auto');
+  const claimed = new Set();
+  const folded = [];
+  log.filter(t => t.source !== 'auto' && (isActiveTransferStatus(t.status) || t.status === 'made'))
+    .slice().sort((a, b) => new Date(a.date) - new Date(b.date))
+    .forEach(m => {
+      const mi = pairIds(m);
+      if (!mi) return;
+      const auto = autos.find(a => {
+        if (claimed.has(a.id)) return false;
+        const ai = pairIds(a);
+        if (!ai || ai.outId !== mi.outId || ai.inId !== mi.inId) return false;
+        if (m.gwId != null && a.gwId != null && a.gwId < m.gwId - 1) return false;
+        return true;
+      });
+      if (!auto) return;
+      claimed.add(auto.id);
+      if (m.note && !auto.note) auto.note = m.note;
+      folded.push({ manualId: m.id, autoId: auto.id });
+    });
+  if (folded.length) {
+    const drop = new Set(folded.map(f => f.manualId));
+    _transferLog = log.filter(t => !drop.has(t.id));
+  }
+  return folded;
 }
 
 // pal-fpl-proxy returns a JSON body on failure — {error, detail,
@@ -3491,41 +3579,35 @@ async function syncTransfersFromFPL() {
     const realTransfers = await xferRes.json();
 
     const existingIds = new Set(_transferLog.map(t => t.id));
-    let added = 0, matched = 0;
+    const newAutoIds = [];
     (realTransfers || []).forEach(t => {
       const id = 'auto_' + t.element_in + '_' + t.element_out + '_' + t.event + '_' + t.time;
       if (existingIds.has(id)) return;
+      existingIds.add(id);
       const inEl = elementsById[t.element_in], outEl = elementsById[t.element_out];
-
-      // A planned OR locked-in entry for this exact swap (same player
-      // out, same player in) is upgraded in place to the confirmed real
-      // one — same slot in the array, note preserved — rather than
-      // living alongside a separate 'made' entry for the same move.
-      // Matches on player ids only (not date), since a plan/lock-in is
-      // usually logged before the real transfer's exact timestamp is
-      // known.
-      const matchIdx = _transferLog.findIndex(e =>
-        isActiveTransferStatus(e.status) && e.playerOutId === t.element_out && e.playerInId === t.element_in);
-
-      const upgraded = {
+      _transferLog.push({
         id,
         date: (t.time || '').slice(0, 10) || (typeof todayISO === 'function' ? todayISO() : ''),
         playerOutName: outEl ? outEl.web_name : ('#' + t.element_out),
         playerInName: inEl ? inEl.web_name : ('#' + t.element_in),
         playerOutId: t.element_out, playerInId: t.element_in,
         costDelta: ((t.element_in_cost || 0) - (t.element_out_cost || 0)) / 10,
-        note: matchIdx > -1 ? (_transferLog[matchIdx].note || '') : '',
+        note: '',
         status: 'made', source: 'auto', gwId: t.event
-      };
-
-      if (matchIdx > -1) {
-        _transferLog[matchIdx] = upgraded;
-        matched++;
-      } else {
-        _transferLog.push(upgraded);
-        added++;
-      }
+      });
+      newAutoIds.push(id);
     });
+
+    // FF-020: matching is done by ONE reconcile pass over the whole
+    // log, not only for transfers first seen on this sync — so a
+    // locked-in entry is folded into its confirmed FPL twin even if
+    // that twin was synced on an earlier run (the old in-loop upgrade
+    // skipped already-known FPL transfers, which is what left
+    // duplicates behind).
+    const folded = reconcileTransferLog();
+    const foldedAutoIds = new Set(folded.map(f => f.autoId));
+    const matched = folded.length;
+    const added = newAutoIds.filter(id => !foldedAutoIds.has(id)).length;
 
     persistTransferLog();
     renderTransferList();
