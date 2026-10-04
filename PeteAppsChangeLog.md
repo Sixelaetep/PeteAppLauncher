@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.02 | v10.89 – v10.99, v11.00, v11.01 and v11.02. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.03 | v10.89 – v10.99, v11.00, v11.01, v11.02 and v11.03. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.1 | v1.0 – v3.1. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,17 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.03 — PET-107 — Quick-add label suggestions
+
+- **Why:** retyping the same shop or bill name on the card is the slowest part of a quick-add. Typing in a label box now shows tap-to-fill pills of matching saved labels. Nothing shows until there is text and a match.
+- **Sources (read-only, from the `on_budget_v1` localStorage key the card stats already read):** Food uses On Budget's saved label list (`data.ftLabels.items`, deleted ones skipped). Bills uses the names on its own past transactions (`data.bills.tx`), de-duplicated case-insensitively, skipping deleted and skipped entries and the generic `Spend` / `Income` fallback names. Food and Bills lists are kept separate. Re-read on each focus of a label box, so it is current without any messaging to the app.
+- **Matching:** case-insensitive substring; labels that start with the typed text rank first, then most used, then most recent; at most 5 pills. Hidden when the only match is exactly what is typed, when the box is cleared, on blur, and after a successful save.
+- **Picking:** tapping a pill fills the label (pill taps do not steal keyboard focus) and moves focus to the amount if it is empty, otherwise leaves it on the label. It does not open the app or save. Labels are inserted as text, never HTML.
+- **Failure behaviour:** no key, unreadable JSON or no matches means no pills and no error; typing and saving work exactly as in v11.02.
+- Launcher-only: `on-budget.html` stays v3.83, no data, sync or message-protocol change. Version: title, nav badge and DEPLOYMENT comment set to v11.03.
+- ⚠ Suggestions come from this device's local copy, so a fresh device shows none until On Budget has loaded and synced once; v3.82's local cache trim can also briefly empty them until the next pull. Bills suggestions can include recurring-bill names, since those transactions carry names too.
+- Tested (headless jsdom, real `index.html`): no pills before typing, no data / corrupt data, Bills de-duplication and ranking, deleted/skipped/generic exclusions, Food-only labels not leaking into Bills, Food list and deleted exclusion, exact-match hiding, pick behaviour and focus, no app open on pick, HTML-safe rendering, blur hide, v11.02 rows intact. Not tested: a real browser or phone (pill wrapping and tap targets on the card, keyboard staying open), live Supabase-synced data.
 
 ### v11.02 — PET-106 — On Budget card: inline Food / Bills quick-add inputs
 

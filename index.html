@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.02</title>
+<title>P Apps v11.03</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -551,6 +551,18 @@
     font-size: 12px; font-weight: 700; font-family: inherit; cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
+  /* PET-107 v11.03: suggestion pills, shown only while the label box has a match. */
+  .ob-quick-sugg { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding-left: 50px; box-sizing: border-box; }
+  .ob-quick-sugg[hidden] { display: none; }
+  .ob-quick-pill {
+    max-width: 100%; height: 28px; padding: 0 10px; box-sizing: border-box;
+    border: 1px solid var(--border); border-radius: 14px;
+    background: var(--surface2); color: var(--ink2);
+    font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ob-quick-pill:hover { border-color: var(--card-color); color: var(--card-color); }
   .ob-quick-go:disabled, .ob-quick-row.busy { opacity: 0.55; pointer-events: none; }
 
   .home-title { text-align: center; font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 4px; letter-spacing: -0.01em; }
@@ -685,7 +697,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.02</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.03</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -809,14 +821,16 @@
         <form class="ob-quick-row" data-kind="food" autocomplete="off" onsubmit="obQuickSubmit(event);return false">
           <span class="ob-quick-tag">Food</span>
           <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="£0.00" aria-label="Food spend amount" oninput="obQuickPenny(this)">
-          <input class="ob-quick-lbl" type="text" placeholder="Label (optional)" maxlength="60" enterkeyhint="done" aria-label="Food spend label">
+          <input class="ob-quick-lbl" type="text" placeholder="Label (optional)" maxlength="60" enterkeyhint="done" aria-label="Food spend label" oninput="obQuickSuggest(this)" onfocus="obQuickSuggest(this,true)" onblur="obQuickSuggestHideSoon(this)">
           <button class="ob-quick-go" type="submit" aria-label="Add food spend">Add</button>
+          <div class="ob-quick-sugg" hidden onpointerdown="event.preventDefault()" onclick="obQuickPick(event)"></div>
         </form>
         <form class="ob-quick-row" data-kind="bills" autocomplete="off" onsubmit="obQuickSubmit(event);return false">
           <span class="ob-quick-tag">Bills</span>
           <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="£0.00" aria-label="Bills spend amount" oninput="obQuickPenny(this)">
-          <input class="ob-quick-lbl" type="text" placeholder="Label (optional)" maxlength="60" enterkeyhint="done" aria-label="Bills spend label">
+          <input class="ob-quick-lbl" type="text" placeholder="Label (optional)" maxlength="60" enterkeyhint="done" aria-label="Bills spend label" oninput="obQuickSuggest(this)" onfocus="obQuickSuggest(this,true)" onblur="obQuickSuggestHideSoon(this)">
           <button class="ob-quick-go" type="submit" aria-label="Add bills spend">Add</button>
+          <div class="ob-quick-sugg" hidden onpointerdown="event.preventDefault()" onclick="obQuickPick(event)"></div>
         </form>
       </div>
     </div>
@@ -1042,6 +1056,9 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-107, v11.03): the quick-add label boxes now suggest saved labels
+  as tap-to-fill pills while typing (Food: its saved label list; Bills: names
+  from its own past transactions). Launcher-only; on-budget.html stays v3.83.
   CHANGED (PET-106, v11.02): On Budget home card now has inline Food / Bills
   quick-add inputs (amount + optional label) in place of the two launch buttons.
   Needs on-budget.html v3.83. No other files affected.
@@ -3125,6 +3142,79 @@ async function launchOBAction(e, action) {
 // typed is lost. Needs on-budget.html v3.83.
 let _obQuickBusy = false;
 
+// ── Label suggestions (PET-107 v11.03) ───────────────────────────────
+// Pills appear only while the label box has text that matches a saved label.
+// Food: On Budget's saved label list (data.ftLabels.items). Bills: the names
+// on its own past transactions (data.bills.tx), skipping deleted/skipped
+// entries and the generic 'Spend'/'Income' fallbacks. Read straight from the
+// on_budget_v1 localStorage key (same origin; same source the card stats use),
+// re-read on focus so it is current, and never written to. If the key is
+// missing or unreadable there are simply no suggestions.
+let _obSuggCache = { food: [], bills: [] };
+function obQuickLoadLabels() {
+  const out = { food: [], bills: [] };
+  try {
+    const raw = localStorage.getItem('on_budget_v1');
+    if (!raw) return out;
+    const parsed = JSON.parse(raw);
+    const d = parsed.data || parsed;
+    ((d.ftLabels && d.ftLabels.items) || []).forEach(l => {
+      if (l && !l._deleted && l.name) out.food.push({ name: String(l.name), count: l.count || 0, last: l.lastUsed || '' });
+    });
+    const seen = {};
+    ((d.bills && d.bills.tx) || []).forEach(t => {
+      if (!t || t._deleted || t.skipped || !t.name) return;
+      const nm = String(t.name).trim();
+      const k = nm.toLowerCase();
+      if (!nm || k === 'spend' || k === 'income') return;
+      const when = t.updated_at || t.date || '';
+      const e = seen[k] || (seen[k] = { name: nm, count: 0, last: '' });
+      e.count++;
+      if (when >= e.last) { e.last = when; e.name = nm; }
+    });
+    out.bills = Object.keys(seen).map(k => seen[k]);
+  } catch (e) { /* unreadable: no suggestions */ }
+  return out;
+}
+function obQuickMatches(kind, q) {
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  return _obSuggCache[kind].filter(l => l.name.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const ap = a.name.toLowerCase().startsWith(q) ? 0 : 1, bp = b.name.toLowerCase().startsWith(q) ? 0 : 1;
+      return ap - bp || b.count - a.count || (b.last || '').localeCompare(a.last || '');
+    }).slice(0, 5);
+}
+function obQuickSuggest(input, reload) {
+  const form = input.closest('form'), box = form && form.querySelector('.ob-quick-sugg');
+  if (!box) return;
+  if (reload) _obSuggCache = obQuickLoadLabels();
+  const q = input.value;
+  let m = obQuickMatches(form.dataset.kind, q);
+  // Hide when the only match is exactly what is already typed.
+  if (m.length === 1 && m[0].name.toLowerCase() === q.trim().toLowerCase()) m = [];
+  box.textContent = '';
+  m.forEach(l => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'ob-quick-pill'; b.dataset.label = l.name; b.textContent = l.name;
+    box.appendChild(b);
+  });
+  box.hidden = !m.length;
+}
+function obQuickSuggestHideSoon(input) {
+  setTimeout(() => { const box = input.closest('form').querySelector('.ob-quick-sugg'); if (box && document.activeElement !== input) { box.hidden = true; } }, 150);
+}
+function obQuickPick(e) {
+  const b = e.target.closest('.ob-quick-pill');
+  if (!b) return;
+  e.stopPropagation();
+  const form = b.closest('form');
+  const lbl = form.querySelector('.ob-quick-lbl'), amt = form.querySelector('.ob-quick-amt');
+  lbl.value = b.dataset.label;
+  const box = form.querySelector('.ob-quick-sugg'); box.hidden = true; box.textContent = '';
+  (amt.dataset.raw ? lbl : amt).focus();
+}
+
 // Same pence-first entry as On Budget's attachPennyInput: digits only,
 // last two are pence ("450" -> 4.50), raw pence kept in dataset.raw.
 function obQuickPenny(el) {
@@ -3178,6 +3268,7 @@ async function obQuickSubmit(e) {
     });
     if (res && res.ok) {
       amtEl.value = ''; amtEl.dataset.raw = ''; lblEl.value = '';
+      const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       switchTo('budget', document.querySelector('[data-target="budget"]'));
     } else {
