@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v1.16
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Test &amp; Issues v1.76</title>
+<title>Test &amp; Issues v1.77</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f97316' text-anchor='middle'>🚦</text></svg>">
 <style>
   :root {
@@ -478,7 +478,7 @@
 
 <!-- ── Nav ── -->
 <nav id="nav">
-  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.76</span><span id="storage-warn" onclick="openSyncModal()" title="Browser storage is full — tap for details" style="display:none;margin-left:8px;font-size:11px;font-weight:700;color:var(--orange);cursor:pointer">⚠ Storage full</span></div>
+  <div class="nav-title">🚦 <span>Test</span> &amp; Issues <span class="nav-ver">v1.77</span><span id="storage-warn" onclick="openSyncModal()" title="Browser storage is full — tap for details" style="display:none;margin-left:8px;font-size:11px;font-weight:700;color:var(--orange);cursor:pointer">⚠ Storage full</span></div>
   <div class="nav-spacer"></div>
   <div class="sync-badge state-local" id="sync-badge" onclick="openSyncModal()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
 </nav>
@@ -1154,7 +1154,7 @@
      manifest-schema, sync, or data logic touched — verified via
      node --check, duplicate ID scan, dangling handler scan, and a
      functional test of the shared functions. -->
-<script src="pal-shared.js?v=1.76"></script>
+<script src="pal-shared.js?v=1.77"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // STORAGE ABSTRACTION
@@ -1236,22 +1236,61 @@ function _setStorageWarn(on) {
   const w = document.getElementById('storage-warn');
   if (w) w.style.display = on ? '' : 'none';
 }
+
+// v1.77/TI-089: CLOUD-FIRST LOCAL CACHE. ti_v1 had grown to ~2 MB (every
+// app's whole version history plus legacy issues) — all of it already in
+// Supabase, and re-fetched in full on every session anyway. Every app on
+// this origin shares one browser quota (~5 MB in Safari on the Mac), so a
+// 2 MB cache here was refused outright and starved everyone else.
+// Policy now: if the serialised data is over LOCAL_CACHE_MAX_KB, there is
+// a live session, nothing is waiting in PalSync's retry queue AND none of
+// this app's own pushes has failed (_pendingPush), the local copy is NOT
+// written (and a stale one is removed) — "cloud mode". The moment a push
+// fails the full wrapper is written best-effort again, exactly as before
+// v1.77, so an unsynced edit still has a local copy to fall back on. Under
+// the cap (a small dataset) behaviour is unchanged. See test-issues entry
+// in PeteAppsChangeLog.md.
+const LOCAL_CACHE_MAX_KB = 300;
+const _pendingPush = new Set(); // 'app:<id>' | 'issue:<id>' | 'meta' — pushes that failed and haven't succeeded since
+let _cloudMode   = false;       // true once a save was skipped under the policy above
+let _cloudLoaded = false;       // true once the first pull settled (or there is no session) — drives the empty-state wording
+function _markPending(k)  { _pendingPush.add(k); try { saveState(); } catch (_) {} } // write the local fallback now
+function _clearPending(k) { _pendingPush.delete(k); }
+
 function save(wrapper) {
   wrapper.lastUpdated = new Date().toISOString();
   const _t0 = _now();
+  const hasCloud = !!(window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession());
+  // Fast path: already in cloud mode and still safe — skip serialising ~2 MB on every edit.
+  if (_cloudMode && hasCloud && _pendingPush.size === 0 && window.PalSync.retryQueueLength() === 0) return true;
+  let res;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(wrapper));
-  } catch (e) {
+    res = window.PalSync.cacheSet(STORAGE_KEY, JSON.stringify(wrapper), { maxKB: LOCAL_CACHE_MAX_KB, cloudSafe: _pendingPush.size === 0 });
+  } catch (e) { res = { stored: false, mode: 'failed', error: e }; }
+
+  if (res.mode === 'cloud-only') {
+    if (!_cloudMode) {
+      _cloudMode = true;
+      try { addSyncLog('Local cache off — ' + Math.round(res.kb) + ' KB of data is held in the cloud only' + (res.freedKB ? ' (freed ' + Math.round(res.freedKB) + ' KB of browser storage)' : ''), 'info'); } catch (_) {}
+    }
+    if (_storageFull) { _storageFull = false; _setStorageWarn(false); } // nothing is being written, so nothing is failing
+    return true;
+  }
+
+  if (res.mode === 'failed') {
     if (!_storageFull) {
       _storageFull = true;
       _setStorageWarn(true);
-      const hasCloud = !!(window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession());
-      try { addSyncLog('Local cache write failed (' + (e && e.message || 'storage error') + ') — ' + (hasCloud ? 'cloud copy is unaffected' : 'NO cloud session: export a backup now'), 'err'); } catch (_) {}
+      const cloudHolds = hasCloud && _pendingPush.size === 0; // a failed push means the cloud does NOT hold the latest edit
+      const msg = (res.error && res.error.message) || 'storage error';
+      try { addSyncLog('Local cache write failed (' + msg + ') — ' + (cloudHolds ? 'cloud copy is unaffected' : (hasCloud ? 'a cloud push has also failed: export a backup now' : 'NO cloud session: export a backup now')), 'err'); } catch (_) {}
       // Delayed so it lands after the caller's own immediate toast (e.g. "Marked passed") instead of being overwritten by it.
-      setTimeout(() => { try { toast(hasCloud ? '⚠ Browser storage full — changes are kept in the cloud only' : '⚠ Browser storage full and not synced — export a backup now'); } catch (_) {} }, 450);
+      setTimeout(() => { try { toast(cloudHolds ? '⚠ Browser storage full — changes are kept in the cloud only' : '⚠ Browser storage full and not fully synced — export a backup now'); } catch (_) {} }, 450);
     }
     return false;
   }
+
+  _cloudMode = false; // stored locally
   if (_storageFull) {
     _storageFull = false;
     _setStorageWarn(false);
@@ -1369,11 +1408,32 @@ function copyFailureReport() {
 function loadState() {
   _wrapper = load();
   state    = _wrapper.data;
+  // v1.77/TI-089: the wrapper is no longer persisted in cloud mode, so the
+  // "last exported" date (a backup reminder) lives in its own tiny key.
+  try { if (!_wrapper.lastExported) { const le = localStorage.getItem('ti_last_exported'); if (le) _wrapper.lastExported = le; } } catch (_) {}
 }
 
 function saveState() {
   save(_wrapper);
+  writeTiStat();
   // Sync is triggered per-entity by the callers — saveState itself is local-only
+}
+
+// v1.77/TI-089: the launcher card used to parse the whole ti_v1 for two counts.
+// With the local cache off that key may not exist, so the counts now travel in
+// a tiny dedicated key (same pattern as pal_ftt_stat / pal_vault_stat). Same
+// arithmetic the launcher used (tombstones are not excluded — unchanged).
+// Never overwrites with zeros from a not-yet-loaded (empty) state.
+function writeTiStat() {
+  try {
+    if (!Object.keys(state.apps).length && !Object.keys(state.issues).length) return;
+    const openIssues = Object.values(state.issues).filter(i => !i.status || i.status === 'open').length;
+    let openTests = 0;
+    Object.values(state.apps).forEach(app => (app.versions || []).forEach(ver => (ver.tests || []).forEach(t => {
+      if (!t.status || t.status === 'open') openTests++;
+    })));
+    localStorage.setItem('pal_ti_stat', JSON.stringify({ openIssues: openIssues, openTests: openTests, updatedAt: new Date().toISOString() }));
+  } catch (e) { /* a convenience cache — never let it block a save */ }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1670,7 +1730,7 @@ function renderTab(tab) {
   if (tab==='apps')    renderApps();
   if (tab==='tests')   {
     resetTestFilter();
-    if (!_testScopeInit) { // v1.76/TI-088: first visit this load → open on the build to test
+    if (!_testScopeInit && activeApps().length) { // v1.76/TI-088: first visit this load → open on the build to test (v1.77: only once there is data — with the local cache off, the first render is empty)
       _testScopeInit = true;
       const sc = defaultTestScope();
       if (sc && !testAppFilter) { testAppFilter = sc.appId; testVersionFilter = sc.version; }
@@ -1734,7 +1794,7 @@ function renderKanban() {
   if (!kbAppSel) return;
   let prevApp = kbAppSel.value;
   let _kbInitVer = null;
-  if (!_kbScopeInit) { // v1.76/TI-088: first render this load → open on the build to test
+  if (!_kbScopeInit && apps.length) { // v1.76/TI-088: first render this load → open on the build to test (v1.77: only once there is data)
     _kbScopeInit = true;
     const sc = defaultTestScope();
     if (sc && !prevApp) { prevApp = sc.appId; _kbInitVer = sc.version; }
@@ -3375,6 +3435,7 @@ async function confirmIssueImport() {
 // ══════════════════════════════════════════════════════════════════
 function exportData() {
   _wrapper.lastExported = new Date().toISOString();
+  try { localStorage.setItem('ti_last_exported', _wrapper.lastExported); } catch (_) {} // v1.77/TI-089 — see loadState()
   save(_wrapper);
   const blob = new Blob([JSON.stringify(_wrapper, null, 2)], {type:'application/json'});
   const url  = URL.createObjectURL(blob);
@@ -3402,7 +3463,10 @@ function importBackup(file) {
       if (!confirm('This will replace ALL current data with the backup. Continue?')) return;
       _wrapper = newWrapper;
       state    = _wrapper.data;
-      save(_wrapper);
+      // v1.77/TI-089: a restore only exists locally until pushed, so it must NOT be skipped by cloud mode —
+      // _markPending() forces the full local write (as before v1.77) until a successful Push clears it.
+      _markPending('restore');
+      if (window.PalSync.hasSession()) addSyncLog('Backup restored locally — press Push to send it to the cloud','info');
       renderTab(currentTab);
       refreshStats();
       renderStorageInfo();
@@ -3448,6 +3512,7 @@ function renderStorageInfo() {
     <div class="stat-chip ${_wrapper.lastExported?'green':'red'}"><span>Exported:</span> <b>${exp}</b></div>
     <div class="stat-chip"><span>Schema:</span> <b>v${_wrapper.version||1}</b></div>
     ${_storageFull ? '<div class="stat-chip red"><span>Local cache:</span> <b>FULL — writes failing</b></div>' : ''}
+    ${_cloudMode ? '<div class="stat-chip green"><span>Local cache:</span> <b>off — data is held in the cloud</b></div>' : ''}
   `;
   // v1.76/TI-087: every app on this origin shares one browser quota, so
   // show the whole origin — largest keys first — to see who is using it.
@@ -3713,33 +3778,34 @@ function runDataIntegrityCheck() {
 async function syncIssue(issue) {
   if (!window.PalSync.hasSession()) return;
   issue.updatedAt = new Date().toISOString();
-  try { setSyncState('syncing'); await _tiIssues.upsert(issue.id, issue); setSyncState('synced'); addSyncLog('Issue '+issue.id+' synced','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
+  try { setSyncState('syncing'); await _tiIssues.upsert(issue.id, issue); _clearPending('issue:'+issue.id); setSyncState('synced'); addSyncLog('Issue '+issue.id+' synced','ok'); }
+  catch(err) { setSyncState('error'); addSyncLog('Issue sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); _markPending('issue:'+issue.id); }
 }
 
 async function syncDeleteIssue(issueId, snapshot) {
   if (!window.PalSync.hasSession()) return;
-  try { setSyncState('syncing'); await _tiIssues.tombstone(issueId, snapshot||{id:issueId}); setSyncState('synced'); addSyncLog('Issue '+issueId+' tombstoned in cloud','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('Issue delete sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
+  try { setSyncState('syncing'); await _tiIssues.tombstone(issueId, snapshot||{id:issueId}); _clearPending('issue:'+issueId); setSyncState('synced'); addSyncLog('Issue '+issueId+' tombstoned in cloud','ok'); }
+  catch(err) { setSyncState('error'); addSyncLog('Issue delete sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); _markPending('issue:'+issueId); }
 }
 
 async function syncApp(app) {
   if (!window.PalSync.hasSession()) return;
   app.updatedAt = new Date().toISOString();
-  try { setSyncState('syncing'); await _tiApps.upsert(app.id, app); setSyncState('synced'); addSyncLog('App '+app.id+' synced','ok'); }
-  catch(err) { setSyncState('error'); addSyncLog('App sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
+  try { setSyncState('syncing'); await _tiApps.upsert(app.id, app); _clearPending('app:'+app.id); setSyncState('synced'); addSyncLog('App '+app.id+' synced','ok'); }
+  catch(err) { setSyncState('error'); addSyncLog('App sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); _markPending('app:'+app.id); }
 }
 
 async function syncMeta() {
   if (!window.PalSync.hasSession()) return;
-  try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); addSyncLog('Meta synced','ok'); }
-  catch(err) { addSyncLog('Meta sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
+  try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); _clearPending('meta'); addSyncLog('Meta synced','ok'); }
+  catch(err) { addSyncLog('Meta sync failed: '+window.PalSync.errorHint(err.status, err.message),'err'); _markPending('meta'); }
 }
 
 // TI-009: Direct versions — throw on error, used in awaited import flow
-async function syncAppDirect(app)     { app.updatedAt = new Date().toISOString(); await _tiApps.upsert(app.id, app); }
-async function syncIssueDirect(issue) { issue.updatedAt = new Date().toISOString(); await _tiIssues.upsert(issue.id, issue); }
-async function syncMetaDirect()       { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); }
+// v1.77/TI-089: each also records a failed push (and rethrows, as before) so the local fallback copy gets written.
+async function syncAppDirect(app)     { app.updatedAt = new Date().toISOString(); try { await _tiApps.upsert(app.id, app); _clearPending('app:'+app.id); } catch (e) { _markPending('app:'+app.id); throw e; } }
+async function syncIssueDirect(issue) { issue.updatedAt = new Date().toISOString(); try { await _tiIssues.upsert(issue.id, issue); _clearPending('issue:'+issue.id); } catch (e) { _markPending('issue:'+issue.id); throw e; } }
+async function syncMetaDirect()       { try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); _clearPending('meta'); } catch (e) { _markPending('meta'); throw e; } }
 
 // ── Full push (all local data → cloud) ─────────────────────────
 async function syncPush() {
@@ -3750,6 +3816,7 @@ async function syncPush() {
     for (const app of Object.values(state.apps)) { await _tiApps.upsert(app.id, app); count++; }
     for (const issue of Object.values(state.issues)) { await _tiIssues.upsert(issue.id, issue); count++; }
     await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq });
+    _pendingPush.clear(); // v1.77/TI-089: everything just reached the cloud
     setSyncState('synced');
     addSyncLog(`Push complete — ${count} records written`,'ok');
   } catch(err) { setSyncState('error'); addSyncLog('Push failed: '+window.PalSync.errorHint(err.status, err.message),'err'); }
@@ -3837,6 +3904,7 @@ async function syncPull() {
       try { await _tiMeta.upsert('__meta__', { nextSeq: state.nextSeq }); } catch(err) {}
     }
 
+    _cloudLoaded = true; syncEmptyCopy(); // v1.77/TI-089
     saveState();
     renderTab(currentTab);
     refreshStats();
@@ -3849,10 +3917,27 @@ async function syncPull() {
     renderPerfInfo();
   } catch(err) {
     setSyncState('error'); addSyncLog('Pull failed: '+window.PalSync.errorHint(err.status, err.message),'err');
+    _cloudLoaded = true; syncEmptyCopy(); // v1.77/TI-089: stop saying "Loading" — the fetch has settled (failed)
     _perfTimings.syncPullSamples.push(_now() - _syncT0);
     if (_perfTimings.syncPullSamples.length > 5) _perfTimings.syncPullSamples.shift();
     renderPerfInfo();
   }
+}
+
+// v1.77/TI-089: with the local cache off the first render is empty until the
+// first pull lands. "No apps tracked yet — import a manifest" would wrongly
+// suggest the data is gone, so say it is loading until the fetch has settled.
+function syncEmptyCopy() {
+  const loading = !_cloudLoaded;
+  [['apps-empty',   'No apps tracked yet', 'Import a release manifest to register your first app and version.'],
+   ['tests-empty',  'No tests to show',    'Import a release manifest to load test scripts.'],
+   ['issues-empty', 'No open issues',      'All clear — log new issues here or via failing a test.']
+  ].forEach(([id, title, sub]) => {
+    const el = document.getElementById(id); if (!el) return;
+    const t = el.querySelector('.empty-title'), u = el.querySelector('.empty-sub');
+    if (t) t.textContent = loading ? 'Loading from the cloud…' : title;
+    if (u) u.textContent = loading ? 'Your data is stored in Supabase and is being fetched.' : sub;
+  });
 }
 
 function openSyncModal() {
@@ -3905,6 +3990,7 @@ window.PalSync.initSession({
   },
   onNoSession: () => {
     setSyncState('local');
+    _cloudLoaded = true; syncEmptyCopy(); // v1.77/TI-089
     addSyncLog('No PAL_SESSION received — running locally','info');
     // Non-blocking banner
     const banner = document.createElement('div');
@@ -3948,6 +4034,7 @@ try {
   }
 } catch (e) { /* localStorage unavailable — tab just stays as before */ }
 applyIssueVisibility(); // v1.76/TI-088 — before first render
+syncEmptyCopy(); // v1.77/TI-089 — "Loading from the cloud…" until the first pull settles
 showTab('kanban');
 refreshStats();
 _perfTimings.initMs = _now() - _bootT0; // TI-076: capture before renderStorageInfo so the panel shows it on first open

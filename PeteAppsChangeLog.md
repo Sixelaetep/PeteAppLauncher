@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v10.98 | v10.89 – v10.98. Earlier history is in inline comments in `index.html` (not supplied). ⚠ v10.99 is referenced by Gigs & Trips v7.101 but has no launcher entry |
+| P Apps Launcher | `index.html` | v11.00 | v10.89 – v10.98 and v11.00. Earlier history is in inline comments in `index.html` (not supplied). ⚠ v10.99 (the version in the supplied file before v11.00, and referenced by Gigs & Trips v7.101) still has no launcher entry |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v2.7 | v1.0 – v2.7 (complete). ⚠ v2.2 and v2.6 are each used for two builds |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -24,7 +24,7 @@ This is the consolidated historical development changelog for every application 
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.81 | v1.0 – v3.43 and v3.73 – v3.81. ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.70 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 |
-| Test & Issues | `test-issues.html` | v1.76 | v1.73 – v1.76. Earlier history is inline in `test-issues.html` (not supplied) |
+| Test & Issues | `test-issues.html` | v1.77 | v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
 **Applications referenced in the changelogs but with no changelog supplied**
 
@@ -40,7 +40,7 @@ This is the consolidated historical development changelog for every application 
 
 | Component | Latest version established | Notes |
 |---|---:|---|
-| `pal-shared.js` | pal-config section v1.2; pal-sync section v1.12 | Combined bundle of pal-config.js + pal-sync.js + pal-utils.js |
+| `pal-shared.js` | pal-config section v1.2; pal-sync section v1.13 | Combined bundle of pal-config.js + pal-sync.js + pal-utils.js. The three standalone files are retired (no app loads them) |
 | `pal-gcal.js` | v3 | Google Calendar access layer; consumers PeteGCal and Gigs & Trips |
 
 ---
@@ -86,11 +86,28 @@ Combined bundle of `pal-config.js` + `pal-sync.js` + `pal-utils.js`, concatenate
   - Fortnight Tracker v3.73 (FT-065, 3 Oct 2026): 500 KB, called inside the `pullFromCloud()` success callback.
   - ⚠ FT-065 says the mechanism was rolled out "across the suite this round … and several others"; the other apps are not named in the supplied material.
 - Follow-up: Test & Issues v1.76 (TI-087) found the trim never fired in the reported quota case.
+- Further follow-up: Test & Issues v1.77 (TI-089) stops caching its ~2 MB locally at all; see `PalSync.cacheSet()` below. The `trimIfLarge('ti_v1', 500)` call is left in place and is now effectively inert for that key.
+
+### `PalSync.cacheSet(key, value, opts)` and `PalSync.storageUsage()` — TI-089
+
+**pal-sync section v1.13. Introduced in Test & Issues v1.77.** Purely additive: two new members on the public object, no existing function changed, so any app that does not call them behaves exactly as before.
+
+- `storageUsage()` — read-only scan of the origin: `{ totalKB, keys: [{ key, kb }] }`, largest first, same `(key + value) * 2` UTF-16 basis as `trimIfLarge`. Returns `null` if localStorage is unavailable.
+- `cacheSet(key, value, { maxKB, cloudSafe })` — quota-safe write for a key that is only a cache of Supabase. Never throws. Returns `{ stored, mode, kb, ... }`:
+  - `mode: 'cloud-only'` — value is over `maxKB`, the caller asserts `cloudSafe` (nothing unsynced), there is a live session and `retryQueueLength() === 0`: nothing is written and a stale copy of the key is removed (`freedKB` reported).
+  - `mode: 'local'` — written.
+  - `mode: 'failed'` — the browser refused; `quota: true` when the reason was space.
+  - In every case where any of the four conditions does not hold, it writes rather than skips.
+- The library cannot see an app's own failed pushes, so `cloudSafe` is the caller's claim. Not valid for Gigs & Trips (bespoke sync; `retryQueueLength()` says nothing about its pending writes) — same rule as `trimIfLarge`.
+- Adopted by: Test & Issues v1.77 (300 KB cap). Available to every other app; none has adopted it yet.
+- Cache-busting: Test & Issues loads `pal-shared.js?v=1.77`. The launcher still loads `?v=10.87` (it does not use the new functions) and other apps keep their existing query strings, so they keep running the previous copy until they next bump it — safe because the change is additive.
+- Tested: see Test & Issues v1.77 (unit checks of every `cacheSet` branch and `storageUsage`, plus `trimIfLarge` regression). Not tested in a real browser.
 
 ### pal-sync section — version history
 
 Recorded in the pal-sync section header of `pal-shared.js` (no dates given). App cross-references are listed only where an app changelog records them.
 
+- **v1.13 — storage helpers (TI-089).** `storageUsage()` and `cacheSet()`; additive, see the section above. Affected: Test & Issues v1.77.
 - **v1.12 — opt-in shared mode.** `table(name, { shared: true })` and `fetchTableRows(name, { shared: true })`. Shared fetch drops the `user_id` filter (RLS is the boundary), orders by `record_key` then `user_id`, and collapses duplicate `record_key`s to the newest `updated_at`. Shared upsert PATCHes by `record_key` alone and omits `user_id` from the PATCH body (no forked copy, no ownership change); POST of a new record still stamps the caller's `user_id`. The flag is carried in the retry queue. Compaction stays per-user. Callers without the flag behave byte-for-byte as before.
   - Affected: Film & TV Tracker v1.8 (FTT-013) — `pal_film_tracker` titles, services and settings. Must be deployed together with the app.
 - **v1.11 — tombstones no longer forgotten after one pull.** `pull()` no longer strips every `_deleted:true` record from `merged`; only deletes the cloud has confirmed leave the working set. An unconfirmed local tombstone whose id already exists in cloud is re-pushed on every pull (`retriedDeleteCount`). Root cause traced via On Budget ON--049 / ON--050 (resurrection of deleted records).
@@ -174,6 +191,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips.
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.00 — PET-104 — Test & Issues card reads `pal_ti_stat`
+
+- Companion to Test & Issues v1.77 (TI-089). `statTiSub()` now reads the small `pal_ti_stat` summary first (`openIssues`, `openTests`) and falls back to parsing `ti_v1` exactly as before, so the card works with both the new and an older Test & Issues build. A corrupt `pal_ti_stat` also falls back to `ti_v1`; with neither key the card says "Open app to load".
+- Why: Test & Issues no longer keeps `ti_v1` in the browser when it is large (it was exhausting the shared storage quota), so the card would otherwise have shown "Open app to load" permanently.
+- Version: title and nav badge set to v11.00. `pal-shared.js?v=10.87` deliberately unchanged (the launcher does not use the new pal-sync v1.13 functions).
+- ⚠ Version numbering: the supplied `index.html` was v10.99 although the previous changelog entry is v10.98 (v10.99 is referenced only by Gigs & Trips v7.101 and its `statGigs` comment about `gat_v1`). v10.99 has no entry of its own; this release continues from the file, not from the changelog. v11.00 was chosen rather than v10.100 so versions still sort sensibly.
+- Tested: `statTiSub` extracted from the real `index.html` and run against the new key, the old key, both, neither, and a corrupt key (6 checks); `node --check` on the launcher's inline script. Not tested: the launcher in a browser, the card refreshing live while Test & Issues is open.
 
 ### v10.98 — PET-103 / PGC-003 — PeteGCal added: new app, nav icon, home card, iframe
 
@@ -2080,6 +2105,20 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 
 `test-issues.html`. From v1.73, full entries go in the `.md`; the inline comment keeps a pointer. Local key `ti_v1`; `APP_REGISTRY` drives app names, icons and prefixes. Hosts HTML Vault as an embedded tab (TI-083, not in the supplied changelog).
 
+### v1.77 — TI-089 — Cloud-first local cache (Test & Issues stops exhausting browser storage)
+
+- **Problem (measured on Pete's Mac, Safari).** `ti_v1` was ~2 MB of data that is already in Supabase and is re-fetched in full on every session anyway. With the rest of the suite at 3.3 MB the write was refused ("Pull complete — 624 pulled, local cache full — not saved locally"; "Local cache write failed (The quota has been exceeded.)"). Sync itself worked (TI-087). Details of the arithmetic are under Cross-App Development → shared per-origin quota.
+- **Policy.** If the serialised data exceeds `LOCAL_CACHE_MAX_KB` (300), there is a live session, `PalSync.retryQueueLength()` is 0 **and** none of this app's own pushes has failed, the local copy is not written and any stale one is removed ("cloud mode"). Otherwise behaviour is exactly as before v1.77, including the TI-087 warnings. Under the cap (small datasets) nothing changes. Once in cloud mode a fast path skips serialising ~2 MB on every edit.
+- **Failed pushes are tracked.** `_pendingPush` records `app:<id>` / `issue:<id>` / `meta` when `syncApp`, `syncIssue`, `syncDeleteIssue`, `syncMeta` or the `…Direct` import variants fail (the `…Direct` ones still rethrow). A failure immediately writes the full local copy as a safety net; a later successful push of that record, or a successful **Push**, clears it, and the next save drops the local copy again. When both the push and the local write fail the message says so ("a cloud push has also failed: export a backup now") instead of claiming the cloud holds the edit.
+- **Launcher card.** New tiny key `pal_ti_stat` `{ openIssues, openTests, updatedAt }`, written on every `saveState()` (same pattern as `pal_ftt_stat` / `pal_vault_stat`; never overwritten by an empty not-yet-loaded state). Same arithmetic the launcher used on `ti_v1`, tombstones not excluded (unchanged). Launcher v11.00 (PET-104) reads it first.
+- **First render with no local copy.** Empty views would have said "No apps tracked yet — import a manifest", implying data loss, so they say "Loading from the cloud…" until the first pull settles (success, failure, or no session after the 3 s timeout). The TI-088 testing-first landing (`_testScopeInit` / `_kbScopeInit`) is now only consumed once there is data, otherwise the empty first render would have used it up before the pull arrived.
+- **Backup/restore.** `lastExported` (the backup reminder) was stored only inside the wrapper, so it would have reset to "Never" every load; it now also lives in `ti_last_exported`. **Restore from backup** previously wrote only the local copy; it now calls `_markPending('restore')` so cloud mode cannot skip it, until a **Push** succeeds.
+- **Sync & Backup → Storage** shows a "Local cache: off — data is held in the cloud" chip in cloud mode.
+- Shared: `pal-shared.js` pal-sync v1.13 (`cacheSet`, `storageUsage`) — see Shared Components. Loaded as `pal-shared.js?v=1.77`. No data-model or Supabase change; no schema change; manifest schema unchanged.
+- **Known trade-offs.** (1) Test & Issues needs a connection and a session to show data; offline or logged-out it starts empty (Export backup still works). (2) A few milliseconds between an edit and its push confirming have no local copy; closing the tab inside that window loses the edit. (3) Launcher counts still include tombstoned records, as before. (4) The cloud data itself is unchanged: the 606 legacy issues (~536 KB) and ever-growing version history remain, and are still pulled in full each session. Archiving them would delete cloud data and is a separate decision.
+- Tested (60 checks, real `test-issues.html` + real `pal-shared.js` in jsdom with a fake Supabase and a quota-limited localStorage): the v1.76 build reproduced the failure in the same harness (control); v1.77 pulls cleanly, writes no `ti_v1`, leaves every other key byte-identical and adds <5 KB; edits reach the cloud; failed push → local fallback written, tracked, cleared by Push, then cloud mode resumes; push failure with storage full → warning without a false "cloud holds it" claim; small dataset still cached locally; reload with no local copy (wording, testing-first landing); no-session wording; export date survives reload; real `importBackup`; release-manifest import success and failure; every `cacheSet` branch and `storageUsage`; `trimIfLarge` regression; launcher `statTiSub` with the new key, the old key, both, neither and a corrupt key.
+- Not tested: real Safari / the real 5 MB limit, real Supabase, the launcher card in a browser iframe, mobile layout, offline behaviour on a device.
+
 ### v1.76 — TI-087, TI-088 — Quota-safe local saves and testing-first mode
 
 - **TI-087 — "Pull failed: The quota has been exceeded".** `save()` called `localStorage.setItem()` unguarded; when the origin quota was full, `QuotaExceededError` threw out of `saveState()` inside `syncPull()`'s try block, so a successful pull was reported as failed. Reproduced on v1.75.
@@ -2131,6 +2170,8 @@ Significant changes that affected the application ecosystem as a whole. Each ite
   - quota-safe saves in Gigs & Trips (GIG-089, v7.94) and Test & Issues (TI-087, v1.76);
   - Gigs & Trips storage report, key classification and measured limit (v7.93, v7.101, v7.102). Real device numbers (v7.102): limit ~3.57 M characters, 48% used, 86% belonging to apps other than Gigs & Trips, mainly `ftt_v1` (1.19 MB) and `gym_tracker_v1` (713 KB);
   - Gigs & Trips retiring its duplicate `gat_v1_clean` copy (v7.101).
+  - **Safari on the Mac, October 2026 (TI-089):** the origin held 3,340.7 KB; Test & Issues' pull then tried to write `ti_v1` at 2,005.7 KB (18 apps' version history 1,469 KB + 606 legacy issues 536 KB) = 5,346 KB, over a ~5,120 KB (5 MB, UTF-16) ceiling by ~225 KB. This matches the observed "local cache full" failure exactly and **suggests the real ceiling on that Mac is ~5 MB, not the ~3.57 M characters (~7 MB) recorded for another device at v7.102** — inferred from arithmetic, not yet re-measured with the Measure real limit button on the Mac. Largest keys at the time: `ftt_v1` 1,221 KB, `gym_tracker_v1` 713 KB, `gat_v1` 466 KB, `on_budget_v1` 169 KB.
+  - Resolved for Test & Issues by v1.77 (cloud-first local cache, `PalSync.cacheSet`, launcher `pal_ti_stat`). Not yet addressed: Film & TV Tracker `availability[].url` (~300 KB estimated, nothing reads it), Gym Tracker, the Fantasy Football caches.
 - **Shared data between Pete and Lex.** Gigs & Trips uses an RLS allow-list of both UIDs. Film & TV Tracker adopted the same RLS (launcher v10.92 / PET-097) and needed pal-sync v1.12 shared mode (FTT-013, v1.8) to actually read both users' rows. Fantasy Football Tracker went the other way: per-user scoping of local caches (v1.33) and a `KNOWN_USERS` check (v1.29) so each person sees only their own team.
 - **Cross-app localStorage reads (no postMessage):**
   - `fn_tracker_v5` (Fortnight Tracker) read by PeteGCal and Gigs & Trips for the working-day alert.
