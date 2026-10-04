@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v2.9</title>
+<title>Film &amp; TV Tracker v3.0</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -413,7 +413,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.9</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.0</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -781,7 +781,7 @@
 <script src="pal-shared.js?v=1.13"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v2.9 (FTT-001..FTT-040) — see film-tv-tracker.md.
+// FILM & TV TRACKER v3.0 (FTT-001..FTT-041) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -811,11 +811,9 @@ let currentBedtimeMax = 30;
 let _saveDebounce = null;
 
 // ── Storage ──────────────────────────────────────────────────────
-function loadState() {
+function loadState(raw) {   // v3.0: `raw` is the stored JSON text, read by initStorage() (IndexedDB, or localStorage as the fallback)
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      _slimRewritePending = raw.indexOf('"url"') !== -1;   // v2.9: a copy written by an older build still carries the dead availability links
       const parsed = JSON.parse(raw);
       state = Object.assign({ version: 1, titles: [], services: [], ignored: [], settings: { bedtimeMaxMinutes: 30, country: 'GB' } }, parsed);
     }
@@ -833,14 +831,21 @@ function seedDefaultServices() {
   }));
 }
 
-// ── Local cache writing (v2.9 / FTT-040) ─────────────────────────
-// localStorage is only a cache of the cloud copy and the origin's quota is shared by every app, so what is written here is a
-// SLIMMED copy of `state` — the in-memory state, the cloud rows and JSON backups are untouched. Dropped: availability[].url, the
-// TMDB "where to watch" page link that older builds repeated on every provider entry (about a dozen times per title); nothing
-// reads it. Every write goes through writeLocalState(), so a refused write (storage full) is reported instead of lost silently.
-let _slimRewritePending = false;
+// ── Local storage (v3.0 / FTT-041) ───────────────────────────────
+// The library is kept in IndexedDB (database ftt_db), not localStorage. localStorage is one small quota shared by every app on
+// this site (about 5 MB in Safari) and this library alone was over half of it, so saves were being refused ("storage full").
+// IndexedDB has its own, far larger, quota. localStorage remains (a) the automatic fallback if IndexedDB is unavailable and
+// (b) the source of an existing local copy, which is moved across once and then removed.
+// What is stored is the slimmed copy (no availability[].url, see v2.9). The in-memory state, the cloud rows and JSON backups are
+// unchanged. The FTT-039 trim is gone: it deleted the local copy after every pull once the library passed 2 MB.
+const IDB_NAME = 'ftt_db', IDB_STORE = 'kv', IDB_KEY = 'state';
+let _storageMode = 'ls';          // 'idb' once IndexedDB is open and readable; otherwise 'ls' (localStorage fallback)
+let _idb = null;
+let _legacyLsPresent = false;
+let _idbDirty = false, _idbBusy = false, _idbSilent = false;
 let _storageFailNotedAt = 0;
 let _lastLocalSave = { ok: true, at: null, quota: false };
+let _bootReadyResolve; const _bootReady = new Promise(r => { _bootReadyResolve = r; });   // the sync pull waits for the local copy to be loaded
 
 function slimTitleForStorage(t) {
   const av = t && t.availability;
@@ -855,34 +860,118 @@ function slimTitleForStorage(t) {
 function serialiseForStorage() {
   return JSON.stringify(Object.assign({}, state, { titles: (state.titles || []).map(slimTitleForStorage) }));
 }
-function writeLocalState(opts) {
-  opts = opts || {};
-  try {
-    localStorage.setItem(STORAGE_KEY, serialiseForStorage());
-    _lastLocalSave = { ok: true, at: new Date().toISOString(), quota: false };
-    _slimRewritePending = false;
-    return true;
-  } catch (e) {
-    const quota = !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014 || /quota/i.test(String(e.message || '')));
-    _lastLocalSave = { ok: false, at: new Date().toISOString(), quota: quota };
-    console.error('local save failed', e);
-    const now = Date.now();
-    if (!opts.silent && now - _storageFailNotedAt > 60000) {   // at most one warning a minute (the importer saves in a loop)
-      _storageFailNotedAt = now;
-      const cloudOk = window.PalSync.hasSession();
-      toast((quota ? 'Browser storage is full, so this device could not update its local copy. ' : 'This device could not update its local copy. ') +
-            (cloudOk ? 'Cloud sync is not affected.' : 'You are not connected to the cloud — download a backup from Sync & Backup.'), 'err');
-    }
-    return false;
+function isQuotaError(e) {
+  return !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014 || /quota/i.test(String(e.message || '')));
+}
+function noteLocalFailure(e, silent) {
+  const quota = isQuotaError(e);
+  _lastLocalSave = { ok: false, at: new Date().toISOString(), quota: quota };
+  console.error('local save failed', e);
+  const now = Date.now();
+  if (!silent && now - _storageFailNotedAt > 60000) {   // at most one warning a minute (the importer saves in a loop)
+    _storageFailNotedAt = now;
+    const cloudOk = window.PalSync.hasSession();
+    toast((quota ? 'Browser storage is full, so this device could not update its local copy. ' : 'This device could not update its local copy. ') +
+          (cloudOk ? 'Cloud sync is not affected.' : 'You are not connected to the cloud — download a backup from Sync & Backup.'), 'err');
   }
 }
 
-// Where the local space goes — read-only, for the Sync & Backup panel. Sizes use the browser's own measure (2 bytes per
-// character), the same basis as the other apps' storage reports, so the numbers can be compared across the suite.
+// ── IndexedDB plumbing ──
+function idbOpen(timeoutMs) {
+  return new Promise(resolve => {
+    let done = false; const fin = v => { if (!done) { done = true; resolve(v); } };
+    try {
+      if (!window.indexedDB) { fin(null); return; }
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE); };
+      req.onsuccess = () => fin(req.result);
+      req.onerror = () => fin(null);
+      req.onblocked = () => fin(null);
+      setTimeout(() => fin(null), timeoutMs || 3000);   // some browsers never answer (private modes) — fall back rather than hang
+    } catch (e) { fin(null); }
+  });
+}
+function idbGet() {
+  return new Promise((res, rej) => {
+    const tx = _idb.transaction(IDB_STORE, 'readonly'); const r = tx.objectStore(IDB_STORE).get(IDB_KEY);
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); tx.onabort = () => rej(tx.error || new Error('aborted'));
+  });
+}
+function idbPut(str) {
+  return new Promise((res, rej) => {
+    const tx = _idb.transaction(IDB_STORE, 'readwrite'); tx.objectStore(IDB_STORE).put(str, IDB_KEY);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error('aborted'));
+  });
+}
+
+// Called once at boot. Returns the stored JSON text to load (or null). Chooses IndexedDB when it works; if both an IndexedDB
+// copy and an old localStorage copy exist (e.g. an older build wrote one after the move) the one saved last wins.
+async function initStorage() {
+  let lsRaw = null;
+  try { lsRaw = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+  _legacyLsPresent = !!lsRaw;
+  _idb = await idbOpen(3000);
+  let idbRaw;
+  if (_idb) { try { idbRaw = await idbGet(); } catch (e) { _idb = null; } }
+  if (!_idb) { _storageMode = 'ls'; return lsRaw; }
+  _storageMode = 'idb';
+  let chosen = (typeof idbRaw === 'string' && idbRaw) ? idbRaw : null;
+  if (lsRaw) {
+    if (!chosen) chosen = lsRaw;
+    else { try { if ((JSON.parse(lsRaw).lastUpdated || '') > (JSON.parse(chosen).lastUpdated || '')) chosen = lsRaw; } catch (e) {} }
+  }
+  return chosen;
+}
+// Move an existing localStorage copy across: write it (slimmed) to IndexedDB, read it back to check, and only then remove the
+// localStorage key. If anything fails the localStorage copy is left exactly as it was and the app carries on in fallback mode.
+async function migrateLegacyLocalCopy() {
+  try {
+    const str = serialiseForStorage();
+    await idbPut(str);
+    const back = await idbGet();
+    if (typeof back !== 'string' || back.length !== str.length) throw new Error('read-back did not match');
+    localStorage.removeItem(STORAGE_KEY);
+    _lastLocalSave = { ok: true, at: new Date().toISOString(), quota: false };
+  } catch (e) {
+    _storageMode = 'ls';
+    console.error('moving the local copy to IndexedDB failed — staying on localStorage', e);
+  }
+}
+
+// ── Writing ──
+function writeLocalState(opts) {
+  opts = opts || {};
+  if (_storageMode === 'idb') {   // asynchronous; rapid calls (the importer) are coalesced into one write of the latest state
+    _idbDirty = true; _idbSilent = !!opts.silent; pumpIdb(); return true;
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, serialiseForStorage());
+    _lastLocalSave = { ok: true, at: new Date().toISOString(), quota: false };
+    return true;
+  } catch (e) { noteLocalFailure(e, opts.silent); return false; }
+}
+async function pumpIdb() {
+  if (_idbBusy) return;
+  _idbBusy = true;
+  try {
+    while (_idbDirty) {
+      _idbDirty = false;
+      try { await idbPut(serialiseForStorage()); _lastLocalSave = { ok: true, at: new Date().toISOString(), quota: false }; }
+      catch (e) { noteLocalFailure(e, _idbSilent); }
+    }
+  } finally { _idbBusy = false; }
+}
+function localSaved() {   // resolves once every queued local write has finished (used by tests and the export)
+  return new Promise(res => { const t = () => (!_idbBusy && !_idbDirty) ? res() : setTimeout(t, 5); t(); });
+}
+
+// Where the local space goes — read-only, for the Sync & Backup panel. Sizes use 2 bytes per character, the same basis as the
+// other apps' storage reports, so the numbers can be compared across the suite.
 function storageReport() {
   const kb = chars => chars * 2 / 1024;
-  const stored = localStorage.getItem(STORAGE_KEY) || '';
-  const out = { ownKB: kb(stored.length + STORAGE_KEY.length), fields: [], tombstones: { count: 0, kb: 0 }, deadKB: 0, origin: null };
+  const ser = serialiseForStorage();
+  let lsChars = 0; try { lsChars = (localStorage.getItem(STORAGE_KEY) || '').length; } catch (e) {}
+  const out = { mode: _storageMode, copyKB: kb(ser.length), lsKB: lsChars ? kb(lsChars + STORAGE_KEY.length) : 0, fields: [], tombstones: { count: 0, kb: 0 }, deadKB: 0, origin: null };
   const byField = {};
   (state.titles || []).forEach(t => {
     const slim = slimTitleForStorage(t);
@@ -890,10 +979,10 @@ function storageReport() {
     Object.keys(slim).forEach(k => { byField[k] = (byField[k] || 0) + k.length + 4 + (JSON.stringify(slim[k]) || '').length; });
   });
   const ranked = Object.keys(byField).map(k => ({ label: k, kb: kb(byField[k]) })).sort((a, b) => b.kb - a.kb);
-  out.fields = ranked.slice(0, 5);
-  const rest = ranked.slice(5).reduce((n, f) => n + f.kb, 0);
+  out.fields = ranked.slice(0, 8);
+  const rest = ranked.slice(8).reduce((n, f) => n + f.kb, 0);
   if (rest > 0) out.fields.push({ label: 'everything else', kb: rest });
-  out.deadKB = Math.max(0, kb(JSON.stringify(state).length - serialiseForStorage().length));
+  out.deadKB = Math.max(0, kb(JSON.stringify(state).length - ser.length));
   if (window.PalSync.storageUsage) {
     const u = window.PalSync.storageUsage();
     if (u) out.origin = { totalKB: u.totalKB, top: u.keys.slice(0, 3) };
@@ -903,8 +992,10 @@ function storageReport() {
 function storageInfoHtml() {
   const r = storageReport();
   const f = n => (n >= 100 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(1)) + ' KB';
-  let h = `This app's local copy &nbsp;<strong>${f(r.ownKB)}</strong>`;
-  if (r.origin) h += `<br>All apps on this site &nbsp;<strong>${f(r.origin.totalKB)}</strong> &nbsp;(this app ${Math.round(r.ownKB / r.origin.totalKB * 100)}%)`;
+  let h = `Stored in &nbsp;<strong>${r.mode === 'idb' ? 'IndexedDB' : 'localStorage (fallback)'}</strong>` +
+          `<br>This app's copy &nbsp;<strong>${f(r.copyKB)}</strong>` +
+          `<br>This app's use of shared localStorage &nbsp;<strong>${f(r.lsKB)}</strong>` +
+          `<br>All apps' localStorage &nbsp;<strong>${r.origin ? f(r.origin.totalKB) : 'not available'}</strong>`;
   h += `<br>Last local save &nbsp;<strong>${_lastLocalSave.ok ? 'OK' : '<span style="color:var(--red)">' + (_lastLocalSave.quota ? 'Failed — storage full' : 'Failed') + '</span>'}</strong>`;
   h += `<br>Last saved &nbsp;<strong>${state.lastUpdated ? new Date(state.lastUpdated).toLocaleString('en-GB') : 'Never'}</strong>` +
        `<br>Last exported &nbsp;<strong>${state.lastExported ? new Date(state.lastExported).toLocaleString('en-GB') : 'Never'}</strong>` +
@@ -913,7 +1004,7 @@ function storageInfoHtml() {
        r.fields.map(x => `${esc(x.label)} &nbsp;<strong>${f(x.kb)}</strong>`).join('<br>') +
        (r.tombstones.count ? `<br>Deleted titles awaiting sync (${r.tombstones.count}) &nbsp;<strong>${f(r.tombstones.kb)}</strong>` : '') +
        (r.deadKB > 0 ? `<br>Link data not stored on this device &nbsp;<strong>${f(r.deadKB)}</strong>` : '') +
-       (r.origin ? '<br><br>Largest items on this site:<br>' + r.origin.top.map(x => `${esc(x.key)} &nbsp;<strong>${f(x.kb)}</strong>`).join('<br>') : '') +
+       (r.origin ? '<br><br>Largest items in localStorage:<br>' + r.origin.top.map(x => `${esc(x.key)} &nbsp;<strong>${f(x.kb)}</strong>`).join('<br>') : '') +
        `</div></details>`;
   return h;
 }
@@ -3682,17 +3773,13 @@ function openDataModal() {
 function closeDataModal() { document.getElementById('dataModal').classList.remove('open'); }
 
 window.PalSync.initSession({
-  // FTT-039 — full history in film-tv-tracker.md. Threshold set well
-  // above the real current library size (safety net for future
-  // unbounded growth, not an active trim today — see the changelog for
-  // why trimming here can't actually reduce size the way it can for an
-  // app whose bloat is stale history rather than a real current library).
+  // FTT-039's trimIfLarge('ftt_v1', 2048) was removed in v3.0 (FTT-041): the real library is over 2 MB, so it deleted the local copy
+  // after every pull. The pull now waits for the local copy to be loaded (it is read asynchronously from IndexedDB).
   onSession: async () => {
+    await _bootReady;
     slog('PAL_SESSION received — user ' + (window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0, 8) + '…' : '?'));
     setSyncStatus('connecting');
     await syncPull();
-    const trimResult = window.PalSync.trimIfLarge('ftt_v1', 2048);
-    if (trimResult.trimmed) slog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
   },
   onRetryFlushed: (result) => { if (result.flushed) slog(`Retrying ${result.flushed} queued change(s) after reconnect — done`, 'ok'); setSyncStatus(_syncState); },
   onNoSession: () => {
@@ -3746,15 +3833,22 @@ function importJSON(evt) {
 // ══════════════════════════════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════════════════════════════
-loadState();
-// One-off upgrade: if any favourites had no order yet, write the numbers back now (a plain local write — no updatedAt
-// bumps, nothing pushed to the cloud) so stored data and JSON exports carry the order from the first open.
-// v2.9: the same plain local write also re-saves a copy written by an older build once, so the dead availability links leave storage on first open.
-const _orderChanged = [ensureFavouriteOrder(), ensureWatchlistOrder()].some(Boolean);
-if (_orderChanged || _slimRewritePending) writeLocalState();
-writeStatCache();   // v2.5: refresh the launcher card's cache on every open, so it picks up favourites right after an upgrade
-switchTab('library');
-renderAll();
+// Boot is asynchronous because the local copy now comes from IndexedDB. Nothing is drawn until it has loaded.
+(async () => {
+  try {
+    const raw = await initStorage();
+    loadState(raw);
+    if (_storageMode === 'idb' && _legacyLsPresent) await migrateLegacyLocalCopy();
+    // One-off upgrade: if any favourites had no order yet, write the numbers back now (a plain local write — no updatedAt
+    // bumps, nothing pushed to the cloud) so stored data and JSON exports carry the order from the first open. In the
+    // localStorage fallback it also re-saves a copy written by a build before v2.9 once, so the dead availability links go.
+    const orderChanged = [ensureFavouriteOrder(), ensureWatchlistOrder()].some(Boolean);
+    if (orderChanged || (_storageMode === 'ls' && raw && raw.indexOf('"url"') !== -1)) writeLocalState();
+    writeStatCache();   // v2.5: refresh the launcher card's cache on every open, so it picks up favourites right after an upgrade
+    switchTab('library');
+    renderAll();
+  } finally { _bootReadyResolve(); }
+})();
 </script>
 </body>
 </html>
