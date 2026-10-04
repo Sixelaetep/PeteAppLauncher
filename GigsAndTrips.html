@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.102</title>
+<title>Gigs &amp; Trips v7.103</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -548,7 +548,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.102</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.103</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -609,7 +609,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.102"></script>
+<script src="pal-shared.js?v=7.103"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=3"></script>
@@ -1315,7 +1315,7 @@ function recurFromRRULE(lines, startStr, timeStr, tz){
   if ((lines || []).some(l=>/^RDATE/i.test(l))) return { ok:false, reason:'has RDATE (extra dates)' };
   const kv = {};
   for (const part of rr[0].slice(6).split(';')){ const i = part.indexOf('='); if (i > 0) kv[part.slice(0,i).toUpperCase()] = part.slice(i+1); }
-  const bad = Object.keys(kv).find(k=>['FREQ','INTERVAL','COUNT','UNTIL','BYDAY','WKST'].indexOf(k) < 0);
+  const bad = Object.keys(kv).find(k=>['FREQ','INTERVAL','COUNT','UNTIL','BYDAY','WKST','BYMONTHDAY','BYMONTH'].indexOf(k) < 0);
   if (bad) return { ok:false, reason:'uses ' + bad };
   if (['DAILY','WEEKLY','MONTHLY','YEARLY'].indexOf(kv.FREQ) < 0) return { ok:false, reason:'repeats ' + (kv.FREQ || '?').toLowerCase() };
   if (kv.COUNT && kv.UNTIL) return { ok:false, reason:'has both COUNT and UNTIL' };
@@ -1324,6 +1324,22 @@ function recurFromRRULE(lines, startStr, timeStr, tz){
   if (kv.WKST && kv.WKST.toUpperCase() !== 'MO' && kv.FREQ === 'WEEKLY' && interval > 1) return { ok:false, reason:'weeks start on ' + kv.WKST };
   const rec = { freq:kv.FREQ, interval:interval, timeZone:tz };
   const days = kv.BYDAY ? kv.BYDAY.toUpperCase().split(',') : [];
+  // Google writes "monthly on the 28th" as FREQ=MONTHLY;BYMONTHDAY=28 and "every August" as
+  // FREQ=YEARLY;BYMONTH=8. Both mean exactly what the start date already says, so they are accepted
+  // when (and only when) they equal it. Anything that differs (several days, -1 for "last day",
+  // another month) is refused. Yearly BYMONTHDAY with no BYMONTH means EVERY month in RFC 5545, which
+  // is not what an annual event means, so it is refused rather than guessed at.
+  const sdStart = (startStr && recurValidDate(startStr)) ? new Date(recurParseDate(startStr)) : null;
+  if (kv.BYMONTHDAY !== undefined){
+    if (kv.FREQ !== 'MONTHLY' && kv.FREQ !== 'YEARLY') return { ok:false, reason:'BYMONTHDAY on ' + kv.FREQ.toLowerCase() };
+    if (!/^\d+$/.test(kv.BYMONTHDAY) || !sdStart || parseInt(kv.BYMONTHDAY,10) !== sdStart.getUTCDate()) return { ok:false, reason:'BYMONTHDAY ' + kv.BYMONTHDAY + ' differs from the start date' };
+    if (days.length) return { ok:false, reason:'BYMONTHDAY with BYDAY' };
+    if (kv.FREQ === 'YEARLY' && kv.BYMONTH === undefined) return { ok:false, reason:'yearly BYMONTHDAY without BYMONTH (means every month)' };
+  }
+  if (kv.BYMONTH !== undefined){
+    if (kv.FREQ !== 'YEARLY') return { ok:false, reason:'BYMONTH on ' + kv.FREQ.toLowerCase() };
+    if (!/^\d+$/.test(kv.BYMONTH) || !sdStart || parseInt(kv.BYMONTH,10) !== sdStart.getUTCMonth() + 1) return { ok:false, reason:'BYMONTH ' + kv.BYMONTH + ' differs from the start date' };
+  }
   if (kv.FREQ === 'WEEKLY'){
     if (days.some(d=>RECUR_DAYS.indexOf(d) < 0)) return { ok:false, reason:'weekly BYDAY has positions' };
     rec.byday = days;
@@ -1353,6 +1369,9 @@ function recurFromRRULE(lines, startStr, timeStr, tz){
     }
   }
   rec.exdates = ex;
+  // A rule whose end falls before its own start has no occurrences. recurNormalise would silently drop such an
+  // end and make the series run forever, so it is refused here instead.
+  if (rec.until && startStr && rec.until < startStr) return { ok:false, reason:'ends before it starts' };
   const norm = recurNormalise(rec, startStr);
   if (!norm) return { ok:false, reason:'rule not usable' };
   return { ok:true, rec:norm };
@@ -8268,14 +8287,47 @@ function gcalDupRemove(alsoGoogle){
 function gcalLocalInstancesOf(masterId){
   return getData().events.filter(g=>g.type==='gig' && !g._deleted && g.calendarEventId && g.calendarEventId.indexOf(masterId + '_') === 0);
 }
+// What imported instance gigs say about Google, with NO extra Google calls: Google gave each of them an id
+// and a start, so recompute the id this app would assign and see if it matches, and see whether this app's
+// engine produces the same dates. A moved instance (changed in Google) is expected to differ.
+function gcalVerifyLocalInstances(row){
+  const out = { idOk:0, idBad:[], inEngine:0, notEngine:[] };
+  if (!row.locals.length) return out;
+  const rec = row.parsed.ok ? row.parsed.rec : null;
+  const dates = row.locals.map(g=>g.date).sort();
+  const eng = rec ? new Set(recurOccurrences({ date:row.startDate, recurrence:Object.assign({}, rec, { exdates:[] }) }, dates[0], dates[dates.length-1], 5000)) : new Set();
+  row.locals.forEach(g=>{
+    const computed = gcalInstanceId(row.id, g.date, row.allDay ? '' : (g.time || ''), row.tz);
+    if (computed === g.calendarEventId) out.idOk++;
+    else out.idBad.push({ name:g.name, date:g.date, time:g.time || '', actual:String(g.calendarEventId).slice(row.id.length + 1), computed:computed.slice(row.id.length + 1) });
+    if (rec){ if (eng.has(g.date)) out.inEngine++; else out.notEngine.push(g.date); }
+  });
+  return out;
+}
+// Policy for a later import/collapse: a series is brought in if this app can represent it AND (it has instances
+// imported here already, or it still produces occurrences). Ended series with nothing imported are left alone.
+function gcalSeriesStatus(row, todayStr){
+  if (!row.parsed.ok) return 'unsupported';
+  const far = localDateStr(new Date(new Date(todayStr + 'T12:00:00').getTime() + 400 * 86400000));
+  return recurOccurrences({ date:row.startDate, recurrence:row.parsed.rec }, todayStr, far, 1).length ? 'active' : 'ended';
+}
+// The record an imported series would become. Pure: nothing here saves it.
+function gcalSeriesFromMaster(m, rec, startDate, startTime){
+  const now = new Date().toISOString();
+  return { id:'gcal_' + m.id, type:'gig', gigType:'other', name:m.summary || '(no title)', date:startDate, time:startTime || '', venue:m.location || '',
+           notes:gcalParseNotes(m.description || ''), ticketUrl:'', ticketPrice:0, tripId:null, eventClass:'standard', importedFrom:'gcal', done:false, missed:false,
+           calendarEventId:m.id, calendarHtmlLink:m.htmlLink || '', gcalEtag:m.etag || '', recurrence:rec, createdAt:now, updatedAt:now, addedBy:_currentUserKey };
+}
 async function gcalScanRecurring(opts){
   opts = opts || {};
-  const now = new Date();
+  const now = new Date(), todayStr = localDateStr(now);
   const min = new Date(now.getFullYear() - 4, now.getMonth(), now.getDate()).toISOString();
   const max = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate()).toISOString();
-  const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, min, max, { singleEvents:false });
-  const masters = events.filter(e=>Array.isArray(e.recurrence) && e.recurrence.length);
-  const overrides = events.filter(e=>e.recurringEventId);
+  // showDeleted: with singleEvents=false Google then also returns each CANCELLED occurrence of a series
+  const events = await PalGCal.listEvents(GCAL_CALENDAR_ID, min, max, { singleEvents:false, showDeleted:true });
+  const masters = events.filter(e=>Array.isArray(e.recurrence) && e.recurrence.length && e.status !== 'cancelled');
+  const overrides = events.filter(e=>e.recurringEventId && e.status !== 'cancelled');
+  const cancelled = events.filter(e=>e.recurringEventId && e.status === 'cancelled');
   const rows = masters.map(m=>{
     const allDay = !(m.start && m.start.dateTime);
     let startDate, startTime = '';
@@ -8284,15 +8336,20 @@ async function gcalScanRecurring(opts){
     else { const w = recurUtcMsToWall(new Date(m.start.dateTime).getTime(), tz); startDate = w.date; startTime = w.time; }
     const parsed = recurFromRRULE(m.recurrence, startDate, startTime, tz);
     const locals = gcalLocalInstancesOf(m.id);
-    return { id:m.id, title:m.summary || '(no title)', rule:m.recurrence.join(' | '), parsed:parsed, startDate:startDate, startTime:startTime, tz:tz, allDay:allDay,
-             locals:locals, plain:locals.filter(gcalIsPlainGig).length, overrides:overrides.filter(o=>o.recurringEventId === m.id).length, ev:m };
+    const row = { id:m.id, title:m.summary || '(no title)', rule:m.recurrence.join(' | '), parsed:parsed, startDate:startDate, startTime:startTime, tz:tz, allDay:allDay,
+                  locals:locals, plain:locals.filter(gcalIsPlainGig).length, overrides:overrides.filter(o=>o.recurringEventId === m.id).length,
+                  cancelled:cancelled.filter(o=>o.recurringEventId === m.id).length, ev:m };
+    row.status = gcalSeriesStatus(row, todayStr);
+    row.verify = gcalVerifyLocalInstances(row);
+    return row;
   });
-  // Check my assumptions against Google for up to 3 supported series: do the instance ids match the
-  // format I compute, and does my engine produce the same occurrence dates Google reports?
+  // Live check for up to 3 series that are actually running now (preferring ones already imported here):
+  // are Google's instance ids and dates what this app computes?
   const checks = [];
   if (!opts.skipChecks){
     const win0 = new Date(now.getTime() - 30*86400000), win1 = new Date(now.getTime() + 90*86400000);
-    for (const r of rows.filter(r=>r.parsed.ok && r.startDate).slice(0, 3)){
+    const cand = rows.filter(r=>r.status === 'active').sort((a,b)=>b.locals.length - a.locals.length).slice(0, 3);
+    for (const r of cand){
       try {
         const inst = await PalGCal.listInstances(GCAL_CALENDAR_ID, r.id, win0.toISOString(), win1.toISOString());
         let idOk = 0, idBad = 0; const gdates = new Set();
@@ -8306,35 +8363,67 @@ async function gcalScanRecurring(opts){
         });
         const mine = recurOccurrences({ date:r.startDate, recurrence:r.parsed.rec }, localDateStr(win0), localDateStr(win1), 1000);
         const g = [...gdates].sort(), mset = new Set(mine);
-        const onlyG = g.filter(x=>!mset.has(x)), onlyM = mine.filter(x=>!gdates.has(x));
-        checks.push({ title:r.title, instances:inst.length, idOk:idOk, idBad:idBad, onlyGoogle:onlyG, onlyMine:onlyM });
+        checks.push({ title:r.title, instances:inst.length, idOk:idOk, idBad:idBad, onlyGoogle:g.filter(x=>!mset.has(x)), onlyMine:mine.filter(x=>!gdates.has(x)) });
       } catch(e){ checks.push({ title:r.title, error:PalGCal.errorHint(e) }); }
     }
   }
-  return { rows:rows, overrides:overrides.length, checks:checks, scanned:events.length };
+  // Dry run of what a later import/collapse would do
+  const imp = rows.filter(r=>r.status !== 'unsupported' && (r.locals.length || r.status === 'active'));
+  const impIds = new Set(imp.map(r=>r.id));
+  const sz = g => JSON.stringify(g).length * 2;
+  const plan = {
+    series:imp.length, withImports:imp.filter(r=>r.locals.length).length, activeOnly:imp.filter(r=>!r.locals.length).length,
+    replaced:imp.reduce((n,r)=>n + r.plain, 0), keptAsChanged:imp.reduce((n,r)=>n + (r.locals.length - r.plain), 0),
+    overridesToExceptions:overrides.filter(o=>impIds.has(o.recurringEventId)).length, cancelledDates:cancelled.filter(o=>impIds.has(o.recurringEventId)).length,
+    bytesRemoved:imp.reduce((n,r)=>n + r.locals.filter(gcalIsPlainGig).reduce((m,g)=>m + sz(g), 0), 0),
+    bytesAdded:imp.reduce((n,r)=>n + sz(gcalSeriesFromMaster(r.ev, r.parsed.rec, r.startDate, r.startTime)), 0)
+  };
+  return { rows:rows, overrides:overrides.length, cancelled:cancelled.length, checks:checks, scanned:events.length, plan:plan };
 }
 function gcalScanReportText(r){
-  const L = ['GOOGLE RECURRING-EVENT SCAN (read-only)', 'Looked at ' + r.scanned + ' calendar entries (4 years back, 1 year ahead, series not expanded).', ''];
+  const kb = n => (n / 1024).toFixed(0) + ' KB';
+  const L = ['GOOGLE RECURRING-EVENT SCAN (read-only)', 'Looked at ' + r.scanned + ' calendar entries (4 years back, 1 year ahead; series not expanded; cancelled occurrences included).', ''];
   const sup = r.rows.filter(x=>x.parsed.ok), uns = r.rows.filter(x=>!x.parsed.ok);
-  const locals = r.rows.reduce((n,x)=>n+x.locals.length, 0), plain = r.rows.reduce((n,x)=>n+x.plain, 0);
-  const bytes = r.rows.reduce((n,x)=>n + x.locals.reduce((m,g)=>m + JSON.stringify(g).length * 2, 0), 0);
-  L.push('Recurring events in Google: ' + r.rows.length + ' (' + sup.length + ' this app can represent, ' + uns.length + ' it cannot) · individually changed instances: ' + r.overrides);
-  L.push('Already imported here as separate gigs: ' + locals + ' (' + plain + ' plain, safe to collapse) ≈ ' + (bytes / 1024).toFixed(0) + ' KB of local storage');
-  L.push('');
-  r.rows.slice().sort((a,b)=>b.locals.length - a.locals.length).forEach(x=>{
-    const when = x.startDate + (x.startTime ? ' ' + x.startTime : ' all day');
-    L.push((x.parsed.ok ? '✅ ' : '⚠️ ') + x.title + ' — ' + (x.parsed.ok ? recurDescribe(x.parsed.rec, x.startDate) : 'NOT supported: ' + x.parsed.reason));
-    L.push('     starts ' + when + ' · ' + x.locals.length + ' imported here (' + x.plain + ' plain) · ' + x.overrides + ' changed in Google');
-    L.push('     ' + x.rule.slice(0, 140));
-  });
-  if (r.checks.length){
-    L.push(''); L.push('CHECKS AGAINST GOOGLE');
-    r.checks.forEach(c=>{
-      if (c.error){ L.push('  ' + c.title + ': could not check (' + c.error + ')'); return; }
-      L.push('  ' + c.title + ': ' + c.instances + ' instances · id format ' + (c.idBad === 0 ? 'matches on all ' + c.idOk : 'MISMATCH on ' + c.idBad + ' of ' + (c.idOk + c.idBad)) +
-        ' · dates ' + (!c.onlyGoogle.length && !c.onlyMine.length ? 'identical to this app\'s engine' : 'DIFFER (Google only: ' + (c.onlyGoogle.join(',') || 'none') + '; engine only: ' + (c.onlyMine.join(',') || 'none') + ')'));
+  const locals = r.rows.reduce((n,x)=>n + x.locals.length, 0), plain = r.rows.reduce((n,x)=>n + x.plain, 0);
+  L.push('Recurring series in Google: ' + r.rows.length + ' (' + sup.length + ' this app can represent, ' + uns.length + ' it cannot)');
+  L.push('Individually changed occurrences: ' + r.overrides + ' · cancelled occurrences: ' + r.cancelled);
+  L.push('Already imported here as separate gigs: ' + locals + ' (' + plain + ' plain)');
+  const p = r.plan;
+  L.push(''); L.push('DRY RUN — what an import/collapse would do (nothing is changed now)');
+  L.push('  Series it would create: ' + p.series + ' (' + p.withImports + ' replacing imported gigs, ' + p.activeOnly + ' still-running series not imported yet)');
+  L.push('  Imported gigs replaced: ' + p.replaced + ' · kept as changed occurrences: ' + p.keptAsChanged + ' · Google-changed occurrences recorded as exceptions: ' + p.overridesToExceptions + ' · cancelled dates recorded: ' + p.cancelledDates);
+  L.push('  Local storage: −' + kb(p.bytesRemoved) + ' removed, +' + kb(p.bytesAdded) + ' added = net ' + (p.bytesAdded - p.bytesRemoved <= 0 ? '−' : '+') + kb(Math.abs(p.bytesAdded - p.bytesRemoved)));
+  const withLocals = r.rows.filter(x=>x.locals.length).sort((a,b)=>b.locals.length - a.locals.length);
+  if (withLocals.length){
+    L.push(''); L.push('SERIES ALREADY IMPORTED HERE (' + withLocals.length + ')');
+    withLocals.forEach(x=>{
+      const v = x.verify;
+      L.push((x.parsed.ok ? '✅ ' : '⚠️ ') + x.title + ' — ' + (x.parsed.ok ? recurDescribe(x.parsed.rec, x.startDate) : 'NOT supported: ' + x.parsed.reason) + (x.status === 'ended' ? ' [ended]' : ''));
+      L.push('     ' + x.locals.length + ' imported (' + x.plain + ' plain) · ' + x.overrides + ' changed in Google · ' + x.cancelled + ' cancelled · ids ' + v.idOk + '/' + x.locals.length + ' match what this app computes' + (x.parsed.ok ? ' · dates ' + v.inEngine + '/' + x.locals.length + ' in this app\'s engine' : ''));
+      v.idBad.slice(0, 2).forEach(b=>L.push('       id differs: ' + b.name + ' ' + b.date + ' ' + b.time + ' — Google ' + b.actual + ' vs computed ' + b.computed));
+      if (v.notEngine.length) L.push('       not in engine: ' + v.notEngine.slice(0, 4).join(', ') + (v.notEngine.length > 4 ? '…' : ''));
+      if (x.parsed.ok) L.push('     ' + x.rule.slice(0, 120));
     });
   }
+  const activeNo = r.rows.filter(x=>!x.locals.length && x.status === 'active');
+  if (activeNo.length){
+    const yearly = activeNo.filter(x=>x.parsed.rec.freq === 'YEARLY'), other = activeNo.filter(x=>x.parsed.rec.freq !== 'YEARLY');
+    L.push(''); L.push('STILL RUNNING, NOT IMPORTED HERE (' + activeNo.length + '): ' + yearly.length + ' yearly (birthdays, anniversaries) and ' + other.length + ' others');
+    other.forEach(x=>L.push('  ' + x.title + ' — ' + recurDescribe(x.parsed.rec, x.startDate)));
+    if (yearly.length) L.push('  Yearly: ' + yearly.slice(0, 10).map(x=>x.title).join('; ') + (yearly.length > 10 ? '; …and ' + (yearly.length - 10) + ' more' : ''));
+  }
+  const ended = r.rows.filter(x=>!x.locals.length && x.status === 'ended');
+  if (ended.length) L.push(''), L.push('ENDED, NOTHING IMPORTED (' + ended.length + '): left alone');
+  const unNo = uns.filter(x=>!x.locals.length);
+  if (unNo.length){ L.push(''); L.push('NOT REPRESENTABLE, NOTHING IMPORTED (' + unNo.length + ')'); unNo.forEach(x=>L.push('  ' + x.title + ' — ' + x.parsed.reason + ' · ' + x.rule.slice(0, 100))); }
+  L.push(''); L.push('LIVE CHECKS AGAINST GOOGLE (series running now)');
+  if (!r.checks.length) L.push('  none were running in the window');
+  r.checks.forEach(c=>{
+    if (c.error){ L.push('  ' + c.title + ': could not check (' + c.error + ')'); return; }
+    if (!c.instances && !c.onlyMine.length){ L.push('  ' + c.title + ': Google returned no instances in the window (not a real check)'); return; }
+    L.push('  ' + c.title + ': ' + c.instances + ' instances · id format ' + (c.idBad === 0 ? 'matches on all ' + c.idOk : 'MISMATCH on ' + c.idBad + ' of ' + (c.idOk + c.idBad)) +
+      ' · dates ' + (!c.onlyGoogle.length && !c.onlyMine.length ? 'identical to this app\'s engine' : 'DIFFER (Google only: ' + (c.onlyGoogle.join(',') || 'none') + '; engine only: ' + (c.onlyMine.slice(0, 6).join(',') || 'none') + ')'));
+  });
   return L.join('\n');
 }
 async function openGcalScan(){
