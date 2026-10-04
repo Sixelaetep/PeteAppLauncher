@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v2.8</title>
+<title>Film &amp; TV Tracker v2.9</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -413,7 +413,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.8</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v2.9</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -781,7 +781,7 @@
 <script src="pal-shared.js?v=1.13"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v2.6 (FTT-001..FTT-038) — see film-tv-tracker.md.
+// FILM & TV TRACKER v2.9 (FTT-001..FTT-040) — see film-tv-tracker.md.
 // Personal catalogue / watchlist / review tool. Backed by TMDB for
 // search, metadata and UK watch-provider availability. Manual entry
 // remains fully supported — TMDB is enrichment, not a dependency for
@@ -815,6 +815,7 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
+      _slimRewritePending = raw.indexOf('"url"') !== -1;   // v2.9: a copy written by an older build still carries the dead availability links
       const parsed = JSON.parse(raw);
       state = Object.assign({ version: 1, titles: [], services: [], ignored: [], settings: { bedtimeMaxMinutes: 30, country: 'GB' } }, parsed);
     }
@@ -832,11 +833,96 @@ function seedDefaultServices() {
   }));
 }
 
+// ── Local cache writing (v2.9 / FTT-040) ─────────────────────────
+// localStorage is only a cache of the cloud copy and the origin's quota is shared by every app, so what is written here is a
+// SLIMMED copy of `state` — the in-memory state, the cloud rows and JSON backups are untouched. Dropped: availability[].url, the
+// TMDB "where to watch" page link that older builds repeated on every provider entry (about a dozen times per title); nothing
+// reads it. Every write goes through writeLocalState(), so a refused write (storage full) is reported instead of lost silently.
+let _slimRewritePending = false;
+let _storageFailNotedAt = 0;
+let _lastLocalSave = { ok: true, at: null, quota: false };
+
+function slimTitleForStorage(t) {
+  const av = t && t.availability;
+  if (!Array.isArray(av) || !av.some(a => a && a.url !== undefined)) return t;
+  const copy = Object.assign({}, t);
+  copy.availability = av.map(a => {
+    if (!a || a.url === undefined) return a;
+    const c = Object.assign({}, a); delete c.url; return c;
+  });
+  return copy;
+}
+function serialiseForStorage() {
+  return JSON.stringify(Object.assign({}, state, { titles: (state.titles || []).map(slimTitleForStorage) }));
+}
+function writeLocalState(opts) {
+  opts = opts || {};
+  try {
+    localStorage.setItem(STORAGE_KEY, serialiseForStorage());
+    _lastLocalSave = { ok: true, at: new Date().toISOString(), quota: false };
+    _slimRewritePending = false;
+    return true;
+  } catch (e) {
+    const quota = !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014 || /quota/i.test(String(e.message || '')));
+    _lastLocalSave = { ok: false, at: new Date().toISOString(), quota: quota };
+    console.error('local save failed', e);
+    const now = Date.now();
+    if (!opts.silent && now - _storageFailNotedAt > 60000) {   // at most one warning a minute (the importer saves in a loop)
+      _storageFailNotedAt = now;
+      const cloudOk = window.PalSync.hasSession();
+      toast((quota ? 'Browser storage is full, so this device could not update its local copy. ' : 'This device could not update its local copy. ') +
+            (cloudOk ? 'Cloud sync is not affected.' : 'You are not connected to the cloud — download a backup from Sync & Backup.'), 'err');
+    }
+    return false;
+  }
+}
+
+// Where the local space goes — read-only, for the Sync & Backup panel. Sizes use the browser's own measure (2 bytes per
+// character), the same basis as the other apps' storage reports, so the numbers can be compared across the suite.
+function storageReport() {
+  const kb = chars => chars * 2 / 1024;
+  const stored = localStorage.getItem(STORAGE_KEY) || '';
+  const out = { ownKB: kb(stored.length + STORAGE_KEY.length), fields: [], tombstones: { count: 0, kb: 0 }, deadKB: 0, origin: null };
+  const byField = {};
+  (state.titles || []).forEach(t => {
+    const slim = slimTitleForStorage(t);
+    if (t._deleted) { out.tombstones.count++; out.tombstones.kb += kb(JSON.stringify(slim).length); return; }
+    Object.keys(slim).forEach(k => { byField[k] = (byField[k] || 0) + k.length + 4 + (JSON.stringify(slim[k]) || '').length; });
+  });
+  const ranked = Object.keys(byField).map(k => ({ label: k, kb: kb(byField[k]) })).sort((a, b) => b.kb - a.kb);
+  out.fields = ranked.slice(0, 5);
+  const rest = ranked.slice(5).reduce((n, f) => n + f.kb, 0);
+  if (rest > 0) out.fields.push({ label: 'everything else', kb: rest });
+  out.deadKB = Math.max(0, kb(JSON.stringify(state).length - serialiseForStorage().length));
+  if (window.PalSync.storageUsage) {
+    const u = window.PalSync.storageUsage();
+    if (u) out.origin = { totalKB: u.totalKB, top: u.keys.slice(0, 3) };
+  }
+  return out;
+}
+function storageInfoHtml() {
+  const r = storageReport();
+  const f = n => (n >= 100 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(1)) + ' KB';
+  let h = `This app's local copy &nbsp;<strong>${f(r.ownKB)}</strong>`;
+  if (r.origin) h += `<br>All apps on this site &nbsp;<strong>${f(r.origin.totalKB)}</strong> &nbsp;(this app ${Math.round(r.ownKB / r.origin.totalKB * 100)}%)`;
+  h += `<br>Last local save &nbsp;<strong>${_lastLocalSave.ok ? 'OK' : '<span style="color:var(--red)">' + (_lastLocalSave.quota ? 'Failed — storage full' : 'Failed') + '</span>'}</strong>`;
+  h += `<br>Last saved &nbsp;<strong>${state.lastUpdated ? new Date(state.lastUpdated).toLocaleString('en-GB') : 'Never'}</strong>` +
+       `<br>Last exported &nbsp;<strong>${state.lastExported ? new Date(state.lastExported).toLocaleString('en-GB') : 'Never'}</strong>` +
+       `<br>Data version &nbsp;<strong>${state.version || 1}</strong>`;
+  h += `<details style="margin-top:6px"><summary style="cursor:pointer">Where the space goes</summary><div style="margin-top:4px;line-height:1.7">` +
+       r.fields.map(x => `${esc(x.label)} &nbsp;<strong>${f(x.kb)}</strong>`).join('<br>') +
+       (r.tombstones.count ? `<br>Deleted titles awaiting sync (${r.tombstones.count}) &nbsp;<strong>${f(r.tombstones.kb)}</strong>` : '') +
+       (r.deadKB > 0 ? `<br>Link data not stored on this device &nbsp;<strong>${f(r.deadKB)}</strong>` : '') +
+       (r.origin ? '<br><br>Largest items on this site:<br>' + r.origin.top.map(x => `${esc(x.key)} &nbsp;<strong>${f(x.kb)}</strong>`).join('<br>') : '') +
+       `</div></details>`;
+  return h;
+}
+
 function saveState() {
   ensureFavouriteOrder();
   ensureWatchlistOrder();
   state.lastUpdated = new Date().toISOString();
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { console.error('saveState failed', e); }
+  writeLocalState();
   writeStatCache();
   renderAll();
   clearTimeout(_saveDebounce);
@@ -848,7 +934,7 @@ function saveState() {
 // paying for a full grid re-render after every single processed row.
 function persistOnly() {
   state.lastUpdated = new Date().toISOString();
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* best-effort */ }
+  writeLocalState();
 }
 
 // Small cache read directly by the launcher's home-screen card —
@@ -2552,7 +2638,7 @@ function mapProvidersToAvailability(json) {
   const gb = json['watch/providers'] && json['watch/providers'].results && json['watch/providers'].results.GB;
   if (!gb) return [];
   const out = [];
-  const push = (arr, type) => (arr || []).forEach(p => out.push({ service: p.provider_name, type: type, url: gb.link || '' }));
+  const push = (arr, type) => (arr || []).forEach(p => out.push({ service: p.provider_name, type: type }));
   push(gb.flatrate, 'subscription');
   push(gb.ads, 'free');
   push(gb.free, 'free');
@@ -3576,13 +3662,7 @@ function openDataModal() {
   document.getElementById('dataSummary').innerHTML =
     `<strong>${live.length}</strong> title${live.length !== 1 ? 's' : ''} total &nbsp;·&nbsp; <strong>${watchlist}</strong> watchlist &nbsp;·&nbsp; <strong>${watched}</strong> watched &nbsp;·&nbsp; <strong>${liveServices().length}</strong> services`;
 
-  const raw = localStorage.getItem(STORAGE_KEY) || '';
-  const kb = (raw.length / 1024).toFixed(1);
-  document.getElementById('storageInfo').innerHTML =
-    `Size &nbsp;<strong>${kb} KB</strong><br>` +
-    `Last saved &nbsp;<strong>${state.lastUpdated ? new Date(state.lastUpdated).toLocaleString('en-GB') : 'Never'}</strong><br>` +
-    `Last exported &nbsp;<strong>${state.lastExported ? new Date(state.lastExported).toLocaleString('en-GB') : 'Never'}</strong><br>` +
-    `Data version &nbsp;<strong>${state.version || 1}</strong>`;
+  document.getElementById('storageInfo').innerHTML = storageInfoHtml();
 
   const connected = window.PalSync.hasSession();
   const stateLabel = _syncState === 'synced' ? '<span style="color:var(--green)">Synced</span>'
@@ -3632,7 +3712,7 @@ window.addEventListener('message', e => {
 // ── Backup / export / import ──────────────────────────────────────
 function exportJSON() {
   state.lastExported = new Date().toISOString();
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  writeLocalState({ silent: true });   // the export itself carries on whether or not the local copy could be updated
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -3669,7 +3749,9 @@ function importJSON(evt) {
 loadState();
 // One-off upgrade: if any favourites had no order yet, write the numbers back now (a plain local write — no updatedAt
 // bumps, nothing pushed to the cloud) so stored data and JSON exports carry the order from the first open.
-if ([ensureFavouriteOrder(), ensureWatchlistOrder()].some(Boolean)) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* best-effort */ } }
+// v2.9: the same plain local write also re-saves a copy written by an older build once, so the dead availability links leave storage on first open.
+const _orderChanged = [ensureFavouriteOrder(), ensureWatchlistOrder()].some(Boolean);
+if (_orderChanged || _slimRewritePending) writeLocalState();
 writeStatCache();   // v2.5: refresh the launcher card's cache on every open, so it picks up favourites right after an upgrade
 switchTab('library');
 renderAll();
