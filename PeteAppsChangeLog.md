@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.01 | v10.89 – v10.99, v11.00 and v11.01. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.0 | v1.0 – v3.0. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.1 | v1.0 – v3.1. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
@@ -634,6 +634,15 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.1 — FTT-042 — Site-wide localStorage total no longer depends on the shared file
+
+- **Fixes v3.0-T3.** On the device the Storage panel showed "All apps' localStorage: not available".
+- **Cause (inferred, the live file was not inspected):** the panel called `PalSync.storageUsage()`, which was added in pal-sync v1.13 (TI-089). The device's sync already works in shared mode (v1.12), so the `pal-shared.js` actually being served is most likely the older v1.12 copy (a cached copy under the same `?v=1.13` query string, or an older deployed file — the Shared Components section records that apps keep running the previous copy until the query string changes).
+- **Change:** `storageReport()` now measures localStorage itself with a small read-only `localStorageUsage()` (same 2-bytes-per-character basis and ranking as `PalSync.storageUsage()`). "not available" now appears only if the browser refuses to list localStorage. No other change.
+- **Not changed:** `pal-shared.js` and its `?v=1.13` reference are untouched; nothing in the app depends on v1.13. If the site is serving an older shared file, uploading the current `pal-shared.js` (v1.13, as supplied) is optional and separate from this release.
+- **v3.0-T4 result recorded:** the breakdown panel works (availability 622 KB, overview 529 KB, everything else 716 KB, link data not stored 994 KB). The note on the ❌ read "Passed"; the note box only appeared on the Problem button, so it was used to attach the figures. Treated as passed.
+- Tested (Stage 1, jsdom with `fake-indexeddb`, 102 checks across the three suites, all passing): the new test removes `PalSync.storageUsage` from the page (simulating the older shared file), then checks the line shows a figure that matches the real localStorage contents and lists the largest keys first; the v3.0 IndexedDB, fallback and pull suites re-run unchanged. Not tested: the live site's `pal-shared.js`, a real iPhone.
 
 ### v3.0 — FTT-041 — Library moves to IndexedDB; the FTT-039 trim is removed
 
