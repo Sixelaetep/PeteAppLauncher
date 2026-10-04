@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.01 | v10.89 – v10.99, v11.00 and v11.01. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.02 | v10.89 – v10.99, v11.00, v11.01 and v11.02. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.1 | v1.0 – v3.1. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.81 | v1.0 – v3.43 and v3.73 – v3.81. ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.83 | v1.0 – v3.43 and v3.73 – v3.83. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.70 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -209,6 +209,17 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.02 — PET-106 — On Budget card: inline Food / Bills quick-add inputs
+
+- **Why:** the card's two launch buttons (+ Food Spend, + Bills Spend) opened On Budget and then a sheet, so adding a spend meant launch, wait, type, save. They are replaced by two inline rows on the card, **Food** and **Bills**, each with an amount, an optional label and an **Add** button. Typing the amount and pressing Add (or Enter / the keyboard's Done) saves the entry and opens On Budget.
+- **How it works:** the launcher posts `{ type:'OB_ACTION', action:'quickAddFood' | 'quickAddBills', amount, label, reqId }` to the On Budget iframe and waits up to 4 s for `OB_QUICKADD_RESULT`. On Budget does the save itself (see On Budget v3.83), so there is no second write path in the launcher, and Supabase sync, balance maths and label history stay the app's. Only on `ok:true` are the inputs cleared and the app opened.
+- **Safety:** if there is no reply (for example an older `on-budget.html` that ignores the action) nothing is cleared, a toast says there was no confirmation and to check the app before retrying, and the row is re-enabled. The row is disabled while a save is in flight, so a double tap cannot add twice; the app also ignores a repeated `reqId`.
+- **Amount entry:** same pence-first entry as On Budget's sheets (type `450` for £4.50), so muscle memory is identical. Inputs are 16 px (no iOS focus zoom). Tapping or typing in the inputs does not trigger the card's own tap-to-open.
+- **Defaults:** Food saves as the Food category, dated today. Bills saves as an outgoing, cleared transaction dated today (the Add transaction sheet's own defaults). Travel/Other, income, uncleared and "Not today?" still need the sheets. The card's two data columns still link to the Spending / Bills tabs (`launchOBAction`, unchanged). `launchOBAddSpend()` is no longer called by the card but is left in place.
+- ⚠ **Needs `on-budget.html` v3.83.** Upload both files together.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.02. `pal-shared.js?v=10.87` deliberately unchanged (no shared-code change).
+- Tested (headless jsdom, real `index.html`, real `on-budget.html` v3.83 in the launcher's iframe, real `pal-shared.js` fetched from the repo): penny formatting, empty-amount block, Food and Bills end-to-end saves with correct entry values and Bills balance, app opens on the right tab, inputs cleared on success, double-submit guard, card tap suppression, and an old v3.82 app in the iframe (nothing saved, input preserved, warning toast, launcher stays on home). Test harness patched jsdom's `postMessage` to supply `origin`/`source` as browsers do. Not tested: a real browser, a phone keyboard (layout, Enter/Done key, iOS zoom), live Supabase sync of the new entry, a second device, Lex's account (the card is pete-only).
 
 ### v11.01 — PET-105 — Gigs & Trips, PeteGCal, Test & Issues and Food System removed from the launcher (on hold) — 2026-10-04
 
@@ -1953,6 +1964,20 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.83 — ON--077 — Launcher quick-add (`quickAddFood` / `quickAddBills`)
+
+- Two new `OB_ACTION` actions for launcher v11.02 (PET-106). The message carries `{ amount, label, reqId }`. The handler switches to the Dashboard (Food) or Bills Ledger (Bills) tab, sets the same sheet state `saveSpend()` / `saveBtx()` read (`_cat='weekly'`, `_ftType='outgoing'`, `_dateShown=false`, `_editCtx=null`; `_btxEditId=null`, `_btxType='outgoing'`, `_btxDateShown=false`, `_btxCleared=true`), fills the amount (`setPennyValue`) and label, and calls the real save function. Entry shape, Bills balance update, label history (`touchFtLabel`), Supabase upsert, `OB_DATA_UPDATED` and toast are therefore exactly what the sheets produce. The sheets are not opened and the inputs are reset afterwards.
+- Replies `{ type:'OB_QUICKADD_RESULT', reqId, ok, msg }` to `e.source` (falls back to `window.parent`) so the launcher only clears its inputs on a confirmed save. A repeated `reqId` returns ok without adding again. An amount that is zero, not a number or under one penny, or over £1,000,000, is rejected with `ok:false` and nothing is written. Label is trimmed and capped at 60 characters. Bills with a blank label saves as "Spend" (existing `saveBtx` behaviour); Food with a blank label saves with no label (existing `saveSpend` behaviour). Origin guard unchanged.
+- Additive: `openFoodSheet`, `openBillsSheet`, `openSpendingTab`, `openBillsTab`, `openBillsTxSheet` untouched. No data-model, calculation or sync change.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=`, and the display-only `version` field in the save and the JSON backup. ⚠ Those last two still said `3.81` at v3.82 (v3.82 did not update them); corrected here.
+- Tested (headless jsdom, real `on-budget.html` and `pal-shared.js`): Food and Bills adds (amount, label, category, type, cleared, date, source), Bills cleared balance 1000 → 974.01, persistence to `on_budget_v1`, label history, duplicate `reqId`, zero / NaN / sub-penny rejection, foreign origin ignored, sheets not left open, `openSpendingTab`, `openBillsTab` and `openFoodSheet` unchanged. Not tested: real browser, live Supabase sync of a quick-added entry, second device, phone.
+
+### v3.82 — ON--076 — Local cache trim on sync (⚠ retrospective entry)
+
+- ⚠ Not in the changelog supplied with the v3.83 work. Written from `on-budget.html`'s own header comment, not from a diff; full notes are in `on-budget.md` (not supplied).
+- Uses a new shared `PalSync.trimIfLarge()` (`pal-shared.js`): clears this app's `on_budget_v1` localStorage key if it has grown past 500 KB, only right after a fresh Supabase pull has landed and never while a write is still pending (`PalSync.retryQueueLength()`). Found via a real Safari storage-quota error in a different app, traced to shared per-origin pressure across the suite. The same utility was added to Test & Issues, Film & TV Tracker, gym-tracker and others in that round.
+- ⚠ Did not update the display-only `version` field in the save / JSON backup (still `3.81`); corrected at v3.83.
 
 ### v3.81 — ON--075 — Launcher deep-links
 
