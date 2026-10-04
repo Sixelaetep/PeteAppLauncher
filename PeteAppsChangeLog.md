@@ -14,11 +14,11 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.00 | v10.89 – v10.98 and v11.00. Earlier history is in inline comments in `index.html` (not supplied). ⚠ v10.99 (the version in the supplied file before v11.00, and referenced by Gigs & Trips v7.101) still has no launcher entry |
+| P Apps Launcher | `index.html` | v11.00 | v10.89 – v10.99 and v11.00. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v2.7 | v1.0 – v2.7 (complete). ⚠ v2.2 and v2.6 are each used for two builds |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
-| Gigs & Trips | `GigsAndTrips.html` | v7.104 | v7.77 – v7.104 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
+| Gigs & Trips | `GigsAndTrips.html` | v7.105 | v7.77 – v7.105 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
@@ -164,7 +164,7 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips.
 - New `listInstances(calendarId, masterEventId, timeMin, timeMax, opts)`, paginated.
 - Defaults unchanged, so PeteGCal and every existing call behave exactly as before.
 - Tested in Node with a stubbed fetch (default parameters identical to v2; no `orderBy` when un-expanded; pagination; instances URL and encoding).
-- Gigs & Trips v7.103 and v7.104 record `pal-gcal.js` as unchanged (still v3).
+- Gigs & Trips v7.103, v7.104 and v7.105 record `pal-gcal.js` as unchanged (still v3). v7.105 adds the write path for repeating events on top of the existing `createEvent` / `updateEvent` (with `expectEtag`) / `deleteEvent`; the event metadata for a series carries `kind:'series'` alongside `app:'gigs-and-trips'`.
 
 ### v2 — `updateEvent` `expectEtag`
 
@@ -199,6 +199,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips.
 - Version: title and nav badge set to v11.00. `pal-shared.js?v=10.87` deliberately unchanged (the launcher does not use the new pal-sync v1.13 functions).
 - ⚠ Version numbering: the supplied `index.html` was v10.99 although the previous changelog entry is v10.98 (v10.99 is referenced only by Gigs & Trips v7.101 and its `statGigs` comment about `gat_v1`). v10.99 has no entry of its own; this release continues from the file, not from the changelog. v11.00 was chosen rather than v10.100 so versions still sort sensibly.
 - Tested: `statTiSub` extracted from the real `index.html` and run against the new key, the old key, both, neither, and a corrupt key (6 checks); `node --check` on the launcher's inline script. Not tested: the launcher in a browser, the card refreshing live while Test & Issues is open.
+
+### v10.99 — Gigs & Trips card reads `gat_v1` directly; skips repeating-series records
+
+- ⚠ Recorded retrospectively. This version shipped with Gigs & Trips v7.101 (AD-7) and was the base for v11.00, but had no entry. Reconstructed from the Gigs & Trips v7.101 release notes, not from a diff of the file.
+- `statGigs()` reads `gat_v1` only (previously `gat_v1_clean` with a fallback to `gat_v1`) and drops tombstones itself. Gigs & Trips stopped writing `gat_v1_clean` in v7.101 and removes a stale copy at startup, so an older cached launcher still fell back correctly and a stale copy could not be read.
+- Repeating-series records (`ev.recurrence`) are skipped, so a repeating event is not shown as a one-off on its first date; individually changed occurrences (ordinary gigs) still count; data containing only a series shows "Nothing upcoming".
+- Version: title and nav version badge set to v10.99.
+- Tested in Node: `statGigs` extracted from the real file — reads `gat_v1` with no clean copy present, drops tombstones, skips series records, counts changed occurrences, shows "Nothing upcoming" for series-only data, ignores a lingering `gat_v1_clean`; `node --check` on the inline script. Not tested: the launcher in a browser, the card on screen.
 
 ### v10.98 — PET-103 / PGC-003 — PeteGCal added: new app, nav icon, home card, iframe
 
@@ -1028,6 +1036,29 @@ Architecture notes recorded across the changelog and backlog:
 - Local storage: `gat_v1` (plus `gat_v1_clean` until v7.101), on an origin shared with the whole suite.
 - Google Calendar via `pal-gcal.js` (see Shared Components), shared OAuth client and Cloud project quota with PeteGCal; calendar id `GCAL_CALENDAR_ID` hardcoded to Pete's account.
 - Recurrence model (in force since v7.100): **Series → virtual occurrences → exceptions**. Extend it; never add a second recurrence implementation or return to creating hundreds of real records.
+- Google projection of recurrence (since v7.105): a series is **one Google recurring event** (RRULE + time zone); a changed occurrence is an **override of that Google instance** (id = series id + original slot); a cancelled occurrence is an **EXDATE** on the series; a date that has a changed occurrence is never sent as an EXDATE.
+
+### v7.105 — GIG-116 — Repeating events sent to Google Calendar, two-way
+
+- **Model:** series = one Google recurring event (rule + time zone); changed occurrence = override of that Google instance (id = series id + original slot, the format verified on the real calendar in v7.103/v7.104); cancelled occurrence = EXDATE on the series. A date with a changed occurrence is not sent as an EXDATE (that would delete the override in Google).
+- **What now reaches Google**
+  - A **new series** is created when saved: rule, start in the series' time zone, 3-hour default end computed in real elapsed time (correct across both UK clock changes), the structured description, colour and metadata `{ app:'gigs-and-trips', type, gigId, kind:'series' }`.
+  - **Edit all events** updates that Google event, with the version check (`expectEtag`).
+  - **Edit this event only** on a series already in Google creates the changed occurrence pointing at Google's instance, so saving it changes that instance. If the series reaches Google later, its changed occurrences are adopted as overrides; a stand-alone copy sent earlier is queued for deletion so nothing is duplicated.
+  - **Cancel this event only** adds the EXDATE and updates the series. **Delete all events** deletes the Google series and its changed occurrences (404/410 count as done).
+  - Converting an ordinary gig that is already in Google into a series turns that event into the recurring one rather than creating a second.
+  - The send queue handles repeats: retries, a rejected rule becomes a visible Failed item, and a drain sends the series before its changed occurrences.
+- **Older series are not sent because they were edited.** Series made before this release (no Google event) are created in Google only through **Sync & Backup → "⬆ Send N repeating events to Google…"**, which lists them, asks first and sends one by one. Their changed occurrences wait without queueing; one already sent as a stand-alone event keeps syncing that way until its series is sent.
+- **Google-managed (imported) series are editable again.** ⚠ Supersedes the read-only behaviour recorded under v7.104 (the guards were removed). The daily refresh now covers every series that has a Google series id, including ones sent from here; the button is now "↻ Refresh repeating events from Google now".
+- **No silent overwrites**
+  - A push is refused if the series changed in Google since the last sync. With nothing waiting to send here, Google's version wins (the title is stripped of the app's type icon, so it cannot grow on each round trip). If both changed, nothing is touched and it is listed under "Calendar changes to review" with a **Repeats** line and **Use Gigs & Trips / Use Google**: the first accepts Google's version number and sends ours over it; the second takes Google's rule and fields.
+  - If Google changes the repeat to a form this app cannot represent, it is not applied: the series is flagged Failed with the reason and left as it was.
+  - The daily refresh skips a series with edits waiting to be sent, a send queued, or (for a series made here) no sync baseline. A new Google version number with identical content is no longer counted as an update.
+- **Review fixes made while finishing the release.** An unfinished earlier cut of this feature was found in the working copy and reviewed before release. Three defects were fixed: it sent every series on any save, including older never-sent ones; a changed occurrence of an unsent series was queued indefinitely and would have shown as "waiting to send" for ever; and a new Google version number alone counted as an update. Two earlier tests were updated because the behaviour intentionally changed (v7.94 metadata objects 3 → 4; v7.100 "series never sent").
+- Not done: "this and following"; changing a single occurrence's time zone.
+- Files: GigsAndTrips.html, GigsAndTrips.md. `pal-gcal.js` unchanged (v3). Launcher unchanged.
+- Tested in Node against a stub Google (16 suites pass): event bodies (weekly timed, all-day yearly, a 31 Dec all-day end, ends across the autumn and spring clock changes, EXDATE excluding only cancelled dates, monthly last-Friday with UNTIL); create/update with the version precondition; converting a gig already in Google; what is and is not sent (older series, new series, changed occurrences of an unsent series, stand-alone copies); signed-out queueing and drain order; adoption of changed occurrences including queuing deletion of the stand-alone copy; edit-this and cancel-this with and without the series in Google; the three mismatch outcomes and both resolutions; refresh protection; a rule round trip for six varied series through the real event body; the explicit Send flow including failure and permanent rejection; series instances and overrides never imported as separate gigs; deleting a synced series; a series deleted in Google flagged but kept.
+- Not tested: real Google or a browser. This is the first release that writes recurring events to the real calendar. Unproven assumptions: Google accepts the event body as built (time zone on both ends, `recurrence` in a PATCH to an existing single event, colour); a PATCH of an instance id creates an override; the version precondition behaves on recurring masters as on single events. A one-series first test was requested.
 
 ### v7.104 — GIG-117, GIG-116 (read direction) — Fold imported repeats into series; Google-managed series
 
@@ -1242,7 +1273,7 @@ Architecture notes recorded across the changelog and backlog:
 
 ## Gigs & Trips — Backlog & planning record (not completed changes)
 
-From `GigsAndTrips-Backlog.md`, "Consolidated Backlog (now at v7.101) — rev 3". It was produced from v7.92 plus later revisions and is a planning document. ⚠ It predates v7.102–v7.104; some items below were progressed after it was written (noted where the changelog shows it). Not inspected when it was written: `gigs-and-trips-gcal-backlog.md`, the external UX spec, the live Supabase schema.
+From `GigsAndTrips-Backlog.md`, "Consolidated Backlog (now at v7.101) — rev 3" (⚠ the document's header has since moved on to v7.105, still rev 3). It was produced from v7.92 plus later revisions and is a planning document. ⚠ This section predates v7.102–v7.105; some items below were progressed after it was written (noted where the changelog shows it). Not inspected when it was written: `gigs-and-trips-gcal-backlog.md`, the external UX spec, the live Supabase schema.
 
 ### Status at rev 3 (v7.101)
 
@@ -1267,7 +1298,7 @@ Review items: STORAGE-001 done (v7.101); STORAGE-002 done, still needs a real de
 - **GIG-094** — retention policy: duplicate retired (v7.101); tiered policy, cleanup triggers and an export-first "Prune imported Standard events older than N months" tool deferred until a real report justifies them.
 - **GIG-100** — remainder: hidden metadata in `extendedProperties.private` (app, ids, class), clean title in metadata.
 - **GIG-104** — partial: no scheduled weekly reconciliation sweep.
-- **GIG-106 / GIG-107** — stage 2 (Google import/write of series) and "this and following" deferred.
+- **GIG-106 / GIG-107** — stage 2 (Google import/write of series) and "this and following" deferred. ⚠ Stage 2 delivered: import/read in v7.104, write in v7.105. "This and following" is still deferred.
 - **GIG-108** — storage health indicator (⚠ measure tool and 85% early warning added in v7.101/v7.102).
 - **GIG-109** — remove legacy flows: item-card URL link (`gcalItemUrl`), `markItemCalendarAdded`, `calendarAdded` badges, after GIG-093 is verified.
 - **GIG-090** — canonical event model specification (design only).
@@ -1277,7 +1308,7 @@ Review items: STORAGE-001 done (v7.101); STORAGE-002 done, still needs a real de
 - **GIG-113** — migrate GIG-001–071 history into the `.md`.
 - **GIG-114** — real-device verification checklist for GIG-072–087 (iPhone Safari and the PWA).
 - **GIG-115** — remaining library options not needed yet (syncToken, single-call metadata update, configurable namespace).
-- **GIG-116** — recurrence ↔ Google sync (⚠ read direction for Google-managed series delivered in v7.104; app → Google writes still to come).
+- **GIG-116** — recurrence ↔ Google sync (⚠ read direction for Google-managed series delivered in v7.104; app → Google writes delivered in v7.105, not yet proven against real Google).
 - **GIG-117** — collapse imported instances (⚠ delivered as the v7.104 conversion).
 - PeteGCal retirement — decision open (shared quota and calendar; risk R-9).
 - Parked: Year / 3-day views, drag-and-drop calendar, desktop scheduling grid, countdown-heavy UI.
@@ -1292,12 +1323,12 @@ Review items: STORAGE-001 done (v7.101); STORAGE-002 done, still needs a real de
 | AD-3 | Imported Google events default to Standard | Decided: yes |
 | AD-4 | Defaults for ambiguous gig types | Open (proposed mapping; flagged records reviewed) |
 | AD-5 | Gig inside a trip appears in two filters | Decided: yes |
-| AD-6 | Recurrence storage | Open, refined: series master + virtual expansion + exceptions, mapped to RRULE / instance overrides; unsupported rules Google-managed read-only |
+| AD-6 | Recurrence storage | Open, refined: series master + virtual expansion + exceptions, mapped to RRULE / instance overrides; unsupported rules Google-managed read-only (⚠ implemented v7.100–v7.105; unsupported rules are refused with a reason rather than shown read-only) |
 | AD-7 | Launcher dependency on `gat_v1_clean` | Decided: launcher reads `gat_v1` |
 | AD-8 | Prune old imported Standard events | Open: explicit tool, export first |
 | AD-9 | Metadata namespace / ownership with PeteGCal | Decided: keep `petegcal` key, add `app: 'gigs-and-trips'` (done v7.94) |
 | AD-10 | Stop importing new recurring instances until series support | Implemented v7.94 (`GCAL_SKIP_RECURRING`) |
-| AD-11 | Europe/London `timeZone` on Google writes | Decided: ships with GIG-116 |
+| AD-11 | Europe/London `timeZone` on Google writes | Decided: ships with GIG-116 (⚠ done in v7.105: series start and end carry the series' `timeZone`) |
 
 ### Migration risks recorded
 
