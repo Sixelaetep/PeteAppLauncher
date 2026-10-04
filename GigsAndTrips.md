@@ -6,6 +6,26 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.99 (GIG-111) — Upcoming and Past: day headers, class filter, "On now"
+
+**The problem.** The Upcoming list went year → month → a flat run of cards, so events on different days looked identical and several events on one day were indistinguishable from events on separate days.
+
+**Day headers.** Inside every month group there is now one header per calendar day: weekday and date (for example "FRI 20 Nov"), a relative label near term (Today, Tomorrow, "in 3 days"; on Past: Yesterday, "10 days ago"), an "N events" count when a day has more than one, a heavier rule under it, and weekends in the accent colour. Today's header is accent-coloured. Events are grouped by the same date the list already sorted on (a trip by its start date on Upcoming, end date on Past), so ordering is unchanged. Year and month collapsing behave as before, and the cards themselves are untouched.
+
+**"On now" block.** A trip already under way used to sit under a start date in the past. On Upcoming it now appears first in its own "On now" block (its card still shows "Day N of D") and is not repeated in the month groups.
+
+**Class filter on both lists.** The All · Important · Gigs · Appts · Trips · Standard bar from the Agenda now also appears on Upcoming and Past and shares the same remembered choice (`gat_cal_filter`). Default is Important, so imported birthdays, bin days and other Standard gigs no longer swamp the list. "N hidden by this filter · Show all" is shown whenever something is hidden, and a filter that hides everything shows a message instead of a blank screen. Trips always count as Important; a Standard-class gig placed inside a trip still shows under Important (as on the Agenda). **Search ignores the filter**, searches everything, and stays a flat list with no filter bar or day headers.
+
+**Consequence to know about:** your own gigs of type "other", which count as Standard, are hidden from Upcoming and Past by default exactly as on the Agenda, until you switch to All/Standard or give them a class on the gig form.
+
+Files changed: `GigsAndTrips.html`, `GigsAndTrips.md`. No data, sync, Supabase or `pal-gcal.js` change.
+
+**Tested — in Node, running the real `render()` with stubbed cards:** one header per day with cards in order and correct counts; Today/Tomorrow/"in 3 days" labels and none far out; the weekend tint matches the real weekday; Important hides Standard gigs and counts them; All restores them; Gigs hides appointments; a chip tapped on a list tab re-renders that list while the Agenda tab still re-renders the Agenda; an in-progress trip appears first in "On now" and only once, a future trip is grouped normally, and a Standard gig on a trip stays visible; Past is newest first with Yesterday / "N days ago"; search is global and flat with no filter bar; an all-filtered list shows the bar and message; the empty list message is unchanged; a collapsed month still hides its days. All earlier suites (v7.93–v7.98, library) still pass; the script passes `node --check`.
+
+**Not tested:** not opened in a browser. How the headers look on a phone (spacing, the 10px indent matching the month header, weekend colour), and whether the card's own date block feels redundant under a day header, are unconfirmed.
+
+---
+
 ## v7.98 (GIG-118 follow-up) — Duplicate finder that matches what the duplicates actually are
 
 **Why.** v7.96's cleanup only found gigs that share a Calendar id with a trip/item, and it found nothing on real data. Most duplicates do not share an id. The old "add to Calendar" link created a **new** Google event every time it was used (title suffixed `[Sent 4 Jul]` / `[Updated - 14 Jul]`), and the mirror and 4-year backfill then imported every one of those events as its own gig. This is a diagnosis from the code and the old changelog, not yet confirmed against your data; the finder shows its findings before anything is changed so a wrong guess costs nothing.
