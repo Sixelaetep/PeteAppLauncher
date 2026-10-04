@@ -2,6 +2,40 @@
 
 Full version history for `test-issues.html`. As of v1.73, new entries go here in full; the inline comment in the `.html` gets a short pointer only, to avoid the file bloating.
 
+## v1.76 (TI-087, TI-088) — Quota-safe local saves + testing-first mode
+
+Two changes in one build.
+
+### TI-087 — "Pull failed: The quota has been exceeded"
+
+**Cause.** `save()` called `localStorage.setItem()` with no guard. When the browser's per-origin quota (shared by every app on the same origin, not just this one) was full, the `QuotaExceededError` threw out of `saveState()` — which `syncPull()` calls *inside* its `try` block. So a pull whose network fetch and merge had both succeeded was reported as "Pull failed", the status went to Error, and the render/refresh steps after `saveState()` never ran. Reproduced exactly on v1.75 (same message, Error state) before fixing.
+
+**Fix.** `save()` now contains the failure: in-memory state stays correct, the cloud copy is untouched, and the pull completes normally. The failure surfaces as a visible **⚠ Storage full** marker in the nav bar, a log entry (naming whether a cloud session exists), and a delayed toast. With **no** cloud session (local-only mode) the message is explicit — "export a backup now" — because in that case the write that failed was the only copy. The first successful write afterwards clears the warning and logs the recovery. `save()` now returns true/false; no existing caller depended on it returning nothing.
+
+**Diagnosis aid.** Sync & Backup → Storage now also lists the whole origin's total and its six largest localStorage keys (UTF-16 bytes, the same basis as `PalSync.trimIfLarge`). Read-only. This is how to tell whether `ti_v1` or another app's key is actually consuming the quota — the v1.75 trim never fired in the reported case (no "Local cache trimmed" log line), which means either `ti_v1` was under 500 KB or writes were pending, so the large key may well belong to a different app. The trim step now logs when it is skipped because of pending writes.
+
+**What this does not do.** It does not free any space. If the quota is genuinely full, the local cache stays stale (cloud remains correct) until something is reduced. The new Storage breakdown identifies what.
+
+### TI-088 — Testing-first mode (Issues hidden by default)
+
+This app is now used for testing releases, not for tracking issues. Issues are **hidden, not removed**: records still load, sync, export and import exactly as before; Sync & Backup → Display → *Show Issues* brings the whole UI back (per-device setting, key `ti_show_issues`). Hidden when off: Issues tab, + Issue, Issues/Build stat chips, Kanban issue board and brief bar, Kanban "📦 Issues", Apps-tab issue lists, "Log Issue" actions, deployed-issue wording in the clean-up sheet.
+
+Testing flow changes (apply regardless of the toggle):
+- **Opens on the build to test.** First visit to Kanban or Tests in a page load selects the most recent release that still has untested tests, scoped to that app and version.
+- **Version selector on the Tests tab** (previously only settable by clicking a version on the Apps tab). Choosing an app defaults to its newest build with untested tests; "All versions" is still one tap away.
+- **Importing a manifest lands on the imported version**, not the whole app.
+- **📋 Failures** (Kanban bar and Tests tab): copies a report of failed tests in the current view — test id, title, steps, expected, observed (the fail note) — to paste into the app's Claude project. When the Kanban guided run finishes with failures and Issues are hidden, it offers this report instead of the Log Issue flow.
+
+No manifest-schema change: `resolvesIssues` remains accepted (and resolves issues if any exist) but can be sent empty or omitted. No data-model change, no migration, `pal-shared.js` unchanged.
+
+Files changed: `test-issues.html` only.
+
+**Tested — genuinely run** (jsdom, real `test-issues.html` + `pal-shared.js`, stubbed Supabase and quota; 54 checks): the v1.75 error reproduced; v1.76 pull completes under quota failure and stays Synced; edits while full still update memory and push to cloud; recovery clears the warning; local-only warning; default scoping; version select; fail → report content and scoping; Kanban end-of-run sheet; toggle on/off with issue data retained; issues-visible mode regression (Issues tab, Log Issue, Apps issue lists); manifest import with and without `resolvesIssues`; trim-skip logging. `node --check` passes.
+
+**Not tested:** real Safari / real browser quota behaviour; mobile layout (the extra select and button sit in rows that already wrap); real Supabase round-trip; the launcher (`index.html` not supplied for this change).
+
+---
+
 ## v1.75 (TI-086) — Local cache trim on sync
 
 Found via a real Safari storage-quota error in a different app (GigsAndTrips) — investigation traced it to shared per-origin storage pressure across the whole app suite, not any one app's bug. `ti_v1` was the single largest contributor at ~2MB, built up from genuinely real, wanted data (every app's version history, every issue) accumulated over this app's long lifetime — not leaked or orphaned data.
