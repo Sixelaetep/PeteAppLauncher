@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.00 | v10.89 – v10.99 and v11.00. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v2.7 | v1.0 – v2.7 (complete). ⚠ v2.2 and v2.6 are each used for two builds |
+| Film & TV Tracker | `film-tv-tracker.html` | v2.8 | v1.0 – v2.8 (complete). ⚠ v2.2, v2.6, v2.7 and v2.8 are each used for two builds |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.105 | v7.77 – v7.105 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
@@ -594,6 +594,17 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v2.8 — FTT-040 — TV, Films and New release views follow the All tab's groups and ordering
+
+- ⚠ Shares the v2.8 label with the old FTT-028 build (Title list import is the only importer), which sits further down this section from the earlier v2.8 – v2.11 numbering.
+- The **TV**, **Films** and **New release** pills no longer show a flat list (TV / Films) or date sections (New release). Each now renders the same sections as All, in the same order, limited to the matching titles: **Favourites** (`favouriteOrder`) → **Available to watch** by Interest High → Medium → Low → Unrated (`watchlistOrder` within a group) → **New seasons** → **Unavailable** → **Watched**; empty sections are hidden. Status tabs (Want to Watch / Watched) still scope the sections as they do on All.
+- Implementation: `librarySections(pred)` takes an optional predicate and filters each section's items; the section builders and comparators (`secFavourites`, `secQueue`, `queueOrderCmp`, …) are the All tab's own, so a filtered view cannot disagree with All. New `TYPE_VIEW_FILTERS` and `typeViewPred()`. Header count for these views is the number of matching titles.
+- Search still switches to a flat list (unchanged). The Sort control is hidden on these three pills, as on All; Title / Runtime / Year / Rating sorts are no longer reachable from TV and Films (they remain on the other flat filters and in search results).
+- **Reorder** is not offered in these limited views (it stays on All, where it acts on the full lists); the filtered sections carry `kind: null`.
+- New release: the Coming up / Out now date sections are removed (`releaseSections`, `fmtRelDay` deleted); tiles keep the Cinema / Streaming label and now show the release date (e.g. `🎬 Cinema · 12 Oct`). The `x.release` / `x.lead` branch in `sectionHtml` and the `.rel-divider` style are left in place but unused.
+- No data-model, sync, backup or launcher change; nothing migrated.
+- Tested (jsdom, stub PalSync, 18 seeded titles; 59 checks): each of TV / Films / New release equals the All sections filtered by type or release, with identical group order and within-group order; no Reorder button and no Sort in those views; New release count and tile labels; status tabs; search → flat list and back; empty New release message; switching to TV mid-reorder exits cleanly; selection mode and See all in the filtered view; all other filter/status combinations (All, Tag view, Available, Favourites, Unavailable, High / Unrated interest, New season, Bedtime, Reviewed × three status tabs) render byte-identically to v2.7. Not tested: real library / Supabase, physical iPhone, two devices, real `pal-shared.js` (stubbed).
 
 ### v2.7 — FTT-039 — Local cache trim on sync
 
