@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.105</title>
+<title>Gigs &amp; Trips v7.106</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -548,7 +548,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.105</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.106</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -609,7 +609,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.105"></script>
+<script src="pal-shared.js?v=7.106"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=3"></script>
@@ -1494,10 +1494,12 @@ function openOccurrenceDetail(id){
         </div>
       </div>
       ${m.notes ? `<div style="font-size:13px;color:var(--ink2);margin-bottom:14px;line-height:1.6">${esc(m.notes)}</div>` : ''}
+      ${gcalStateBadge('gig', { id:m.id }, m)}
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-pri" onclick="recurEditThis('${esc(m.id)}','${esc(sp.date)}')">✏️ Edit this event only</button>
         <button class="btn btn-ghost" onclick="closeModal();openEditGig('${esc(m.id)}')">✏️ Edit all events</button>
         <button class="btn btn-ghost" onclick="recurCancelThis('${esc(m.id)}','${esc(sp.date)}')">🚫 Cancel this event only</button>
+        ${m.calendarEventId ? `<button class="btn btn-ghost" onclick="gcalResendSeries('${esc(m.id)}')">↻ Send to Google Calendar now</button>` : ''}
         ${m.calendarHtmlLink ? `<a class="btn btn-ghost" style="text-align:center;text-decoration:none" target="_blank" href="${esc(m.calendarHtmlLink)}">Open in Google Calendar ↗</a>` : ''}
         <button class="btn btn-danger" onclick="recurDeleteSeries('${esc(m.id)}')">🗑 Delete all events${m.calendarEventId ? ' (also from Google Calendar)' : ''}</button>
       </div>
@@ -1526,11 +1528,15 @@ function recurEditThis(masterId, dateStr){
   openEditGig(ex.id);
   render();
 }
-function recurCancelThis(masterId, dateStr){
+async function recurCancelThis(masterId, dateStr){
   if (!confirm('Cancel just this event? The rest of the series is unaffected.')) return;
   const upd = recurAddExdate(masterId, dateStr);
-  closeModal(); showToast('This event cancelled'); render();
-  if (upd) gcalSyncGig(upd, false);   // GIG-116: the series gets the EXDATE in Google
+  closeModal(); render();
+  if (upd && upd.calendarEventId){      // GIG-116: the series gets the EXDATE in Google; say honestly whether it got there
+    showToast('Cancelled here — updating Google Calendar…');
+    const r = await gcalSyncGig(upd, false);
+    showToast(r === true ? 'Cancelled here and in Google Calendar ✓' : 'Cancelled here, but Google Calendar is not updated yet — see Sync & Backup');
+  } else showToast('This event cancelled');
 }
 async function recurDeleteSeries(masterId){
   const m = getEvent(masterId); if (!m) return;
@@ -8097,6 +8103,7 @@ async function gcalQueueDrain(force){
 }
 
 async function gcalQueueRetryNow(){
+  await gcalHealFalseConflicts();
   await gcalQueueDrain(true);
   showDataManager();
 }
@@ -8504,7 +8511,7 @@ async function gcalAdoptExceptions(master){
     await gcalSyncGig(f, false);
   }
 }
-async function gcalSyncSeries(g, isNew){
+async function gcalSyncSeries(g, isNew, opts){
   if (!PalGCal.hasToken()){
     syncLog('Calendar sync queued (not signed in) — "' + g.name + '" saved; will send when signed in', 'info');
     gcalQueueAdd('upsert','gig',{id:g.id},g.name);
@@ -8532,8 +8539,7 @@ async function gcalSyncSeries(g, isNew){
     _gcalLastErr = e;
     if (gcalClassifyError(e) === 'conflict'){
       syncLog('Repeating event changed in Google since last sync — "' + g.name + '" not overwritten', 'err');
-      gcalHandleSeriesMismatch(g, e);
-      return false;
+      return (await gcalHandleSeriesMismatch(g, e, opts)) === true;
     }
     syncLog('Calendar sync failed for repeating "' + g.name + '": ' + PalGCal.errorHint(e), 'err');
     gcalQueueAdd('upsert','gig',{id:g.id},g.name,gcalClassifyError(e),PalGCal.errorHint(e));
@@ -8541,17 +8547,36 @@ async function gcalSyncSeries(g, isNew){
   }
 }
 // The push found the series changed in Google meanwhile (library 'etag-mismatch'; e.data is Google's version now).
-function gcalHandleSeriesMismatch(g, e){
+// The hash of what Google holds for a series, comparable with the baseline hash stored when we last sent it.
+function gcalGoogleSeriesHash(row, cur){
+  const gf = gcalGoogleGigFields(row.ev, cur);
+  return gcalSeriesHash({ name:gf.name, date:row.startDate, time:row.startTime, venue:gf.venue, notes:gf.notes, recurrence:row.parsed.rec }, recurExceptionsOf(cur.id));
+}
+async function gcalHandleSeriesMismatch(g, e, opts){
   const G = e && e.data && e.data.etag ? e.data : null;
-  if (!G){ gcalQueueAdd('upsert','gig',{id:g.id},g.name); return; }
+  if (!G){ gcalQueueAdd('upsert','gig',{id:g.id},g.name); return false; }
   const cur = getEvent(g.id) || g;
   const row = gcalScanRowFromMaster(G);
-  if (!row.parsed.ok){ gcalQueueAdd('upsert','gig',{id:g.id},g.name,'permanent','Google changed the repeat to a form this app cannot read (' + row.parsed.reason + ')'); return; }
+  if (!row.parsed.ok){ gcalQueueAdd('upsert','gig',{id:g.id},g.name,'permanent','Google changed the repeat to a form this app cannot read (' + row.parsed.reason + ')'); return false; }
   const appChanged = cur.gcalSyncedHash && gcalSeriesHash(cur) !== cur.gcalSyncedHash;
+  // v7.106: did Google's CONTENT change since our last send, or only its version number? Editing a single occurrence, or Google
+  // touching the event, moves the number without changing the series. In that case there is nothing to decide: adopt the number and
+  // send our change again (once).
+  if (cur.gcalSyncedHash && gcalGoogleSeriesHash(row, cur) === cur.gcalSyncedHash){
+    const f = getEvent(cur.id);
+    if (f){ f.gcalEtag = G.etag; saveEvent(f); }
+    if (!(opts && opts.rebased)){
+      syncLog('Only Google\'s version number moved — re-sending repeating "' + g.name + '"', 'info');
+      return gcalSyncSeries(getEvent(g.id) || cur, false, { rebased:true });
+    }
+    // it moved again straight away: still no real conflict, so leave our change waiting to be sent (visible, retried) rather than asking you to decide
+    gcalQueueAdd('upsert','gig',{id:g.id},g.name);
+    return false;
+  }
   if (!appChanged){                      // nothing of ours to send: Google's version simply wins
     gcalApplySeriesFromGoogle({ rows:[row], overrideEvents:[], cancelledEvents:[] }, { force:true });
     gcalQueueRemove('upsert','gig',{id:g.id});
-    return;
+    return false;
   }
   const gf = gcalGoogleGigFields(G, cur);
   const isNew = gcalConfAdd({
@@ -8561,6 +8586,7 @@ function gcalHandleSeriesMismatch(g, e){
   });
   gcalQueueRemove('upsert','gig',{id:g.id});
   if (isNew) showToast('Repeating event changed in both places — see Sync & Backup');
+  return false;
 }
 // One-off helper for series made in the app before they could be sent (the stage-1 ones).
 function gcalUnsentSeries(){ return recurMasters().filter(g=>!g.calendarEventId && g.importedFrom !== 'gcal'); }
@@ -8573,6 +8599,37 @@ async function gcalSendSeriesToGoogle(){
   for (const g of list){ if (await gcalSyncGig(getEvent(g.id), true) === true) ok++; await new Promise(r=>setTimeout(r, 350)); }
   showToast(ok + ' of ' + list.length + ' sent ✓');
   showDataManager();
+}
+
+// Entries created before v7.106 for a change that was not really a conflict (Google's content equals what we last sent; only its version
+// number moved) are resolved here: adopt Google's number and send ours. A real conflict (Google's content differs) is never touched.
+async function gcalHealFalseConflicts(){
+  const c = gcalConfLoad();
+  let healed = 0;
+  for (const x of c.items.filter(i=>i.reason === 'both-changed' && i.kind === 'gig')){
+    const cur = getEvent(x.id);
+    if (!cur || !cur.gcalSyncedHash) continue;
+    let same = false;
+    try {
+      if (x.series && x.googleMaster){ const row = gcalScanRowFromMaster(x.googleMaster); same = row.parsed.ok && gcalGoogleSeriesHash(row, cur) === cur.gcalSyncedHash; }
+      else if (x.google) same = gcalFieldsHash(x.google) === cur.gcalSyncedHash;
+    } catch(e){}
+    if (!same) continue;
+    const f = Object.assign({}, cur, { gcalEtag:x.googleEtag || cur.gcalEtag });
+    saveEvent(f);
+    gcalConfRemove(x.key);
+    healed++;
+    if (PalGCal.hasToken()) await gcalSyncGig(f, false, { rebased:true }); else gcalQueueAdd('upsert','gig',{id:f.id},f.name);
+  }
+  if (healed){ try { syncLog('Calendar: ' + healed + ' change' + (healed === 1 ? '' : 's') + ' that were not real conflicts sent to Google', 'ok'); render(); } catch(e){} }
+  return healed;
+}
+async function gcalResendSeries(id){
+  const m = getEvent(id); if (!m || !m.recurrence) return;
+  gcalQueueReset('gig', { id:id });
+  showToast('Sending to Google Calendar…');
+  const r = await gcalSyncGig(getEvent(id) || m, false);
+  showToast(r === true ? 'Google Calendar is up to date ✓' : 'Not sent — see Sync & Backup (Calendar changes to review, or the sync queue)');
 }
 // ==GIG-116 END==
 
@@ -8853,6 +8910,7 @@ function gcalEvaluateGig(g, G){
   const googH = gcalFieldsHash(gf);
   if (googH === appH) return { action:'baseline', fields:gf };            // Google edited something we do not own
   if (appH === g.gcalSyncedHash) return { action:'apply', fields:gf };    // only Google changed
+  if (googH === g.gcalSyncedHash) return { action:'rebase', fields:gf };  // Google's content is what we last sent; only its version number moved (v7.106)
   return { action:'conflict', fields:gf };                                 // both changed
 }
 function gcalSetBaseline(id, G, fieldsForHash){
@@ -8914,6 +8972,7 @@ function gcalHandleGigEvent(g, G){
   const r = gcalEvaluateGig(g, G);
   if (r.action === 'baseline'){ gcalSetBaseline(g.id, G, gcalGigFields(g)); return 'baseline'; }
   if (r.action === 'apply'){ gcalApplyGoogleToGig(g.id, r.fields, G.etag, G.htmlLink); return 'applied'; }
+  if (r.action === 'rebase'){ const f = getEvent(g.id); if (f){ f.gcalEtag = G.etag || f.gcalEtag; saveEvent(f); } return 'rebased'; }   // keep what we have waiting; just adopt Google's version number
   if (r.action === 'conflict'){
     const isNew = gcalConfAdd({
       key:gcalConfKey('both-changed','gig',{id:g.id}), reason:'both-changed', kind:'gig', id:g.id, calendarEventId:g.calendarEventId,
@@ -8999,15 +9058,18 @@ async function gcalReviewLinked(events, timeMin, timeMax){
 
 // A push that finds Google changed in the meantime (lib 'etag-mismatch').
 // e.data is the event as it is in Google right now.
-function gcalHandleEtagMismatch(g, e){
-  if (g.recurrence && !g.recurrenceOf) return gcalHandleSeriesMismatch(g, e);
+async function gcalHandleEtagMismatch(g, e, opts){
+  if (g.recurrence && !g.recurrenceOf) return gcalHandleSeriesMismatch(g, e, opts);
   const G = e && e.data && e.data.etag ? e.data : null;
-  if (!G){ gcalQueueAdd('upsert','gig',{id:g.id},g.name); return; }
+  if (!G){ gcalQueueAdd('upsert','gig',{id:g.id},g.name); return false; }
   const cur = getEvent(g.id) || g;
   const a = gcalHandleGigEvent(cur, G);
+  // v7.106: Google's content is unchanged since our last send, only its version number moved, so our edit is NOT in conflict: send it again, once.
+  if (a==='rebased' && !(opts && opts.rebased)){ syncLog('Only Google\'s version number moved — re-sending "' + g.name + '"', 'info'); return gcalSyncGig(getEvent(g.id) || cur, false, { rebased:true }); }
   if (a==='conflict' || a==='conflict-new' || a==='applied') gcalQueueRemove('upsert','gig',{id:g.id}); // decision / Google wins; do not re-push
   else gcalQueueAdd('upsert','gig',{id:g.id},g.name); // baseline refreshed — a later drain pushes with the new etag
   if (a==='conflict-new') showToast('Calendar changed in both places — see Sync & Backup');
+  return false;
 }
 
 function gcalConfLineDiffs(c){
@@ -9141,14 +9203,14 @@ function gcalItemDescriptionFields(trip, it){
   return sections;
 }
 
-async function gcalSyncGig(g, isNew){
+async function gcalSyncGig(g, isNew, opts){
   // GIG-116: a repeating series is one recurring Google event; a changed occurrence is an override of one of its instances.
   if (g.recurrence && !g.recurrenceOf){
     if (!isNew && !g.calendarEventId){   // an older, never-sent series is only created in Google on purpose (Sync & Backup → Send…)
       syncLog('Repeating event "' + g.name + '" is not in Google Calendar yet — use Sync & Backup → Send repeating events to Google', 'info');
       return null;
     }
-    return gcalSyncSeries(g, isNew);
+    return gcalSyncSeries(g, isNew, opts);
   }
   if (g.recurrenceOf){
     const m = getEvent(g.recurrenceOf);
@@ -9220,8 +9282,7 @@ async function gcalSyncGig(g, isNew){
     _gcalLastErr = e;
     if (gcalClassifyError(e) === 'conflict'){
       syncLog('Calendar changed in Google since last sync — "' + g.name + '" not overwritten', 'err');
-      gcalHandleEtagMismatch(g, e);
-      return false;
+      return (await gcalHandleEtagMismatch(g, e, opts)) === true;
     }
     syncLog('Calendar sync failed for "' + g.name + '": ' + PalGCal.errorHint(e), 'err');
     gcalQueueAdd('upsert','gig',{id:g.id},g.name,gcalClassifyError(e),PalGCal.errorHint(e));
@@ -9860,6 +9921,7 @@ function initGCalSync(){
       if (signedIn){
         gcalMirrorPull();
         setTimeout(function(){ gcalQueueDrain(false); }, 1500); // GIG-101: send anything that was waiting
+        setTimeout(function(){ gcalHealFalseConflicts(); }, 2500);       // v7.106: clear conflicts that were only a moved version number
         setTimeout(function(){ gcalAutoRefreshSeries(false); }, 4000); // GIG-117: daily, only once a conversion has been done
       }
     },

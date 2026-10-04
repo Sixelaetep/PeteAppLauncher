@@ -16,9 +16,9 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.00 | v10.89 – v10.99 and v11.00. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v2.8 | v1.0 – v2.8 (complete). ⚠ v2.2, v2.6, v2.7 and v2.8 are each used for two builds |
+| Film & TV Tracker | `film-tv-tracker.html` | v2.7 | v1.0 – v2.7 (complete). ⚠ v2.2 and v2.6 are each used for two builds |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
-| Gigs & Trips | `GigsAndTrips.html` | v7.105 | v7.77 – v7.105 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
+| Gigs & Trips | `GigsAndTrips.html` | v7.106 | v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
@@ -164,7 +164,7 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips.
 - New `listInstances(calendarId, masterEventId, timeMin, timeMax, opts)`, paginated.
 - Defaults unchanged, so PeteGCal and every existing call behave exactly as before.
 - Tested in Node with a stubbed fetch (default parameters identical to v2; no `orderBy` when un-expanded; pagination; instances URL and encoding).
-- Gigs & Trips v7.103, v7.104 and v7.105 record `pal-gcal.js` as unchanged (still v3). v7.105 adds the write path for repeating events on top of the existing `createEvent` / `updateEvent` (with `expectEtag`) / `deleteEvent`; the event metadata for a series carries `kind:'series'` alongside `app:'gigs-and-trips'`.
+- Gigs & Trips v7.103, v7.104, v7.105 and v7.106 record `pal-gcal.js` as unchanged (still v3). v7.105 adds the write path for repeating events on top of the existing `createEvent` / `updateEvent` (with `expectEtag`) / `deleteEvent`; the event metadata for a series carries `kind:'series'` alongside `app:'gigs-and-trips'`.
 
 ### v2 — `updateEvent` `expectEtag`
 
@@ -594,17 +594,6 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
-
-### v2.8 — FTT-040 — TV, Films and New release views follow the All tab's groups and ordering
-
-- ⚠ Shares the v2.8 label with the old FTT-028 build (Title list import is the only importer), which sits further down this section from the earlier v2.8 – v2.11 numbering.
-- The **TV**, **Films** and **New release** pills no longer show a flat list (TV / Films) or date sections (New release). Each now renders the same sections as All, in the same order, limited to the matching titles: **Favourites** (`favouriteOrder`) → **Available to watch** by Interest High → Medium → Low → Unrated (`watchlistOrder` within a group) → **New seasons** → **Unavailable** → **Watched**; empty sections are hidden. Status tabs (Want to Watch / Watched) still scope the sections as they do on All.
-- Implementation: `librarySections(pred)` takes an optional predicate and filters each section's items; the section builders and comparators (`secFavourites`, `secQueue`, `queueOrderCmp`, …) are the All tab's own, so a filtered view cannot disagree with All. New `TYPE_VIEW_FILTERS` and `typeViewPred()`. Header count for these views is the number of matching titles.
-- Search still switches to a flat list (unchanged). The Sort control is hidden on these three pills, as on All; Title / Runtime / Year / Rating sorts are no longer reachable from TV and Films (they remain on the other flat filters and in search results).
-- **Reorder** is not offered in these limited views (it stays on All, where it acts on the full lists); the filtered sections carry `kind: null`.
-- New release: the Coming up / Out now date sections are removed (`releaseSections`, `fmtRelDay` deleted); tiles keep the Cinema / Streaming label and now show the release date (e.g. `🎬 Cinema · 12 Oct`). The `x.release` / `x.lead` branch in `sectionHtml` and the `.rel-divider` style are left in place but unused.
-- No data-model, sync, backup or launcher change; nothing migrated.
-- Tested (jsdom, stub PalSync, 18 seeded titles; 59 checks): each of TV / Films / New release equals the All sections filtered by type or release, with identical group order and within-group order; no Reorder button and no Sort in those views; New release count and tile labels; status tabs; search → flat list and back; empty New release message; switching to TV mid-reorder exits cleanly; selection mode and See all in the filtered view; all other filter/status combinations (All, Tag view, Available, Favourites, Unavailable, High / Unrated interest, New season, Bedtime, Reviewed × three status tabs) render byte-identically to v2.7. Not tested: real library / Supabase, physical iPhone, two devices, real `pal-shared.js` (stubbed).
 
 ### v2.7 — FTT-039 — Local cache trim on sync
 
@@ -1048,6 +1037,16 @@ Architecture notes recorded across the changelog and backlog:
 - Google Calendar via `pal-gcal.js` (see Shared Components), shared OAuth client and Cloud project quota with PeteGCal; calendar id `GCAL_CALENDAR_ID` hardcoded to Pete's account.
 - Recurrence model (in force since v7.100): **Series → virtual occurrences → exceptions**. Extend it; never add a second recurrence implementation or return to creating hundreds of real records.
 - Google projection of recurrence (since v7.105): a series is **one Google recurring event** (RRULE + time zone); a changed occurrence is an **override of that Google instance** (id = series id + original slot); a cancelled occurrence is an **EXDATE** on the series; a date that has a changed occurrence is never sent as an EXDATE.
+
+### v7.106 — GIG-116 fix — A cancelled occurrence now reaches Google; a moved version number is not a conflict
+
+- **Reported:** in the first real test of v7.105, "Cancel this event only" removed the date here but not in Google Calendar.
+- **Cause (a real defect, reproduced):** a push of a repeating event is refused if Google's version number (etag) has changed. Any change was treated as "Google changed it too", so with an edit of the user's own waiting the app declared a conflict and sent nothing. The number can move without the series changing; the likely trigger was the preceding "Edit this event only" patching one Google instance (⚠ assumed to move the series' number, **not confirmed against Google**). Reproduced against a stand-in Google that behaves that way: old code listed a "changed in both places" item and sent nothing. The same weakness existed for single gigs since v7.97.
+- **Fix:** before declaring a conflict the app compares Google's *content* (title, time, place, notes, the repeat rule including cancelled dates; not the version number) with what it last sent. Same content: adopt the number and send the change again **once**; if the number moves again immediately the change is left waiting (visible, retried), not turned into a conflict. Content really differs and the user also changed it: still a conflict, nothing overwritten. Applies to single gigs on both the push path and the Calendar pull.
+- **Healing:** "Calendar changes to review" entries that were only a moved number are resolved automatically after sign-in and on **Retry now** (number adopted, change sent). Genuine conflicts are never touched.
+- **Visibility:** "Cancel this event only" reports what happened ("Cancelled here and in Google Calendar ✓" / "…not updated yet — see Sync & Backup"). The repeating-event view shows its sync state and, for a series in Google, a **↻ Send to Google Calendar now** button.
+- Files: GigsAndTrips.html, GigsAndTrips.md. `pal-gcal.js` unchanged (v3). Launcher unchanged.
+- Tested in Node (17 suites pass) against a stand-in Google that moves the series' number when an occurrence is patched: the exact sequence from the report now sends the cancellation, with no conflict and nothing queued; a real conflict is still a conflict; one retry then waiting, never a loop; single gigs on both paths; healing; honest messages; badge and resend. Three older test expectations were updated for the intended change. Not tested: real Google or a browser; if the cancellation still fails the Sync Log line will say why.
 
 ### v7.105 — GIG-116 — Repeating events sent to Google Calendar, two-way
 
