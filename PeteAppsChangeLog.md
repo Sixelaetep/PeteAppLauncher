@@ -14,26 +14,26 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.00 | v10.89 – v10.99 and v11.00. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.01 | v10.89 – v10.99, v11.00 and v11.01. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v2.7 | v1.0 – v2.7 (complete). ⚠ v2.2 and v2.6 are each used for two builds |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
-| Gigs & Trips | `GigsAndTrips.html` | v7.106 | v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
+| Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.81 | v1.0 – v3.43 and v3.73 – v3.81. ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.70 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 |
-| Test & Issues | `test-issues.html` | v1.77 | v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
+| Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
 **Applications referenced in the changelogs but with no changelog supplied**
 
 | Application | Current / Latest Version | Where it is recorded |
 |---|---:|---|
-| PeteGCal (`PeteGCal.html`) | v1.0 | Launcher v10.98 (PET-103 / PGC-003); `pal-gcal.js` |
+| PeteGCal (`PeteGCal.html`) | v1.0 | Launcher v10.98 (PET-103 / PGC-003); `pal-gcal.js`. ⏸ On hold — removed from the launcher at v11.01 (2026-10-04) |
 | Claim Tracker (`claim-tracker.html`) | Not established | Embedded in Fortnight Tracker (FT-041, FT-062, FT-064); CLA-013, CLA-014 referenced |
 | Meal Planner | Not established | MP-045 referenced (sync audit); out of scope for pal-sync compaction |
-| Food System | Not established | Launcher card referenced only |
+| Food System (`food-system-tracker.html`) | Not established | Launcher card referenced only. ⏸ On hold — removed from the launcher at v11.01 (2026-10-04) |
 | pal-fpl-proxy (Supabase Edge Function) | v1.4 | Fantasy Football Tracker v1.0, v1.16, v1.17, v1.19 |
 
 **Shared components**
@@ -42,6 +42,24 @@ This is the consolidated historical development changelog for every application 
 |---|---:|---|
 | `pal-shared.js` | pal-config section v1.2; pal-sync section v1.13 | Combined bundle of pal-config.js + pal-sync.js + pal-utils.js. The three standalone files are retired (no app loads them) |
 | `pal-gcal.js` | v3 | Google Calendar access layer; consumers PeteGCal and Gigs & Trips |
+
+---
+
+## Applications on hold
+
+Four applications were taken out of the launcher at **P Apps Launcher v11.01 (PET-105, 2026-10-04)**. They are **on hold, not retired**: Pete is exploring other ways of working with them. Their files are unchanged and still in the repository, and no data was touched. Nothing here is a statement that they are finished or abandoned.
+
+| Application | File | Last version | Last launcher version that carried it |
+|---|---|---:|---:|
+| Gigs & Trips | `GigsAndTrips.html` | v7.106 | v11.00 |
+| PeteGCal | `PeteGCal.html` | v1.0 | v11.00 |
+| Test & Issues | `test-issues.html` | v1.77 | v11.00 |
+| Food System | `food-system-tracker.html` | Not established | v11.00 |
+
+- While on hold: no launcher nav icon, home card, iframe, backup row or layout-panel entry for any of them. `pal-gcal.js` is kept as-is (its only consumers, PeteGCal and Gigs & Trips, are both on hold).
+- Backlogs for these apps stay where they are; nothing was moved or closed.
+- To reinstate an app, restore from launcher v11.00 (the full removal list is in the v11.01 entry under P Apps Launcher) and record it as a new launcher version.
+- ⚠ **Side effects to be aware of** (details in the v11.01 entry): HTML Vault is embedded inside Test & Issues, so its only launcher route is now its Standalone setting in Customize layout; Lex no longer has Gigs & Trips or PeteGCal in her launcher.
 
 ---
 
@@ -154,7 +172,7 @@ Shared Google Calendar access layer, kept separate from `pal-shared.js` on purpo
 
 Public API: `init`, `signIn`, `signOut`, `hasToken`, `getTokenExpiry`, `requestTokenRefresh`, `errorHint`, `withAppMeta`, `readAppMeta`, `listEvents`, `listInstances`, `createEvent`, `updateEvent`, `deleteEvent`, `getEvent`.
 
-Affected applications: PeteGCal (first consumer) and Gigs & Trips.
+Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both consumers are on hold as of launcher v11.01 (2026-10-04); the module itself is unchanged.
 
 ### v3 — GIG-115
 
@@ -191,6 +209,28 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips.
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.01 — PET-105 — Gigs & Trips, PeteGCal, Test & Issues and Food System removed from the launcher (on hold) — 2026-10-04
+
+- **Why:** Pete is putting these four applications on hold while he explores other ways of working with them. This is a launcher-only removal. `GigsAndTrips.html`, `PeteGCal.html`, `test-issues.html`, `food-system-tracker.html` and `pal-gcal.js` are untouched, no data was deleted, and nothing was changed in Supabase.
+- **Removed from `index.html`, for each of the four apps:**
+  - Nav icon: 📅 Gigs & Trips, 🥫 Food System (pete-only), 🗓️ PeteGCal, 🚦 Test & Issues (pete-only).
+  - Home card: Gigs & Trips, PeteGCal, Food System, and the dormant Test & Issues card. The Fantasy Football / Food System `.card-pair` wrapper is replaced by a plain Fantasy Football card; it rendered full width when Food System was hidden for Lex, so Pete's static layout now matches hers.
+  - Iframes: `frame-gigs`, `frame-petegcal`, `frame-ti`, `frame-food`.
+  - Backup panel rows (Gigs & Trips, Test & Issues, Food System) and `triggerGigsBackup()`, `triggerTiBackup()`, `triggerFoodBackup()`, plus their calls in `backupAll()`. **Download All: Pete 10 → 7 files** (Fortnight, On Budget, Claims, Vault, Horizon, Gym, Reading), **Lex 3 → 2** (Gym, Reading). The row-count text and the final toast are updated to match.
+  - Card stat code: `statGigs()`, `statFood()`, `statTiSub()` and their calls in `refreshCardStats()`. The v11.00 `pal_ti_stat` reader (`statTiSub`) therefore has no consumer in the launcher any more; the key itself is still written by Test & Issues v1.77, which is unchanged.
+  - `LAYOUT_APPS` entries `gigs`, `food`, `ti`, `petegcal` (the Customize layout panel now lists 9 apps instead of 13).
+  - `PAL_NAV_SLUG_MAP` entries `GigsAndTrips`, `test-issues`, `food-system-tracker`, `PeteGCal`; `GAT_DATA_UPDATED` and `FS_DATA_UPDATED` removed from the data-update listener. A `PAL_NAVIGATE` for any of those slugs is now silently ignored (no other supplied app sends one).
+  - DEPLOYMENT comment updated; the four files are marked ON HOLD there.
+- **Saved layout:** `mergeLayoutConfig()` already drops saved entries that are no longer in `LAYOUT_APPS`, so Pete's existing synced `pal_layout` row needs no migration. The stale entries stay in the row until the next layout save, which writes the pruned list. No Supabase change.
+- **Reinstating an app:** restore its pieces from launcher v11.00. The `LAYOUT_APPS` defaults it had were: gigs order 0 full card+icon; food order 4 half card+icon; ti order 6 full, icon only; petegcal order 12 full card+icon. A reinstated app is appended with these defaults if the saved layout has no entry for it.
+- ⚠ **Known side effects, accepted with the request:**
+  - **HTML Vault** is not on hold, but it is embedded in Test & Issues (the Html tab) and has no icon or card of its own while embedded. With Test & Issues gone from the launcher, Vault is reachable only by ticking **Standalone** for HTML Vault in Customize layout (then tick Card and/or Icon). Its backup row and standalone iframe are unchanged, so Vault backups still work either way.
+  - **Release tests:** Test & Issues is where release-manifest tests are run and recorded. It can still be opened directly at `test-issues.html`, but no longer from the launcher.
+  - **Lex** no longer has Gigs & Trips or PeteGCal in her launcher (both were shared with her). The Google Calendar sharing itself is unaffected.
+  - Fantasy Football's saved width may still be `half` in Pete's layout; as the only half-width card it fills the row, so there is no visible gap.
+- Version: title and nav badge set to v11.01. `pal-shared.js?v=10.87` deliberately unchanged (no shared-code change).
+- Tested: `node --check` on all three inline scripts; 75 headless checks (jsdom, real `pal-shared.js`, real `index.html`) covering absence of all four apps' nav/card/iframe/layout/slug entries, presence of every remaining app's card, iframe and nav, `refreshCardStats()` running without error, backup rows (7 apps + Download All), `backupAll()` running exactly 7 triggers for Pete and Gym + Reading for Lex, row-count text, a saved layout containing the removed ids being reconciled and rendered, Vault appearing when set Standalone, the layout panel listing none of the four, and `PAL_NAVIGATE` to a removed slug being a no-op. Not tested: the launcher in a real browser, live Supabase layout sync, remaining apps loading in their iframes, a physical phone, Lex's account.
 
 ### v11.00 — PET-104 — Test & Issues card reads `pal_ti_stat`
 
@@ -1028,6 +1068,8 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 ---
 
 # Gigs & Trips
+
+> ⏸ **On hold since 2026-10-04** — removed from the launcher at P Apps Launcher v11.01 (PET-105) while Pete explores other ways of working with it. File, data and backlog unchanged. See "Applications on hold".
 
 `GigsAndTrips.html`. From v7.87, full entries go in the `.md`; the inline HTML comment keeps a short pointer (same convention as `index.md` and `PeteGCal.md`). Entries before GIG-072 (GIG-001 – GIG-071) were not migrated and remain as inline comments in the HTML (see "Pre-GIG-072 history" below).
 
@@ -2143,6 +2185,8 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 ---
 
 # Test & Issues
+
+> ⏸ **On hold since 2026-10-04** — removed from the launcher at P Apps Launcher v11.01 (PET-105) while Pete explores other ways of working with it. File and data unchanged; it hosts the embedded HTML Vault tab, so see the Vault note in the launcher v11.01 entry. See "Applications on hold".
 
 `test-issues.html`. From v1.73, full entries go in the `.md`; the inline comment keeps a pointer. Local key `ti_v1`; `APP_REGISTRY` drives app names, icons and prefixes. Hosts HTML Vault as an embedded tab (TI-083, not in the supplied changelog).
 
