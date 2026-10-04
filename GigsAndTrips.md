@@ -6,6 +6,30 @@ Entries before GIG-072 (the start of the Google Calendar sync work) are not yet 
 
 ---
 
+## v7.100 (GIG-106, GIG-107) — Repeating events, stage 1: in the app
+
+First stage of recurrence. **Repeating events now work inside Gigs & Trips; they are not sent to Google Calendar yet** (stage 2). This is deliberately not the GIG-048 design that was removed in GIG-060.
+
+**How it works.** A repeating event is **one gig record** (the series) with a `recurrence` rule. Its occurrences are worked out when needed and never stored, so changing the series changes every occurrence at once. Changing a single occurrence stores an ordinary gig (an exception) that points back to the series (`recurrenceOf`, `recurrenceOriginalDate`) and the series skips that date (`recurrence.exdates`); cancelling one occurrence also just adds the date to `exdates`. Dates are plain calendar dates with a wall-clock time, so clock changes can never move or duplicate an occurrence. No Supabase schema change: the series and exceptions are normal gig documents with extra fields (an older copy of the app would show the series as a single gig on its first date).
+
+**Rules supported.** Daily; weekly on chosen days; monthly on the same date, the 1st–4th weekday ("3rd Friday") or the last weekday; yearly. Every N days/weeks/months/years; ends never, on a date, or after N times. Weeks start Monday (as Google does); a monthly date that does not exist (the 31st in a 30-day month) is skipped, not moved; 29 Feb only occurs in leap years; "after N times" counts occurrences before any cancelled ones are removed.
+
+**Using it.** The gig form has a new **Repeats** section. Tapping an occurrence (Upcoming or Agenda, marked 🔁) opens a short view with: **Edit this event only** (creates the changed occurrence and opens it), **Edit all events** (opens the series; changes apply to every occurrence except ones you changed individually), **Cancel this event only**, and **Delete all events** (removes the series and its changed occurrences). A repeating event cannot be part of a trip; pick the trip on a single changed occurrence instead, which then also appears inside the trip. Upcoming and the Agenda show occurrences (Upcoming: next 120 days, capped at 400); **Past does not list them**. They respect the class filter and the day headers.
+
+**Guards.** The series record itself never appears as an extra entry, a completion prompt, a review candidate, a same-date clash, or a duplicate-removal candidate. Google: a series is not synced (logged, nothing queued, no Google event created); its changed occurrences are ordinary gigs and do sync as single events. The mirror's deletion check now recognises a Google recurring event by its occurrences, so it makes no needless lookups.
+
+**Stage 2 (next): Google.** Write the series to Google as one recurring event (with the cancelled/changed dates excluded), import recurring Google events as series instead of skipping them, read edits to a Google series back, and collapse the recurring instances already imported as separate gigs. Needs a `pal-gcal.js` change (non-expanded listing) and is the part I can least test without real Google.
+
+**Known limits in stage 1:** occurrences have no done/missed/review of their own (a changed occurrence does); same-date and day-off warnings ignore occurrences; "this and following" is not offered; converting an existing gig that is already in Google Calendar into a series leaves its single Google event in place.
+
+Files changed: `GigsAndTrips.html`, `GigsAndTrips.md`. No `pal-gcal.js`, launcher or schema change.
+
+**Tested — in Node:** the expansion engine against hand-checked dates (daily every 3 days across a month end; weekly single and multiple days; a start mid-week; every 2 weeks with Monday-based weeks; count; the 31st skipped in short months; every 3 months; 3rd and last Friday; 29 Feb; every 2 years; cancelled dates not reducing COUNT); window slicing equals filtering the full expansion for five rules over three windows; the cap; an inverted window and a bad start date; days across the UK clock change; rule cleaning and descriptions (defaults, bad values, "until" beating "count", ordinals); the real `render()` and agenda: the series is not listed, about 17 weekly occurrences appear in 120 days starting at the right date, a cancelled date is skipped and a changed occurrence is listed once, Past shows none, the class filter applies; the occurrence view, edit-this (exception created once, date skipped, form opened), cancel-this, delete-series (everything tombstoned, Google deletes only for records that had a Calendar event), deleting from the form routes through the series path; form reading and validation (no day ticked, nth/last monthly, bad interval, missing or backwards end date, bad count) and form rendering for a new gig, a series and a changed occurrence; the series is never sent to Google while its changed occurrence is. Inline script passes `node --check`; all earlier suites still pass.
+
+**Not tested:** not opened in a browser, so the Repeats section layout, the day-chip and "On" controls on a phone, and the occurrence view are unseen. Nothing has run against real Google. Creating a series through the real form and saving it was checked through its pieces (form reader, expansion, lists), not end to end by pressing Save.
+
+---
+
 ## v7.99 (GIG-111) — Upcoming and Past: day headers, class filter, "On now"
 
 **The problem.** The Upcoming list went year → month → a flat run of cards, so events on different days looked identical and several events on one day were indistinguishable from events on separate days.

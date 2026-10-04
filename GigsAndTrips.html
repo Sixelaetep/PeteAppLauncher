@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.99</title>
+<title>Gigs &amp; Trips v7.100</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -158,6 +158,11 @@ body{font-family:var(--f);background:var(--surf);color:var(--ink);height:100vh;o
 .day-hdr-rel{font-size:11px;font-weight:700;color:var(--acc);margin-left:auto}
 .day-hdr-n{font-size:11px;color:var(--ink3);font-weight:500}
 .day-hdr:first-child{margin-top:6px}
+/* GIG-106 — repeating events */
+.rep-days{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.rep-day{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--bdr);border-radius:999px;font-size:12px;font-weight:600;color:var(--ink2);background:var(--card);cursor:pointer}
+.rep-note{font-size:12px;color:var(--ink3);margin-top:6px}
+.rep-mark{font-size:12px;margin-left:4px;opacity:.8}
 .agenda-trip{font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.03em;padding:10px 14px 0}
 .agenda-row{background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);margin-bottom:8px;cursor:pointer;overflow:hidden}
 .agenda-row-main{display:flex;gap:12px;align-items:flex-start;padding:12px 14px}
@@ -543,7 +548,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.99</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.100</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -604,7 +609,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.99"></script>
+<script src="pal-shared.js?v=7.100"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=2"></script>
@@ -964,6 +969,308 @@ function agendaFilterBar(active){
   ).join('') + '</div>';
 }
 
+
+// ==GIG-106 BEGIN==
+// GIG-106/107 — full history in GigsAndTrips.md. REPEATING EVENTS (stage 1: in the app).
+// A repeating event is ONE gig record (the "series") carrying a `recurrence` rule; its
+// occurrences are worked out when needed and never stored. Changing the series changes
+// every occurrence. Changing one occurrence stores a normal gig (the "exception") that
+// points back with recurrenceOf / recurrenceOriginalDate, and the series skips that
+// date through recurrence.exdates (so does cancelling one). Dates are plain calendar
+// dates (YYYY-MM-DD) with a wall-clock time, so clock changes never move an occurrence.
+// Stage 1 does NOT send series to Google Calendar yet.
+const RECUR_DAYS = ['SU','MO','TU','WE','TH','FR','SA'];
+const RECUR_DAY_NAMES = {SU:'Sunday',MO:'Monday',TU:'Tuesday',WE:'Wednesday',TH:'Thursday',FR:'Friday',SA:'Saturday'};
+const RECUR_UPCOMING_DAYS = 120;
+const RECUR_MAX_OCCURRENCES = 400;
+const RECUR_DAY_MS = 86400000;
+
+function recurParseDate(str){ const p = String(str).split('-').map(Number); return Date.UTC(p[0], p[1]-1, p[2]); }
+function recurFmt(ms){ const d = new Date(ms); return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0') + '-' + String(d.getUTCDate()).padStart(2,'0'); }
+function recurValidDate(str){ return /^\d{4}-\d{2}-\d{2}$/.test(String(str||'')) && recurFmt(recurParseDate(str)) === str; }
+
+// Clean a rule: returns a normalised copy, or null if it is not a usable rule.
+function recurNormalise(rec, startStr){
+  if (!rec || ['DAILY','WEEKLY','MONTHLY','YEARLY'].indexOf(rec.freq) < 0) return null;
+  const out = { freq:rec.freq, interval:Math.min(99, Math.max(1, parseInt(rec.interval,10) || 1)) };
+  const byday = Array.isArray(rec.byday) ? rec.byday : [];
+  if (rec.freq === 'WEEKLY'){
+    const codes = [...new Set(byday.map(c=>String(c).toUpperCase()).filter(c=>RECUR_DAYS.indexOf(c) >= 0))];
+    out.byday = codes.length ? codes : (startStr && recurValidDate(startStr) ? [RECUR_DAYS[new Date(recurParseDate(startStr)).getUTCDay()]] : []);
+  } else if (rec.freq === 'MONTHLY'){
+    const m = /^(-1|[1-4])(SU|MO|TU|WE|TH|FR|SA)$/.exec(String(byday[0] || '').toUpperCase());
+    out.byday = m ? [m[1] + m[2]] : [];
+  } else out.byday = [];
+  if (rec.until && recurValidDate(rec.until) && (!startStr || rec.until >= startStr)) out.until = rec.until;
+  else if (rec.count && parseInt(rec.count,10) >= 1) out.count = Math.min(999, parseInt(rec.count,10));
+  out.exdates = [...new Set((rec.exdates||[]).filter(recurValidDate))].sort();
+  return out;
+}
+
+// Occurrence dates (YYYY-MM-DD) of a series within [fromStr, toStr], exdates removed.
+// COUNT counts generated occurrences before exdates are removed (RFC 5545).
+function recurOccurrences(master, fromStr, toStr, cap){
+  const rec = master && master.recurrence;
+  if (!rec || !master.date || !recurValidDate(master.date)) return [];
+  cap = cap || 500;
+  const start = recurParseDate(master.date), from = recurParseDate(fromStr), to = recurParseDate(toStr);
+  const hardEnd = Math.min(to, rec.until ? recurParseDate(rec.until) : Infinity);
+  const maxCount = rec.count ? rec.count : Infinity;
+  const ex = new Set(rec.exdates || []);
+  const interval = Math.max(1, parseInt(rec.interval,10) || 1);
+  const out = []; let generated = 0, guard = 0;
+  const emit = function(ms){                       // false = stop
+    if (ms < start) return true;
+    if (ms > hardEnd) return false;
+    if (++generated > maxCount) return false;
+    if (ms >= from){ const s = recurFmt(ms); if (!ex.has(s)){ out.push(s); if (out.length >= cap) return false; } }
+    return true;
+  };
+  const sd = new Date(start);
+  if (rec.freq === 'DAILY'){
+    for (let ms = start; guard++ < 200000; ms += interval * RECUR_DAY_MS){ if (!emit(ms)) break; }
+  } else if (rec.freq === 'WEEKLY'){
+    const codes = (rec.byday && rec.byday.length) ? rec.byday : [RECUR_DAYS[sd.getUTCDay()]];
+    const offs = codes.map(c=>(RECUR_DAYS.indexOf(c) + 6) % 7).filter(i=>i >= 0 && i < 7).sort((a,b)=>a-b);   // weeks start Monday
+    let wk = start - ((sd.getUTCDay() + 6) % 7) * RECUR_DAY_MS;
+    outer: for (; guard++ < 200000; wk += interval * 7 * RECUR_DAY_MS){
+      if (wk > hardEnd) break;
+      for (const o of offs){ if (!emit(wk + o * RECUR_DAY_MS)) break outer; }
+    }
+  } else if (rec.freq === 'MONTHLY'){
+    const spec = /^(-1|[1-4])(SU|MO|TU|WE|TH|FR|SA)$/.exec((rec.byday && rec.byday[0]) || '');
+    for (let k = 0; guard++ < 100000; k++){
+      const first = Date.UTC(sd.getUTCFullYear(), sd.getUTCMonth() + k * interval, 1);
+      if (first > hardEnd) break;
+      const fd = new Date(first);
+      let ms;
+      if (spec){
+        const wd = RECUR_DAYS.indexOf(spec[2]), n = parseInt(spec[1],10);
+        if (n > 0) ms = first + (((wd - fd.getUTCDay() + 7) % 7) + (n - 1) * 7) * RECUR_DAY_MS;
+        else { const last = Date.UTC(fd.getUTCFullYear(), fd.getUTCMonth() + 1, 0); ms = last - ((new Date(last).getUTCDay() - wd + 7) % 7) * RECUR_DAY_MS; }
+        if (new Date(ms).getUTCMonth() !== fd.getUTCMonth()) continue;   // e.g. no 5th Friday this month
+      } else {
+        ms = Date.UTC(fd.getUTCFullYear(), fd.getUTCMonth(), sd.getUTCDate());
+        if (new Date(ms).getUTCMonth() !== fd.getUTCMonth()) continue;   // day 31 in a 30-day month: skipped, not counted
+      }
+      if (!emit(ms)) break;
+    }
+  } else if (rec.freq === 'YEARLY'){
+    for (let k = 0; guard++ < 5000; k++){
+      const ms = Date.UTC(sd.getUTCFullYear() + k * interval, sd.getUTCMonth(), sd.getUTCDate());
+      if (ms > hardEnd && new Date(ms).getUTCMonth() === sd.getUTCMonth()) break;
+      if (new Date(ms).getUTCMonth() !== sd.getUTCMonth()) { if (ms > hardEnd) break; continue; }   // 29 Feb in a non-leap year
+      if (!emit(ms)) break;
+    }
+  }
+  return out;
+}
+
+function recurOrdinal(n){ return n + (['th','st','nd','rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : (n % 10 < 4 ? n % 10 : 0)]); }
+function recurDescribe(rec, startStr){
+  if (!rec) return '';
+  const n = rec.interval || 1;
+  const sd = recurValidDate(startStr) ? new Date(recurParseDate(startStr)) : null;
+  let t;
+  if (rec.freq === 'DAILY') t = n === 1 ? 'Every day' : 'Every ' + n + ' days';
+  else if (rec.freq === 'WEEKLY'){
+    const names = (rec.byday && rec.byday.length ? rec.byday : (sd ? [RECUR_DAYS[sd.getUTCDay()]] : [])).slice().sort((a,b)=>((RECUR_DAYS.indexOf(a)+6)%7)-((RECUR_DAYS.indexOf(b)+6)%7)).map(c=>RECUR_DAY_NAMES[c].slice(0,3));
+    t = (n === 1 ? 'Every week' : 'Every ' + n + ' weeks') + (names.length ? ' on ' + names.join(', ') : '');
+  } else if (rec.freq === 'MONTHLY'){
+    const m = /^(-1|[1-4])(SU|MO|TU|WE|TH|FR|SA)$/.exec((rec.byday && rec.byday[0]) || '');
+    const where = m ? 'on the ' + (m[1] === '-1' ? 'last' : recurOrdinal(parseInt(m[1],10))) + ' ' + RECUR_DAY_NAMES[m[2]] : (sd ? 'on the ' + recurOrdinal(sd.getUTCDate()) : '');
+    t = (n === 1 ? 'Every month' : 'Every ' + n + ' months') + ' ' + where;
+  } else t = (n === 1 ? 'Every year' : 'Every ' + n + ' years') + (sd ? ' on ' + sd.getUTCDate() + ' ' + sd.toLocaleDateString('en-GB',{month:'short',timeZone:'UTC'}) : '');
+  if (rec.until) t += ', until ' + new Date(recurParseDate(rec.until)).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
+  else if (rec.count) t += ', ' + rec.count + (rec.count === 1 ? ' time' : ' times');
+  return t;
+}
+
+function recurMasters(){ return getData().events.filter(e=>e.type==='gig' && !e._deleted && e.recurrence && !e.recurrenceOf); }
+function recurExceptionsOf(masterId){ return getData().events.filter(e=>e.type==='gig' && !e._deleted && e.recurrenceOf === masterId); }
+function recurSplitId(id){ const i = String(id).indexOf('@'); return i < 0 ? null : { masterId:String(id).slice(0, i), date:String(id).slice(i+1) }; }
+
+// A display-only gig for one occurrence. It is never saved; its id is "<seriesId>@<date>".
+function recurOccurrenceGig(master, dateStr){
+  const g = Object.assign({}, master, { id:master.id + '@' + dateStr, date:dateStr, _occurrence:true, _masterId:master.id, done:false, missed:false });
+  delete g.calendarEventId; delete g.calendarHtmlLink; delete g.calendarAdded; delete g.gcalEtag; delete g.gcalSyncedHash; delete g.review;
+  return g;
+}
+function recurExpandAll(fromStr, toStr, cap){
+  cap = cap || RECUR_MAX_OCCURRENCES;
+  const all = [];
+  recurMasters().forEach(m=>{ recurOccurrences(m, fromStr, toStr, cap).forEach(ds=>all.push(recurOccurrenceGig(m, ds))); });
+  all.sort((a,b)=> a.date !== b.date ? a.date.localeCompare(b.date) : String(a.time||'').localeCompare(String(b.time||'')));
+  return all.slice(0, cap);
+}
+
+// ── Form: "Repeats" section ──────────────────────────────────────────────
+function recurMonthlyOptions(dateStr){
+  if (!recurValidDate(dateStr)) return [{key:'dom', label:'On the same day each month'}];
+  const d = new Date(recurParseDate(dateStr)), dow = RECUR_DAYS[d.getUTCDay()];
+  const nth = Math.ceil(d.getUTCDate() / 7);
+  const isLast = d.getUTCDate() + 7 > new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  const opts = [{key:'dom', label:'On the ' + recurOrdinal(d.getUTCDate())}];
+  if (nth <= 4) opts.push({key:'nth', label:'On the ' + recurOrdinal(nth) + ' ' + RECUR_DAY_NAMES[dow]});
+  if (isLast) opts.push({key:'last', label:'On the last ' + RECUR_DAY_NAMES[dow]});
+  return opts;
+}
+function gfRepeatHtml(g, dateStr){
+  if (g && g.recurrenceOf){
+    return '<div class="fg"><label>Repeats</label><div class="rep-note">🔁 This is a changed occurrence of a repeating event. To change the whole series, open the series and choose “Edit all events”.</div></div>';
+  }
+  const rec = g && g.recurrence ? g.recurrence : null;
+  const days = rec && rec.byday && rec.freq === 'WEEKLY' ? rec.byday : [];
+  const chips = ['MO','TU','WE','TH','FR','SA','SU'].map(c=>'<label class="rep-day"><input type="checkbox" value="' + c + '" ' + (days.indexOf(c) >= 0 ? 'checked' : '') + '> ' + RECUR_DAY_NAMES[c].slice(0,2) + '</label>').join('');
+  const end = rec && rec.until ? 'until' : rec && rec.count ? 'count' : 'never';
+  const sel = (v,cur) => v === cur ? 'selected' : '';
+  return `<div class="fg"><label>Repeats</label>
+      <select class="fi" id="gfRepFreq" onchange="gfRepeatChanged()">
+        <option value="" ${sel('', rec ? rec.freq : '')}>Does not repeat</option>
+        <option value="DAILY" ${sel('DAILY', rec && rec.freq)}>Daily</option>
+        <option value="WEEKLY" ${sel('WEEKLY', rec && rec.freq)}>Weekly</option>
+        <option value="MONTHLY" ${sel('MONTHLY', rec && rec.freq)}>Monthly</option>
+        <option value="YEARLY" ${sel('YEARLY', rec && rec.freq)}>Yearly</option>
+      </select>
+      <div id="gfRepBody" style="display:${rec ? 'block' : 'none'}">
+        <div class="fi-row" style="margin-top:10px">
+          <div class="fg"><label>Every <span id="gfRepUnit"></span></label><input class="fi" type="number" min="1" max="99" id="gfRepInt" value="${rec ? rec.interval : 1}"></div>
+          <div class="fg" id="gfRepMonthWrap" style="display:none"><label>On</label><select class="fi" id="gfRepMonthMode" data-cur="${rec && rec.freq === 'MONTHLY' ? (rec.byday && rec.byday[0] ? (rec.byday[0].indexOf('-1') === 0 ? 'last' : 'nth') : 'dom') : 'dom'}"></select></div>
+        </div>
+        <div class="rep-days" id="gfRepDays" style="display:none">${chips}</div>
+        <div class="fi-row" style="margin-top:10px">
+          <div class="fg"><label>Ends</label><select class="fi" id="gfRepEnd" onchange="gfRepeatChanged()"><option value="never" ${sel('never',end)}>Never</option><option value="until" ${sel('until',end)}>On a date</option><option value="count" ${sel('count',end)}>After a number of times</option></select></div>
+          <div class="fg" id="gfRepUntilWrap" style="display:none"><label>Last date</label><input class="fi" type="date" id="gfRepUntil" value="${esc(rec && rec.until || '')}"></div>
+          <div class="fg" id="gfRepCountWrap" style="display:none"><label>Times</label><input class="fi" type="number" min="1" max="999" id="gfRepCount" value="${rec && rec.count ? rec.count : 10}"></div>
+        </div>
+        <div class="rep-note">${g && g.recurrence ? 'Changes here apply to every event in the series, except ones you have changed individually.' : 'A repeating event can’t be part of a trip; pick the trip on a single occurrence instead.'} Repeating events are kept in Gigs &amp; Trips for now and are not sent to Google Calendar yet.</div>
+      </div>
+    </div>`;
+}
+function gfRepeatChanged(){
+  const freqEl = document.getElementById('gfRepFreq'); if (!freqEl) return;
+  const freq = freqEl.value, body = document.getElementById('gfRepBody');
+  const dateStr = document.getElementById('gfDate')?.value || '';
+  body.style.display = freq ? 'block' : 'none';
+  const unit = { DAILY:'day(s)', WEEKLY:'week(s)', MONTHLY:'month(s)', YEARLY:'year(s)' }[freq] || '';
+  document.getElementById('gfRepUnit').textContent = unit;
+  document.getElementById('gfRepDays').style.display = freq === 'WEEKLY' ? 'flex' : 'none';
+  document.getElementById('gfRepMonthWrap').style.display = freq === 'MONTHLY' ? 'block' : 'none';
+  if (freq === 'WEEKLY' && recurValidDate(dateStr) && !document.querySelector('#gfRepDays input:checked')){
+    const box = document.querySelector('#gfRepDays input[value="' + RECUR_DAYS[new Date(recurParseDate(dateStr)).getUTCDay()] + '"]'); if (box) box.checked = true;
+  }
+  if (freq === 'MONTHLY'){
+    const ms = document.getElementById('gfRepMonthMode'), cur = ms.value || ms.getAttribute('data-cur') || 'dom';
+    const opts = recurMonthlyOptions(dateStr);
+    ms.innerHTML = opts.map(o=>'<option value="' + o.key + '" ' + (o.key === cur ? 'selected' : '') + '>' + esc(o.label) + '</option>').join('');
+  }
+  const em = document.getElementById('gfRepEnd').value;
+  document.getElementById('gfRepUntilWrap').style.display = em === 'until' ? 'block' : 'none';
+  document.getElementById('gfRepCountWrap').style.display = em === 'count' ? 'block' : 'none';
+  const trip = document.getElementById('gfTripId');
+  if (trip){ if (freq){ trip.value = ''; trip.disabled = true; } else trip.disabled = false; }
+}
+// Reads the Repeats section. {rec:null} = does not repeat; {error} = invalid; else {rec}.
+function gfReadRepeat(dateStr){
+  const freq = document.getElementById('gfRepFreq')?.value || '';
+  if (!freq) return { rec:null };
+  const interval = parseInt(document.getElementById('gfRepInt')?.value || '1', 10);
+  if (!(interval >= 1 && interval <= 99)) return { error:'Repeat interval must be between 1 and 99' };
+  const rec = { freq:freq, interval:interval };
+  const dow = RECUR_DAYS[new Date(recurParseDate(dateStr)).getUTCDay()];
+  if (freq === 'WEEKLY'){
+    rec.byday = [...document.querySelectorAll('#gfRepDays input:checked')].map(i=>i.value);
+    if (!rec.byday.length) rec.byday = [dow];
+  }
+  if (freq === 'MONTHLY'){
+    const mode = document.getElementById('gfRepMonthMode')?.value || 'dom';
+    const nth = Math.ceil(new Date(recurParseDate(dateStr)).getUTCDate() / 7);
+    rec.byday = mode === 'last' ? ['-1' + dow] : mode === 'nth' ? [nth + dow] : [];
+  }
+  const em = document.getElementById('gfRepEnd')?.value || 'never';
+  if (em === 'until'){
+    const u = document.getElementById('gfRepUntil')?.value || '';
+    if (!u) return { error:'Choose the last date for the repeat' };
+    if (u < dateStr) return { error:'The repeat ends before it starts' };
+    rec.until = u;
+  } else if (em === 'count'){
+    const n = parseInt(document.getElementById('gfRepCount')?.value || '0', 10);
+    if (!(n >= 1 && n <= 999)) return { error:'Number of times must be 1–999' };
+    rec.count = n;
+  }
+  return { rec:recurNormalise(rec, dateStr) };
+}
+
+// ── Occurrence view and the This / All choices ───────────────────────────
+function openOccurrenceDetail(id){
+  const sp = recurSplitId(id); const m = sp && getEvent(sp.masterId);
+  if (!m || !m.recurrence){ showToast('That repeating event no longer exists'); return; }
+  const ti = gigTypeInfo(m.gigType || 'music');
+  const o = recurOccurrenceGig(m, sp.date);
+  showModal(`<div class="modal-hdr">
+      <div class="modal-title">${esc(m.name)} <span class="rep-mark">🔁</span></div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span style="font-size:36px">${ti.icon}</span>
+        <div>
+          <div style="font-size:13px;color:var(--ink3)">${fmtDateLong(o.date)}${o.time ? ' · ' + o.time : ''}</div>
+          ${m.venue ? `<div style="font-size:14px;color:var(--ink2);margin-top:2px">📍 ${esc(m.venue)}</div>` : ''}
+          <div style="font-size:12px;color:var(--ink3);margin-top:4px">🔁 ${esc(recurDescribe(m.recurrence, m.date))}</div>
+        </div>
+      </div>
+      ${m.notes ? `<div style="font-size:13px;color:var(--ink2);margin-bottom:14px;line-height:1.6">${esc(m.notes)}</div>` : ''}
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-pri" onclick="recurEditThis('${esc(m.id)}','${esc(sp.date)}')">✏️ Edit this event only</button>
+        <button class="btn btn-ghost" onclick="closeModal();openEditGig('${esc(m.id)}')">✏️ Edit all events</button>
+        <button class="btn btn-ghost" onclick="recurCancelThis('${esc(m.id)}','${esc(sp.date)}')">🚫 Cancel this event only</button>
+        <button class="btn btn-danger" onclick="recurDeleteSeries('${esc(m.id)}')">🗑 Delete all events</button>
+      </div>
+    </div>`);
+}
+function recurAddExdate(masterId, dateStr){
+  const m = getEvent(masterId); if (!m || !m.recurrence) return null;
+  const f = Object.assign({}, m); f.recurrence = Object.assign({}, m.recurrence);
+  f.recurrence.exdates = [...new Set((m.recurrence.exdates || []).concat([dateStr]))].sort();
+  f.updatedAt = new Date().toISOString();
+  saveEvent(f);
+  return f;
+}
+function recurEditThis(masterId, dateStr){
+  const m = getEvent(masterId); if (!m || !m.recurrence) return;
+  let ex = getData().events.find(e=>e.type==='gig' && !e._deleted && e.recurrenceOf === masterId && e.recurrenceOriginalDate === dateStr);
+  if (!ex){
+    const now = new Date().toISOString();
+    ex = Object.assign({}, m, { id:uid('gat'), createdAt:now, updatedAt:now, date:dateStr, recurrenceOf:masterId, recurrenceOriginalDate:dateStr, done:false, missed:false, addedBy:_currentUserKey });
+    delete ex.recurrence; delete ex.calendarEventId; delete ex.calendarHtmlLink; delete ex.calendarAdded; delete ex.gcalEtag; delete ex.gcalSyncedHash; delete ex.review;
+    saveEvent(ex);
+    recurAddExdate(masterId, dateStr);
+  }
+  closeModal();
+  openEditGig(ex.id);
+  render();
+}
+function recurCancelThis(masterId, dateStr){
+  if (!confirm('Cancel just this event? The rest of the series is unaffected.')) return;
+  recurAddExdate(masterId, dateStr);
+  closeModal(); showToast('This event cancelled'); render();
+}
+async function recurDeleteSeries(masterId){
+  const m = getEvent(masterId); if (!m) return;
+  const exs = recurExceptionsOf(masterId);
+  if (!confirm('Delete "' + m.name + '" and ALL its events' + (exs.length ? ' (including ' + exs.length + ' you changed individually)' : '') + '?')) return;
+  for (const g of [m].concat(exs)){
+    if (g.calendarEventId){
+      const ok = await gcalDeleteGig(g.calendarEventId, g.name);
+      if (ok !== true) gcalQueueAdd('delete','gig',{calendarEventId:g.calendarEventId}, g.name);
+      gcalQueueRemove('upsert','gig',{id:g.id});
+    }
+    deleteEvent(g.id);
+  }
+  closeModal(); showToast('Repeating event deleted'); render();
+}
+// ==GIG-106 END==
 // ═══════════════════════════════════════════════════════════════════
 // AGENDA DATA LAYER (GIG-083) — full history in GigsAndTrips.md
 // ═══════════════════════════════════════════════════════════════════
@@ -983,11 +1290,14 @@ function getAgendaItems(startDate, endDate){
   const trips = d.events.filter(e=>e.type==='trip'&&!e._deleted);
   const tripIds = new Set(trips.map(t=>t.id));
 
-  d.events.filter(e=>e.type==='gig'&&!e._deleted&&!e.missed&&e.date>=startDate&&e.date<=endDate)
+  d.events.filter(e=>e.type==='gig'&&!e._deleted&&!e.missed&&!e.recurrence&&e.date>=startDate&&e.date<=endDate)
     .forEach(g=>{
       if(g.tripId && tripIds.has(g.tripId)) return; // covered via its trip's day below
       entries.push(agendaEntryFromGig(g));
     });
+
+  // GIG-106: repeating events contribute their occurrences (the series record itself is not an entry)
+  recurExpandAll(startDate, endDate).forEach(o=>entries.push(agendaEntryFromGig(o)));
 
   trips.filter(t=>t.status!=='Cancelled').forEach(trip=>{
     const linkedGigs = d.events.filter(e=>e.type==='gig'&&!e._deleted&&e.tripId===trip.id);
@@ -1017,7 +1327,7 @@ function agendaEntryFromGig(g){
     kind:'gig', date:g.date, time:g.time||null,
     title:g.name||'(no title)', icon:ti.icon, typeLabel:ti.label,
     location:g.venue||'', tripName:null, tripId:null, gigId:g.id,
-    eventClass:eventClassOfGig(g)
+    eventClass:eventClassOfGig(g), recurring:!!(g._occurrence||g.recurrenceOf)
   };
 }
 
@@ -1179,7 +1489,7 @@ function agendaRow(it){
     <div class="agenda-row-main">
       <div class="agenda-time${it.time?'':' allday'}">${esc(timeLabel)}</div>
       <div class="agenda-info">
-        <div class="agenda-title">${it.icon} ${esc(it.title)}</div>
+        <div class="agenda-title">${it.icon} ${esc(it.title)}${it.recurring?' <span class="rep-mark">🔁</span>':''}</div>
         ${it.location ? `<div class="agenda-loc">${esc(it.location)}</div>` : ''}
         ${durationLine}
       </div>
@@ -2458,11 +2768,17 @@ function render(){
 
   let upcoming=[], past=[];
   all.forEach(ev=>{
+    if(ev.type==='gig' && ev.recurrence) return; // GIG-106: a series is shown as its occurrences (below)
     const endDate=ev.type==='gig'?ev.date:ev.endDate;
     if(!endDate) return;
     const isOver = ev.type==='gig' ? ev.done||ev.missed||(endDate<todayStr) : (ev.status==='Completed'||ev.status==='Cancelled'||(endDate<todayStr));
     if(isOver) past.push(ev); else upcoming.push(ev);
   });
+
+  if(_tab==='upcoming'){
+    const _horizon=localDateStr(new Date(Date.now()+RECUR_UPCOMING_DAYS*86400000));
+    recurExpandAll(todayStr,_horizon).forEach(o=>upcoming.push(o));
+  }
 
   // Sort key: ISO datetime string for precise ordering including time.
   // Gigs use their time if set, otherwise end-of-day so untimed gigs
@@ -2701,7 +3017,7 @@ function renderGigCard(g, d){
           ${g.time?`<div class="card-time" style="font-size:9px;color:var(--acc);font-weight:700;margin-top:2px">${g.time}</div>`:''}
         </div>
         <div class="card-info">
-          <div class="card-name">${esc(g.name)}</div>
+          <div class="card-name">${esc(g.name)}${(g._occurrence||g.recurrenceOf)?' <span class="rep-mark">🔁</span>':''}</div>
           ${g.venue?`<div class="card-sub">📍 ${esc(g.venue)} ${venueLinkHtml(g.venue)}</div>`:''}
           <div class="card-meta">
             <span class="type-pill ${g.gigType||'music'}">${ti.label}</span>
@@ -3024,10 +3340,11 @@ function showGigForm(g){
       <div class="fg"><label>Type</label><div class="type-grid">${typeGrid}</div></div>
       <div class="fg"><label>Name *</label><input class="fi" id="gfName" placeholder="Artist, event or show name" value="${esc(g?.name||'')}"></div>
       <div class="fi-row">
-        <div class="fg"><label>Date *</label><input class="fi" type="date" id="gfDate" value="${esc(prefillDate)}" onchange="checkGigFormConflicts()"></div>
+        <div class="fg"><label>Date *</label><input class="fi" type="date" id="gfDate" value="${esc(prefillDate)}" onchange="checkGigFormConflicts();gfRepeatChanged()"></div>
         <div class="fg"><label>Time</label><div onchange="checkGigFormConflicts()">${timePickerHtml('gfTime',g?.time)}</div></div>
       </div>
       <div id="gfConflict" style="margin-bottom:8px"></div>
+      ${gfRepeatHtml(g, prefillDate)}
       <div class="fg"><label>Venue</label>
         <div class="venue-wrap">
           <input class="fi" id="gfVenue" placeholder="Venue name" value="${esc(g?.venue||'')}" autocomplete="off">
@@ -3063,6 +3380,7 @@ function showGigForm(g){
   setTimeout(()=>{
     initVenueAC('gfVenue','venueDrop');
     checkGigFormConflicts(); // catches pre-filled date on edit
+    gfRepeatChanged();       // GIG-106: show the right repeat controls for this gig
   },0);
 }
 
@@ -3105,6 +3423,15 @@ function saveGig(){
   const _cls=document.getElementById('gfEventClass')?.value||'';
   if(_cls) g.eventClass=_cls; else delete g.eventClass;
   g.notes=document.getElementById('gfNotes')?.value.trim()||'';
+  // GIG-106: repeat settings. A changed occurrence (recurrenceOf) can't itself repeat.
+  if(!g.recurrenceOf){
+    const rf=gfReadRepeat(date);
+    if(rf.error){ if(err) err.textContent=rf.error; return; }
+    if(rf.rec){
+      rf.rec.exdates=(g.recurrence&&g.recurrence.exdates)||[];   // keep cancelled / changed dates
+      g.recurrence=rf.rec; g.tripId=null;                        // a series can't be part of a trip
+    } else delete g.recurrence;
+  }
   g.updatedAt=new Date().toISOString();
 
   // Save venue to venues list (as {name, mapUrl} object)
@@ -3133,7 +3460,7 @@ function saveGig(){
   gcalSyncGig(g, isNew);
 
   closeModal();
-  showToast(isNew?'Gig added ✓':'Gig updated ✓');
+  showToast(g.recurrence ? (isNew?'Repeating gig added ✓':'Repeating gig updated ✓') : (isNew?'Gig added ✓':'Gig updated ✓'));
 
   // GIG-043: if this gig was added from inside a trip's day view, return
   // there instead of the plain list so the new gig is immediately visible
@@ -3142,7 +3469,7 @@ function saveGig(){
   _gigFormPrefillDate=null; _gigFormPrefillTripId=null; _gigFormReturnTo=null;
   if(returnTo&&returnTo.view==='dayView'&&getEvent(returnTo.tripId)){
     render(); openDayView(returnTo.tripId,returnTo.dayId);
-  } else if(!isNew){
+  } else if(!isNew && !g.recurrence){
     // Render the list first so the card is up-to-date when the modal is dismissed,
     // then open the detail modal on top — user sees correct emoji/type immediately.
     render();
@@ -3165,6 +3492,7 @@ function saveGig(){
 // removed-field cleanups elsewhere in this app.
 async function confirmDeleteGig(id){
   const g=getEvent(id); if(!g) return;
+  if(g.recurrence && !g.recurrenceOf){ closeModal(); await recurDeleteSeries(id); return; } // GIG-106: deleting a series deletes its changed occurrences too
   if(!confirm(`Delete "${g.name}"?`)) return;
   // GIG-082: await the Calendar delete before removing the local
   // record — a failed Calendar delete no longer silently proceeds to
@@ -3180,6 +3508,7 @@ async function confirmDeleteGig(id){
 }
 
 function openGigDetail(id){
+  if(String(id).indexOf('@')>0){ openOccurrenceDetail(id); return; } // GIG-106: one occurrence of a repeating event
   const g=getEvent(id); if(!g) return;
   const ti=gigTypeInfo(g.gigType||'music');
   const r=g.review||{};
@@ -5040,7 +5369,7 @@ function renderReviews(){
 
   (d.events||[]).filter(ev=>!ev._deleted).forEach(ev=>{
     if(ev.type==='gig'){
-      if(filterType==='trip') return;
+      if(filterType==='trip' || ev.recurrence) return;
       const entry={_kind:'gig',ev,date:ev.date,name:ev.name,rating:ev.review?.rating||0};
       if(ev.review?.rating) reviewed.push(entry); else if(ev.done||ev.missed||(ev.date<todayISO())) unreviewed.push(entry);
     } else if(ev.type==='trip'){
@@ -5307,7 +5636,7 @@ function gigsConflictingTrips(gigDate, gigTripId, d){
 function gigsOnSameDate(gigId, gigDate, d){
   if(!gigDate) return [];
   return (d.events||[]).filter(e=>
-    e.type==='gig' && !e._deleted &&
+    e.type==='gig' && !e._deleted && !e.recurrence &&
     e.id!==gigId && e.date===gigDate && !e.missed
   );
 }
@@ -7444,7 +7773,7 @@ function gcalHasCopySuffix(t){ return /\[(?:sent|updated)\b[^\]]*\]\s*$/i.test(S
 function gcalDupKey(date, title){ return (date||'') + '|' + gcalNormTitle(title); }
 function gcalIsPlainGig(g){
   return g.type==='gig' && g.gigType==='other' && !g.tripId && !g.review && !g.ticketUrl && !g.ticketPrice &&
-         (!g.eventClass || g.eventClass==='standard') && !g.seriesId;
+         (!g.eventClass || g.eventClass==='standard') && !g.seriesId && !g.recurrence && !g.recurrenceOf;
 }
 // records the app itself owns that a Google copy could duplicate: trip items and trips
 function gcalOwnedKeyIndex(){
@@ -7761,13 +8090,14 @@ async function gcalDetectDeleted(fetchedIds, timeMin, timeMax){
 
 async function gcalReviewLinked(events, timeMin, timeMax){
   const byId = new Map(); events.forEach(ev=>byId.set(ev.id, ev));
+  const presentIds = new Set(byId.keys()); events.forEach(ev=>{ if (ev.recurringEventId) presentIds.add(ev.recurringEventId); });
   const tally = { applied:0, baseline:0, conflictsNew:0 };
   getData().events.filter(e=>e.type==='gig'&&!e._deleted&&e.calendarEventId).forEach(g=>{
     const G = byId.get(g.calendarEventId); if (!G) return;
     const a = gcalHandleGigEvent(g, G);
     if (a==='applied') tally.applied++; else if (a==='baseline') tally.baseline++; else if (a==='conflict-new') tally.conflictsNew++;
   });
-  const del = await gcalDetectDeleted(new Set(byId.keys()), timeMin, timeMax);
+  const del = await gcalDetectDeleted(presentIds, timeMin, timeMax);
   gcalConfPrune();
   const parts = [];
   if (tally.applied) parts.push(tally.applied + ' updated from Google');
@@ -7925,6 +8255,9 @@ function gcalItemDescriptionFields(trip, it){
 }
 
 async function gcalSyncGig(g, isNew){
+  // GIG-106 stage 1: a repeating series is not sent to Google Calendar yet (it would create a single,
+  // non-repeating event). Its changed occurrences are ordinary gigs and do sync.
+  if (g.recurrence){ syncLog('Repeating event "' + g.name + '" kept in Gigs & Trips only (Google Calendar sync for repeats comes later)', 'info'); return null; }
   if (!PalGCal.hasToken()){
     syncLog('Calendar sync queued (not signed in) — "' + g.name + '" saved; will send when signed in', 'info');
     gcalQueueAdd('upsert','gig',{id:g.id},g.name);
@@ -8490,7 +8823,7 @@ function checkCompletionPrompt(){
   // Exclude self-completing types (appointment, gym, pets) — no done/missed concept.
   const _selfComplete=new Set(['appointment','gym','pets']);
   const pendingGigs=all.filter(ev=>
-    ev.type==='gig' &&
+    ev.type==='gig' && !ev.recurrence &&
     ev.date && ev.date<todayStr &&
     !ev.done && !ev.missed &&
     !_selfComplete.has(ev.gigType||'music')
