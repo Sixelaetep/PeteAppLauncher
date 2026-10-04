@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.03 | v10.89 – v10.99, v11.00, v11.01, v11.02 and v11.03. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.04 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03 and v11.04. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.1 | v1.0 – v3.1. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.73 | v3.2 – v3.73. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.83 | v1.0 – v3.43 and v3.73 – v3.83. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.84 | v1.0 – v3.43 and v3.73 – v3.84. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.70 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -209,6 +209,16 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.04 — PET-108 — On Budget card restacked: details, then input, for Food and for Bills
+
+- **Why:** the card showed Food & Travel and Bills side by side with both quick-add rows underneath. It is now one full-width stack, in this order: **Food details**, **Food quick-add**, **Bills details**, **Bills quick-add**, so each input sits directly under the figures it affects.
+- **Food details** keeps everything it had (pot or card balance, Headroom, the Food / Travel reserve line, tap-through to the Spending tab) and adds two bars in the same format: **🛒 Food this week** and **🚗 Travel this month**, each showing spent of limit, a progress bar, and £ left (or £ over). Colours follow the app's own rule: more than 80% used is amber, over the limit is red, otherwise the app's blue. A bar is omitted when its limit is 0.
+- **Bills details** is its own block below the Food quick-add, with a divider, showing cleared balance and the forecast line, with tap-through to the Bills ledger as before.
+- **Structure:** `#stat-budget` is now the Food details block and still carries the card's overall state class and the "No data yet" / "Open app to refresh" / "Open app to load" fallbacks; new `#stat-budget-bills` is the Bills block, hidden whenever a fallback message is showing. The two quick-add forms are siblings outside both stat blocks, so a muted (50% faded) block can never fade an input. Quick-add, label suggestions, tap-through links and the card's tap-to-open are unchanged. The old two-column `.ob-grid` CSS is now unused and left in place.
+- **Needs `on-budget.html` v3.84** for the bars (it exports the four new figures). Against an older saved summary the bars are simply left out and the rest of the card renders as before, until the app is next opened.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.04. `pal-shared.js?v=10.87` deliberately unchanged.
+- Tested (headless jsdom, real `index.html` and `on-budget.html`): block order, bar text and widths, amber and red thresholds, over-limit text and 100% cap, zero spend, zero travel budget, older summary with no new fields, not-started month, Increasing mode, all three fallbacks hiding the Bills block, inputs never inside a stat block, tap links; plus the v11.02 end-to-end quick-add suite (including the old-app failure path) and the v11.03 suggestion suite re-run unchanged. Not tested: a real browser or phone (card height with both bars, wrapping), live synced data.
 
 ### v11.03 — PET-107 — Quick-add label suggestions
 
@@ -1975,6 +1985,13 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.84 — ON--078 — Week and Travel figures exported for the launcher
+
+- `computeDashboardSummary()` now also exports `weekSpent`, `weekBudget`, `travelSpent` and `travelBudget`, for launcher v11.04 (PET-108). They are the Spending tab's own "Food this week" and "Travel this month" figures: `weekSpent` is this week's non-deleted Food (`weekly`) spend over the current week's dates; `weekBudget` is the current week's budget from `getWeeks()` (falling back to the month's weekly Food budget); `travelSpent` / `travelBudget` come from `calcReserve()`. All four are `null` until the month is started.
+- Additive: no existing summary field, calculation, data shape, message action or sync change.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=`, and the display-only `version` field in the save and the JSON backup.
+- Tested (headless jsdom, real `on-budget.html`): fields null before the month starts; correct values with deleted, Other and Travel transactions mixed in; same £ figures as the rendered Spending tab; carried in the saved `dashboardSummary`; existing fields unchanged; the v3.83 quick-add suite re-run. Not tested: real browser, a month spanning a week boundary on a real device clock, live sync.
 
 ### v3.83 — ON--077 — Launcher quick-add (`quickAddFood` / `quickAddBills`)
 
