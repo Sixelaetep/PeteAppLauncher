@@ -14,9 +14,9 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.04 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03 and v11.04. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.05 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04 and v11.05. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.1 | v1.0 – v3.1. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.2 | v1.0 – v3.2. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.75 | v3.2 – v3.75. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
@@ -209,6 +209,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.05 — PET-109 — Film & TV Tracker card: four favourites
+
+- **Why:** the card had room for a fourth poster. Companion to Film & TV Tracker v3.2 (FTT-043), which also fixes the card keeping watched favourites.
+- **Change:** the card shows up to four favourites (`fttTopFavourites()` takes 4 from `topFavourites`). Tiles now share the row (`flex: 1 1 0`, `max-width: 80px`, poster `aspect-ratio: 2 / 3`) so four fit a phone-width card; on a wide card they stay 80px.
+- **Fallback (no `topFavourites` in `pal_ftt_stat`):** derives four from `ftt_v1` and now skips Watched favourites. It cannot tell blocked (unavailable) favourites apart, because that needs the tracker's service settings; the tracker's own cache is the accurate source and is rewritten on every open and save.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.05. `pal-shared.js?v=10.87` unchanged.
+- Tested (headless jsdom, the real launcher functions): six favourites in the cache → four tiles; two → two; none → no strip or label; counts line intact; titles escaped; fallback skips a watched favourite and caps at four. Not tested: a real browser or phone (four-tile wrapping at 390px), the live card refreshing after a title is marked watched.
 
 ### v11.04 — PET-108 — On Budget card restacked: details, then input, for Food and for Bills
 
@@ -666,6 +674,13 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.2 — FTT-043 — Launcher card follows the Favourites shelf; four favourites
+
+- **Bug:** after a favourite was marked Watched it stayed in the launcher card's "Top favourites" (reported with World War II with Tom Hanks), although it had left the Favourites shelf in the app.
+- **Cause:** `writeStatCache()` (v2.5) built `topFavourites` from `orderedFavourites()`, which is every live favourite including Watched and blocked ones. The shelf uses `secFavourites()` (Want to Watch, not blocked). Marking a title Watched does not clear its favourite flag or order, so the two lists disagreed.
+- **Fix:** `topFavourites` is now `secFavourites().slice(0, 4)`, so the card shows exactly the first four titles of the shelf, in the saved order. Four rather than three (launcher v11.05, PET-109). `favouriteCount` is unchanged (all favourites). No data-model, sync, backup or storage change; the favourite flag and order of a watched title are untouched, so un-watching it puts it back where it was.
+- Tested (Stage 1, jsdom, real page with a stubbed PalSync and seeded `ftt_v1`, 9 checks): four in saved order; marking the second Watched drops it and the fifth moves up; card equals the shelf; un-watching restores it; fewer than four; none; un-favouriting; non-https poster stored as null; counts still written. The same test run against v3.1 fails at the first Watched check. Not tested: real `pal-shared.js`, Supabase or IndexedDB, a real browser or phone, Lex's account, the launcher card updating live while the app is open in the iframe.
 
 ### v3.1 — FTT-042 — Site-wide localStorage total no longer depends on the shared file
 
