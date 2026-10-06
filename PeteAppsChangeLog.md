@@ -14,10 +14,10 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.05 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04 and v11.05. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.06 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05 and v11.06. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.2 | v1.0 – v3.2. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
-| Fortnight Tracker | `fortnight-tracker.html` | v3.75 | v3.2 – v3.75. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
+| Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
@@ -209,6 +209,16 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.06 — PET-110 — 9-Day Fortnight card: Live and Claims are separate tap targets — 6 Oct 2026
+
+- **Why:** the 9-Day Fortnight card carries two sections — the fortnight figures and the Claims line (from `claim_tracker_v1`) — but the whole card did one thing (`switchTo('fortnight')`), so tapping the Claims figures opened the app wherever it was last left. Claims lives inside Fortnight Tracker as its Claims tab, so each section now opens the matching tab.
+- **Change:** new `launchFortnightTab(e, tab)` — same `ensureLoaded` → `switchTo` → `postMessage` order as `launchOBAction`. The Claims line (`#stat-claims-sub`) calls it with `'claims'`; the rest of the card (header, fortnight stat, timer, hours bar, holiday line) calls it with `'live'`. The Claims line stops the click bubbling, so one tap sends one message. `'live'` is always sent, so a warm app left on Timesheet still lands on Live.
+- **Message:** `{ type: 'FT_ACTION', action: 'openTab', tab }` — the original FT-041 contract name, now handled again by fortnight-tracker.html v3.76 (FT-068).
+- **Styling:** `#stat-claims-sub` gets a divider, a little spacing and a pointer cursor, styled by id (not class) because `setCardStat()` rewrites `className` on every refresh. No change to the Claims stat maths, the standalone-Claims card, or `renderHomeGrid()`'s show/hide of the Claims line.
+- **Needs `fortnight-tracker.html` v3.76.** Against an older copy the message is ignored and the app simply opens where it was left (no error).
+- Version: title, nav badge and DEPLOYMENT comment set to v11.06. `pal-shared.js?v=10.87` unchanged. Nav-bar ⏳ icon unchanged (still resumes where the app was left).
+- Tested (headless jsdom, real `index.html`): no boot errors; card header, fortnight stat and Claims line (and its inner span) each send exactly one message with the right tab; frame becomes visible and `currentTab` is `fortnight`; the Claims handler survives a `setCardStat()` className rewrite; cold start (frame not yet loaded) sends nothing until the frame's load event, then sends once. Not tested: a real browser or phone (tap targets, divider appearance in light and dark themes), the Claims line when Claims is set to standalone (code path untouched), a real nested-iframe load.
 
 ### v11.05 — PET-109 — Film & TV Tracker card: four favourites
 
@@ -953,6 +963,14 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 `fortnight-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the full history was in `fortnight-tracker.md`, resequenced newest-to-oldest because the original inline order mixed ascending and descending runs. Supabase table `fortnight_bundles` (bundles keyed by `record_key`; `code_`, `leave_`, `bh_`, `la_` prefixed rows share the table). Local key `fn_tracker_v5`, also read directly by PeteGCal and Gigs & Trips for the working-day alert.
 
 ⚠ Several FT IDs are reused across versions in the source (for example FT-062 at v3.72 and v3.68; FT-039 at v3.44 and v3.42; FT-030 at v3.36 and v3.33; FT-026 at v3.34 and v3.32; FT-020 to FT-025 at multiple versions). They are preserved as recorded.
+
+### v3.76 — FT-068 — 6 Oct 2026 — Launcher deep-link to a tab (Live / Claims)
+
+- **Why:** the launcher's 9-Day Fortnight card now has two tap targets (launcher v11.06, PET-110): the fortnight section opens the app on Live, the Claims section opens it on its Claims tab (the embedded Claim Tracker). The app had no way to be told which tab to open.
+- **Change:** the existing `message` listener (same-origin check unchanged) handles `{ type: 'FT_ACTION', action: 'openTab', tab }` by calling `switchTab(tab)`. Allowed tabs: `live`, `timesheet`, `archive`, `leave`, `claims`; anything else is ignored. If `pal_standalone_claims` is `'true'` (Claims tab hidden), a Claims request falls back to Live. No call is made when the requested tab is already current.
+- Claims frame still lazy-loads on first visit to the tab, via the existing `switchTab` → `loadClaimsFrame()`.
+- No data-model, storage, sync or backup change. Version synced in `<title>`, logo-sub, the `pal-shared.js?v=` tag and the inline history comment. `pal-shared.js` not changed; `index.html` changed (v11.06).
+- Tested (headless jsdom, real `fortnight-tracker.html`, `PalSync` stubbed): script syntax check; `openTab` to claims shows the Claims wrapper and sets the nested iframe `src`; back to live hides it; timesheet → live; unknown tab ignored; standalone-Claims flag falls back to Live; message from another origin ignored; tab button highlight follows. Not tested: a real browser or phone, the nested Claim Tracker actually rendering after a launcher jump, real Supabase sync.
 
 ### v3.75 — FT-067 — 5 Oct 2026 — Conference icon changed to speaking head
 
