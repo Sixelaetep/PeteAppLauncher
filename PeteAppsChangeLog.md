@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.07 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06 and v11.07. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.08 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07 and v11.08. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.3 | v1.0 – v3.3. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.86 | v1.0 – v3.43 and v3.73 – v3.86. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.87 | v1.0 – v3.43 and v3.73 – v3.87. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -209,6 +209,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.08 — PET-112 — On Budget card: progress bars use On Budget's own colours — 6 Oct 2026
+
+- **Why:** the Food week / Travel bars on the launcher's On Budget card used the launcher's blue fill, amber `#f59e0b` and coral `#f78166`, so they did not match the same bars inside On Budget (lime, amber, red).
+- **Change:** new `--ob-ok`, `--ob-amber`, `--ob-red` variables scoped to the launcher theme and used by `.ob-bar-fill` and `.ob-bar-left`. Launcher dark → On Budget's dark palette (`#a3e635` / `#fbbf24` / `#f87171`); launcher light → On Budget's light palette (`#5a8a00` / `#b45309` / `#dc2626`). Thresholds unchanged (over = red, more than 80% used = amber).
+- **Unchanged:** all JavaScript, the cleared line, other cards, the Bills block's coloured figures (they were not part of the request; they still use the launcher greens / amber / coral — flagged as a possible follow-up for consistency).
+- Version: title, nav badge and DEPLOYMENT comment set to v11.08. `pal-shared.js?v=10.87` unchanged.
+- Tested: all inline scripts parse; the stylesheet defines the variables for both themes. Not tested: actual rendering in a browser (colours in dark and light on a phone), and whether the launcher's theme setting is what On Budget is following inside the iframe.
 
 ### v11.07 — PET-111 — On Budget card: cleared figure for Food & Travel — 6 Oct 2026
 
@@ -2053,6 +2061,14 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.87 — ON--081 — Bills Ledger: confirm before removing
+
+- **Why:** the new ✓ (v3.86) sits beside the ✕, and the ✕ removed an entry instantly with no confirmation and no undo. A mis-tap on ✕ is much harder to recover from than one on ✓ (a recurring row records a skipped occurrence; a cleared row reverses the balance and is soft-deleted).
+- **Change:** the ✕ on uncleared rows (`confirmRemoveUncleared()`), the ✕ on cleared rows and the Delete button in the edit sheet (`confirmDeleteBillsTx()`) now ask first, via the browser's native `confirm()` (same style as the app's existing `prompt()` use). The message names the entry and amount, says a recurring row is a skip and that the schedule isn't changed, and says a cleared delete reverses the cleared balance. Cancel changes nothing. The ✓ stays one tap (recoverable from the edit sheet). ✓ also gets a little more space from ✕.
+- **Not changed:** the delete logic itself (`deleteBillsTx()`, `quickDeleteUncleared()`), Spending's ✕ (no prompt there — left alone as that screen is signed off; possible follow-up), the clear sheet's own "Skip" / "Cancel" buttons, data model, sync, backups, `pal-shared.js`.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and the `version` fields in save and JSON export.
+- Tested (headless jsdom, real `on-budget.html` v3.87; `pal-shared.js` not available, `PalSync` / `esc` / `toast` / `uid` stubbed, `confirm` stubbed): cancel on each of the four delete paths changes nothing (no tx removed, no skip recorded, balance unchanged); accept performs the same result as v3.86 (ad-hoc removed, recurring skipped, cleared removed with balance reversed, skipped row removed with no balance change); message text; rendered rows call the confirm wrappers and no direct delete handlers remain; ✓ still one-tap with the right delta; version labels. Not tested: a real browser or phone — in particular that `confirm()` appears inside the launcher's iframe on iOS and desktop, and the ✓/✕ spacing.
 
 ### v3.86 — ON--080 — Bills Ledger: tick to clear, matching Spending
 
