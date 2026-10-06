@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.71</title>
+<title>Reading Tracker v3.72</title>
 <style>
   :root {
     --bg:       #0f1923;
@@ -750,7 +750,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.71</span></div>
+    <div class="rt-logo">My Reading <span>v3.72</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1044,6 +1044,7 @@
   </div>
 
   <div id="collectionCards"></div>
+  <div id="monthlySummaryCard"></div>
 
   <!-- v3.61 (MR-046): "My Trackers" heading + card containers removed
        from view — trackers no longer get a front-page section.
@@ -1603,7 +1604,7 @@
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-shared.js?v=3.71"></script>
+<script src="pal-shared.js?v=3.72"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -1779,6 +1780,9 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.72 (MR-057): Dashboard "Monthly progress" card (this month + previous 3,
+// % of current Monthly targets, books/audiobooks separate); Stats monthly
+// history split into Books and Audiobooks sections. No data-model change.
 // v3.71 (MR-056): local cache trim on sync. Same shared mechanism
 // rolled out across the suite this round (Test & Issues' TI-086, Film
 // & TV Tracker's FTT-039, and several others) — pal-shared.js gained
@@ -6046,43 +6050,99 @@ function renderStats(period) {
 // reading this whole feature is about). Highlights the best month by
 // book count and, separately, by pages (chapters aren't folded into the
 // "pages" metric — different unit, would misrepresent both).
+function _monthLabelLong(m) {
+  const [y, mo] = m.split("-");
+  return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+}
+function _monthLabelShort(m) {
+  const [y, mo] = m.split("-");
+  return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+}
+// v3.72 (MR-057): this month + previous N calendar months, newest first.
+function recentMonthKeys(n, now) {
+  const d = now ? new Date(now) : new Date();
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const x = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    out.push(x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0"));
+  }
+  return out;
+}
+function _pct(done, target) {
+  const t = Number(target);
+  return t > 0 ? Math.round((done / t) * 100) : null;
+}
+// v3.72 (MR-057): dashboard card — this month and the previous 3, per type,
+// % of the CURRENT Monthly targets (no per-month target history exists).
+function renderMonthlySummaryCard(now) {
+  const el = document.getElementById("monthlySummaryCard");
+  if (!el) return;
+  const cfg = appState.monthlyConfig || defaultMonthlyConfig();
+  const months = recentMonthKeys(3, now);
+  const types = [
+    { type: "book",      icon: "📖", name: "Books",      target: cfg.bookTarget,  unitTarget: cfg.bookPageTarget,    unit: "p"  },
+    { type: "audiobook", icon: "🎧", name: "Audiobooks", target: cfg.audioTarget, unitTarget: cfg.audioChapterTarget, unit: "ch" }
+  ];
+  const sections = types.map(t => {
+    const stats = monthlyStatsFor(t.type);
+    const rows = months.map((m, i) => {
+      const r = stats[m] || { booksFinished: 0, unitsRead: 0 };
+      const pct = _pct(r.booksFinished, t.target);
+      const upct = _pct(r.unitsRead, t.unitTarget);
+      const fill = Math.min(100, pct != null ? pct : (upct != null ? upct : 0));
+      const done = (pct != null ? pct >= 100 : (upct != null && upct >= 100));
+      const detail = r.booksFinished + (t.target > 0 ? "/" + t.target : "") + " finished"
+        + (pct != null ? " (" + pct + "%)" : "")
+        + " · " + r.unitsRead.toLocaleString() + t.unit
+        + (upct != null ? " (" + upct + "% of " + Number(t.unitTarget).toLocaleString() + t.unit + ")" : "");
+      return `<div style="padding:5px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;font-size:12px;gap:8px">
+          <span style="${i === 0 ? "font-weight:700" : ""}">${i === 0 ? "This month" : esc(_monthLabelShort(m))}${done ? " ✅" : ""}</span>
+          <span style="color:var(--muted);text-align:right">${esc(detail)}</span>
+        </div>
+        <div class="tc-bar" style="margin-top:4px"><div class="tc-fill" style="width:${fill}%"></div></div>
+      </div>`;
+    }).join("");
+    return `<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:600;margin-bottom:2px">${t.icon} ${t.name}</div>${rows}</div>`;
+  }).join("");
+  el.innerHTML = `<div class="tc" style="cursor:default"><div class="card-title" style="margin-bottom:8px">📅 Monthly progress</div>${sections}<div class="field-hint">% is against your current Monthly targets.</div></div>`;
+}
+
+// v3.47 (MR-032) / v3.72 (MR-057): Monthly reading history for the Stats
+// tab, now split into separate Books (pages) and Audiobooks (chapters)
+// sections, each with its own best-month highlights.
 function renderMonthlyStatsSection() {
   const el = document.getElementById("monthlyStatsSection");
   if (!el) return;
   const bookStats  = monthlyStatsFor("book");
   const audioStats = monthlyStatsFor("audiobook");
-  const months = Array.from(new Set([...Object.keys(bookStats), ...Object.keys(audioStats)])).sort();
-  if (months.length === 0) { el.innerHTML = ""; return; }
+  if (Object.keys(bookStats).length === 0 && Object.keys(audioStats).length === 0) { el.innerHTML = ""; return; }
 
-  let bestBooksMonth = null, bestBooksCount = -1;
-  let bestPagesMonth = null, bestPagesCount = -1;
-  const rows = months.map(month => {
-    const b = bookStats[month]  || { booksFinished: 0, unitsRead: 0 };
-    const a = audioStats[month] || { booksFinished: 0, unitsRead: 0 };
-    const totalBooks = b.booksFinished + a.booksFinished;
-    if (totalBooks > bestBooksCount) { bestBooksCount = totalBooks; bestBooksMonth = month; }
-    if (b.unitsRead > bestPagesCount) { bestPagesCount = b.unitsRead; bestPagesMonth = month; }
-    return { month, totalBooks, pages: b.unitsRead, chapters: a.unitsRead };
-  }).reverse();
-
-  function monthLabel(m) {
-    const [y, mo] = m.split("-");
-    return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  function block(icon, name, stats, unit, unitWord) {
+    const months = Object.keys(stats).sort();
+    if (months.length === 0) {
+      return `<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">${icon} ${name}</div><div class="field-hint">No ${name.toLowerCase()} activity yet.</div></div>`;
+    }
+    let bestB = null, bestBC = 0, bestU = null, bestUC = 0;
+    months.forEach(m => {
+      if (stats[m].booksFinished > bestBC) { bestBC = stats[m].booksFinished; bestB = m; }
+      if (stats[m].unitsRead > bestUC) { bestUC = stats[m].unitsRead; bestU = m; }
+    });
+    const hl = `<div class="pace-info-box" style="margin-bottom:8px">
+      <div class="pace-row"><span class="pace-label">🏆 Best month (${name.toLowerCase()} finished)</span><span>${bestBC > 0 ? esc(_monthLabelLong(bestB)) + " — " + bestBC : "—"}</span></div>
+      <div class="pace-row"><span class="pace-label">🏆 Best month (${unitWord})</span><span>${bestUC > 0 ? esc(_monthLabelLong(bestU)) + " — " + bestUC.toLocaleString() + " " + unitWord : "—"}</span></div>
+    </div>`;
+    const rows = months.slice().reverse().map(m => `
+      <div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--border)">
+        <span>${esc(_monthLabelLong(m))}</span>
+        <span style="color:var(--muted)">${stats[m].booksFinished} finished · ${stats[m].unitsRead.toLocaleString()}${unit}</span>
+      </div>`).join("");
+    return `<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;margin-bottom:6px">${icon} ${name}</div>${hl}${rows}</div>`;
   }
 
-  const highlightsHTML = `
-    <div class="pace-info-box" style="margin-bottom:10px">
-      <div class="pace-row"><span class="pace-label">🏆 Best month (books)</span><span>${bestBooksCount > 0 ? monthLabel(bestBooksMonth) + " — " + bestBooksCount + " book" + (bestBooksCount !== 1 ? "s" : "") : "—"}</span></div>
-      <div class="pace-row"><span class="pace-label">🏆 Best month (pages)</span><span>${bestPagesCount > 0 ? monthLabel(bestPagesMonth) + " — " + bestPagesCount.toLocaleString() + " pages" : "—"}</span></div>
-    </div>`;
-
-  const rowsHTML = rows.map(r => `
-    <div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--border)">
-      <span>${monthLabel(r.month)}</span>
-      <span style="color:var(--muted)">${r.totalBooks} book${r.totalBooks !== 1 ? "s" : ""} · ${r.pages.toLocaleString()}p · ${r.chapters.toLocaleString()}ch</span>
-    </div>`).join("");
-
-  el.innerHTML = `<div class="card-title" style="margin-bottom:8px">📅 Monthly Reading History</div>${highlightsHTML}${rowsHTML}`;
+  el.innerHTML = `<div class="card-title" style="margin-bottom:8px">📅 Monthly Reading History</div>`
+    + block("📖", "Books", bookStats, "p", "pages")
+    + block("🎧", "Audiobooks", audioStats, "ch", "chapters");
 }
 
 function renderDashboard() {
@@ -6093,6 +6153,7 @@ function renderDashboard() {
   renderMonthlyMergeBanner();
   renderMonthlyWidgets();
   renderCollectionCards();
+  renderMonthlySummaryCard();
 
   // Tracker cards
   updateWishlistCard();

@@ -23,7 +23,7 @@ This is the consolidated historical development changelog for every application 
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.85 | v1.0 – v3.43 and v3.73 – v3.85. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
-| Reading Tracker | `reading-tracker.html` | v3.70 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 |
+| Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
 **Applications referenced in the changelogs but with no changelog supplied**
@@ -2297,6 +2297,15 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 # Reading Tracker
 
 `reading-tracker.html`. The `.md` archives part of the clean changelog block (v3.29 – v3.67) from the HTML; the inline comment keeps the 15 most recent. ⚠ Only the entries listed below were supplied; older short notes elsewhere in the code were left in place. Syncs via pal-sync across four tables (trackers, books, entries, wishlist).
+
+### v3.72 — MR-057
+
+- Dashboard: new "Monthly progress" card (below the collection cards) showing this month plus the previous 3 calendar months, Books and Audiobooks separately. Each row shows books finished vs target with %, pages/chapters read (with % of the optional page/chapter target when set), a progress bar and ✅ at 100%.
+- Stats tab: "Monthly Reading History" split into a Books section (finished + pages, best month by books finished and by pages) and an Audiobooks section (finished + chapters, best month by finished and by chapters). Previously one merged list with books and audiobooks combined.
+- ⚠ % for past months uses the CURRENT Monthly targets: no per-month target history exists. Months follow calendar months (as `monthlyStatsFor` always has), not `cycleStartDate`.
+- No data-model, localStorage, sync or export/import change. Launcher (`index.html`) not affected (no `RT_DATA_UPDATED` change).
+- Stage 1 testing: `node --check`; scripted run of the real functions with seeded data (month window incl. year rollover, % maths with and without unit targets, zero targets, empty data, books/audiobooks separation). Not tested: real browser rendering, phone layout, live Supabase/second device.
+- ⚠ v3.71 (MR-056) is not otherwise recorded here: adopted `PalSync.trimIfLarge` (500 KB local cache trim) in `selectUser`'s successful-pull branch only (from the inline comment).
 
 ### v3.70 — MR-055
 
