@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.87</title>
+<title>On Budget v3.88</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -362,7 +362,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.87</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.88</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -839,14 +839,18 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.87"></script>
+<script src="pal-shared.js?v=3.88"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.87
+// On Budget v3.88
 // localStorage key: on_budget_v1
 // Full version history for v1.0 through v3.43 (49 releases,
 // 2026-06-xx to 2026-08-xx) has moved to on-budget.md, kept alongside
 // this file — nothing before v3.44 is duplicated here any more.
+// v3.88 (ON--082): Spending now matches Bills — the ✕ on a Food & Travel
+// transaction and Delete in its edit sheet ask for confirmation first
+// (confirmDelTx()), and the Spending ✓ gets the same extra gap from ✕.
+// Failed deployment check v3.87-T2 ("Bills done but not Spending").
 // v3.87 (ON--081): Bills Ledger ✕ now asks for confirmation before
 // removing anything (uncleared row, cleared row, and Delete in the edit
 // sheet), naming the entry and amount. The ✓ stays one tap — a mis-tap is
@@ -2567,7 +2571,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.87', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.88', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2576,7 +2580,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.87', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.88', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3385,7 +3389,7 @@ function renderDash() {
       const dotClass = isIncome ? 'income' : t.category;
       const name     = t.label||'';
       const dateFmt  = new Date(t.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-      const clearBtn = t.cleared===false ? `<button class="tx-clear" aria-label="Mark cleared" title="Mark cleared" onclick="event.stopPropagation();clearFtTx('${k}','${t.id}')">✓</button>` : '';
+      const clearBtn = t.cleared===false ? `<button class="tx-clear" style="margin-right:8px" aria-label="Mark cleared" title="Mark cleared" onclick="event.stopPropagation();clearFtTx('${k}','${t.id}')">✓</button>` : '';
       return `<div class="tx-row" onclick="openEditSheet('${k}','${t.id}')" style="cursor:pointer">
         <div class="tx-dot ${dotClass}"></div>
         <div class="tx-body">
@@ -3393,7 +3397,7 @@ function renderDash() {
           <div class="tx-date">${dateFmt}</div>
         </div>
         <div class="tx-amt" style="${isIncome?'color:var(--accent)':''}">${isIncome?'+':''}£${(t.amount||0).toFixed(2)}</div>${clearBtn}
-        <button class="tx-del" aria-label="Delete transaction" onclick="event.stopPropagation();delTx('${k}','${t.id}')">×</button>
+        <button class="tx-del" aria-label="Delete transaction" onclick="event.stopPropagation();confirmDelTx('${k}','${t.id}')">×</button>
       </div>`;
     };
     const unclearedRows = sorted.filter(t=>t.cleared===false);
@@ -3498,6 +3502,16 @@ function resetMonthAdjust() {
 }
 
 // ── Delete transaction ─────────────────────────────────────────
+// v3.88 (ON--082): confirmation wrapper for the Spending ✕ / edit-sheet
+// Delete, same style as the Bills confirms (native confirm()).
+function confirmDelTx(mk, id) {
+  const m = months[mk]; if (!m) return;
+  const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
+  const isIncome = t.type==='income';
+  const name = t.label || (isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other'));
+  if (!confirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`)) return;
+  delTx(mk, id);
+}
 function delTx(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id); if (!t) return;
@@ -3801,7 +3815,7 @@ function deleteFromEditSheet() {
   if (!_editCtx) return;
   const { mk, id } = _editCtx;
   closeSheet();
-  delTx(mk, id);
+  confirmDelTx(mk, id);
 }
 
 function closeSheet() { document.getElementById('overlay').classList.remove('open'); }
