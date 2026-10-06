@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.85</title>
+<title>On Budget v3.86</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -362,7 +362,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.85</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.86</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -839,14 +839,21 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.85"></script>
+<script src="pal-shared.js?v=3.86"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.85
+// On Budget v3.86
 // localStorage key: on_budget_v1
 // Full version history for v1.0 through v3.43 (49 releases,
 // 2026-06-xx to 2026-08-xx) has moved to on-budget.md, kept alongside
 // this file — nothing before v3.44 is duplicated here any more.
+// v3.86 (ON--080): Bills Ledger now matches the Spending clear pattern.
+// Uncleared rows get a one-tap ✓ (quickClearUncleared) that clears the
+// item at its current (possibly overridden) name/amount/date, applying
+// the same stored-balance delta, override consumption and sync calls as
+// saveClear(). Setting a cleared row back to uncleared is done from its
+// edit sheet (Cleared now / Uncleared switch — already present from
+// v3.61; confirmed to work for recurring-sourced entries too).
 // v3.85 (ON--079): cleared / uncleared for Food & Travel. Each F&T
 // transaction can now be cleared or uncleared, via a `cleared` flag
 // that works exactly like Bills' (`cleared !== false` means cleared, so
@@ -2554,7 +2561,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.85', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.86', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2563,7 +2570,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.85', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.86', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -4639,6 +4646,9 @@ function billsRowHtml(it) {
   const delCall = it.kind==='recurring'
     ? `quickDeleteUncleared('recurring','${it.recurringId}','${it.schedDate}')`
     : `quickDeleteUncleared('adhoc','${it.txId}')`;
+  const clrCall = it.kind==='recurring'
+    ? `quickClearUncleared('recurring','${it.recurringId}','${it.schedDate}')`
+    : `quickClearUncleared('adhoc','${it.txId}')`;
   return `<div class="ledger-row ${overdraft?'overdraft':''} ${it.overdue?'overdue':''}" onclick="${onclick}">
     <div class="ledger-body">
       <div class="ledger-name">${esc(it.name)}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.overridden?' <span class="recur-badge">Edited</span>':''}${it.overdue?' <span class="recur-badge overdue-badge">Overdue</span>':''}</div>
@@ -4650,6 +4660,7 @@ function billsRowHtml(it) {
         <div class="ledger-amt ${it.type}">${sign}£${it.amount.toFixed(2)}</div>
         <div class="ledger-bal ${overdraft?'warn':''}">Bal £${it.runningBalance.toFixed(2)}</div>
       </div>
+      <button class="tx-clear" aria-label="Mark cleared" title="Mark cleared" onclick="event.stopPropagation();${clrCall}">✓</button>
       <button class="tx-del" aria-label="Delete entry" onclick="event.stopPropagation();${delCall}">✕</button>
     </div>
   </div>`;
@@ -5569,6 +5580,37 @@ function saveClear() {
   addSyncLog(`Cleared "${name}" ${delta>=0?'+':''}£${delta.toFixed(2)} → balance £${bills.settings.clearedBalance.toFixed(2)}`,'info');
   save(true); closeClearSheet(); renderBillsLedger();
   if (entry) syncUpsertBillsTx(entry);
+  if (overrideSnapshot) syncTombstoneBillsOverride(overrideSnapshot);
+  syncUpsertBillsSettings();
+  toast(`Marked cleared — balance £${bills.settings.clearedBalance.toFixed(2)}`);
+}
+// v3.86 (ON--080): one-tap clear straight from an uncleared row, at the
+// row's current values (including any per-occurrence override). Mirrors
+// saveClear() without opening the sheet.
+function quickClearUncleared(kind, a, b) {
+  let entry, overrideSnapshot, type, amt, name;
+  if (kind === 'recurring') {
+    const item = bills.recurring.find(r=>r.id===a && !r._deleted);
+    if (!item) return;
+    if (bills.tx.some(t=>t.recurringId===a && t.schedDate===b && !t._deleted)) return; // already resolved
+    const ov = findOverride(a, b);
+    const shown = shiftWeekend(new Date(b+'T00:00:00'), item.weekendShift||'none');
+    name = ov?.name || item.name; type = item.type; amt = ov ? ov.amount : item.amount;
+    entry = { id:billsUid(), date: ov?.date || iso(shown), name, type, amount:Math.round(amt*100)/100, source:'recurring', recurringId:a, schedDate:b, cleared:true, note:item.note, _ts:Date.now(), updated_at:new Date().toISOString() };
+    bills.tx.push(entry);
+    overrideSnapshot = consumeOverride(a, b);
+  } else {
+    const t = bills.tx.find(x=>x.id===a && !x._deleted);
+    if (!t || t.cleared!==false) return;
+    t.cleared = true; t.updated_at = new Date().toISOString();
+    entry = t; name = t.name; type = t.type; amt = t.amount;
+  }
+  const delta = type==='income' ? amt : -amt;
+  bills.settings.clearedBalance = Math.round(((bills.settings.clearedBalance||0) + delta)*100)/100;
+  bills.settings.updated_at = new Date().toISOString();
+  addSyncLog(`Cleared "${name}" ${delta>=0?'+':''}£${delta.toFixed(2)} → balance £${bills.settings.clearedBalance.toFixed(2)}`,'info');
+  save(true); renderBillsLedger();
+  syncUpsertBillsTx(entry);
   if (overrideSnapshot) syncTombstoneBillsOverride(overrideSnapshot);
   syncUpsertBillsSettings();
   toast(`Marked cleared — balance £${bills.settings.clearedBalance.toFixed(2)}`);
