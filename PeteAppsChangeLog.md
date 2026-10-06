@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.08 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07 and v11.08. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.3 | v1.0 – v3.3. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.4 | v1.0 – v3.4. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
@@ -702,6 +702,16 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.4 — FTT-045 — New releases filters (films/series, language, genre, hide)
+
+- **Request:** trim the New releases scan down with more than the window and cinema/streaming choice — language, genres and similar — keeping it simple.
+- **Change:** + Add → New releases has a collapsible **Filters** section (opens by itself when filters are active; its title summarises them, e.g. "Filters: Korean · Drama"). Choices: **Films + series / Films only / Series only**; **original language** (Any, English, French, Spanish, German, Italian, Dutch, Danish, Swedish, Norwegian, Korean, Japanese, Hindi, Mandarin, Turkish); **genre** (one of 17); **Hide** tick-boxes (Animation, Documentary, Reality / talk, Family / kids); **Reset filters**.
+- **How:** the filters are added to the existing TMDB `/discover` queries (`with_original_language`, `with_genres`, `without_genres`), so the 30-per-source cap is spent on matching titles rather than trimmed afterwards. TMDB's film and series genre ids differ, so each genre maps to both (`REL_GENRES`); a genre with no series equivalent (Horror, Romance, Thriller, History, Music) skips the series source, and Series only + Cinema only has nothing to look up (a message says so, no request is made). "Reality / talk" only applies to series. Review window, ignore list, dedupe against the library and the New releases button are unchanged.
+- **Feedback:** the done / nothing-found toasts name the active filters.
+- **Storage:** choices are remembered on this device only (`localStorage` key `ftt_relfilters`, read/written inside try/catch). Not in `state`, so no sync, backup, schema or data-model change. `pal-shared.js` and the launcher are unchanged.
+- Tested (Stage 1, jsdom, real page, stubbed PalSync/TMDB recording the request URLs, 15 checks, all passing): no filters leaves the three queries unchanged; language + genre + hide reach all three queries; Horror skips series; Series only; Series + Cinema only makes no request and resets the button; per-media genre ids and the combined hide list; summary label; toast names the filters; save, restore and reset of the remembered choices. The v3.3 suite re-run on this build: 20/21 (the only failure is its own "title is v3.3" check). Not tested: real TMDB results (e.g. that `with_original_language` combines as expected with `with_release_type`), real browser/phone layout of the Filters block.
+- ⚠ Language is TMDB's *original* language, so an English-language film from a non-UK studio still counts as English, and a dubbed foreign title is matched by its original language.
 
 ### v3.3 — FTT-044 — Season handling; New seasons / New releases buttons; new-season check moved to + Add
 

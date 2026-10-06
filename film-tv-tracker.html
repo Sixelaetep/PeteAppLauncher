@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v3.3</title>
+<title>Film &amp; TV Tracker v3.4</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -336,6 +336,13 @@
   .rel-head { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink2); margin-bottom:8px; }
   .rel-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .rel-row select { flex:1 1 120px; min-width:0; margin:0; }
+  .rel-filters { margin-top:8px; }
+  .rel-filters summary { font-size:12px; font-weight:700; color:var(--ink2); cursor:pointer; padding:2px 0; }
+  .rel-filters .rel-row { margin-top:8px; }
+  .rel-hide { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; margin-top:8px; font-size:12px; color:var(--ink2); }
+  .rel-hide label { display:inline-flex; align-items:center; gap:5px; cursor:pointer; }
+  .rel-hide input { width:auto; margin:0; }
+  .rel-reset { background:none; border:0; color:var(--film); font-size:12px; cursor:pointer; font-family:inherit; padding:0; text-decoration:underline; }
   .rel-hint { font-size:11.5px; color:var(--ink2); margin-top:8px; line-height:1.45; }
   /* Personal tags (v2.2) */
   .ptag-box { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px 8px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; }
@@ -420,7 +427,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.3</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.4</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -743,6 +750,18 @@
         </select>
         <button class="modal-btn primary" id="relBtn" onclick="relButton()">Fetch</button>
       </div>
+      <details class="rel-filters" id="relFilters">
+        <summary id="relFilterSum">Filters</summary>
+        <div class="rel-row">
+          <select id="relMedia" aria-label="Films or series" onchange="relSaveFilters()">
+            <option value="all">Films + series</option><option value="movie">Films only</option><option value="tv">Series only</option>
+          </select>
+          <select id="relLang" aria-label="Original language" onchange="relSaveFilters()"></select>
+          <select id="relGenre" aria-label="Genre" onchange="relSaveFilters()"></select>
+        </div>
+        <div class="rel-hide" id="relHide"><span>Hide:</span></div>
+        <div class="rel-hide"><button class="rel-reset" onclick="relResetFilters()">Reset filters</button></div>
+      </details>
       <div class="rel-hint" id="relHint">UK releases in that window: films in cinemas, plus films and new series arriving on streaming services. Most popular first (up to 30 of each). They open in a review window where each goes to Want to Watch, Watched, Delete, or Not interested (never offered again).</div>
     </div>
     <div class="rel-box">
@@ -793,7 +812,10 @@
 <script src="pal-shared.js?v=1.13"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v3.3 (FTT-001..FTT-044) — see film-tv-tracker.md.
+// FILM & TV TRACKER v3.4 (FTT-001..FTT-045) — see film-tv-tracker.md.
+// v3.4 (FTT-045): New releases filters (+ Add → New releases): films / series, original language, genre, and genres to hide. They
+// trim the TMDB discover queries themselves, so the 30-per-source cap is spent on titles you might want. Remembered on this device
+// only (localStorage ftt_relfilters). No data-model, sync or backup change.
 // v3.3 (FTT-044): season handling. Mark watched on a TV detail card asks whether every season has been watched (OK = show + all
 // seasons, Cancel = tick seasons yourself in the detail view); season rows in the detail view are tappable. A new season found
 // on a Watched show moves it back to Want to Watch (rating kept, old seasons stay watched). New seasons / New releases buttons
@@ -3532,6 +3554,81 @@ async function updateFromTmdb() {
 // ══════════════════════════════════════════════════════════════════
 const REL_MAX = 30;
 let relRunning = false;
+// v3.4/FTT-045: filters. Genre ids differ between TMDB's film and series lists, so each choice carries both (null = that list has no
+// such genre, so that source is skipped when it is picked). Language is TMDB's original language. Kept on this device only.
+const REL_LANGS = [['', 'Any language'], ['en', 'English'], ['fr', 'French'], ['es', 'Spanish'], ['de', 'German'], ['it', 'Italian'], ['nl', 'Dutch'],
+  ['da', 'Danish'], ['sv', 'Swedish'], ['no', 'Norwegian'], ['ko', 'Korean'], ['ja', 'Japanese'], ['hi', 'Hindi'], ['zh', 'Mandarin'], ['tr', 'Turkish']];
+const REL_GENRES = [
+  ['action', 'Action', '28', '10759'], ['adventure', 'Adventure', '12', '10759'], ['animation', 'Animation', '16', '16'], ['comedy', 'Comedy', '35', '35'],
+  ['crime', 'Crime', '80', '80'], ['documentary', 'Documentary', '99', '99'], ['drama', 'Drama', '18', '18'], ['family', 'Family', '10751', '10751'],
+  ['scifi', 'Sci-Fi / Fantasy', '878|14', '10765'], ['horror', 'Horror', '27', null], ['mystery', 'Mystery', '9648', '9648'], ['romance', 'Romance', '10749', null],
+  ['thriller', 'Thriller', '53', null], ['war', 'War', '10752', '10768'], ['western', 'Western', '37', '37'], ['history', 'History', '36', null], ['music', 'Music', '10402', null]
+];
+const REL_HIDE = [['animation', 'Animation', '16', '16'], ['documentary', 'Documentary', '99', '99'], ['reality', 'Reality / talk', null, '10764,10767'], ['family', 'Family / kids', '10751', '10751,10762']];
+const REL_FILTER_KEY = 'ftt_relfilters';
+function relDefaults() { return { media: 'all', lang: '', genre: '', hide: [] }; }
+function relReadFilters() {
+  const f = relDefaults(), g = id => document.getElementById(id);
+  if (g('relMedia')) f.media = g('relMedia').value || 'all';
+  if (g('relLang')) f.lang = g('relLang').value || '';
+  if (g('relGenre')) f.genre = g('relGenre').value || '';
+  f.hide = [...document.querySelectorAll('#relHide input:checked')].map(i => i.value);
+  return f;
+}
+// The query-string part for one source (media 'movie' | 'tv'); null = skip this source for the current filters.
+function relFilterParams(f, media) {
+  if (f.media !== 'all' && f.media !== media) return null;
+  let q = '';
+  if (f.lang) q += '&with_original_language=' + encodeURIComponent(f.lang);
+  if (f.genre) {
+    const g = REL_GENRES.find(x => x[0] === f.genre), ids = g && (media === 'tv' ? g[3] : g[2]);
+    if (!g || !ids) return null;
+    q += '&with_genres=' + encodeURIComponent(ids);
+  }
+  const out = (f.hide || []).map(k => REL_HIDE.find(x => x[0] === k)).filter(Boolean).map(h => media === 'tv' ? h[3] : h[2]).filter(Boolean)
+    .join(',').split(',').filter((v, i, a) => v && a.indexOf(v) === i);
+  if (out.length) q += '&without_genres=' + encodeURIComponent(out.join(','));
+  return q;
+}
+function relFilterSummary(f) {
+  const bits = [];
+  if (f.media === 'movie') bits.push('films'); else if (f.media === 'tv') bits.push('series');
+  if (f.lang) bits.push((REL_LANGS.find(l => l[0] === f.lang) || [0, f.lang])[1]);
+  if (f.genre) bits.push((REL_GENRES.find(g => g[0] === f.genre) || [0, f.genre])[1]);
+  if ((f.hide || []).length) bits.push('hiding ' + f.hide.map(k => (REL_HIDE.find(x => x[0] === k) || [0, k])[1].toLowerCase()).join(', '));
+  return bits.join(' · ');
+}
+function relSaveFilters() {
+  const f = relReadFilters();
+  try { localStorage.setItem(REL_FILTER_KEY, JSON.stringify(f)); } catch (e) {}
+  relUpdateFilterLabel(f);
+}
+function relUpdateFilterLabel(f) {
+  const el = document.getElementById('relFilterSum'); if (!el) return;
+  const sum = relFilterSummary(f || relReadFilters());
+  el.textContent = sum ? 'Filters: ' + sum : 'Filters';
+}
+function relResetFilters() { relApplyFilters(relDefaults()); relSaveFilters(); }
+function relApplyFilters(f) {
+  const g = id => document.getElementById(id);
+  if (g('relMedia')) g('relMedia').value = f.media || 'all';
+  if (g('relLang')) g('relLang').value = f.lang || '';
+  if (g('relGenre')) g('relGenre').value = f.genre || '';
+  document.querySelectorAll('#relHide input').forEach(i => { i.checked = (f.hide || []).includes(i.value); });
+  relUpdateFilterLabel(f);
+}
+function relInitFilters() {
+  const lang = document.getElementById('relLang'), genre = document.getElementById('relGenre'), hide = document.getElementById('relHide');
+  if (!lang || lang.options.length) return;
+  REL_LANGS.forEach(l => lang.add(new Option(l[1], l[0])));
+  genre.add(new Option('Any genre', ''));
+  REL_GENRES.forEach(g => genre.add(new Option(g[1], g[0])));
+  REL_HIDE.forEach(h => { const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" value="${h[0]}" onchange="relSaveFilters()"> ${h[1]}`; hide.appendChild(l); });
+  let f = relDefaults();
+  try { const raw = localStorage.getItem(REL_FILTER_KEY); if (raw) f = Object.assign(f, JSON.parse(raw)); } catch (e) {}
+  relApplyFilters(f);
+  if (relFilterSummary(f)) document.getElementById('relFilters').open = true;
+}
 function addDaysISO(iso, n) { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
 function relButton() { if (relRunning) cancelImport(); else importNewReleases(); }
 async function importNewReleases() {
@@ -3546,11 +3643,16 @@ async function importNewReleases() {
   hint.textContent = 'Looking up releases…';
   const common = `language=en-GB&sort_by=popularity.desc&include_adult=false`;
   const stream = `watch_region=GB&with_watch_monetization_types=flatrate`;
+  const filt = relReadFilters(), fMovie = relFilterParams(filt, 'movie'), fTv = relFilterParams(filt, 'tv'), fSum = relFilterSummary(filt);
   const sources = [];
-  if (what !== 'streaming') sources.push({ kind: 'cinema', media: 'movie', q: `/discover/movie?${common}&region=GB&with_release_type=${encodeURIComponent('2|3')}&release_date.gte=${from}&release_date.lte=${to}` });
+  if (what !== 'streaming' && fMovie !== null) sources.push({ kind: 'cinema', media: 'movie', q: `/discover/movie?${common}&region=GB&with_release_type=${encodeURIComponent('2|3')}&release_date.gte=${from}&release_date.lte=${to}${fMovie}` });
   if (what !== 'cinema') {
-    sources.push({ kind: 'streaming', media: 'movie', q: `/discover/movie?${common}&region=GB&with_release_type=4&release_date.gte=${from}&release_date.lte=${to}&${stream}` });
-    sources.push({ kind: 'streaming', media: 'tv', q: `/discover/tv?${common}&first_air_date.gte=${from}&first_air_date.lte=${to}&${stream}` });
+    if (fMovie !== null) sources.push({ kind: 'streaming', media: 'movie', q: `/discover/movie?${common}&region=GB&with_release_type=4&release_date.gte=${from}&release_date.lte=${to}&${stream}${fMovie}` });
+    if (fTv !== null) sources.push({ kind: 'streaming', media: 'tv', q: `/discover/tv?${common}&first_air_date.gte=${from}&first_air_date.lte=${to}&${stream}${fTv}` });
+  }
+  if (!sources.length) {
+    relRunning = false; btn.textContent = 'Fetch'; document.getElementById('relWindow').disabled = false; document.getElementById('relKind').disabled = false; hint.textContent = hintWas;
+    toast('Nothing to look up with those filters (series have no cinema releases, and some genres only exist for films)', 'err'); return;
   }
   const added = [], counts = { cinema: 0, streaming: 0 };
   let skipped = 0, ignoredN = 0, errors = 0, failed = false, more = false;
@@ -3611,12 +3713,12 @@ async function importNewReleases() {
       .catch(e => toast('Some titles failed to sync: ' + window.PalSync.errorHint(e.status, e.message), 'err'));
     closeModal('modal-add');
     updateTagButton();
-    toast(`${added.length} new release${added.length !== 1 ? 's' : ''} to review (${counts.cinema} cinema, ${counts.streaming} streaming)`
+    toast(`${added.length} new release${added.length !== 1 ? 's' : ''} to review (${counts.cinema} cinema, ${counts.streaming} streaming)` + (fSum ? ` — filters: ${fSum}` : '')
       + (skipped ? `, ${skipped} already in your library or deleted before` : '') + (ignoredN ? `, ${ignoredN} not interested (skipped)` : '')
       + (more ? '; most popular first, TMDB had more' : '') + (errors ? `, ${errors} could not be fetched` : ''));
     openTagModal();
   } else if (!failed) {
-    toast(_bulkImportCancel ? 'Cancelled' : 'No new releases in that window'
+    toast(_bulkImportCancel ? 'Cancelled' : 'No new releases in that window' + (fSum ? ` matching your filters (${fSum})` : '')
       + (skipped || ignoredN ? ` (${skipped} already in your library or deleted before, ${ignoredN} not interested)` : ''));
   }
 }
@@ -3962,6 +4064,7 @@ function importJSON(evt) {
     const orderChanged = [ensureFavouriteOrder(), ensureWatchlistOrder()].some(Boolean);
     if (orderChanged || (_storageMode === 'ls' && raw && raw.indexOf('"url"') !== -1)) writeLocalState();
     writeStatCache();   // v2.5: refresh the launcher card's cache on every open, so it picks up favourites right after an upgrade
+    relInitFilters();
     switchTab('library');
     renderAll();
   } finally { _bootReadyResolve(); }
