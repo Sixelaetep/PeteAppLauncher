@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.08 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07 and v11.08. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.4 | v1.0 – v3.4. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.5 | v1.0 – v3.5. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
@@ -702,6 +702,16 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.5 — FTT-046 — + Add search finds actors as well as titles
+
+- **Request:** search by actor or title from the Add title modal.
+- **Change:** no mode switch — the one search box now does both. TMDB `/search/multi` already returned people (the app discarded them); up to three matching actors (acting department, with known-for titles) now appear as chips above the title results, showing a photo and two known-for titles. Tapping a chip lists that person's films and series from `/person/{id}/combined_credits`: most popular first, up to 40, with the character shown ("as …") and a **← Back** button to the title results. Rows use the same layout and buttons as title results (+ Watchlist / ✅ Add as Watched / Already added — view), so `searchRowHtml()` was factored out of `runSearch()`.
+- **Filtering of credits:** talk / news / reality appearances (TMDB genres 10767, 10763, 10764) and "Self / Himself / Herself" credits are dropped so the list is the acting work; duplicate credits (one per title) are collapsed. A later release can loosen this if it hides something wanted.
+- **Behaviour kept:** adding a title from an actor's list stays in that list and flags the row as added (`refreshSearch()` / `_searchView`); `mediaProviderSearch()` still returns films and series only (new `mediaProviderSearchAll()` returns everything). Placeholder and hint text mention actors.
+- **Data and sync:** no data-model, sync, backup or storage change; nothing new is stored. `pal-shared.js` and the launcher are unchanged.
+- Tested (Stage 1, jsdom, real page, stubbed PalSync/TMDB, 11 checks, all passing): version; one actor chip (a director result is ignored) and title rows still shown with already-added flagged; credits sorted by popularity with talk/self/duplicate credits removed; role text, Back button and already-added state; adding from the actor list and staying in it; Back returns to results; empty and error states. The v3.3 and v3.4 suites re-run on this build: all checks pass except their own version-number checks. Not tested: real TMDB data (e.g. how many credits a prolific actor returns, ordering quality), real browser/phone layout of the chips.
+- ⚠ Not included: searching by director/crew (acting credits only), and filtering the title results by actor name.
 
 ### v3.4 — FTT-045 — New releases filters (films/series, language, genre, hide)
 

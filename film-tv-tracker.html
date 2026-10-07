@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v3.4</title>
+<title>Film &amp; TV Tracker v3.5</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -414,6 +414,12 @@
   .search-result-row .sr-title { font-size:13.5px; font-weight:700; }
   .search-result-row .sr-meta { font-size:11px; color:var(--ink2); margin:2px 0 6px; }
   .search-result-row .sr-overview { font-size:11.5px; color:var(--ink2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:8px; }
+  .actor-chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+  .actor-chip { display:inline-flex; align-items:center; gap:8px; background:var(--surface2); border:1px solid var(--border); color:var(--ink); border-radius:22px; padding:3px 12px 3px 3px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; text-align:left; }
+  .actor-chip:hover { border-color:var(--film); }
+  .actor-chip img, .actor-chip .ac-ph { width:32px; height:32px; border-radius:50%; object-fit:cover; background:var(--surface); flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+  .actor-chip small { display:block; font-weight:400; color:var(--ink2); font-size:10.5px; }
+  .actor-head { display:flex; align-items:center; gap:10px; margin:0 0 12px; font-size:14px; font-weight:700; }
   .sr-actions { display:flex; gap:6px; flex-wrap:wrap; }
 
   .stars { color:var(--orange); font-size:13px; letter-spacing:1px; }
@@ -427,7 +433,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.4</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.5</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -735,10 +741,10 @@
       <button class="modal-close" onclick="closeModal('modal-add')" title="Close" aria-label="Close">✕</button>
     </div>
     <div class="filter-row" style="margin-top:12px;margin-bottom:6px">
-      <div class="search-box"><input id="searchInput" placeholder="Search TMDB for a film or series…" onkeydown="if(event.key==='Enter')runSearch()"></div>
+      <div class="search-box"><input id="searchInput" placeholder="Search TMDB for a film, series or actor…" onkeydown="if(event.key==='Enter')runSearch()"></div>
       <button class="modal-btn primary" onclick="runSearch()">Search</button>
     </div>
-    <div style="font-size:11px;color:var(--ink2);margin-bottom:12px" id="searchHint">Searches TMDB (UK region). Metadata and streaming availability are pulled in automatically when you add a title.</div>
+    <div style="font-size:11px;color:var(--ink2);margin-bottom:12px" id="searchHint">Searches TMDB (UK region) by title or actor. Metadata and streaming availability are pulled in automatically when you add a title.</div>
     <div class="rel-box">
       <div class="rel-head">🎬 New releases</div>
       <div class="rel-row">
@@ -812,7 +818,10 @@
 <script src="pal-shared.js?v=1.13"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v3.4 (FTT-001..FTT-045) — see film-tv-tracker.md.
+// FILM & TV TRACKER v3.5 (FTT-001..FTT-046) — see film-tv-tracker.md.
+// v3.5 (FTT-046): + Add search also finds actors. The one search box shows matching actors as chips above the title results; tapping
+// one lists that person's films and series (most popular first, talk/news/reality appearances left out) with the same + Watchlist /
+// Add as Watched buttons. No data-model, sync or backup change.
 // v3.4 (FTT-045): New releases filters (+ Add → New releases): films / series, original language, genre, and genres to hide. They
 // trim the TMDB discover queries themselves, so the 30-per-source cap is spent on titles you might want. Remembered on this device
 // only (localStorage ftt_relfilters). No data-model, sync or backup change.
@@ -2847,9 +2856,24 @@ async function tmdbFetch(path) {
   if (!res.ok) { const err = new Error('TMDB ' + res.status); err.status = res.status; throw err; }
   return res.json();
 }
-async function mediaProviderSearch(query) {
+async function mediaProviderSearchAll(query) {
   const data = await tmdbFetch('/search/multi?query=' + encodeURIComponent(query) + '&include_adult=false&language=en-GB&region=GB');
-  return (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+  return data.results || [];
+}
+async function mediaProviderSearch(query) {
+  return (await mediaProviderSearchAll(query)).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+}
+// v3.5/FTT-046: an actor's films and series (cast credits), most popular first. Talk / news / reality appearances (genres 10767,
+// 10763, 10764) and "Self" credits are dropped so the list is the acting work; one row per title.
+async function mediaProviderPersonCredits(personId) {
+  const data = await tmdbFetch(`/person/${personId}/combined_credits?language=en-GB`);
+  const seen = new Set();
+  return (data.cast || []).filter(r => {
+    if (r.media_type !== 'movie' && r.media_type !== 'tv') return false;
+    if ((r.genre_ids || []).some(g => g === 10767 || g === 10763 || g === 10764)) return false;
+    if (/\b(self|himself|herself|themselves)\b/i.test(r.character || '')) return false;
+    const k = r.media_type + r.id; if (seen.has(k)) return false; seen.add(k); return true;
+  }).sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
 }
 async function mediaProviderDetails(tmdbId, mediaType) {
   if (mediaType === 'tv') return tmdbFetch(`/tv/${tmdbId}?language=en-GB&append_to_response=watch/providers,content_ratings`);
@@ -2911,28 +2935,20 @@ function tmdbToTitle(json, mediaType, status) {
 }
 
 // ── Search / Add tab ─────────────────────────────────────────────
-async function runSearch() {
-  const q = document.getElementById('searchInput').value.trim();
-  if (!q) return;
-  const box = document.getElementById('searchResults');
-  box.innerHTML = '<div class="empty-state">Searching…</div>';
-  if (!window.PAL_CONFIG.TMDB_READ_TOKEN) {
-    box.innerHTML = emptyState('⚠️', 'No TMDB key configured — use Enter manually below to add titles.');
-    return;
-  }
-  try {
-    const results = await mediaProviderSearch(q);
-    if (!results.length) { box.innerHTML = emptyState('🔎', 'No results.'); return; }
-    box.innerHTML = results.slice(0, 20).map(r => {
-      const isTv = r.media_type === 'tv';
-      const name = isTv ? r.name : r.title;
-      const year = ((isTv ? r.first_air_date : r.release_date) || '').slice(0, 4);
-      const already = liveTitles().find(t => t.externalIds && t.externalIds.tmdb === r.id);
-      return `
+let _searchView = null;   // v3.5: null = title results; {actor:{id,name}} = an actor's credits (so adding a title refreshes the right view)
+function refreshSearch() { if (_searchView && _searchView.actor) showActor(_searchView.actor.id, _searchView.actor.name); else runSearch(); }
+function searchRowHtml(r) {
+  const isTv = r.media_type === 'tv';
+  const name = isTv ? r.name : r.title;
+  const year = ((isTv ? r.first_air_date : r.release_date) || '').slice(0, 4);
+  const already = liveTitles().find(t => t.externalIds && t.externalIds.tmdb === r.id);
+  const role = r.character ? `<div class="sr-meta">as ${esc(r.character)}</div>` : '';
+  return `
         <div class="search-result-row">
           ${r.poster_path ? `<img src="${TMDB_IMG}${r.poster_path}">` : `<div class="poster-fallback" style="width:60px;height:90px;border-radius:6px">${isTv ? '📺' : '🎬'}</div>`}
           <div class="sr-body">
             <div class="sr-title">${esc(name)} <span style="font-weight:400;color:var(--ink2);font-size:11px">${year} · ${isTv ? 'TV' : 'Film'}</span></div>
+            ${role}
             <div class="sr-overview">${esc(r.overview || '')}</div>
             <div class="sr-actions">
               ${already
@@ -2942,9 +2958,42 @@ async function runSearch() {
             </div>
           </div>
         </div>`;
-    }).join('');
+}
+async function runSearch() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  _searchView = null;
+  const box = document.getElementById('searchResults');
+  box.innerHTML = '<div class="empty-state">Searching…</div>';
+  if (!window.PAL_CONFIG.TMDB_READ_TOKEN) {
+    box.innerHTML = emptyState('⚠️', 'No TMDB key configured — use Enter manually below to add titles.');
+    return;
+  }
+  try {
+    const all = await mediaProviderSearchAll(q);
+    const results = all.filter(r => r.media_type === 'movie' || r.media_type === 'tv');
+    const people = all.filter(r => r.media_type === 'person' && (r.known_for_department || 'Acting') === 'Acting' && (r.known_for || []).length).slice(0, 3);
+    if (!results.length && !people.length) { box.innerHTML = emptyState('🔎', 'No results.'); return; }
+    const chips = people.length ? `<div class="actor-chips">${people.map(p => {
+      const known = (p.known_for || []).map(k => k.title || k.name).filter(Boolean).slice(0, 2).join(', ');
+      return `<button class="actor-chip" onclick="showActor(${p.id}, this.dataset.name)" data-name="${esc(p.name)}">${p.profile_path ? `<img src="${TMDB_IMG}${p.profile_path}" alt="">` : '<span class="ac-ph">🎭</span>'}<span>${esc(p.name)}<small>Actor${known ? ' · ' + esc(known) : ''}</small></span></button>`;
+    }).join('')}</div>` : '';
+    box.innerHTML = chips + results.slice(0, 20).map(searchRowHtml).join('');
   } catch (e) {
     box.innerHTML = emptyState('⚠️', 'TMDB search failed: ' + window.PalSync.errorHint(e.status, e.message));
+  }
+}
+async function showActor(personId, name) {
+  _searchView = { actor: { id: personId, name } };
+  const box = document.getElementById('searchResults');
+  box.innerHTML = '<div class="empty-state">Loading ' + esc(name) + '…</div>';
+  try {
+    const credits = await mediaProviderPersonCredits(personId);
+    const head = `<div class="actor-head"><button class="small-btn" onclick="runSearch()">← Back</button><span>🎭 ${esc(name)}</span></div>`;
+    box.innerHTML = head + (credits.length ? credits.slice(0, 40).map(searchRowHtml).join('') : emptyState('🔎', 'No films or series found for this actor.'))
+      + (credits.length > 40 ? `<div class="rel-hint">Showing the 40 most popular of ${credits.length}.</div>` : '');
+  } catch (e) {
+    box.innerHTML = emptyState('⚠️', 'TMDB lookup failed: ' + window.PalSync.errorHint(e.status, e.message));
   }
 }
 async function addFromSearch(tmdbId, mediaType, status) {
@@ -2955,7 +3004,7 @@ async function addFromSearch(tmdbId, mediaType, status) {
     saveState();
     if (window.PalSync.hasSession()) syncPushTitle(t);
     toast((status === 'watched' ? 'Added to Watched: ' : 'Added to Watchlist: ') + t.title);
-    runSearch();
+    refreshSearch();
   } catch (e) {
     toast('Could not fetch details: ' + window.PalSync.errorHint(e.status, e.message), 'err');
   }
