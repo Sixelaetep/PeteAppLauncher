@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.4 | v1.0 – v3.4. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
+| Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.90 | v1.0 – v3.43 and v3.73 – v3.90. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -1565,6 +1565,24 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.111 — GYM-097 — Meals and Water combined into one Food & drink modal
+
+- The separate Meals (GYM-060) and Water (GYM-068) modals are replaced by one **Food & drink** modal (`modalIntake`, `openIntakeModal(date)`). Both calendar summary cards (🍽 and 💧) remain and both open it; `openMealsModal()` / `openWaterModal()` kept as thin wrappers.
+- Layout: food totals, water totals, the drink ⚡ Quick Add / Today stepper cards (unchanged), "🍽 Food today" list (unchanged Edit/Delete), then one **Add food or drink** block.
+- One name box (`intakeNameInput`) with one search (`onIntakeNameInput()`) returning pills for saved meals (🍽, shows cal/protein) and saved drinks (💧, shows ml). Meal pill fills name/calories/protein as before; drink pill logs one immediately as before (GYM-074).
+- "New food / New drink" toggle (`setIntakeKind()`) decides what a brand-new typed name becomes: food shows calories/protein and the Google lookup link; drink shows volume (ml). `saveIntakeEntry()` routes to `saveMealEntry()` or `saveWaterEntry()`; an exact name match on a saved drink (with no saved meal of that name) is treated as that drink regardless of the toggle.
+- Manage buttons now side by side: 📋 Saved Meals / 📋 Saved Drinks (the drinks manager modal title and empty text now say "Drinks"; behaviour unchanged, ⚡ Quick Add toggle intact).
+- Removed DOM ids: `modalMeals`, `modalWater`, `mealNameInput`, `waterNameInput`, `mealSearchResults`, `waterSearchResults`, `mealSearchLink`, `waterModalTitle`, `mealsModalTitle`. Empty food list text is now "No food logged yet".
+- No data-model, localStorage, Supabase table/sync, or JSON export/import change — same `nutritionEntries`, `savedMeals`, `waterEntries`, `savedWaterItems` records and `sbUpsert` calls. Launcher not affected (reads `gym_pal_xapp`, unchanged); no `index.html` change.
+- Fixed the stale `VERSION` constant (was `'2.109'` while title and badge said v2.110). Title, header badge, `VERSION` and `pal-shared.js?v=` all set to 2.111. `pal-shared.js` itself unchanged.
+- Tested (headless Chromium via Playwright, 390px, real `gym-tracker.html` with a stub `pal-shared.js`/PalSync, so no live sync): 33 checks — both entry points open the one modal, new food, new drink, empty-name guard, mixed meal+drink pills, drink pill auto-log, meal pill fill, no duplicate saved meal on re-log, exact-drink-name routing, Quick Add flag, stepper +/−, edit/delete food, localStorage persistence and reload, record shapes unchanged, no horizontal overflow, no page errors. Not tested: real `pal-shared.js`, live Supabase / second device, a physical phone, Reports/Insights with the new data.
+
+### v2.110 — GYM-096 — Local cache trim on sync (retrospective)
+
+- ⚠ Added retrospectively from the inline comment block in the v2.110 `gym-tracker.html`; not originally logged here.
+- Uses the new shared `PalSync.trimIfLarge(key, maxKB)` (same mechanism as Test & Issues TI-086 and Film & TV Tracker FTT-039): deletes `gym_tracker_v1` from localStorage when it exceeds 1536 KB and nothing is waiting to push (`PalSync.retryQueueLength()`), so the existing `pullFromCloud()` repopulates it. Wired in the `onSession` callback after `renderAll()` in the pull success callback. Threshold is above the then-current ~713 KB, so a safety net, not an active trim.
+- Per the inline note: tested `node --check` and `trimIfLarge()` branches in Node against synthetic data (when built for TI-086); not run in a real browser against real gym data.
 
 ### v2.109 — Remove a whole circuit
 
