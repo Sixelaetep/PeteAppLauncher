@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v3.5</title>
+<title>Film &amp; TV Tracker v3.6</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -433,7 +433,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.5</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.6</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -818,7 +818,9 @@
 <script src="pal-shared.js?v=1.13"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v3.5 (FTT-001..FTT-046) — see film-tv-tracker.md.
+// FILM & TV TRACKER v3.6 (FTT-001..FTT-047) — see film-tv-tracker.md.
+// v3.6 (FTT-047): adding a title from + Add search no longer jumps back to the top of the results. The list is redrawn from the
+// results already on screen (no new TMDB request, no "Loading…" placeholder) and the scroll position is kept. No data change.
 // v3.5 (FTT-046): + Add search also finds actors. The one search box shows matching actors as chips above the title results; tapping
 // one lists that person's films and series (most popular first, talk/news/reality appearances left out) with the same + Watchlist /
 // Add as Watched buttons. No data-model, sync or backup change.
@@ -2935,8 +2937,26 @@ function tmdbToTitle(json, mediaType, status) {
 }
 
 // ── Search / Add tab ─────────────────────────────────────────────
-let _searchView = null;   // v3.5: null = title results; {actor:{id,name}} = an actor's credits (so adding a title refreshes the right view)
-function refreshSearch() { if (_searchView && _searchView.actor) showActor(_searchView.actor.id, _searchView.actor.name); else runSearch(); }
+let _searchData = null;   // v3.6: what is on screen (title results + actor chips, or an actor's credits), so a redraw needs no new request
+// Redraw the Add-search list in place after adding a title: same results, same scroll position (the .modal is what scrolls).
+function refreshSearch() {
+  const box = document.getElementById('searchResults'); if (!box || !_searchData) return;
+  const scroller = box.closest('.modal'), top = scroller ? scroller.scrollTop : 0;
+  box.innerHTML = _searchData.actor ? actorHtml(_searchData.actor.name, _searchData.credits) : searchHtml(_searchData.people, _searchData.results);
+  if (scroller) scroller.scrollTop = top;
+}
+function searchHtml(people, results) {
+  const chips = people.length ? `<div class="actor-chips">${people.map(p => {
+    const known = (p.known_for || []).map(k => k.title || k.name).filter(Boolean).slice(0, 2).join(', ');
+    return `<button class="actor-chip" onclick="showActor(${p.id}, this.dataset.name)" data-name="${esc(p.name)}">${p.profile_path ? `<img src="${TMDB_IMG}${p.profile_path}" alt="">` : '<span class="ac-ph">🎭</span>'}<span>${esc(p.name)}<small>Actor${known ? ' · ' + esc(known) : ''}</small></span></button>`;
+  }).join('')}</div>` : '';
+  return chips + results.slice(0, 20).map(searchRowHtml).join('');
+}
+function actorHtml(name, credits) {
+  const head = `<div class="actor-head"><button class="small-btn" onclick="runSearch()">← Back</button><span>🎭 ${esc(name)}</span></div>`;
+  return head + (credits.length ? credits.slice(0, 40).map(searchRowHtml).join('') : emptyState('🔎', 'No films or series found for this actor.'))
+    + (credits.length > 40 ? `<div class="rel-hint">Showing the 40 most popular of ${credits.length}.</div>` : '');
+}
 function searchRowHtml(r) {
   const isTv = r.media_type === 'tv';
   const name = isTv ? r.name : r.title;
@@ -2962,7 +2982,7 @@ function searchRowHtml(r) {
 async function runSearch() {
   const q = document.getElementById('searchInput').value.trim();
   if (!q) return;
-  _searchView = null;
+  _searchData = null;
   const box = document.getElementById('searchResults');
   box.innerHTML = '<div class="empty-state">Searching…</div>';
   if (!window.PAL_CONFIG.TMDB_READ_TOKEN) {
@@ -2974,24 +2994,20 @@ async function runSearch() {
     const results = all.filter(r => r.media_type === 'movie' || r.media_type === 'tv');
     const people = all.filter(r => r.media_type === 'person' && (r.known_for_department || 'Acting') === 'Acting' && (r.known_for || []).length).slice(0, 3);
     if (!results.length && !people.length) { box.innerHTML = emptyState('🔎', 'No results.'); return; }
-    const chips = people.length ? `<div class="actor-chips">${people.map(p => {
-      const known = (p.known_for || []).map(k => k.title || k.name).filter(Boolean).slice(0, 2).join(', ');
-      return `<button class="actor-chip" onclick="showActor(${p.id}, this.dataset.name)" data-name="${esc(p.name)}">${p.profile_path ? `<img src="${TMDB_IMG}${p.profile_path}" alt="">` : '<span class="ac-ph">🎭</span>'}<span>${esc(p.name)}<small>Actor${known ? ' · ' + esc(known) : ''}</small></span></button>`;
-    }).join('')}</div>` : '';
-    box.innerHTML = chips + results.slice(0, 20).map(searchRowHtml).join('');
+    _searchData = { people, results };
+    box.innerHTML = searchHtml(people, results);
   } catch (e) {
     box.innerHTML = emptyState('⚠️', 'TMDB search failed: ' + window.PalSync.errorHint(e.status, e.message));
   }
 }
 async function showActor(personId, name) {
-  _searchView = { actor: { id: personId, name } };
+  _searchData = null;
   const box = document.getElementById('searchResults');
   box.innerHTML = '<div class="empty-state">Loading ' + esc(name) + '…</div>';
   try {
     const credits = await mediaProviderPersonCredits(personId);
-    const head = `<div class="actor-head"><button class="small-btn" onclick="runSearch()">← Back</button><span>🎭 ${esc(name)}</span></div>`;
-    box.innerHTML = head + (credits.length ? credits.slice(0, 40).map(searchRowHtml).join('') : emptyState('🔎', 'No films or series found for this actor.'))
-      + (credits.length > 40 ? `<div class="rel-hint">Showing the 40 most popular of ${credits.length}.</div>` : '');
+    _searchData = { actor: { id: personId, name }, credits };
+    box.innerHTML = actorHtml(name, credits);
   } catch (e) {
     box.innerHTML = emptyState('⚠️', 'TMDB lookup failed: ' + window.PalSync.errorHint(e.status, e.message));
   }

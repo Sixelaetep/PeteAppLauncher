@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.09 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08 and v11.09. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.5 | v1.0 – v3.5. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.6 | v1.0 – v3.6. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
@@ -715,6 +715,14 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.6 — FTT-047 — Adding from + Add search no longer jumps to the top of the results
+
+- **Bug:** tapping + Watchlist or ✅ Add as Watched in the Add title search (title results and, from v3.5, an actor's credits) sent the list back to the top, so the next title had to be found again.
+- **Cause:** `addFromSearch()` finished by calling `runSearch()` / `showActor()`, which replaced the list with a "Searching… / Loading…" placeholder, re-requested TMDB and redrew. The short placeholder collapsed the modal's height, so the scroll position was lost.
+- **Fix:** the results on screen are kept (`_searchData`: title results + actor chips, or an actor's credits). After an add, `refreshSearch()` redraws the list from them synchronously — no placeholder, no new TMDB request — and restores the scroll position of the modal (`.modal`, the element that scrolls). The added row flips to "Already added — view" in place. Row/list HTML was factored into `searchHtml()` / `actorHtml()`. Typing a new search or tapping an actor / Back still re-fetches as before.
+- **Data and sync:** none; display only. `pal-shared.js` and the launcher unchanged.
+- Tested (Stage 1, jsdom, real page, stubbed PalSync/TMDB, 16 checks, all passing): scroll position kept after adding from the actor list and from the title results (the modal's scrollTop is stubbed because jsdom has no layout); no `search/multi` or credits request after an add; no placeholder shown; the added row (and earlier ones) flagged; v3.5 actor-search checks unchanged. v3.3 and v3.4 suites re-run: only their own version-number checks fail. Not tested: the real scroll behaviour on a phone/browser (layout is not simulated), which the deployment check covers.
 
 ### v3.5 — FTT-046 — + Add search finds actors as well as titles
 
