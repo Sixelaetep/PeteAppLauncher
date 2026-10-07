@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.09 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08 and v11.09. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.6 | v1.0 – v3.6. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.7 | v1.0 – v3.7. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
@@ -715,6 +715,13 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.7 — FTT-048 — Show all of an actor's credits
+
+- **Request:** the actor list in + Add search stopped at the 40 most popular; allow showing all.
+- **Change:** when an actor has more than 40 credits, the note under the list now reads "Showing the 40 most popular of N" with a **Show all N** button. It lists every film and series credit (still most popular first, same talk/reality/"Self" filtering as v3.5) and the button becomes **Show top 40**. The choice (`_searchData.showAll`) is redrawn in place via `refreshSearch()` — scroll position kept, no new TMDB request — and is reset when an actor is opened again. Actors with 40 or fewer credits show no button.
+- **Data and sync:** none; display only. `pal-shared.js` and the launcher unchanged.
+- Tested (Stage 1, jsdom, real page, stubbed TMDB, 9 checks, all passing): 40 rows plus "Show all 95"; all 95 after the toggle with scroll kept and no request; back to 40; stays expanded after adding a title; reopening an actor starts at 40; 30 credits shows no button. The v3.6 search suite re-run: all pass except its own version check. Not tested: a real actor with several hundred credits in a browser (long list rendering speed), phone layout.
 
 ### v3.6 — FTT-047 — Adding from + Add search no longer jumps to the top of the results
 
