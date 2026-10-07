@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.08 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07 and v11.08. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.09 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08 and v11.09. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.5 | v1.0 – v3.5. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,19 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.09 — PET-113 — On Budget card made more compact — 7 Oct 2026
+
+- **Why:** the On Budget home card was tall because every detail sat on its own line under the main figure, and each progress bar's "£ left / over" caption sat on a third line. Request: put more of it on the same line to reduce the card height.
+- **Change (display only):**
+  - **Food & Travel:** the label, the main figure (`£388.53`) and the detail figures (Cleared / uncleared, "left of budget", Headroom, Food · Travel) are now one wrapping row. On a wide card they fit on a single line; on a phone they wrap onto as many lines as they need rather than one line each. Each detail is a small inline chip keeping its existing colour.
+  - **Bars:** each bar's caption moved into its heading line (`🛒 Food this week … £126.48 of £125 · £1.48 over`), removing one line per bar. The Food and Travel bars sit side by side when the card is at least about 500px wide (CSS grid, `minmax(250px, 1fr)`), and stack on a phone.
+  - **Bills:** label, cleared balance and the forecast line share one row.
+  - Vertical spacing between the blocks and above the quick-add rows tightened slightly (Bills divider 12/10 → 8/8px; bar and quick-add top margins 8 → 6px).
+- **Unchanged:** every figure, colour threshold and rounding rule (the same `statOnBudget()` inputs and tests); the stacked order Food details → Food quick-add → Bills details → Bills quick-add (PET-108); quick-add inputs, suggestions and the 4 s confirmation (PET-106 / PET-107); tap-through on the Food & Travel and Bills areas; the cleared line rules (PET-111); the bar colours (PET-112); the fallbacks ("No data yet", "Open app to refresh", "Open app to load"). `on-budget.html` is unchanged (still v3.90 / ON--084) and `pal-shared.js?v=10.87` is unchanged. No data, storage, message-protocol or sync change.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.09.
+- Tested (Stage 1): `node --check` on the three inline scripts; 36 checks in jsdom against the real `index.html` with the figures from the reported screenshot — head order and text of every chip, no leftover stacked detail lines, bar text and fill widths (red over-limit, amber, normal), side-by-side grid container present, Bills row, Decreasing mode, Auto with nothing uncleared (no cleared chip), an older saved summary without the newer fields (no bars, no errors), "Not started", a zero Travel budget (one bar), both fallbacks hiding the Bills block, block order, quick-add forms present and inputs never inside a stat block, tap links calling `openSpendingTab` / `openBillsTab`, `refreshCardStats()` running without error. Real Chromium screenshots (Playwright, local file with a stubbed `pal-shared.js`) at 1100px and 390px: card height 410px → 243px on desktop and 410px → 320px on a phone.
+- Not tested: the live deployed build, real synced data, an actual iPhone (text wrapping at the narrowest widths, the real font), light theme, and whether the phone's 2-up/1-up bar switch lands where expected at tablet widths.
 
 ### v11.08 — PET-112 — On Budget card: progress bars use On Budget's own colours — 6 Oct 2026
 
