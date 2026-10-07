@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.109 | v2.32 – v2.109. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32 |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.88 | v1.0 – v3.43 and v3.73 – v3.88. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.89 | v1.0 – v3.43 and v3.73 – v3.89. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -2071,6 +2071,15 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.89 — ON--083 — Spending: prominent cleared figure above the Cleared section
+
+- **Why:** the cleared figure (what you match against the card / bank) was only a small line under the hero value. It now also heads the Cleared group in the transaction list.
+- **Interpretation to confirm:** "cleared transactions amount" was read as the **cleared balance** — the same figure as the hero card's `Cleared £X` line (Pot remaining in Decreasing mode, Card balance in Increasing mode, counting cleared transactions only). Beside it, in smaller type, the number of cleared transactions and their net spend (`£35.00 spent`, or `+£x net in` if income outweighs spend). If only the sum of cleared transactions was wanted, the side figure is the one to promote.
+- **Change:** where the list is grouped (something uncleared), the plain `Cleared` heading is replaced by a tinted block (`.tx-cleared-total`, accent wash and borders, 22px bold figure) directly above the cleared rows and below the uncleared ones. Display only — no data, calculation, sync or backup change.
+- **Unchanged:** with nothing uncleared the list has no group headings and no block (render is identical to v3.88, including in Manual mode); hero card, budgets, Bills, launcher (stays v11.08), `pal-shared.js`.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and the `version` fields in save and JSON export.
+- Tested (headless jsdom, real `on-budget.html` v3.89; `pal-shared.js` not available, `PalSync` / `esc` / `toast` / `uid` stubbed): in Decreasing and Increasing the block's figure equals the hero Cleared figure, label matches the mode, count and net spend correct, block sits between the Uncleared rows and the Cleared rows; no block when nothing is uncleared (Auto and Manual); render without uncleared items identical to v3.88 in both modes; block disappears after the last uncleared item is cleared; version labels. Not tested: real browser / phone (look, contrast and fit in light and dark themes).
 
 ### v3.88 — ON--082 — Spending: confirm before removing (matches Bills)
 
