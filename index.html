@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.09</title>
+<title>P Apps v11.10</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -693,6 +693,32 @@
     white-space: nowrap;
   }
   #toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ── On Budget quick-add confirmation (PET-114 v11.10) ── */
+  #obConfirm {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    width: min(92vw, 380px);
+    transform: translateX(-50%) translateY(140%);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 4px solid #3fb950;
+    color: var(--ink);
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    z-index: 10000;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+    transition: transform 0.25s ease;
+    visibility: hidden;
+    cursor: pointer;
+  }
+  #obConfirm.show { transform: translateX(-50%) translateY(0); visibility: visible; }
+  #obConfirm .obc-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  #obConfirm .obc-row { display: flex; justify-content: space-between; gap: 12px; }
+  #obConfirm .obc-row span:first-child { color: var(--ink3); }
 </style>
 <!-- Pre-paint: suppress lock screen flash if a stored session exists.
      Runs synchronously before first paint so the login form never
@@ -728,7 +754,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.09</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.10</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1096,6 +1122,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-114, v11.10): On Budget card quick-add (Food / Bills) no longer opens the app. On success a
+  5-second confirmation popup (#obConfirm) shows the transaction plus the new balances read from On Budget's
+  freshly saved dashboardSummary, and the card refreshes; the user stays on the launcher. launcher-only —
+  on-budget.html unchanged (v3.91).
   CHANGED (PET-113, v11.09): On Budget card made more compact — label, main figure and detail figures share one
   wrapping row; each bar's £ left / over caption moves into its heading line; the Food and Travel bars sit side
   by side on wide screens. Display only; no data, message or sync change; on-budget.html unchanged.
@@ -1137,6 +1167,7 @@
 <iframe id="frame-screen"    class="app-frame" data-src="film-tv-tracker.html"  title="Film &amp; TV Tracker"></iframe>
 
 <div id="toast"></div>
+<div id="obConfirm" role="status" aria-live="polite" onclick="hideObQuickConfirm()"></div>
 
 <!-- v10.67 (PET-074): Safari-speed investigation, launcher side. Test &
      Issues TI-076 added a per-app diagnostics panel (init render / sync
@@ -3364,6 +3395,60 @@ function obQuickSend(frame, payload) {
   });
 }
 
+// PET-114 v11.10: confirmation popup after a quick-add. Balances come from the
+// dashboardSummary On Budget wrote in save() just before it replied; if that
+// summary is missing or older than this request it is not shown (the
+// confirmation of the transaction itself still is).
+let _obConfirmTimer = null;
+function hideObQuickConfirm() {
+  const el = document.getElementById('obConfirm');
+  if (el) el.classList.remove('show');
+  if (_obConfirmTimer) { clearTimeout(_obConfirmTimer); _obConfirmTimer = null; }
+}
+function showObQuickConfirm(kind, amount, label, reqStart) {
+  const el = document.getElementById('obConfirm');
+  if (!el) return;
+  const gbp = function (n) { return (n < 0 ? '−£' : '£') + Math.abs(n).toFixed(2); };
+  let sm = null;
+  try {
+    const parsed = JSON.parse(localStorage.getItem('on_budget_v1') || 'null');
+    const d = parsed && parsed.dashboardSummary;
+    const t = d && d.computedAt ? Date.parse(d.computedAt) : NaN;
+    if (d && !isNaN(t) && t >= reqStart - 1000) sm = d;
+  } catch (_) {}
+  const rows = [];
+  const add = function (k, v) { if (v != null && !/NaN|undefined/.test(v)) rows.push([k, v]); };
+  if (sm) {
+    if (kind === 'food') {
+      if (sm.potDirection === 'increasing' && sm.cardBalance != null) add('Card balance', gbp(sm.cardBalance));
+      else add('Left to spend', gbp(sm.pot));
+      add('Headroom', gbp(sm.headroom));
+      if (sm.weekBudget > 0 && sm.weekSpent != null) {
+        const left = sm.weekBudget - sm.weekSpent;
+        add('Food this week', (left >= 0 ? gbp(left) + ' left' : gbp(-left) + ' over') + ' of ' + gbp(sm.weekBudget));
+      }
+    } else {
+      add('Cleared balance', gbp(sm.clearedBalance));
+      if (sm.forecastBalance != null) add(sm.forecastLabel || 'Forecast', gbp(sm.forecastBalance));
+    }
+  }
+  el.textContent = '';
+  const title = document.createElement('div');
+  title.className = 'obc-title';
+  title.textContent = '✓ ' + (kind === 'food' ? 'Food' : 'Bills') + ' ' + gbp(amount) + (label ? ' · ' + label : '') +
+    (kind === 'food' && sm && sm.ftClearMode === 'manual' ? ' (uncleared)' : '');
+  el.appendChild(title);
+  rows.forEach(function (r) {
+    const row = document.createElement('div'); row.className = 'obc-row';
+    const a = document.createElement('span'); a.textContent = r[0];
+    const b = document.createElement('span'); b.textContent = r[1];
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  });
+  el.classList.add('show');
+  if (_obConfirmTimer) clearTimeout(_obConfirmTimer);
+  _obConfirmTimer = setTimeout(hideObQuickConfirm, 5000);
+}
+
 async function obQuickSubmit(e) {
   e.preventDefault();
   e.stopPropagation();
@@ -3374,23 +3459,26 @@ async function obQuickSubmit(e) {
   const pence = parseInt(amtEl.dataset.raw || '', 10);
   if (!pence || pence < 1) { toast('Enter an amount'); amtEl.focus(); return; }
   const kind = form.dataset.kind;
+  const lblText = lblEl.value.trim();
   _obQuickBusy = true;
   form.classList.add('busy');
   toast('Saving to On Budget…');
   try {
     const frame = await ensureLoaded('budget');
+    const reqStart = Date.now();
     const reqId = 'oq' + Date.now() + Math.random().toString(36).slice(2, 7);
     const res = await obQuickSend(frame, {
       action: kind === 'food' ? 'quickAddFood' : 'quickAddBills',
       amount: pence / 100,
-      label: lblEl.value.trim(),
+      label: lblText,
       reqId: reqId
     });
     if (res && res.ok) {
       amtEl.value = ''; amtEl.dataset.raw = ''; lblEl.value = '';
       const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-      switchTo('budget', document.querySelector('[data-target="budget"]'));
+      showObQuickConfirm(kind, pence / 100, lblText, reqStart);
+      try { refreshCardStats(); } catch (_) {}
     } else {
       toast('Not saved — ' + ((res && res.msg) || 'On Budget rejected it'));
     }

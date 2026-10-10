@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.09 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08 and v11.09. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.10 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09 and v11.10. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.7 | v1.0 – v3.7. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,19 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.10 — PET-114 — On Budget quick-add stays on the launcher with a 5-second confirmation popup — 10 Oct 2026
+
+- **Why:** the Food and Bills quick-add inputs on the On Budget card saved the transaction and then switched to the On Budget app. Request: just deliver the transaction, show a pop-up for 5 seconds confirming it (ideally with the new balances and what remains on the spending element), then leave the user on the launcher with the card showing the new values.
+- **Change (launcher only):**
+  - `obQuickSubmit()` no longer calls `switchTo('budget', …)` after a successful save; the user stays where they were.
+  - New popup `#obConfirm` (`showObQuickConfirm()` / `hideObQuickConfirm()`): auto-hides after 5 s, tap to dismiss, `role="status"` / `aria-live="polite"`. Title `✓ Food £4.50 · label` (or `Bills`; Food adds "(uncleared)" in manual clear mode). Food rows: Card balance (Increasing mode) or Left to spend, Headroom, Food this week £ left/over of budget. Bills rows: Cleared balance and the forecast line. The label is inserted as text, never HTML.
+  - Balances are read from On Budget's `dashboardSummary` in the `on_budget_v1` localStorage envelope, which `save()` has already written before it replies. A stale-data guard ignores a summary whose `computedAt` is older than the request start (minus 1 s); the confirmation then shows without balances.
+  - `refreshCardStats()` is called explicitly after success (in addition to the existing `OB_DATA_UPDATED` refresh) so the card shows the new values straight away.
+- **Unchanged:** the `OB_ACTION` / `OB_QUICKADD_RESULT` message protocol; failure and `NO_ACK` handling (toasts, nothing cleared, no popup); the double-submit guard; card tap-through to the Spending and Bills tabs. `on-budget.html` is unchanged (v3.91) and `pal-shared.js?v=10.87` is unchanged. No data, storage or sync change.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.10.
+- Tested (Stage 1): `node --check` on the three inline scripts; 16 checks in jsdom against the real `index.html` with a stubbed `pal-shared.js`, iframe and `obQuickSend` — popup shown for Food (Decreasing), Food (Increasing + manual), and Bills; correct rows and text; label HTML not injected; no `switchTo`; `refreshCardStats` called; inputs cleared; popup removed after 5 s; tap dismisses; stale summary shows no balances; failed result and `NO_ACK` show no popup and do not navigate.
+- Not tested: the live deployed build, a real On Budget iframe round trip, real synced data, an actual phone (popup position/safe-area, overlap with the "Saving…" toast), light theme.
 
 ### v11.09 — PET-113 — On Budget card made more compact — 7 Oct 2026
 
