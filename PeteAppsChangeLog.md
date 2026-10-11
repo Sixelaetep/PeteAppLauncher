@@ -16,7 +16,7 @@ This is the consolidated historical development changelog for every application 
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.11 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10 and v11.11. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
-| Film & TV Tracker | `film-tv-tracker.html` | v3.7 | v1.0 – v3.7. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
+| Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
@@ -737,6 +737,16 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 # Film & TV Tracker
 
 `film-tv-tracker.html`. From v1.2, full entries live in the `.md`; the inline HTML comment keeps a pointer. Supabase table `pal_film_tracker` (`title_` / `service_` / `ignore_` prefixes, single `__settings__` row), shared between Pete and Lex since v1.8. Local key `ftt_v1`; launcher stat cache `pal_ftt_stat`. Data from TMDB (GB/UK region).
+
+### v3.8 — FTT-049 — Subscription logo filter
+
+- **Request:** see which films/series on the lists are on each subscription, with logo buttons that work from whatever Library view is open.
+- **Change:** a row of logo buttons sits under the Library pills (inside the sticky controls). It lists the subscription/free services you own (`hasAccess`, active) that have at least one title; tap one or several to narrow the current view to titles available on them (OR across services). It composes with every existing view: the sectioned All view, TV / Films / New release sections, Tag view, the flat filters (Available, Favourites, interest…), the Want to Watch / Watched / All status, and search. Section ordering is unchanged; Reorder is not offered in a filtered sub-view (same as TV/Films). The heading shows the selected service names and count; an empty result says "Nothing here is on the selected subscription." **✕ Clear** removes the filter. Buttons have a tooltip/aria-label "Name · N titles"; unselected buttons dim while a selection is active.
+- **How it matches:** per title, stored `availability` entries of type subscription or free are mapped with the existing `findMatchingService`; rent/buy never counts. No new availability logic; refresh data with Update from TMDB if a title looks wrong.
+- **Logos:** fetched once from TMDB `/watch/providers/movie|tv?watch_region=GB`, matched by normalised name, and cached as a tiny name→path map in localStorage `ftt_svclogos` (not the main library, so no FTT-041 quota impact). Without a logo (offline, no match) the button shows initials.
+- **Data and sync:** none. Selection (`lib.svc`) is session-only UI state, never persisted or synced. No data-model, backup/JSON or Supabase change. `pal-shared.js` unchanged. Launcher: no change needed (`pal_ftt_stat` shape unchanged).
+- Tested (Stage 1): `node --check`; jsdom on the real page with stubbed TMDB and a 5-title library: buttons shown only for owned services, logo fetched and cached, single and multi-select counts, combined with TV, Films + Want to Watch, flat-filter empty state, Tag view without error, search + filter empty state, Clear. Not tested: real browser/phone layout and horizontal scroll, live TMDB logo matching on the real service list, the real library at size, second-device behaviour.
+- Known limitations: the filter resets on reload; matching depends on the fuzzy service-name match; logos need TMDB reachable once.
 
 ### v3.7 — FTT-048 — Show all of an actor's credits
 

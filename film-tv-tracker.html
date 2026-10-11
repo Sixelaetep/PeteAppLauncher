@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v3.7</title>
+<title>Film &amp; TV Tracker v3.8</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%232dd4bf' text-anchor='middle'>🎬</text></svg>">
 <style>
   :root {
@@ -104,6 +104,14 @@
   .seg button.on .n { color:var(--ink2); }
 
   .chiprow { display:flex; align-items:center; gap:6px; }
+  .svcrow { display:flex; align-items:center; gap:8px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch; padding:2px 0; }
+  .svcrow:empty { display:none; }
+  .svcrow::-webkit-scrollbar { display:none; }
+  .svcbtn { flex:0 0 auto; width:44px; height:44px; border-radius:11px; border:2px solid transparent; background:var(--surface2); color:var(--ink); padding:0; overflow:hidden; cursor:pointer; opacity:.72; font-family:inherit; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .svcbtn img { width:100%; height:100%; object-fit:cover; display:block; }
+  .svcbtn.on { border-color:var(--film); opacity:1; }
+  .svcrow.has-sel .svcbtn:not(.on) { opacity:.4; }
+  .svcclear { flex:0 0 auto; border:0; background:none; color:var(--film); font-size:12.5px; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; padding:6px 4px; }
   .chips { flex:1 1 auto; min-width:0; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
   .chips::-webkit-scrollbar { display:none; }
   .fchip { flex:0 0 auto; border:1px solid var(--border); background:none; color:var(--ink2); border-radius:16px; padding:6px 13px; font-size:12.5px; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
@@ -433,7 +441,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.7</span></h1>
+  <h1>🎬 Film &amp; TV Tracker <span class="v">v3.8</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -557,6 +565,7 @@
       </div>
       <button class="fchip" id="moreChip" onclick="openMoreSheet()">More ▾</button>
     </div>
+    <div class="svcrow" id="svcRow" role="group" aria-label="Filter by subscription"></div>
   </div>
 
   <!-- Discovery — compact, hidden when empty, hidden while searching/filtering -->
@@ -818,7 +827,11 @@
 <script src="pal-shared.js?v=1.13"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// FILM & TV TRACKER v3.7 (FTT-001..FTT-048) — see film-tv-tracker.md.
+// FILM & TV TRACKER v3.8 (FTT-001..FTT-049) — see film-tv-tracker.md.
+// v3.8 (FTT-049): subscription logo filter. A row of logo buttons under the Library pills (your subscription / free services that have
+// titles) narrows whichever view is open — sections, Tag view, TV/Films, flat filters, search — to titles available on the selected
+// service(s). Logos from TMDB's GB provider list, cached as a tiny name→path map (localStorage ftt_svclogos); initials if unavailable.
+// Selection is session-only. No data-model, sync or backup change.
 // v3.7 (FTT-048): an actor's list in + Add search shows the 40 most popular as before, with a "Show all N" button (and "Show top 40")
 // to see every film and series credit. Display only; no data change.
 // v3.6 (FTT-047): adding a title from + Add search no longer jumps back to the top of the results. The list is redrawn from the
@@ -1314,7 +1327,7 @@ function renderAll() {
 const LIB_PAGE = 60;
 const SHELF_MAX = 8;   // a shelf shows this many tiles; See all / Reorder expose the whole collection (a display limit, never a collection limit)
 const LIB_HEADINGS = { watchlist: 'Want to Watch', watched: 'Watched', all: 'All Titles' };
-const lib = { status: 'all', filter: 'all', tagSel: [], sort: 'added', sortUser: false, search: '', limit: LIB_PAGE, secLimit: { unavailable: LIB_PAGE, watched: LIB_PAGE } };
+const lib = { status: 'all', filter: 'all', svc: [], tagSel: [], sort: 'added', sortUser: false, search: '', limit: LIB_PAGE, secLimit: { unavailable: LIB_PAGE, watched: LIB_PAGE } };
 // Default ordering (an explicit Sort choice always wins):
 //  · Favourites / Available filters: favourites first (saved order), then the rest newest-added first.
 //  · Want to Watch (v2.2): your own order — favourites first (favourite order), then the rest in Want to Watch order.
@@ -1341,6 +1354,82 @@ const MORE_FILTERS = [
   ['reviewed', 'Reviewed', 'Watched titles with a written review']
 ];
 let _libSearchT = null;
+
+// ── v3.8 (FTT-049): subscription logo filter ───────────────────────
+// A row of logo buttons (one per subscription / free service you own) that narrows whatever Library view is open to titles
+// available on the selected service(s). UI-only state (lib.svc, never persisted or synced). Logos come from TMDB's provider
+// list (GB) and are cached as a tiny name→path map; without a logo a button shows the service's initials.
+const SVC_LOGO_KEY = 'ftt_svclogos', SVC_LOGO_IMG = 'https://image.tmdb.org/t/p/w92';
+let svcLogos = {}, _svcLogoTried = '';
+function loadSvcLogoCache() {
+  try { const r = JSON.parse(localStorage.getItem(SVC_LOGO_KEY) || 'null'); if (r && r.map && typeof r.map === 'object') svcLogos = r.map; } catch (e) {}
+}
+function titleSvcIds(t) {
+  const out = new Set();
+  (t.availability || []).forEach(a => {
+    if (a.type !== 'subscription' && a.type !== 'free') return;
+    const s = findMatchingService(a.service);
+    if (s) out.add(s.id);
+  });
+  return out;
+}
+function svcPred() {
+  const sel = new Set(lib.svc);
+  return t => { for (const id of titleSvcIds(t)) if (sel.has(id)) return true; return false; };
+}
+function svcInitials(name) {
+  const w = String(name || '').replace(/\+/g, ' plus ').split(/[^A-Za-z0-9]+/).filter(Boolean);
+  return (w.length > 1 ? w.slice(0, 3).map(x => x[0]).join('') : (w[0] || '?').slice(0, 2)).toUpperCase();
+}
+function svcLogoFor(s) { const p = svcLogos[normalizeServiceName(s.name)]; return p ? SVC_LOGO_IMG + p : null; }
+function svcOwned() {
+  return state.services.filter(s => !s._deleted && s.hasAccess && s.active !== false && (s.type === 'subscription' || s.type === 'free' || !s.type));
+}
+function renderSvcRow() {
+  const el = document.getElementById('svcRow');
+  if (!el) return;
+  const owned = svcOwned();
+  const ownedIds = new Set(owned.map(s => s.id));
+  lib.svc = lib.svc.filter(id => ownedIds.has(id));
+  const counts = {};
+  liveTitles().forEach(t => titleSvcIds(t).forEach(id => { counts[id] = (counts[id] || 0) + 1; }));
+  const shown = owned.filter(s => counts[s.id] > 0 || lib.svc.includes(s.id));
+  if (!shown.length) { el.innerHTML = ''; el.classList.remove('has-sel'); return; }
+  el.classList.toggle('has-sel', lib.svc.length > 0);
+  el.innerHTML = shown.map(s => {
+    const on = lib.svc.includes(s.id), logo = svcLogoFor(s), n = counts[s.id] || 0;
+    return `<button class="svcbtn ${on ? 'on' : ''}" aria-pressed="${on}" title="${esc(s.name)} · ${n} title${n === 1 ? '' : 's'}" aria-label="${esc(s.name)}, ${n} title${n === 1 ? '' : 's'}" onclick="toggleSvc('${esc(s.id)}')">`
+      + (logo ? `<img src="${logo}" alt="" loading="lazy" onerror="this.replaceWith(document.createTextNode(svcInitials('${esc(s.name).replace(/'/g, "\\'")}')))">` : esc(svcInitials(s.name))) + '</button>';
+  }).join('') + (lib.svc.length ? `<button class="svcclear" onclick="clearSvc()">✕ Clear</button>` : '');
+  ensureSvcLogos(shown);
+}
+function toggleSvc(id) { const s = new Set(lib.svc); if (s.has(id)) s.delete(id); else s.add(id); setLib({ svc: [...s] }); }
+function clearSvc() { setLib({ svc: [] }); }
+async function ensureSvcLogos(list) {
+  const missing = list.filter(s => !svcLogoFor(s));
+  if (!missing.length || typeof tmdbFetch !== 'function') return;
+  const key = missing.map(s => normalizeServiceName(s.name)).sort().join('|');
+  if (key === _svcLogoTried) return;
+  _svcLogoTried = key;
+  try {
+    const all = [];
+    for (const kind of ['movie', 'tv']) {
+      const r = await tmdbFetch(`/watch/providers/${kind}?watch_region=GB&language=en-GB`);
+      (r && r.results || []).forEach(p => { if (p.logo_path) all.push({ n: normalizeServiceName(p.provider_name), l: p.logo_path }); });
+    }
+    let changed = false;
+    missing.forEach(s => {
+      const n = normalizeServiceName(s.name);
+      let hit = all.find(p => p.n === n);
+      if (!hit) hit = all.filter(p => p.n.length >= 4 && n.length >= 4 && (p.n.includes(n) || n.includes(p.n))).sort((a, b) => a.n.length - b.n.length)[0];
+      if (hit) { svcLogos[n] = hit.l; changed = true; }
+    });
+    if (changed) {
+      try { localStorage.setItem(SVC_LOGO_KEY, JSON.stringify({ at: Date.now(), map: svcLogos })); } catch (e) {}
+      renderSvcRow();
+    }
+  } catch (e) { /* offline or no key — initials stay */ }
+}
 
 function setLib(patch) {
   if (favDraft) finishFavReorder();   // the view is about to change under the drag — save what was done
@@ -1538,6 +1627,7 @@ function renderLibrary() {
   const watchlist = titles.filter(t => t.status === 'watchlist');
   const watched = titles.filter(t => t.status === 'watched');
   const nf = n => n.toLocaleString('en-GB');
+  renderSvcRow();
 
   document.getElementById('cnt-watchlist').textContent = nf(watchlist.length);
   document.getElementById('cnt-watched').textContent = nf(watched.length);
@@ -1565,8 +1655,10 @@ function renderLibrary() {
   let base = titles;
   if (lib.status === 'watchlist') base = watchlist;
   else if (lib.status === 'watched') base = watched;
+  const svcOn = lib.svc.length > 0, svcP = svcOn ? svcPred() : null;
+  if (svcOn) base = base.filter(svcP);
   const list = structured ? [] : filterAndSort(base, lib.filter, effectiveSort(), lib.search);
-  const secs = structured ? (tagView ? tagSections(base) : librarySections(typeView ? typeViewPred(lib.filter) : null)) : null;
+  const secs = structured ? (tagView ? tagSections(base) : librarySections(typeView ? (svcOn ? (t => typeViewPred(lib.filter)(t) && svcP(t)) : typeViewPred(lib.filter)) : svcP)) : null;
   // Reordering the full Favourites list shows every matching favourite (no paging), so any of them can be dragged anywhere.
   const gridReorder = !structured && !!favDraft && favKind === 'fav' && favScope === 'grid';
   let shown;
@@ -1587,7 +1679,7 @@ function renderLibrary() {
     al.innerHTML = (structured && !selectMode && !favDraft)
       ? (nsN ? `<button class="alert-btn" onclick="openNewSeasons()"><span>🆕 New seasons</span><span class="ct">${nf(nsN)}</span></button>` : '')
       + (nrN ? `<button class="alert-btn" onclick="openNewReleasesReview()"><span>🎬 New releases to review</span><span class="ct">${nf(nrN)}</span></button>` : '') : ''; }
-  document.getElementById('libTitle').textContent = LIB_HEADINGS[lib.status] + ' · ' + nf(totalCount);
+  document.getElementById('libTitle').textContent = LIB_HEADINGS[lib.status] + (svcOn ? ' · ' + state.services.filter(s => lib.svc.includes(s.id)).map(s => s.name).join(', ') : '') + ' · ' + nf(totalCount);
   // Selection only ever covers titles currently on screen: if a filter/search change
   // (or a delete elsewhere) removes a selected title from view, it drops out of the
   // selection, so "Delete N selected" can never touch something you can't see.
@@ -1609,6 +1701,7 @@ function renderLibrary() {
     secEl.innerHTML = (tagView && !tagIndex().size ? `<div class="rel-hint" style="margin:10px 0 0">No tags yet. Add some in Edit title, or run Update from TMDB in Sync &amp; Backup to tag every title from its genres.</div>` : '')
       + (secs.length ? secs.map(x => sectionHtml(x, nf)).join('')
       : emptyState('🎬', !titles.length ? 'Your library is empty — tap + Add to get started.'
+        : svcOn ? 'Nothing here is on the selected subscription.'
         : relView ? 'No new releases yet. Use + Add → New releases to bring some in.'
         : lib.status === 'watchlist' ? 'Nothing on your Want to Watch list yet.' : 'Nothing here yet.'));
   } else {
@@ -1619,6 +1712,7 @@ function renderLibrary() {
     else if (shown.length) gridEl.innerHTML = shown.map(t => miniCardHtml(t, true, cardOpts)).join('');
     else if (query) gridEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="es-icon">🔍</div>Nothing in your library matches “${esc(query)}”.<br><button class="add-btn" onclick="addFromLibSearch()">+ Add “${esc(query)}”</button></div>`;
     else gridEl.innerHTML = emptyState('🎬', !titles.length ? 'Your library is empty — tap + Add to get started.'
+        : svcOn ? 'Nothing here is on the selected subscription.'
         : lib.filter !== 'all' ? 'Nothing matches — try clearing the filter.'
         : lib.status === 'watchlist' ? 'Nothing on your Want to Watch list yet.' : 'Nothing here yet.');
     moreEl.innerHTML = (list.length > shown.length ? `<button class="more-btn" onclick="libShowMore()">Show more · ${nf(list.length - shown.length)} left</button>` : '')
@@ -4135,6 +4229,7 @@ function importJSON(evt) {
     if (orderChanged || (_storageMode === 'ls' && raw && raw.indexOf('"url"') !== -1)) writeLocalState();
     writeStatCache();   // v2.5: refresh the launcher card's cache on every open, so it picks up favourites right after an upgrade
     relInitFilters();
+    loadSvcLogoCache();
     switchTab('library');
     renderAll();
   } finally { _bootReadyResolve(); }
