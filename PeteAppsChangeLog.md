@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.10 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09 and v11.10. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.11 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10 and v11.11. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.7 | v1.0 – v3.7. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.91 | v1.0 – v3.43 and v3.73 – v3.91. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.92 | v1.0 – v3.43 and v3.73 – v3.92. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -209,6 +209,15 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.11 — PET-115 — Quick-add files spend under the shop's usual category — 11 Oct 2026
+
+- **Why:** the launcher spend quick-add always filed under Food. With On Budget v3.92 each shop can have a usual category (Food / Travel / Other); the launcher should use it.
+- **Change (`index.html`):** the quick-add row tag reads **Spend** (was Food; aria-labels updated). The category is chosen by On Budget from the label and returned in `OB_QUICKADD_RESULT.category`; the confirmation popup names it (`✓ Travel £4.50 · Shell`) and shows the matching figure (Food this week for Food, Travel this month for Travel; Other shows balance and headroom). Label suggestions show the shop's icon (🛒 / 🚗 / 📦) when a category is set; the label inserted is the plain name.
+- **Unchanged:** the Bills row; the message protocol apart from reading the new reply field; failure / `NO_ACK` handling; the PET-114 behaviour (stay on the launcher, 5 s popup, card refresh). Against an older On Budget (< v3.92) the reply has no category and everything is filed and shown as Food, as before. Needs `on-budget.html` v3.92 to apply categories. `pal-shared.js?v=10.87` unchanged.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.11.
+- Tested (Stage 1): `node --check`; 22 checks in jsdom against the real `index.html` (PET-114 checks re-run plus: Travel and Other popups, unknown/missing category → Food, tag text, suggestion icons, plain `dataset.label`).
+- Not tested: real On Budget iframe round trip, live site, phone layout of the longer "Spend" tag and icon pills.
 
 ### v11.10 — PET-114 — On Budget quick-add stays on the launcher with a 5-second confirmation popup — 10 Oct 2026
 
@@ -2140,6 +2149,20 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.92 — ON--086 — Shop list remembers a usual spend category (Food / Travel / Other)
+
+- **Why:** the launcher's spend quick-add always filed under Food, and the Add transaction sheet always started on Food. Request: assign Food, Travel or Other automatically from the shop label, with somewhere to set or edit each shop's usual category, applied everywhere including launcher adds.
+- **Change (`on-budget.html` only):**
+  - Each shop-list item (`ftLabels.items[]`) gets an optional `category` (`weekly` | `travel` | `other`). No category = no rule. No schema change; it travels inside the existing per-record `ftlabel_` sync row and in JSON export/import.
+  - Add transaction sheet: picking a shop chip or typing a known shop selects its category, unless the user has already tapped a category in that sheet. Not applied when editing an existing transaction or for income.
+  - Settings > Shop list: every shop has a category selector (Not set / Food / Travel / Other); changing it saves, bumps `updated_at` and syncs that record.
+  - Learning: saving a new transaction with a shop that has no category stores the category used; if the user explicitly tapped a different category, the stored one is updated. Editing a transaction never changes a rule.
+  - Launcher `quickAddFood`: category = the shop's rule, else Food (also when no label). The reply `OB_QUICKADD_RESULT` gains `category` (`weekly`/`travel`/`other`; `null` for Bills). Launcher adds never create or change a rule (so an unknown shop is not locked to Food).
+- **Unchanged:** all existing transactions and totals; the Food/Travel/Other maths; the Bills quick-add; shops with no category behave exactly as before.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and both `version` fields (save, JSON export).
+- Tested (Stage 1): `node --check`; 27 checks in jsdom against the real `on-budget.html` with stubbed `PalSync`/`uid`/`esc` — case-insensitive lookup, launcher message round trip (ruled shop → travel reply and saved as travel, unknown shop/no label/unset shop → Food, no rule learned, Bills reply `null`), sheet auto-select, user pick not overridden, explicit pick updates the rule, new shop learns, unset shop learns on first sheet save, edit and income never learn, Settings selector render/change/clear, persistence in `on_budget_v1`, old-shape items render.
+- Not tested: real browser layout of the Settings selector chips, live Supabase round trip (that an extra field on the `ftlabel_` row survives push/pull and a second device), real iframe messaging with the launcher.
 
 ### v3.91 — ON--085 — Deleted Food & Travel transactions no longer reappear on other devices
 

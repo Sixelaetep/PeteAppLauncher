@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.10</title>
+<title>P Apps v11.11</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -754,7 +754,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.10</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.11</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -880,10 +880,10 @@
       <div class="card-stat muted" id="stat-budget"><span class="card-stat-dot"></span><span id="stat-budget-val">—</span></div>
       <div class="ob-quick" onclick="event.stopPropagation()">
         <form class="ob-quick-row" data-kind="food" autocomplete="off" onsubmit="obQuickSubmit(event);return false">
-          <span class="ob-quick-tag">Food</span>
-          <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="£0.00" aria-label="Food spend amount" oninput="obQuickPenny(this)">
-          <input class="ob-quick-lbl" type="text" placeholder="Label (optional)" maxlength="60" enterkeyhint="done" aria-label="Food spend label" oninput="obQuickSuggest(this)" onfocus="obQuickSuggest(this,true)" onblur="obQuickSuggestHideSoon(this)">
-          <button class="ob-quick-go" type="submit" aria-label="Add food spend">Add</button>
+          <span class="ob-quick-tag">Spend</span>
+          <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="£0.00" aria-label="Spend amount" oninput="obQuickPenny(this)">
+          <input class="ob-quick-lbl" type="text" placeholder="Label (optional)" maxlength="60" enterkeyhint="done" aria-label="Spend label" oninput="obQuickSuggest(this)" onfocus="obQuickSuggest(this,true)" onblur="obQuickSuggestHideSoon(this)">
+          <button class="ob-quick-go" type="submit" aria-label="Add spend">Add</button>
           <div class="ob-quick-sugg" hidden onpointerdown="event.preventDefault()" onclick="obQuickPick(event)"></div>
         </form>
       </div>
@@ -1122,6 +1122,11 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-115, v11.11): quick-add "Spend" row (was "Food") now files the spend under the shop's usual
+  category — Food, Travel or Other — set in On Budget (v3.92) Settings > Shop list. On Budget picks the
+  category and replies with it (OB_QUICKADD_RESULT.category); the popup names that category and shows the
+  matching bar (Food this week / Travel this month). Label suggestions show the shop's category icon.
+  Unknown shop / no label = Food, as before. Needs on-budget.html v3.92 to apply categories.
   CHANGED (PET-114, v11.10): On Budget card quick-add (Food / Bills) no longer opens the app. On success a
   5-second confirmation popup (#obConfirm) shows the transaction plus the new balances read from On Budget's
   freshly saved dashboardSummary, and the card refreshes; the user stays on the launcher. launcher-only —
@@ -3302,6 +3307,9 @@ let _obQuickBusy = false;
 // re-read on focus so it is current, and never written to. If the key is
 // missing or unreadable there are simply no suggestions.
 let _obSuggCache = { food: [], bills: [] };
+// PET-115 v11.11: On Budget shop → usual category (set in On Budget Settings > Shop list)
+const OB_CAT_ICON = { weekly: '🛒', travel: '🚗', other: '📦' };
+const OB_CAT_NAME = { weekly: 'Food', travel: 'Travel', other: 'Other' };
 function obQuickLoadLabels() {
   const out = { food: [], bills: [] };
   try {
@@ -3310,7 +3318,7 @@ function obQuickLoadLabels() {
     const parsed = JSON.parse(raw);
     const d = parsed.data || parsed;
     ((d.ftLabels && d.ftLabels.items) || []).forEach(l => {
-      if (l && !l._deleted && l.name) out.food.push({ name: String(l.name), count: l.count || 0, last: l.lastUsed || '' });
+      if (l && !l._deleted && l.name) out.food.push({ name: String(l.name), count: l.count || 0, last: l.lastUsed || '', cat: l.category || '' });
     });
     const seen = {};
     ((d.bills && d.bills.tx) || []).forEach(t => {
@@ -3347,7 +3355,7 @@ function obQuickSuggest(input, reload) {
   box.textContent = '';
   m.forEach(l => {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'ob-quick-pill'; b.dataset.label = l.name; b.textContent = l.name;
+    b.type = 'button'; b.className = 'ob-quick-pill'; b.dataset.label = l.name; b.textContent = (OB_CAT_ICON[l.cat] ? OB_CAT_ICON[l.cat] + ' ' : '') + l.name;
     box.appendChild(b);
   });
   box.hidden = !m.length;
@@ -3405,7 +3413,8 @@ function hideObQuickConfirm() {
   if (el) el.classList.remove('show');
   if (_obConfirmTimer) { clearTimeout(_obConfirmTimer); _obConfirmTimer = null; }
 }
-function showObQuickConfirm(kind, amount, label, reqStart) {
+function showObQuickConfirm(kind, amount, label, reqStart, cat) {
+  if (!OB_CAT_NAME[cat]) cat = 'weekly'; // older On Budget replies carry no category
   const el = document.getElementById('obConfirm');
   if (!el) return;
   const gbp = function (n) { return (n < 0 ? '−£' : '£') + Math.abs(n).toFixed(2); };
@@ -3423,9 +3432,12 @@ function showObQuickConfirm(kind, amount, label, reqStart) {
       if (sm.potDirection === 'increasing' && sm.cardBalance != null) add('Card balance', gbp(sm.cardBalance));
       else add('Left to spend', gbp(sm.pot));
       add('Headroom', gbp(sm.headroom));
-      if (sm.weekBudget > 0 && sm.weekSpent != null) {
+      if (cat === 'weekly' && sm.weekBudget > 0 && sm.weekSpent != null) {
         const left = sm.weekBudget - sm.weekSpent;
         add('Food this week', (left >= 0 ? gbp(left) + ' left' : gbp(-left) + ' over') + ' of ' + gbp(sm.weekBudget));
+      } else if (cat === 'travel' && sm.travelBudget > 0 && sm.travelSpent != null) {
+        const left = sm.travelBudget - sm.travelSpent;
+        add('Travel this month', (left >= 0 ? gbp(left) + ' left' : gbp(-left) + ' over') + ' of ' + gbp(sm.travelBudget));
       }
     } else {
       add('Cleared balance', gbp(sm.clearedBalance));
@@ -3435,7 +3447,7 @@ function showObQuickConfirm(kind, amount, label, reqStart) {
   el.textContent = '';
   const title = document.createElement('div');
   title.className = 'obc-title';
-  title.textContent = '✓ ' + (kind === 'food' ? 'Food' : 'Bills') + ' ' + gbp(amount) + (label ? ' · ' + label : '') +
+  title.textContent = '✓ ' + (kind === 'food' ? OB_CAT_NAME[cat] : 'Bills') + ' ' + gbp(amount) + (label ? ' · ' + label : '') +
     (kind === 'food' && sm && sm.ftClearMode === 'manual' ? ' (uncleared)' : '');
   el.appendChild(title);
   rows.forEach(function (r) {
@@ -3477,7 +3489,7 @@ async function obQuickSubmit(e) {
       amtEl.value = ''; amtEl.dataset.raw = ''; lblEl.value = '';
       const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-      showObQuickConfirm(kind, pence / 100, lblText, reqStart);
+      showObQuickConfirm(kind, pence / 100, lblText, reqStart, res.category);
       try { refreshCardStats(); } catch (_) {}
     } else {
       toast('Not saved — ' + ((res && res.msg) || 'On Budget rejected it'));

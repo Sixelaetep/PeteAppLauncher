@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.91</title>
+<title>On Budget v3.92</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -316,6 +316,7 @@
   .quick-label-chip{padding:6px 12px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);color:var(--ink2);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:all 0.15s;-webkit-tap-highlight-color:transparent;white-space:nowrap}
   .quick-label-chip:active{background:var(--accent-dim);border-color:var(--accent-border);color:var(--accent)}
   .manage-label-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px 5px 12px;border-radius:14px;border:1px solid var(--border);background:var(--surface2);color:var(--ink2);font-size:12px;font-weight:600;margin:0 6px 6px 0}
+.manage-label-cat{border:1px solid var(--border);background:var(--surface2);color:var(--ink2);font-size:11px;border-radius:8px;padding:2px 4px;max-width:96px}
   .manage-label-chip button{border:none;background:none;color:var(--ink3);font-size:13px;cursor:pointer;padding:0 2px;line-height:1}
   .filter-pill.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
 
@@ -367,7 +368,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.91</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.92</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -464,7 +465,7 @@
     </div>
     <div class="settings-block">
       <h3>Shop list</h3>
-      <div class="settings-hint" style="margin-bottom:8px">Builds itself as you add labels when logging a transaction. Remove any you don't want showing as quick picks.</div>
+      <div class="settings-hint" style="margin-bottom:8px">Builds itself as you add labels when logging a transaction. Set each shop's usual category (Food, Travel or Other) so it is picked automatically here and when adding from the launcher. Remove any you don't want showing as quick picks.</div>
       <div id="manage-labels-list"></div>
     </div>
     <div class="settings-block">
@@ -551,9 +552,9 @@
     </div>
 
     <div class="cat-grid" id="cat-grid-wrap">
-      <button class="cat-btn sel weekly" id="cat-weekly" onclick="pickCat('weekly')"><span class="ci">🛒</span>Food</button>
-      <button class="cat-btn travel"      id="cat-travel" onclick="pickCat('travel')"><span class="ci">🚗</span>Travel</button>
-      <button class="cat-btn other"       id="cat-other"  onclick="pickCat('other')"><span class="ci">📦</span>Other</button>
+      <button class="cat-btn sel weekly" id="cat-weekly" onclick="pickCat('weekly',true)"><span class="ci">🛒</span>Food</button>
+      <button class="cat-btn travel"      id="cat-travel" onclick="pickCat('travel',true)"><span class="ci">🚗</span>Travel</button>
+      <button class="cat-btn other"       id="cat-other"  onclick="pickCat('other',true)"><span class="ci">📦</span>Other</button>
     </div>
 
     <div class="amount-row">
@@ -844,10 +845,21 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.91"></script>
+<script src="pal-shared.js?v=3.92"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.91
+// On Budget v3.92
+// v3.92 (ON--086): shop list now remembers a usual spend category (Food /
+// Travel / Other) per shop. Stored as an optional `category` ('weekly' |
+// 'travel' | 'other') on each ftLabels item — no schema change, old data and
+// backups load unchanged (no category = no rule). Picking or typing a known
+// shop in the Add transaction sheet selects its category (until the user taps
+// a category themselves); Settings > Shop list has a per-shop category
+// selector; a shop with no category learns the one used when a new
+// transaction is saved, and an explicit different pick updates it. The
+// launcher's quickAddFood now uses the shop's category (default Food when
+// unknown) and reports it back in OB_QUICKADD_RESULT.category. Launcher
+// quick-adds never create or change a rule.
 // localStorage key: on_budget_v1
 // Full version history for v1.0 through v3.43 (49 releases,
 // 2026-06-xx to 2026-08-xx) has moved to on-budget.md, kept alongside
@@ -2431,7 +2443,7 @@ window.addEventListener('message', function(e) {
       // opening a sheet, then reports back so the launcher can confirm.
       const isFood = e.data.action === 'quickAddFood';
       const reqId = e.data.reqId;
-      let ok = false, msg = '';
+      let ok = false, msg = '', quickCat = isFood ? 'weekly' : null;
       try {
         window._obQuickSeen = window._obQuickSeen || {};
         const pence = Math.round(Number(e.data.amount) * 100);
@@ -2445,11 +2457,14 @@ window.addEventListener('message', function(e) {
           const amt = pence / 100;
           if (isFood) {
             switchTab('dashboard');
-            _cat = 'weekly'; _ftType = 'outgoing'; _dateShown = false; _editCtx = null;
+            // ON--086: the shop's usual category (Food when unknown / no label)
+            _cat = ftLabelCategory(label) || 'weekly'; quickCat = _cat;
+            _ftType = 'outgoing'; _dateShown = false; _editCtx = null; _catUserPicked = false;
             _ftCleared = !ftManual(); // v3.85 (ON--079): follows the Transaction clearing setting
             setPennyValue('m-amt', amt);
             document.getElementById('m-label').value = label;
-            saveSpend();
+            _ftLearnOff = true;
+            try { saveSpend(); } finally { _ftLearnOff = false; }
             setPennyValue('m-amt', null);
             document.getElementById('m-label').value = '';
           } else {
@@ -2468,7 +2483,7 @@ window.addEventListener('message', function(e) {
         msg = 'Error: ' + (err && err.message ? err.message : err);
       }
       const replyTo = e.source || window.parent;
-      if (replyTo && replyTo !== window) replyTo.postMessage({ type: 'OB_QUICKADD_RESULT', reqId: reqId, ok: ok, msg: msg }, e.origin);
+      if (replyTo && replyTo !== window) replyTo.postMessage({ type: 'OB_QUICKADD_RESULT', reqId: reqId, ok: ok, msg: msg, category: quickCat }, e.origin);
     }
   }
 });
@@ -2683,7 +2698,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.91', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.92', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2692,7 +2707,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.91', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.92', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3883,6 +3898,7 @@ function clearFtTx(mk, id) {
 }
 
 function openSheet() {
+  _catUserPicked = false;
   _cat = 'weekly'; _ftType = 'outgoing'; _dateShown = false; _editCtx = null;
   _ftCleared = !ftManual(); setFtClearedUI(); showFtClearedField(ftManual());
   document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('sel'));
@@ -3909,6 +3925,7 @@ function openSheet() {
 function openEditSheet(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
+  _catUserPicked = false;
   _editCtx = { mk, id };
   _ftType = t.type || 'outgoing';
   _cat = t.category || 'weekly';
@@ -3950,7 +3967,23 @@ function pickFtType(t) {
   document.getElementById('cat-grid-wrap').style.display = t==='outgoing' ? 'grid' : 'none';
 }
 
-function pickCat(c) {
+// ON--086: _catUserPicked is true once the user taps a category in the sheet,
+// so a later label pick/typing never overrides their choice.
+let _catUserPicked = false;
+let _ftLearnOff = false; // true while the launcher quick-add runs (no rule learning)
+function ftLabelCategory(name) {
+  const id = ftLabelId(name);
+  if (!id) return null;
+  const it = ftLabels.items.find(l => l.id === id && !l._deleted);
+  return it && (it.category === 'weekly' || it.category === 'travel' || it.category === 'other') ? it.category : null;
+}
+function autoCatFromLabel() {
+  if (_editCtx || _ftType !== 'outgoing' || _catUserPicked) return;
+  const c = ftLabelCategory(document.getElementById('m-label').value);
+  if (c && c !== _cat) pickCat(c);
+}
+function pickCat(c, byUser) {
+  if (byUser) _catUserPicked = true;
   _cat = c;
   document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('sel'));
   document.getElementById('cat-'+c).classList.add('sel');
@@ -3980,8 +4013,9 @@ function renderQuickLabels() {
 }
 function pickQuickLabel(name) {
   document.getElementById('m-label').value = name;
+  autoCatFromLabel();
 }
-function touchFtLabel(name) {
+function touchFtLabel(name, cat) {
   const norm = (name||'').trim();
   if (!norm) return;
   const id = ftLabelId(norm);
@@ -3994,8 +4028,11 @@ function touchFtLabel(name) {
     item.lastUsed = now;
     item.updated_at = now;
     delete item._deleted; // re-adding a previously-removed name un-deletes it
+    // ON--086: learn the category if none yet; an explicit different pick updates it
+    if (cat && (!item.category || (_catUserPicked && item.category !== cat))) item.category = cat;
   } else {
     item = { id, name:norm, count:1, lastUsed:now, updated_at:now };
+    if (cat) item.category = cat;
     ftLabels.items.push(item);
   }
   syncUpsertFtLabel(item);
@@ -4043,9 +4080,20 @@ function renderManageLabels() {
   if (!el) return;
   const sorted = [...ftLabels.items].filter(l=>!l._deleted).sort((a,b)=>a.name.localeCompare(b.name));
   if (!sorted.length) { el.innerHTML = `<div style="font-size:12px;color:var(--ink3)">No shops saved yet — add a label when logging a transaction and it'll appear here.</div>`; return; }
+  // ON--086: each shop also carries a usual spend category (optional)
+  const opt = (v, t, cur) => `<option value="${v}"${(cur||'')===v?' selected':''}>${t}</option>`;
   el.innerHTML = sorted.map(l=>
-    `<span class="manage-label-chip">${esc(l.name)}<button type="button" data-label="${esc(l.name)}" aria-label="Delete label ${esc(l.name)}">✕</button></span>`
+    `<span class="manage-label-chip">${esc(l.name)}<select class="manage-label-cat" data-label="${esc(l.name)}" aria-label="Usual category for ${esc(l.name)}">${opt('','Not set',l.category)}${opt('weekly','🛒 Food',l.category)}${opt('travel','🚗 Travel',l.category)}${opt('other','📦 Other',l.category)}</select><button type="button" data-label="${esc(l.name)}" aria-label="Delete label ${esc(l.name)}">✕</button></span>`
   ).join('');
+}
+function setFtLabelCategory(name, cat) {
+  const item = ftLabels.items.find(l=>l.name===name && !l._deleted);
+  if (!item) return;
+  if (cat === 'weekly' || cat === 'travel' || cat === 'other') item.category = cat; else delete item.category;
+  item.updated_at = new Date().toISOString();
+  save(true);
+  syncUpsertFtLabel(item);
+  toast(cat ? 'Usual category saved' : 'Usual category cleared');
 }
 function deleteFtLabel(name) {
   const idx = ftLabels.items.findIndex(l=>l.name===name && !l._deleted);
@@ -4068,7 +4116,7 @@ function saveSpend() {
   const isIncome = _ftType==='income';
   const emoji = isIncome ? '💰' : (_cat==='weekly'?'🛒':_cat==='travel'?'🚗':'📦');
 
-  if (label) touchFtLabel(label);
+  if (label) touchFtLabel(label, (!isIncome && !_editCtx && !_ftLearnOff) ? _cat : null);
 
   if (_editCtx) {
     // Editing in place — Food & Travel's pot is always derived fresh
@@ -5962,6 +6010,12 @@ writeDashboardSummaryOnly(); // PET-058/060 v3.51: backfill for a restored/impor
     const btn = e.target.closest('button[data-label]');
     if (btn) deleteFtLabel(btn.dataset.label);
   });
+  if (manage) manage.addEventListener('change', function(e){
+    const sel = e.target.closest('select[data-label]');
+    if (sel) setFtLabelCategory(sel.dataset.label, sel.value);
+  });
+  const mlab = document.getElementById('m-label');
+  if (mlab) mlab.addEventListener('input', autoCatFromLabel);
 })();
 
 // ON--037: closing the app while a push/pull is still in flight was the
