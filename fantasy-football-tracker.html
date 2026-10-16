@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.49</title>
+<title>Fantasy Football Tracker v1.51</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -430,7 +430,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.49</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.51</span></div>
 </nav>
 
 <div class="tabs">
@@ -458,6 +458,11 @@
         <p>Click <strong>Refresh from FPL</strong> to pull your current gameweek picks through pal-fpl-proxy.</p>
       </div>
     </div>
+    <details class="card" id="gwPerfCard" style="margin-top:14px" ontoggle="if(this.open)renderGwPerformance()">
+      <summary><h2>📊 Gameweek performance</h2></summary>
+      <p class="sub" style="margin:6px 0 10px">Your locked-in team vs the app's Advice and any external AI, on actual points. Saved automatically when you lock in, run Advice or import an AI reply, and frozen at the deadline.</p>
+      <div id="gwPerfBody"></div>
+    </details>
   </div>
 
   <div class="tab-panel" id="tab-advice">
@@ -482,8 +487,18 @@
     </div>
 
     <details class="card" id="nwTransfersCard">
-      <summary><h2>🔁 Transfers for next week</h2></summary>
+      <summary><h2>🔁 Transfers for next week <span id="nwFtBadge" class="sub" style="font-weight:400"></span></h2></summary>
       <div class="squad-meta" id="transferMeta" style="margin-bottom:10px">Not loaded yet</div>
+      <div id="freeTransfersBox" style="border:1px solid var(--border,#444);border-radius:10px;padding:10px 12px;margin-bottom:14px">
+        <strong>Free transfers</strong>
+        <p style="margin:6px 0 8px">FPL doesn't expose this via the API — enter what the FPL app shows for the upcoming gameweek and confirm it. Transfers you mark <strong>I've done this on FPL</strong> use it up automatically; planned ones are counted separately.</p>
+        <label for="freeTransfersCountInput">Free transfers available (before any below)</label>
+        <input type="text" id="freeTransfersCountInput" inputmode="numeric" placeholder="1">
+        <div class="sub" id="freeTransfersGwDisplay" style="margin-bottom:8px">Gameweek: load your squad first</div>
+        <button class="btn" onclick="confirmFreeTransfers()">✔ Confirm free transfers</button>
+        <div id="freeTransfersStatus" class="sub" style="margin-top:8px"></div>
+        <div id="freeTransfersStalePrompt"></div>
+      </div>
       <p style="margin-bottom:10px">Real transfers you've already made and FPL has confirmed are picked up automatically by Sync (in <strong>Historic transfers</strong> below). Use the two buttons here for anything Sync can't see yet:
       <strong>Add as planned</strong> for a move you're still considering, or <strong>I've done this on FPL</strong> if you've actually confirmed it on FPL but the API won't show it until the gameweek deadline passes.</p>
       <label for="txfOutSearch">Player out</label>
@@ -549,16 +564,6 @@
       <button class="btn" onclick="saveSettings()">Save</button>
     </div>
     <div class="card">
-      <h2>Free transfers</h2>
-      <p style="margin-bottom:10px">FPL doesn't expose this via the API (it's not a stored value, it's derived from your whole
-      season's history and chip usage) — enter what the FPL site shows you. Used to flag which planned/locked-in transfers are free vs. a hit.</p>
-      <label for="freeTransfersCountInput">How many free transfers you have</label>
-      <input type="text" id="freeTransfersCountInput" inputmode="numeric" placeholder="1">
-      <div class="sub" id="freeTransfersGwDisplay" style="margin-bottom:12px">Gameweek: load your squad first</div>
-      <button class="btn" onclick="saveSettings()">Save</button>
-      <div id="freeTransfersStalePrompt"></div>
-    </div>
-    <div class="card">
       <h2>Backup</h2>
       <p style="margin-bottom:10px">Export/import your settings as JSON, same as the rest of the suite.</p>
       <button class="btn secondary" onclick="exportData()">⬇️ Export</button>
@@ -577,12 +582,32 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.49"></script>
+<script src="pal-shared.js?v=1.51"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
  *
+ * v1.51 [FF-023] — (a) External-AI JSON import hardened: tolerant
+ *   parser repairs the usual AI slip-ups (curly quotes, trailing commas,
+ *   comments, citation markers, raw newlines / unescaped quotes inside
+ *   strings, cut-off replies), picks the right code block when a reply
+ *   has several, no longer rejects a reply just for lacking "players",
+ *   and shows WHERE a parse failed. Prompt gains explicit strict-JSON
+ *   rules and drops the unused sources[].url field. (b) Gameweek
+ *   performance: the locked-in team, the app's Advice team and each
+ *   imported AI's recommended XI are saved per gameweek (frozen at the
+ *   deadline) and compared on actual points in a new section at the
+ *   bottom of the Squad tab. Stored in ff_score_history under
+ *   record_key 'gw_records' (no new table).
+ * v1.50 [FF-022] — Free transfers moved from Settings into the Next Week
+ *   Transfers section, with an explicit per-gameweek "Confirm" step.
+ *   Transfers marked "I've done this on FPL" (locked) consume the
+ *   confirmed count live; the status shows done / planned / remaining.
+ *   External prompt transferContext now carries freeTransfersAtStart,
+ *   confirmed-for-this-gameweek flag, done-on-FPL count and remaining
+ *   after done. No data-model change (same ff_settings keys, plus
+ *   freeTransfersConfirmedAt).
  * v1.49 [FF-021] — Tabs restructured around "what FPL shows now" versus
  * "what I'm planning for next week":
  *
@@ -1750,7 +1775,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.49';
+const FF_VERSION = '1.51';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -1815,20 +1840,38 @@ function currentPlanningGwDeadline() {
 function updateFreeTransfersGwDisplay() {
   const gwEl = document.getElementById('freeTransfersGwDisplay');
   const promptEl = document.getElementById('freeTransfersStalePrompt');
+  const statusEl = document.getElementById('freeTransfersStatus');
+  const badgeEl = document.getElementById('nwFtBadge');
   if (!gwEl || !promptEl) return;
   const gw = currentPlanningGw();
   if (gw == null) {
     gwEl.textContent = 'Gameweek: load your squad first';
     promptEl.innerHTML = '';
+    if (statusEl) statusEl.innerHTML = '';
+    if (badgeEl) badgeEl.textContent = '';
     return;
   }
   const deadlineText = formatDeadline(currentPlanningGwDeadline());
   gwEl.textContent = 'Gameweek: ' + gw + ' (from your live squad, not set manually)' + (deadlineText ? ' · Deadline: ' + deadlineText : '');
-  if (_settings.freeTransfersCount != null && _settings.freeTransfersSavedForGw != null && _settings.freeTransfersSavedForGw !== gw) {
+  const u = computeTransferSlotUsage();
+  if (u.available != null && _settings.freeTransfersSavedForGw !== gw) {
     promptEl.innerHTML = '<div class="sub" style="color:var(--accent5);margin-top:8px">⚠️ Your free transfer count was confirmed for GW' +
-      _settings.freeTransfersSavedForGw + ', but you\'re now planning for GW' + gw + '. Please check the FPL site and re-save.</div>';
+      _settings.freeTransfersSavedForGw + ', but you\'re now planning for GW' + gw + '. Check the FPL app and press Confirm.</div>';
   } else {
     promptEl.innerHTML = '';
+  }
+  if (statusEl) {
+    if (u.available == null) {
+      statusEl.textContent = 'Not set — enter the number shown in the FPL app and confirm.';
+    } else {
+      statusEl.textContent = (u.isStale ? '⚠️ Unconfirmed for GW' + gw + ' · ' : '✅ Confirmed for GW' + gw + ' · ') +
+        u.available + ' free · ' + u.lockedCount + ' done on FPL · ' + u.plannedCount + ' planned · ' +
+        u.remainingAfterDone + ' left after done' + (u.plannedCount ? ' (' + u.remaining + ' if planned go ahead)' : '');
+    }
+  }
+  if (badgeEl) {
+    badgeEl.textContent = u.available == null ? '· free transfers not set'
+      : (u.isStale ? '· ⚠️ confirm free transfers' : '· ' + u.remainingAfterDone + ' free left');
   }
 }
 
@@ -1886,17 +1929,6 @@ function loadLocalSettings() {
 
 function saveSettings() {
   _settings.entryId = document.getElementById('entryIdInput').value.trim() || _settings.entryId;
-  const ftCountRaw = document.getElementById('freeTransfersCountInput').value.trim();
-  const newCount = ftCountRaw === '' ? null : Math.max(0, parseInt(ftCountRaw, 10) || 0);
-  // Snapshot which gameweek this count is being confirmed for, taken
-  // automatically from live data — not typed, so it can't be entered
-  // wrong, only become stale if the user doesn't come back to re-save
-  // after the squad moves on to a new gameweek (which the prompt below
-  // then catches).
-  if (newCount !== _settings.freeTransfersCount || _settings.freeTransfersSavedForGw == null) {
-    _settings.freeTransfersSavedForGw = currentPlanningGw();
-  }
-  _settings.freeTransfersCount = newCount;
   try { localStorage.setItem(scopedKey('ff_settings_local'), JSON.stringify(_settings)); } catch (e) {}
   if (window.PalSync && PalSync.hasSession()) {
     PalSync.table('ff_settings').upsert('main', _settings)
@@ -1910,6 +1942,31 @@ function saveSettings() {
   renderTransferList();
 }
 
+// Free transfers: the user enters what the FPL app shows and presses
+// Confirm. The gameweek is taken from live data (never typed), and a
+// confirm always re-stamps it, so the count is only "confirmed" for the
+// gameweek it was confirmed in.
+function confirmFreeTransfers() {
+  const raw = document.getElementById('freeTransfersCountInput').value.trim();
+  if (raw === '') { safeToast('Enter how many free transfers FPL shows', 'err'); return; }
+  const gw = currentPlanningGw();
+  if (gw == null) { safeToast('Load your squad first so the gameweek is known', 'err'); return; }
+  _settings.freeTransfersCount = Math.max(0, parseInt(raw, 10) || 0);
+  _settings.freeTransfersSavedForGw = gw;
+  _settings.freeTransfersConfirmedAt = Date.now();
+  try { localStorage.setItem(scopedKey('ff_settings_local'), JSON.stringify(_settings)); } catch (e) {}
+  if (window.PalSync && PalSync.hasSession()) {
+    PalSync.table('ff_settings').upsert('main', _settings)
+      .then(() => safeToast('Free transfers confirmed for GW' + gw))
+      .catch(() => safeToast('Confirmed locally — sync failed', 'err'));
+  } else {
+    safeToast('Free transfers confirmed for GW' + gw);
+  }
+  updateFreeTransfersGwDisplay();
+  refreshNextWeekView();
+  renderTransferList();
+}
+
 // ── Backup / export (matches suite wrapper convention) ─────────
 function exportData() {
   const wrapper = {
@@ -1917,7 +1974,7 @@ function exportData() {
     appVersion: FF_VERSION,   // was a hard-coded '1.46' that had drifted from the other version locations (FF-020)
     lastUpdated: new Date().toISOString(),
     lastExported: new Date().toISOString(),
-    data: { settings: _settings }
+    data: { settings: _settings, gwRecords: _gwRecords }
   };
   const blob = new Blob([JSON.stringify(wrapper, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1939,6 +1996,10 @@ function importBackup(file) {
       try { localStorage.setItem(scopedKey('ff_settings_local'), JSON.stringify(_settings)); } catch (e) {}
       document.getElementById('entryIdInput').value = _settings.entryId || '';
       if (window.PalSync && PalSync.hasSession()) PalSync.table('ff_settings').upsert('main', _settings);
+      if (parsed.data.gwRecords && typeof parsed.data.gwRecords === 'object') {
+        Object.keys(parsed.data.gwRecords).forEach(k => { const r = parsed.data.gwRecords[k]; if (!_gwRecords[k] || (r.updatedAt || 0) > (_gwRecords[k].updatedAt || 0)) _gwRecords[k] = r; });
+        persistGwRecords(); renderGwPerformance();
+      }
       safeToast('Backup imported');
     } catch (e) { safeToast('⚠ Could not read backup file', 'err'); }
   };
@@ -2933,6 +2994,7 @@ function lockInSquad(gwId) {
   };
   lineup.lockedAt = Date.now();
   persistManualLineup();
+  if (!recordLockedSnapshot(gwId, lineup)) safeToast('Deadline has passed — locked for display but not saved to Gameweek performance', 'err');
   refreshNextWeekView();
   safeToast('Squad locked in — refreshing advice…');
   loadAdvice();
@@ -3378,6 +3440,9 @@ function computeTransferSlotUsage() {
   return {
     available, gw, entries,
     usedCount: ordered.length,
+    lockedCount: locked.length,
+    plannedCount: planned.length,
+    remainingAfterDone: available != null ? Math.max(0, available - locked.length) : null,
     remaining: available != null ? Math.max(0, available - ordered.length) : null,
     isStale: gw != null && _settings.freeTransfersSavedForGw != null && _settings.freeTransfersSavedForGw !== gw,
     liveGwId: _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null,
@@ -3480,6 +3545,7 @@ function transferEntryCardHtml(t, slotById) {
 function renderTransferList() {
   const body = document.getElementById('transferActiveBody');
   const histBody = document.getElementById('transferHistoryBody');
+  updateFreeTransfersGwDisplay();
   const slotUsage = computeTransferSlotUsage();
   const slotById = {}; slotUsage.entries.forEach(e => { slotById[e.id] = e.isFree; });
   const liveGwId = _lastLiveSquadCache ? _lastLiveSquadCache.gwId : null;
@@ -4102,6 +4168,11 @@ function generateExportPrompt() {
   const transferContext = {
     freeTransfersKnown: slotUsage.available != null,
     freeTransfers: slotUsage.available,
+    freeTransfersAtStart: slotUsage.available,
+    freeTransfersConfirmedForThisGameweek: slotUsage.available != null && !slotUsage.isStale,
+    transfersDoneOnFpl: slotUsage.lockedCount,
+    transfersPlannedNotDone: slotUsage.plannedCount,
+    freeTransfersLeftAfterDone: slotUsage.remainingAfterDone,
     alreadyPlannedThisWindow: slotUsage.usedCount,
     remainingFreeTransfers: slotUsage.remaining,
     freeTransferCountMayBeStale: slotUsage.isStale,
@@ -4196,7 +4267,7 @@ function buildExportPromptText(payload) {
       startLikelihood: 'likely | uncertain | unlikely | unknown — about tactical rotation risk, separate from fitness',
       confidence: 'high | medium | low',
       summary: 'one or two sentences',
-      sources: [{ name: 'string', date: 'approximate date', url: 'string' }]
+      sources: [{ name: 'string — publication or club, plain text, no links', date: 'approximate date' }]
     }],
     playersChecked: 'array of every priorityPlayers id you actually researched, whether or not you found anything new',
     recommendedXI: {
@@ -4232,7 +4303,7 @@ function buildExportPromptText(payload) {
     JSON.stringify(payload, null, 2),
     '```',
     '',
-    'transferContext above tells you my actual transfer capacity for this gameweek (freeTransfersKnown will be false if I haven\'t told the app how many I have — in that case just give your best transfer verdict anyway and don\'t assume a specific number). algorithmicTransferSuggestions is what my own app\'s scoring already flags as sell/buy candidates — useful grounding, not something to just defer to.',
+    'transferContext above tells you my actual transfer capacity for this gameweek: freeTransfersAtStart is what I confirmed the FPL app showed, transfersDoneOnFpl have already been made on FPL (so freeTransfersLeftAfterDone is what I genuinely have left), and transfersPlannedNotDone are only intentions (remainingFreeTransfers also subtracts those). If freeTransfersConfirmedForThisGameweek is false, treat the count as unreliable and say so (freeTransfersKnown will be false if I haven\'t told the app how many I have — in that case just give your best transfer verdict anyway and don\'t assume a specific number). algorithmicTransferSuggestions is what my own app\'s scoring already flags as sell/buy candidates — useful grounding, not something to just defer to.',
     '',
     '## What to do',
     '0. Sanity-check the gameweek before anything else: forGameweekDeadline above is when Gameweek ' + payload.forGameweek + ' actually locks. Compare it to today\'s real date (use a web search if you\'re not confident what today\'s date is). If that deadline looks like it was already MORE than a day or so in the past, a newer gameweek has almost certainly become current since this was generated, and everything below may be stale — set gameweekMismatchSuspected to true, explain briefly in gameweekMismatchNote, and still do your best with the research below rather than refusing, since a flagged-but-completed reply is more useful to me than none at all. If the deadline is today, upcoming, or only slightly in the past, set it to false and proceed normally.',
@@ -4251,6 +4322,7 @@ function buildExportPromptText(payload) {
     '',
     '## Output format',
     'Reply with ONLY a single JSON code block matching this exact shape, nothing else — no other prose, headings, or commentary before or after it, and no markdown inside the JSON string values. If you\'re ever unsure or the research is inconclusive, still put your best attempt in the JSON (use "unknown"/low confidence fields for that) rather than explaining the problem in prose instead of the code block — a prose-only reply can\'t be imported back into my app at all.',
+    'JSON RULES (my app parses this automatically, so a single stray character breaks the import): (1) strict JSON only — straight double quotes " (never curly quotes), no trailing commas, no // or /* */ comments, no "..." placeholders; (2) every string value on ONE line, with no markdown, bullet characters, links, URLs, footnote or citation markers like [1] or 【…】 inside any value; (3) if you need a double quote inside text, write \\" or just avoid it; (4) use null for any non-enum field you can\'t determine, and keep the enum values (fit/doubtful/likely/high etc., including unknown) exactly as listed; (5) keep every summary and reasoning string under about 250 characters so the whole reply fits — it is far better to be brief than to be cut off, and the JSON must be COMPLETE with every bracket closed; (6) put the one ```json block last and write nothing after the closing fence.',
     '```json',
     JSON.stringify(schema, null, 2),
     '```'
@@ -4315,14 +4387,108 @@ function extBadgeClass(value, kind) {
 // then any fenced block, then the outermost {...} span as a last
 // resort for a bare, un-fenced reply.
 function extractJsonCandidate(raw) {
-  const jsonFence = raw.match(/```json\s*([\s\S]*?)```/i);
-  if (jsonFence) return jsonFence[1].trim();
-  const anyFence = raw.match(/```\s*([\s\S]*?)```/);
-  if (anyFence) return anyFence[1].trim();
+  // Collect every fenced block (an unterminated last fence = a cut-off
+  // reply, still worth trying), then prefer the one that looks like OUR
+  // reply schema over e.g. an echoed copy of the situation JSON.
+  const blocks = [];
+  const re = /```[a-zA-Z]*\s*([\s\S]*?)(```|$)/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m[1].trim()) blocks.push(m[1].trim());
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  const looksLikeReply = t => /"(aiSource|recommendedXI|keyUpdates|confirmedSquadBasis|playersChecked)"/.test(t);
+  const good = blocks.filter(looksLikeReply);
+  if (good.length) return good.sort((x, y) => y.length - x.length)[0];
+  if (blocks.length) {
+    const braced = blocks.filter(t => t.indexOf('{') !== -1);
+    if (braced.length) return braced.sort((x, y) => y.length - x.length)[0];
+  }
   const first = raw.indexOf('{');
   const last = raw.lastIndexOf('}');
   if (first !== -1 && last > first) return raw.slice(first, last + 1).trim();
+  if (first !== -1) return raw.slice(first).trim();
   return raw.trim();
+}
+
+// FF-023: AIs (and chat UIs) routinely mangle otherwise-fine JSON:
+// curly quotes, trailing commas, // comments, citation markers, raw line
+// breaks or unescaped quotes inside a string, or a reply cut off
+// mid-way. Rather than reject those, make one string-aware repair pass
+// and parse again. Returns { value, repairs[] } or throws the ORIGINAL
+// parse error (so the position shown to the user refers to what they pasted).
+function repairJsonText(text) {
+  const repairs = [];
+  let t = String(text).replace(/^﻿/, '').replace(/[​-‍⁠]/g, '').replace(/ /g, ' ');
+  const before = t;
+  t = t.replace(/【[^】]*】/g, '').replace(/:contentReference\[[^\]]*\](\{[^}]*\})?/g, '')
+       .replace(/\[cite(_start|_end)?[^\]]*\]/g, '').replace(/<\/?cite[^>]*>/g, '');
+  if (t !== before) repairs.push('removed citation markers');
+  let out = '', inStr = false, esc = false, i = 0;
+  const stack = [];
+  const nextNonSpace = k => { while (k < t.length && /\s/.test(t[k])) k++; return t[k]; };
+  let changed = { quotes: false, commas: false, comments: false, newlines: false, inner: false };
+  while (i < t.length) {
+    const c = t[i];
+    if (inStr) {
+      if (esc) { out += c; esc = false; i++; continue; }
+      if (c === '\\') { out += c; esc = true; i++; continue; }
+      if (c === '\n' || c === '\r') { out += '\\n'; changed.newlines = true; if (c === '\r' && t[i + 1] === '\n') i++; i++; continue; }
+      if (c === '\t') { out += '\\t'; i++; continue; }
+      if (c === '"' || c === '”') {
+        const n = nextNonSpace(i + 1);
+        if (c === '"' && (n === undefined || n === ',' || n === ':' || n === '}' || n === ']')) { out += '"'; inStr = false; i++; continue; }
+        if (c === '”' && (n === ',' || n === ':' || n === '}' || n === ']')) { out += '"'; inStr = false; changed.quotes = true; i++; continue; }
+        out += '\\"'; changed.inner = true; i++; continue;
+      }
+      out += c; i++; continue;
+    }
+    if (c === '"' || c === '“' || c === '”') {
+      if (c !== '"') changed.quotes = true;
+      out += '"'; inStr = true; i++; continue;
+    }
+    if (c === '/' && t[i + 1] === '/') { while (i < t.length && t[i] !== '\n') i++; changed.comments = true; continue; }
+    if (c === '/' && t[i + 1] === '*') { const e = t.indexOf('*/', i + 2); i = e === -1 ? t.length : e + 2; changed.comments = true; continue; }
+    if (c === '{' || c === '[') stack.push(c === '{' ? '}' : ']');
+    if (c === '}' || c === ']') {
+      const m = out.match(/,(\s*)$/);
+      if (m) { out = out.slice(0, out.length - m[0].length) + m[1]; changed.commas = true; }
+      if (stack.length) stack.pop();
+    }
+    out += c; i++;
+  }
+  if (changed.quotes) repairs.push('straightened curly quotes');
+  if (changed.commas) repairs.push('removed trailing commas');
+  if (changed.comments) repairs.push('removed comments');
+  if (changed.newlines) repairs.push('fixed line breaks inside text');
+  if (changed.inner) repairs.push('escaped quotes inside text');
+  let truncated = false;
+  if (inStr || stack.length) {
+    truncated = true;
+    if (inStr) out += '"';
+    out = out.replace(/,\s*$/, '').replace(/,\s*"[^"]*"\s*:\s*$/, '').replace(/"[^"]*"\s*:\s*$/, '');
+    while (stack.length) { out = out.replace(/,\s*$/, ''); out += stack.pop(); }
+    repairs.push('closed a reply that was cut off');
+  }
+  return { text: out, repairs, truncated };
+}
+
+function parseAiJson(candidate) {
+  try { return { value: JSON.parse(candidate), repairs: [], truncated: false }; }
+  catch (firstErr) {
+    let rep;
+    try { rep = repairJsonText(candidate); } catch (e) { throw firstErr; }
+    try { return { value: JSON.parse(rep.text), repairs: rep.repairs, truncated: rep.truncated }; }
+    catch (e2) {
+      const err = firstErr;
+      const pm = /position (\d+)/.exec(firstErr.message || '');
+      if (pm) {
+        const pos = parseInt(pm[1], 10);
+        err.snippet = candidate.slice(Math.max(0, pos - 50), pos) + ' ⟵ here ⟶ ' + candidate.slice(pos, pos + 40);
+      }
+      throw err;
+    }
+  }
 }
 
 let _lastImportRejection = null;
@@ -4366,13 +4532,14 @@ function importExternalCheck() {
   clearImportRejection();
   if (!raw) { safeToast('Paste the JSON reply first', 'err'); return; }
   const candidate = extractJsonCandidate(raw);
-  let parsed;
+  let parsed, parseNotes = { repairs: [], truncated: false };
   try {
-    parsed = JSON.parse(candidate);
+    const r = parseAiJson(candidate);
+    parsed = r.value; parseNotes = r;
   } catch (e) {
     showImportRejection(
-      'couldn\'t parse this as JSON (' + e.message + ').',
-      'Make sure you pasted the model\'s FULL reply, including the whole code block from opening to closing ``` — a reply cut off partway through won\'t parse.'
+      'couldn\'t parse this as JSON (' + e.message + ')' + (e.snippet ? ' near: …' + e.snippet.replace(/\s+/g, ' ') + '…' : '') + '.',
+      'Make sure you pasted the model\'s FULL reply, including the whole code block from opening to closing ``` — a reply cut off partway through can\'t always be repaired.'
     );
     return;
   }
@@ -4381,12 +4548,21 @@ function importExternalCheck() {
     return;
   }
   if (!Array.isArray(parsed.players)) {
-    showImportRejection(
-      'the JSON is missing the required "players" array.',
-      'If the reply used a different shape (e.g. renamed or restructured a field), ask it to match the schema exactly rather than editing the JSON by hand.'
-    );
-    return;
+    // FF-023: "players" is only the per-player news list and is
+    // legitimately empty/omitted when nothing new was found — only reject
+    // if the reply has none of the other schema fields either.
+    const hasOther = parsed.recommendedXI || parsed.transferRecommendation || Array.isArray(parsed.keyUpdates) || Array.isArray(parsed.playersChecked);
+    if (!hasOther) {
+      showImportRejection(
+        'the JSON has none of the expected fields (players, recommendedXI, transferRecommendation, keyUpdates).',
+        'If the reply used a different shape (e.g. renamed or restructured a field), ask it to match the schema exactly rather than editing the JSON by hand.'
+      );
+      return;
+    }
+    parsed.players = [];
   }
+  if (typeof parsed.forGameweek === 'string' && /^\d+$/.test(parsed.forGameweek.trim())) parsed.forGameweek = parseInt(parsed.forGameweek, 10);
+  parsed.players = parsed.players.filter(p => p && typeof p === 'object');
   const aiSource = ['claude', 'chatgpt', 'gemini'].includes((parsed.aiSource || '').toLowerCase())
     ? parsed.aiSource.toLowerCase() : 'other';
   parsed.aiSource = aiSource;
@@ -4412,7 +4588,10 @@ function importExternalCheck() {
   // signal — it can be wrong, but it's still worth surfacing).
   const planningGw = currentPlanningGw();
   const mismatchedGw = planningGw != null && parsed.forGameweek != null && parsed.forGameweek !== planningGw;
-  if (mismatchedGw) {
+  recordExternalSnapshot(parsed);
+  if (parseNotes.truncated) {
+    safeToast('Imported, but the reply looked cut off and was repaired — some fields may be missing. Re-run for a full reply if anything looks incomplete.', 'err');
+  } else if (mismatchedGw) {
     safeToast('Imported, but this is for Gameweek ' + parsed.forGameweek + ' — you\'re now on Gameweek ' + planningGw + ', so it won\'t be used until you export and import a fresh one.', 'err');
   } else if (parsed.gameweekMismatchSuspected) {
     safeToast('Imported — but ' + AI_SOURCE_LABELS[aiSource] + ' itself flagged a possible gameweek mismatch: ' + (parsed.gameweekMismatchNote || 'see its notes') + '. Worth a fresh export if in doubt.', 'err');
@@ -5847,6 +6026,305 @@ async function pullRemoteScoreHistory() {
   } catch (e) { console.error('Score history pull from Supabase failed:', e); }
 }
 
+// ── Gameweek records (FF-023) ───────────────────────────────────
+// Per gameweek we keep: the locked-in team the user went with, the app's
+// own Advice team, and each imported AI's recommended XI — all frozen at
+// the deadline so hindsight can't rewrite them — plus (once the
+// gameweek is played) the actual points of every player involved. The
+// Squad tab's "Gameweek performance" section compares them.
+// Stored in the existing ff_score_history table under record_key
+// 'gw_records' (the table is generic key/data), so no migration.
+let _gwRecords = {};
+let _gwPerfSelected = null;
+
+function gwRecordsLoadLocal() {
+  try {
+    const raw = localStorage.getItem(scopedKey('ff_gw_records'));
+    if (raw) { const parsed = JSON.parse(raw); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) _gwRecords = parsed; }
+  } catch (e) {}
+}
+
+function persistGwRecords() {
+  // keep a season's worth, newest gameweeks win
+  const ids = Object.keys(_gwRecords).map(Number).sort((a, b) => a - b);
+  while (ids.length > 40) delete _gwRecords[ids.shift()];
+  try { localStorage.setItem(scopedKey('ff_gw_records'), JSON.stringify(_gwRecords)); } catch (e) {}
+  if (window.PalSync && PalSync.hasSession()) {
+    PalSync.table('ff_score_history').upsert('gw_records', { records: _gwRecords }).catch(() => {
+      console.error('GW records saved locally but failed to sync to Supabase.');
+    });
+  }
+}
+
+async function pullRemoteGwRecords() {
+  try {
+    const result = await PalSync.table('ff_score_history').pull([], 'id', 'updated_at');
+    const remote = result.rows && result.rows.find(r => r.record_key === 'gw_records');
+    if (remote && remote.data && remote.data.records && typeof remote.data.records === 'object') {
+      Object.keys(remote.data.records).forEach(k => {
+        const r = remote.data.records[k];
+        const mine = _gwRecords[k];
+        if (!mine || (r.updatedAt || 0) > (mine.updatedAt || 0)) _gwRecords[k] = r;
+      });
+      try { localStorage.setItem(scopedKey('ff_gw_records'), JSON.stringify(_gwRecords)); } catch (e) {}
+      renderGwPerformance();
+    }
+  } catch (e) { console.error('GW records pull from Supabase failed:', e); }
+}
+
+function gwDeadlinePassed(gwId, fallbackDeadline) {
+  const dl = (gwId === currentPlanningGw() ? currentPlanningGwDeadline() : null) || fallbackDeadline || null;
+  if (!dl) return false;
+  const t = new Date(dl).getTime();
+  return !isNaN(t) && Date.now() >= t;
+}
+
+function getGwRecord(gwId) {
+  if (!_gwRecords[gwId]) _gwRecords[gwId] = { gwId, names: {}, external: {} };
+  const r = _gwRecords[gwId];
+  if (!r.names) r.names = {};
+  if (!r.external) r.external = {};
+  return r;
+}
+
+function gwRecordNames(rec, elementsById, ids) {
+  if (!elementsById) return;
+  ids.forEach(id => { const el = elementsById[id]; if (el) rec.names[id] = el.web_name; });
+}
+
+function recordLockedSnapshot(gwId, lineup) {
+  if (gwId == null || !lineup) return false;
+  if (gwDeadlinePassed(gwId)) return false;
+  const rec = getGwRecord(gwId);
+  rec.locked = {
+    starterIds: lineup.starterIds.slice(), benchOrder: lineup.benchOrder.slice(),
+    captainId: lineup.captainId, viceCaptainId: lineup.viceCaptainId, lockedAt: Date.now(),
+    transfers: (_transferLog || []).filter(t => isActiveTransferStatus(t.status) && t.gwId === gwId)
+      .map(t => ({ outId: t.playerOutId, inId: t.playerInId, outName: t.playerOutName, inName: t.playerInName, status: t.status }))
+  };
+  const bs = _lastAdviceRenderData && _lastAdviceRenderData.elementsById;
+  gwRecordNames(rec, bs, rec.locked.starterIds.concat(rec.locked.benchOrder));
+  rec.updatedAt = Date.now();
+  persistGwRecords();
+  renderGwPerformance();
+  return true;
+}
+
+function recordAdviceSnapshot(rd) {
+  try {
+    if (!rd || rd.gwId == null || !rd.optimal || !rd.optimal.starterIds) return;
+    if (gwDeadlinePassed(rd.gwId, rd.deadline)) return;
+    const rec = getGwRecord(rd.gwId);
+    rec.advice = {
+      starterIds: rd.optimal.starterIds.slice(),
+      captainId: rd.captain ? rd.captain.id : null,
+      viceCaptainId: rd.viceCaptain ? rd.viceCaptain.id : null,
+      squadIds: rd.picks.map(p => p.element),
+      basedOnLockedIn: !!(rd.lockInfo && rd.lockInfo.locked),
+      generatedAt: Date.now()
+    };
+    gwRecordNames(rec, rd.elementsById, rec.advice.squadIds.concat(rec.locked ? rec.locked.starterIds.concat(rec.locked.benchOrder) : []));
+    rec.updatedAt = Date.now();
+    persistGwRecords();
+    renderGwPerformance();
+  } catch (e) { console.error('recordAdviceSnapshot failed:', e); }
+}
+
+function recordExternalSnapshot(parsed) {
+  try {
+    const gw = parsed && parsed.forGameweek != null ? parsed.forGameweek : currentPlanningGw();
+    const rx = parsed && parsed.recommendedXI;
+    if (gw == null || !rx || !Array.isArray(rx.starting) || !rx.starting.length) return;
+    if (gwDeadlinePassed(gw)) return;
+    const rec = getGwRecord(gw);
+    rec.external[parsed.aiSource] = {
+      starting: rx.starting.map(String), bench: Array.isArray(rx.bench) ? rx.bench.map(String) : [],
+      captain: rx.captain ? String(rx.captain) : null, viceCaptain: rx.viceCaptain ? String(rx.viceCaptain) : null,
+      transfer: parsed.transferRecommendation && parsed.transferRecommendation.action ? parsed.transferRecommendation.action : null,
+      importedAt: Date.now()
+    };
+    rec.updatedAt = Date.now();
+    persistGwRecords();
+    renderGwPerformance();
+  } catch (e) { console.error('recordExternalSnapshot failed:', e); }
+}
+
+// ── Results: actual points per player for a saved gameweek ──────
+function gwRecordPlayerIds(rec) {
+  const ids = new Set();
+  if (rec.locked) rec.locked.starterIds.concat(rec.locked.benchOrder).forEach(i => ids.add(i));
+  if (rec.advice) rec.advice.squadIds.concat(rec.advice.starterIds).forEach(i => ids.add(i));
+  return [...ids];
+}
+
+function normName(n) {
+  return String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Resolve an AI's player names against the saved squad (names we stored
+// plus full names from bootstrap). Returns id or null.
+function resolveNameToId(name, candidates) {
+  const n = normName(name);
+  if (!n) return null;
+  let hit = candidates.find(c => c.keys.includes(n));
+  if (hit) return hit.id;
+  const matches = candidates.filter(c => c.keys.some(k => k && (k.endsWith(' ' + n) || n.endsWith(' ' + k) || (n.length > 3 && k.includes(n)))));
+  return matches.length === 1 ? matches[0].id : null;
+}
+
+async function fetchGwResults(gwId) {
+  const rec = _gwRecords[gwId];
+  if (!rec) return;
+  const btn = document.getElementById('gwPerfFetchBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+  try {
+    const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(true) });
+    if (!bootRes.ok) throw new Error('bootstrap HTTP ' + bootRes.status);
+    const boot = await bootRes.json();
+    const ev = (boot.events || []).find(e => e.id === gwId);
+    const byId = {}; (boot.elements || []).forEach(e => { byId[e.id] = e; });
+    const ids = gwRecordPlayerIds(rec);
+    // names we couldn't store at the time
+    ids.forEach(id => { if (!rec.names[id] && byId[id]) rec.names[id] = byId[id].web_name; });
+    // external AI names -> ids, restricted to this squad
+    const cand = ids.map(id => {
+      const el = byId[id]; if (!el) return null;
+      return { id, keys: [normName(el.web_name), normName(el.first_name + ' ' + el.second_name), normName(el.second_name)] };
+    }).filter(Boolean);
+    Object.keys(rec.external || {}).forEach(ai => {
+      const x = rec.external[ai];
+      x.startingIds = x.starting.map(n => resolveNameToId(n, cand));
+      x.captainId = x.captain ? resolveNameToId(x.captain, cand) : null;
+      x.viceCaptainId = x.viceCaptain ? resolveNameToId(x.viceCaptain, cand) : null;
+    });
+    const points = {}, minutes = {};
+    const queue = ids.slice();
+    const worker = async () => {
+      while (queue.length) {
+        const id = queue.shift();
+        const r = await fetch(FF_PROXY_URL + '/element-summary/' + id, { headers: proxyHeaders(true) });
+        if (!r.ok) throw new Error('element-summary ' + id + ' HTTP ' + r.status);
+        const d = await r.json();
+        let pts = 0, mins = 0;
+        (d.history || []).forEach(h => { if (h.round === gwId) { pts += h.total_points || 0; mins += h.minutes || 0; } });
+        points[id] = pts; minutes[id] = mins;
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    let fpl = null;
+    if (_settings.entryId) {
+      try {
+        const pr = await fetch(FF_PROXY_URL + '/entry/' + encodeURIComponent(_settings.entryId) + '/picks/' + gwId, { headers: proxyHeaders(true) });
+        if (pr.ok) { const pd = await pr.json(); if (pd.entry_history) fpl = { points: pd.entry_history.points, transfersCost: pd.entry_history.event_transfers_cost || 0, activeChip: pd.active_chip || null }; }
+      } catch (e) {}
+    }
+    rec.result = { points, minutes, fetchedAt: Date.now(), finished: !!(ev && ev.finished), fpl };
+    rec.updatedAt = Date.now();
+    persistGwRecords();
+    renderGwPerformance();
+  } catch (e) {
+    safeToast('Could not fetch results: ' + e.message, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Fetch results'; }
+  }
+}
+
+// Points for a side: starters' points + captain's points once more
+// (captain doubled). Ignores auto-subs, chips and hits — it answers
+// "which XI/captain choice was better", not "what did FPL score me".
+function gwSideScore(startIds, captainId, pts) {
+  let xi = 0, unmatched = 0;
+  startIds.forEach(id => { if (id == null) unmatched++; else xi += (pts[id] || 0); });
+  const cap = captainId != null ? (pts[captainId] || 0) : 0;
+  return { xi, cap, total: xi + cap, unmatched };
+}
+
+function gwPerfSides(rec) {
+  const pts = rec.result.points;
+  const sides = [];
+  if (rec.locked) sides.push({ key: 'locked', label: 'Your locked-in team', ids: rec.locked.starterIds, cap: rec.locked.captainId, savedAt: rec.locked.lockedAt });
+  if (rec.advice) sides.push({ key: 'advice', label: 'App advice', ids: rec.advice.starterIds, cap: rec.advice.captainId, savedAt: rec.advice.generatedAt });
+  Object.keys(rec.external || {}).forEach(ai => {
+    const x = rec.external[ai];
+    if (!x.startingIds) return;
+    sides.push({ key: 'ext:' + ai, label: (AI_SOURCE_LABELS[ai] || ai) + ' (external)', ids: x.startingIds, cap: x.captainId, savedAt: x.importedAt });
+  });
+  sides.forEach(sd => { sd.score = gwSideScore(sd.ids, sd.cap, pts); });
+  return sides;
+}
+
+function gwPerfSummaryAcross() {
+  const done = Object.values(_gwRecords).filter(r => r.result && r.locked && r.advice);
+  if (done.length < 1) return '';
+  let better = 0, worse = 0, same = 0, delta = 0;
+  done.forEach(r => {
+    const sides = gwPerfSides(r);
+    const you = sides.find(x => x.key === 'locked'), app = sides.find(x => x.key === 'advice');
+    const d = you.score.total - app.score.total;
+    delta += d; if (d > 0) better++; else if (d < 0) worse++; else same++;
+  });
+  return '<div class="sub" style="margin-bottom:8px">Across ' + done.length + ' saved gameweek' + (done.length === 1 ? '' : 's') + ' with results: your team beat the app advice ' + better + ', matched ' + same + ', trailed ' + worse + ' · net ' + (delta > 0 ? '+' : '') + delta + ' pts</div>';
+}
+
+function renderGwPerformance() {
+  const box = document.getElementById('gwPerfBody');
+  if (!box) return;
+  const ids = Object.keys(_gwRecords).map(Number).sort((a, b) => b - a);
+  if (!ids.length) {
+    box.innerHTML = '<div class="sub">Nothing saved yet. Lock in your squad on the Next Week tab and run Advice — both are saved here for the gameweek, and any external AI reply you import is added too.</div>';
+    return;
+  }
+  if (_gwPerfSelected == null || !_gwRecords[_gwPerfSelected]) _gwPerfSelected = ids[0];
+  const rec = _gwRecords[_gwPerfSelected];
+  const nm = id => safeEsc(rec.names[id] || ('#' + id));
+  let h = gwPerfSummaryAcross();
+  h += '<label for="gwPerfSelect">Gameweek</label><select id="gwPerfSelect" onchange="_gwPerfSelected=parseInt(this.value,10);renderGwPerformance()">' +
+    ids.map(i => '<option value="' + i + '"' + (i === _gwPerfSelected ? ' selected' : '') + '>GW' + i + '</option>').join('') + '</select>';
+  const saved = [];
+  saved.push(rec.locked ? '✅ your locked-in team' : '❌ no locked-in team saved');
+  saved.push(rec.advice ? '✅ app advice' : '❌ no app advice saved');
+  const exts = Object.keys(rec.external || {});
+  saved.push(exts.length ? '✅ ' + exts.map(a => AI_SOURCE_LABELS[a] || a).join(', ') : 'no external AI');
+  h += '<div class="sub" style="margin:6px 0">Saved: ' + saved.join(' · ') + '</div>';
+  const passed = gwDeadlinePassed(_gwPerfSelected) || (currentPlanningGw() != null && _gwPerfSelected < currentPlanningGw());
+  if (!rec.result) {
+    h += passed
+      ? '<button class="btn" id="gwPerfFetchBtn" onclick="fetchGwResults(' + _gwPerfSelected + ')">↻ Fetch results</button>'
+      : '<div class="sub">Deadline hasn\'t passed yet — results can be fetched once the gameweek is underway. What is saved now is frozen at the deadline.</div>';
+  } else {
+    const sides = gwPerfSides(rec);
+    const you = sides.find(x => x.key === 'locked');
+    h += '<div class="sub" style="margin-bottom:6px">' + (rec.result.finished ? 'Final points' : '⏳ Provisional — gameweek not finished') + ' · fetched ' + new Date(rec.result.fetchedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) +
+      ' <button class="sub-btn" id="gwPerfFetchBtn" onclick="fetchGwResults(' + _gwPerfSelected + ')">↻ Refresh</button></div>';
+    h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="text-align:left"><th>Team</th><th>Captain</th><th>XI</th><th>Total</th><th>vs yours</th></tr>';
+    sides.forEach(sd => {
+      const d = you ? sd.score.total - you.score.total : 0;
+      h += '<tr style="border-top:1px solid var(--border,#333)"><td>' + safeEsc(sd.label) + (sd.score.unmatched ? ' <span class="sub">(' + sd.score.unmatched + ' name' + (sd.score.unmatched === 1 ? '' : 's') + ' unmatched)</span>' : '') + '</td>' +
+        '<td>' + (sd.cap != null ? nm(sd.cap) + ' (' + (rec.result.points[sd.cap] || 0) + ')' : '–') + '</td>' +
+        '<td>' + sd.score.xi + '</td><td><strong>' + sd.score.total + '</strong></td>' +
+        '<td>' + (sd.key === 'locked' ? '–' : (d > 0 ? '+' : '') + d) + '</td></tr>';
+    });
+    h += '</table></div>';
+    const f = rec.result.fpl;
+    if (f) h += '<div class="sub" style="margin-top:6px">FPL reported for you: ' + f.points + ' pts' + (f.transfersCost ? ' (−' + f.transfersCost + ' hit)' : '') + (f.activeChip ? ' · chip: ' + safeEsc(f.activeChip) : '') + ' — includes auto-subs and chips, which the comparison above leaves out.</div>';
+    // differences vs the user's team
+    if (you) {
+      sides.filter(x => x.key !== 'locked').forEach(sd => {
+        const mine = new Set(you.ids), theirs = new Set(sd.ids.filter(i => i != null));
+        const onlyThem = [...theirs].filter(i => !mine.has(i)), onlyMine = [...mine].filter(i => !theirs.has(i));
+        const pt = i => nm(i) + ' (' + (rec.result.points[i] || 0) + ')';
+        h += '<details class="explainer" style="margin-top:8px"><summary>' + safeEsc(sd.label) + ' — what differed</summary><div class="sub" style="padding-top:6px">' +
+          '<div><strong>They started, you didn\'t:</strong> ' + (onlyThem.length ? onlyThem.map(pt).join(', ') : 'nobody') + '</div>' +
+          '<div><strong>You started, they didn\'t:</strong> ' + (onlyMine.length ? onlyMine.map(pt).join(', ') : 'nobody') + '</div>' +
+          '<div><strong>Captain:</strong> ' + (sd.cap != null ? pt(sd.cap) : 'n/a') + ' vs yours ' + (you.cap != null ? pt(you.cap) : 'n/a') + '</div></div></details>';
+      });
+      h += '<details class="explainer" style="margin-top:8px"><summary>Your XI, player by player</summary><div class="sub" style="padding-top:6px">' +
+        you.ids.map(i => nm(i) + ' ' + (rec.result.points[i] || 0) + (i === you.cap ? ' (C)' : '')).join(' · ') +
+        '<br>Bench: ' + rec.locked.benchOrder.map(i => nm(i) + ' ' + (rec.result.points[i] || 0)).join(' · ') + '</div></details>';
+    }
+  }
+  box.innerHTML = h;
+}
+
 function buildAdviceCachePayload(data) {
   const { picks, elementsById, scoresById, optimal, captain, viceCaptain, captainConfidence,
           watchItems, transferOpportunities, decisions, nextFixtureByTeam, gwId, deadline, fixtureGW, isPlannedMode, contradictionFlags } = data;
@@ -6124,6 +6602,7 @@ async function loadAdvice() {
     // wouldn't be enough to find it again for exporting.
     _lastAdviceRenderData = renderData;
     _lastAdviceGeneratedAt = Date.now();
+    recordAdviceSnapshot(renderData);
     // FF-017 Phase B: surfaces the review-session status inline in
     // Advice — appended after everything else so existing layout/order
     // is untouched; re-rendered on every analysis run so it can never
@@ -6206,6 +6685,8 @@ function loadAllPerUserLocalCaches() {
   loadTransferLogFromCache();
   loadExternalChecksFromCache();
   loadManualLineupFromCache();
+  gwRecordsLoadLocal();
+  renderGwPerformance();
   refreshNextWeekView();
 }
 
@@ -6241,6 +6722,7 @@ if (window.PalSync) {
       pullRemoteTransferLog();
       pullRemoteExternalCheck();
       pullRemoteManualLineup();
+      pullRemoteGwRecords();
     },
     onNoSession: function () {
       loadAllPerUserLocalCaches();
