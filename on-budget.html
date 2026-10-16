@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.92</title>
+<title>On Budget v3.93</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -21,7 +21,7 @@
     --red:#dc2626; --red-dim:rgba(220,38,38,0.08); --red-border:rgba(220,38,38,0.25);
     --amber:#b45309; --amber-dim:rgba(180,83,9,0.08); --amber-border:rgba(180,83,9,0.25);
     --blue:#1d4ed8; --blue-dim:rgba(29,78,216,0.07); --blue-border:rgba(29,78,216,0.2);
-    --weekly:#16a34a; --travel:#1d4ed8; --other:#7c3aed;
+    --weekly:#16a34a; --travel:#1d4ed8; --other:#7c3aed; --orange:#ea580c;
     --ink:#111827; --ink2:#6b7280; --ink3:#9ca3af;
     --divider:rgba(0,0,0,0.06); --track:rgba(0,0,0,0.08);
     --r:10px; --nav-h:52px; --tab-h:48px;
@@ -38,7 +38,7 @@
     --red:#f87171; --red-dim:rgba(248,113,113,0.12); --red-border:rgba(248,113,113,0.35);
     --amber:#fbbf24; --amber-dim:rgba(251,191,36,0.12); --amber-border:rgba(251,191,36,0.35);
     --blue:#60a5fa; --blue-dim:rgba(96,165,250,0.12); --blue-border:rgba(96,165,250,0.3);
-    --weekly:#4ade80; --travel:#60a5fa; --other:#c4b5fd;
+    --weekly:#4ade80; --travel:#60a5fa; --other:#c4b5fd; --orange:#fb923c;
     --ink:#e6edf3; --ink2:#8b949e; --ink3:#6e7681;
     --divider:rgba(255,255,255,0.08); --track:rgba(255,255,255,0.1);
   }
@@ -142,6 +142,13 @@
   .bar-ok{background:var(--accent)}
   .bar-amber{background:var(--amber)}
   .bar-warn{background:var(--red)}
+  .bar-moved{background:var(--orange)}
+  .bar-track.seg{display:flex}
+  .bar-track.seg .bar-fill{border-radius:0;flex:none}
+  .tx-wk-tag{display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;font-size:10px;font-weight:600;color:var(--orange);border:1px solid var(--orange)}
+  .moved-legend{font-size:10px;color:var(--ink3);margin-top:4px}
+  .moved-legend b{color:var(--orange)}
+  #ft-nextweek-switch.on{background:var(--orange)}
 
   .food-week-row{display:flex;align-items:center;gap:8px;padding:4px 0}
   .food-week-label{font-size:10px;color:var(--ink3);width:42px;flex-shrink:0}
@@ -368,7 +375,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.92</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.93</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -582,6 +589,14 @@
         <span id="ft-cleared-label">Uncleared</span>
       </label>
       <div class="settings-hint" id="ft-cleared-hint"></div>
+    </div>
+
+    <div class="field-group" id="ft-nextweek-field" style="display:none">
+      <label class="pill-toggle" onclick="toggleFtNextWeek()">
+        <span class="pill-switch" id="ft-nextweek-switch"></span>
+        <span>Count in next week's budget</span>
+      </label>
+      <div class="settings-hint">For a shop done early: takes it out of next week's Food budget instead of this week's. Your real date stays the same.</div>
     </div>
 
     <button class="btn btn-primary btn-full" onclick="saveSpend()" id="ft-sheet-save-btn">Add transaction</button>
@@ -845,10 +860,13 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.92"></script>
+<script src="pal-shared.js?v=3.93"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.92
+// On Budget v3.93
+// v3.93 (ON--087): a Food spend can be counted in NEXT week's budget (shopping
+// done early). Optional budgetDate on the transaction drives week attribution
+// only; the real date is untouched. Shown in orange on the week bars.
 // v3.92 (ON--086): shop list now remembers a usual spend category (Food /
 // Travel / Other) per shop. Stored as an optional `category` ('weekly' |
 // 'travel' | 'other') on each ftLabels item — no schema change, old data and
@@ -1688,6 +1706,31 @@ const STORAGE_KEY = 'on_budget_v1';
 const DEFAULT_SETTINGS = { weeklyFood:125, monthlyTravel:150, monthlyPot:700, payinDay:28, weekStartDay:6, potDirection:'decreasing', clearMode:'auto' };
 function ftManual() { return settings.clearMode === 'manual'; }
 
+// ── ON--087: count a Food spend in next week's budget ────────────
+// budgetDate is an optional additive field: the date used ONLY to decide
+// which budget week a Food spend belongs to. The real date is untouched.
+function wkDate(t) { return t.budgetDate || t.date; }
+function isShifted(t) { return !!t.budgetDate && t.budgetDate > t.date; }
+// Start of the week after the one containing dateIso, or null if that week
+// would fall outside the current pay cycle.
+function nextWeekStartIso(dateIso) {
+  const { next } = getBoundaries();
+  const ns = weekAnchor(new Date(dateIso + 'T00:00:00'));
+  ns.setDate(ns.getDate() + 7);
+  return ns < next ? iso(ns) : null;
+}
+let _ftNextWeek = false;
+function setFtNextWeekUI() {
+  const el = document.getElementById('ft-nextweek-switch'); if (el) el.classList.toggle('on', _ftNextWeek);
+}
+function toggleFtNextWeek() { _ftNextWeek = !_ftNextWeek; setFtNextWeekUI(); }
+// Offered for outgoing Food in the current pay cycle only (new, or editing one of its spends).
+function syncNextWeekField() {
+  const el = document.getElementById('ft-nextweek-field'); if (!el) return;
+  const inCycle = !_editCtx || _editCtx.mk === curKey();
+  el.style.display = (_ftType === 'outgoing' && _cat === 'weekly' && inCycle) ? '' : 'none';
+}
+
 let settings  = { ...DEFAULT_SETTINGS };
 let months    = {};   // 'YYYY-MM' → { startBalance, transactions[] }
 let _breakdown = false;  // session state for collapsible headroom breakdown
@@ -2459,7 +2502,7 @@ window.addEventListener('message', function(e) {
             switchTab('dashboard');
             // ON--086: the shop's usual category (Food when unknown / no label)
             _cat = ftLabelCategory(label) || 'weekly'; quickCat = _cat;
-            _ftType = 'outgoing'; _dateShown = false; _editCtx = null; _catUserPicked = false;
+            _ftType = 'outgoing'; _dateShown = false; _editCtx = null; _catUserPicked = false; _ftNextWeek = false;
             _ftCleared = !ftManual(); // v3.85 (ON--079): follows the Transaction clearing setting
             setPennyValue('m-amt', amt);
             document.getElementById('m-label').value = label;
@@ -2642,7 +2685,7 @@ function computeDashboardSummary() {
       potPct   = d.startBalance > 0 ? Math.min(100, Math.round(spent/d.startBalance*100)) : 0;
       // v3.84 (ON--078): this week's Food and the month's Travel, as on the Spending tab.
       const curWeek = weeks.find(w => w.isCurrent);
-      weekSpent = curWeek ? Math.round(tx.filter(t => t.category === 'weekly' && t.date >= iso(curWeek.start) && t.date <= iso(curWeek.end))
+      weekSpent = curWeek ? Math.round(tx.filter(t => t.category === 'weekly' && wkDate(t) >= iso(curWeek.start) && wkDate(t) <= iso(curWeek.end))
                                           .reduce((s, t) => s + (t.amount || 0), 0) * 100) / 100 : 0;
       weekBudget   = Math.round(((curWeek && curWeek.budget) || monthWeeklyFood || 0) * 100) / 100;
       travelSpent  = Math.round((reserveBd.travelSpent || 0) * 100) / 100;
@@ -2698,7 +2741,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.92', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.93', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2707,7 +2750,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.92', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.93', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -2963,7 +3006,7 @@ function calcReserve(weeks, tx, travelBudgetOverride) {
   const food = weeks.reduce((tot, w) => {
     if (w.isPast) return tot;
     const ws = iso(w.start), we = iso(w.end);
-    const spent = tx.filter(t=>t.category==='weekly'&&t.date>=ws&&t.date<=we&&!t._deleted)
+    const spent = tx.filter(t=>t.category==='weekly'&&wkDate(t)>=ws&&wkDate(t)<=we&&!t._deleted)
                     .reduce((s,t)=>s+(t.amount||0),0);
     return tot + Math.max(0, w.budget - spent);
   }, 0);
@@ -3201,11 +3244,17 @@ function renderDash() {
   const curWeek = weeks.find(w=>w.isCurrent);
   const wWeeklySpent = curWeek ? tx.filter(t=>{
     const ws=iso(curWeek.start),we=iso(curWeek.end);
-    return t.category==='weekly'&&t.date>=ws&&t.date<=we;
+    return t.category==='weekly'&&wkDate(t)>=ws&&wkDate(t)<=we;
   }).reduce((s,t)=>s+(t.amount||0),0) : 0;
   const wWeeklyBudget = curWeek?.budget || monthWeeklyFood;
+  const wWeeklyMoved  = curWeek ? tx.filter(t=>{
+    const ws=iso(curWeek.start),we=iso(curWeek.end);
+    return t.category==='weekly'&&isShifted(t)&&wkDate(t)>=ws&&wkDate(t)<=we;
+  }).reduce((s,t)=>s+(t.amount||0),0) : 0;
   const wWeeklyLeft   = wWeeklyBudget - wWeeklySpent;
   const wWeeklyPct    = Math.min(100, Math.round(wWeeklySpent/wWeeklyBudget*100));
+  const wWeeklyMovedPct = Math.min(wWeeklyPct, Math.round(wWeeklyMoved/wWeeklyBudget*100));
+  const wWeeklyNormPct  = wWeeklyPct - wWeeklyMovedPct;
 
   // This month's Travel spend — a single monthly budget, not per-week
   const mTravelSpent  = reserveBd.travelSpent;
@@ -3306,7 +3355,7 @@ function renderDash() {
   weeks.forEach(w => {
     if (w.isPast) return;
     const ws = iso(w.start), we = iso(w.end);
-    const wSpent = tx.filter(t=>t.category==='weekly'&&t.date>=ws&&t.date<=we&&!t._deleted)
+    const wSpent = tx.filter(t=>t.category==='weekly'&&wkDate(t)>=ws&&wkDate(t)<=we&&!t._deleted)
                      .reduce((s,t)=>s+(t.amount||0),0);
     const wNeed  = Math.max(0, w.budget - wSpent);
     const isCur  = w.isCurrent;
@@ -3330,21 +3379,29 @@ function renderDash() {
   //    "£0 spent", since nothing has happened yet there's nothing to
   //    report — the target is the useful number). ──
   let foodWeekBars = '';
+  let anyMoved = false;
   weeks.forEach(w => {
     const ws = iso(w.start), we = iso(w.end);
-    const wSpent = tx.filter(t=>t.category==='weekly'&&t.date>=ws&&t.date<=we&&!t._deleted)
-                     .reduce((s,t)=>s+(t.amount||0),0);
+    const wTx = tx.filter(t=>t.category==='weekly'&&wkDate(t)>=ws&&wkDate(t)<=we&&!t._deleted);
+    const wSpent = wTx.reduce((s,t)=>s+(t.amount||0),0);
+    const wMoved = wTx.filter(isShifted).reduce((s,t)=>s+(t.amount||0),0);
+    // ON--087: a future week with moved-in spend now shows that spend (orange).
     const isFuture = !w.isPast && !w.isCurrent;
-    const pct = isFuture ? 0 : Math.min(100, Math.round(wSpent/w.budget*100));
-    const barCls = isFuture ? 'bar-ok' : (wSpent>w.budget ? 'bar-warn' : 'bar-ok');
-    const amtLabel = `£${wSpent.toFixed(2)}/£${w.budget.toFixed(2)}`;
+    const showBar = !isFuture || wMoved > 0;
+    const pct = showBar ? Math.min(100, Math.round(wSpent/w.budget*100)) : 0;
+    const mPct = showBar ? Math.min(pct, Math.round(wMoved/w.budget*100)) : 0;
+    const nPct = pct - mPct;
+    if (wMoved > 0) anyMoved = true;
+    const barCls = (!showBar) ? 'bar-ok' : (wSpent>w.budget ? 'bar-warn' : 'bar-ok');
+    const amtLabel = showBar ? `£${wSpent.toFixed(2)}/£${w.budget.toFixed(2)}` : `£${wSpent.toFixed(2)}/£${w.budget.toFixed(2)}`;
     foodWeekBars += `
-      <div class="food-week-row ${w.isCurrent?'current':''} ${isFuture?'future':''}">
+      <div class="food-week-row ${w.isCurrent?'current':''} ${isFuture&&!showBar?'future':''}">
         <span class="food-week-label">Wk ${w.num}</span>
-        <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${pct}%"></div></div>
+        <div class="bar-track seg"><div class="bar-fill ${barCls}" style="width:${nPct}%"></div><div class="bar-fill bar-moved" style="width:${mPct}%"></div></div>
         <span class="food-week-amt">${amtLabel}</span>
       </div>`;
   });
+  if (anyMoved) foodWeekBars += `<div class="moved-legend"><b>■</b> Orange = spend moved in from the week before</div>`;
   const travelRow = `
     <div class="breakdown-row">
       <span class="breakdown-week-label">Travel budget<span style="color:var(--ink3);font-weight:400"> (this month)</span><span style="color:var(--ink3);font-size:10px;display:block;margin-top:1px">£${mTravelSpent.toFixed(2)} spent of £${mTravelBudget.toFixed(2)}</span></span>
@@ -3422,7 +3479,7 @@ function renderDash() {
   <div class="stat-card" style="margin-bottom:10px;margin-top:10px">
     <div class="stat-card-label">🛒 Food this week</div>
     <div class="stat-card-val">£${wWeeklySpent.toFixed(2)}</div>
-    <div class="bar-track" style="margin:6px 0 4px"><div class="bar-fill ${wWeeklyLeft<0?'bar-warn':wWeeklyPct>80?'bar-amber':'bar-ok'}" style="width:${wWeeklyPct}%"></div></div>
+    <div class="bar-track seg" style="margin:6px 0 4px"><div class="bar-fill ${wWeeklyLeft<0?'bar-warn':wWeeklyPct>80?'bar-amber':'bar-ok'}" style="width:${wWeeklyNormPct}%"></div><div class="bar-fill bar-moved" style="width:${wWeeklyMovedPct}%"></div></div>
     <div class="stat-card-sub">${weeklyLeftFmt} of £${wWeeklyBudget.toFixed(0)}</div>
     ${weeklyDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${weeklyDaily<0?'-':''}£${Math.abs(weeklyDaily).toFixed(2)}/day${weeklyDaily<0?' over':''} (after today) · ${weekDaysLeft} day${weekDaysLeft===1?'':'s'} left</div>` : ''}
     <div style="height:1px;background:var(--border);margin:10px 0 6px"></div>
@@ -3516,11 +3573,12 @@ function renderDash() {
       const dotClass = isIncome ? 'income' : t.category;
       const name     = t.label||'';
       const dateFmt  = new Date(t.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+      const wkTag = (t.category==='weekly' && isShifted(t)) ? (()=>{ const wk=(weeks||[]).find(w=>iso(w.start)<=t.budgetDate&&t.budgetDate<=iso(w.end)); return `<span class="tx-wk-tag">Counts in ${wk?'Wk '+wk.num:'next week'}</span>`; })() : '';
       const clearBtn = t.cleared===false ? `<button class="tx-clear" style="margin-right:8px" aria-label="Mark cleared" title="Mark cleared" onclick="event.stopPropagation();clearFtTx('${k}','${t.id}')">✓</button>` : '';
       return `<div class="tx-row" onclick="openEditSheet('${k}','${t.id}')" style="cursor:pointer">
         <div class="tx-dot ${dotClass}"></div>
         <div class="tx-body">
-          <div class="tx-name${name?'':' unlabelled'}">${esc(name)||catEmoji+' '+catLabel}</div>
+          <div class="tx-name${name?'':' unlabelled'}">${esc(name)||catEmoji+' '+catLabel}${wkTag}</div>
           <div class="tx-date">${dateFmt}</div>
         </div>
         <div class="tx-amt" style="${isIncome?'color:var(--accent)':''}">${isIncome?'+':''}£${(t.amount||0).toFixed(2)}</div>${clearBtn}
@@ -3900,10 +3958,12 @@ function clearFtTx(mk, id) {
 function openSheet() {
   _catUserPicked = false;
   _cat = 'weekly'; _ftType = 'outgoing'; _dateShown = false; _editCtx = null;
+  _ftNextWeek = false; setFtNextWeekUI();
   _ftCleared = !ftManual(); setFtClearedUI(); showFtClearedField(ftManual());
   document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('sel'));
   document.getElementById('cat-weekly').classList.add('sel');
   pickFtType('outgoing');
+  syncNextWeekField();
   setPennyValue('m-amt', null);
   document.getElementById('m-label').value = '';
   document.getElementById('m-date').value  = '';
@@ -3930,10 +3990,12 @@ function openEditSheet(mk, id) {
   _ftType = t.type || 'outgoing';
   _cat = t.category || 'weekly';
   _dateShown = true;
+  _ftNextWeek = isShifted(t); setFtNextWeekUI();
   _ftCleared = t.cleared !== false; setFtClearedUI(); showFtClearedField(ftManual() || !_ftCleared);
   document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('sel'));
   document.getElementById('cat-'+_cat).classList.add('sel');
   pickFtType(_ftType);
+  syncNextWeekField();
   setPennyValue('m-amt', t.amount);
   document.getElementById('m-label').value = t.label || '';
   document.getElementById('m-date').value  = t.date;
@@ -3965,6 +4027,7 @@ function pickFtType(t) {
   document.getElementById('fttx-type-outgoing').classList.toggle('sel', t==='outgoing');
   document.getElementById('fttx-type-income').classList.toggle('sel', t==='income');
   document.getElementById('cat-grid-wrap').style.display = t==='outgoing' ? 'grid' : 'none';
+  syncNextWeekField();
 }
 
 // ON--086: _catUserPicked is true once the user taps a category in the sheet,
@@ -3987,6 +4050,7 @@ function pickCat(c, byUser) {
   _cat = c;
   document.querySelectorAll('.cat-btn').forEach(b=>b.classList.remove('sel'));
   document.getElementById('cat-'+c).classList.add('sel');
+  syncNextWeekField();
 }
 
 function toggleDate() {
@@ -4116,6 +4180,15 @@ function saveSpend() {
   const isIncome = _ftType==='income';
   const emoji = isIncome ? '💰' : (_cat==='weekly'?'🛒':_cat==='travel'?'🚗':'📦');
 
+  // ON--087: resolve the budget-week attribution before anything is written.
+  const wantShift = !isIncome && _cat === 'weekly' && _ftNextWeek;
+  let budgetDate = null;
+  if (wantShift) {
+    budgetDate = nextWeekStartIso(date);
+    if (!budgetDate) { toast('No next week left in this pay cycle'); return; }
+  }
+  const touchesBudgetDate = !_editCtx || _editCtx.mk === curKey();
+
   if (label) touchFtLabel(label, (!isIncome && !_editCtx && !_ftLearnOff) ? _cat : null);
 
   if (_editCtx) {
@@ -4133,6 +4206,10 @@ function saveSpend() {
       amount:Math.round(amt*100)/100, label, cleared:_ftCleared,
       updated_at: new Date().toISOString()
     };
+    if (touchesBudgetDate) {
+      if (budgetDate) m.transactions[idx].budgetDate = budgetDate;
+      else delete m.transactions[idx].budgetDate;
+    }
     const entry = m.transactions[idx];
     save(true); closeSheet(); renderDash();
     syncUpsertTx(mk, entry);
@@ -4149,6 +4226,7 @@ function saveSpend() {
     amount:Math.round(amt*100)/100, label, cleared:_ftCleared,
     _ts: Date.now(), updated_at: new Date().toISOString()
   };
+  if (budgetDate) entry.budgetDate = budgetDate;
   months[k].transactions.push(entry);
 
   save(true); closeSheet(); renderDash();

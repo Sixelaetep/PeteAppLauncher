@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.92 | v1.0 – v3.43 and v3.73 – v3.92. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.93 | v1.0 – v3.43 and v3.73 – v3.93. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -2159,6 +2159,22 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.93 — ON--087 — Count a Food spend in next week's budget (orange on the week bars)
+
+- **Why:** when next week's shop is done early it was eating this week's Food budget (or, once over, the headroom). Request: move a spend to next week's budget so it comes out of that week's budget rather than the headroom, shown in orange on the tracker progress bar.
+- **Change (`on-budget.html` only):**
+  - New optional `budgetDate` (ISO date) on a Food transaction. It is used ONLY to decide which budget week the spend counts in (`wkDate(t) = t.budgetDate || t.date`). The real `date` is untouched, so list order, card/bank matching and pot maths are unchanged. `isShifted(t)` = `budgetDate > date`.
+  - Add/Edit transaction sheet: new switch "Count in next week's budget", shown only for outgoing Food (new transactions, or editing a transaction in the current pay cycle). Saving sets `budgetDate` to the start of the week after the spend's date; switching it off removes the field. Refused with "No next week left in this pay cycle" when that week would fall after pay-in.
+  - `wkDate` now drives `calcReserve`, the Food-this-week figure, the "How calculated?" rows, the per-week bars and `computeDashboardSummary().weekSpent`. Because the pot always falls by the spend, a moved spend that fits next week's budget leaves headroom unchanged.
+  - Orange (`--orange`, light and dark): the moved-in part of a week's bar is an orange segment (also in the Food-this-week card), future weeks holding moved-in spend now show their bar, a legend appears under the bars when any exist, and the transaction row gets an orange "Counts in Wk N" tag.
+  - Launcher quick-add always resets the switch (never shifted).
+- **Scope / limitations:** Food only. Travel has a single monthly budget and no weekly budget, so there is nothing to move it into. Past months' transactions are not offered the switch.
+- **Data / sync:** additive field, no schema change; rides on the existing `tx_<monthKey>_<id>` record, JSON export/import and sync. Older data (no `budgetDate`) renders identically. A device still on v3.92 ignores the field (shows the spend in its real week) but preserves it when it edits the record, so update every device.
+- **Launcher:** `index.html` v11.11 unchanged (reads `dashboardSummary`; `weekSpent` follows the shift). `pal-shared.js` unchanged.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and both `version` fields (save, JSON export).
+- Tested (Stage 1): `node --check` on both inline scripts; jsdom against the real `on-budget.html` with stubbed `PalSync`/`uid`/`esc`/`toast` (23 checks): budgetDate = next week's start with real date unchanged, headroom unchanged by a within-budget move, orange segment / tag / legend rendered, `weekSpent` excludes shifted and includes normal spend, edit preloads switch and un-moving removes the field, switch hidden for Travel and income, a stale switch never stores `budgetDate` on Travel, refusal in the final week, quick-add unaffected, legacy data shows no tags, JSON export carries `budgetDate`.
+- Not tested: real browser layout/colours (light, dark, phone), live Supabase round trip and a second device, v3.92 device interop, launcher card with a real shift.
 
 ### v3.92 — ON--086 — Shop list remembers a usual spend category (Food / Travel / Other)
 
