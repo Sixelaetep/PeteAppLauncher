@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.95 | v1.0 – v3.43 and v3.73 – v3.95. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.96 | v1.0 – v3.43 and v3.73 – v3.96. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -2159,6 +2159,19 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.96 — ON--090 — Merge duplicate shops (Settings > Shop list)
+
+- **Why:** the shop list builds itself from typed labels, so near-duplicates ("Tesco" / "Tesco Express") accumulate. Request: merge duplicates and update all relevant transactions.
+- **Change (`on-budget.html` only):** new "Merge duplicate shops" button under the Shop list opens a sheet: pick the duplicate (removed) and the shop to keep; a live preview states how many transactions will be renamed. On Merge:
+  - every non-deleted Food/Travel/Other transaction, in every month, whose label matches the duplicate (case-insensitive, same rule as the list) gets the kept shop's name and a fresh `updated_at`, and is synced as an ordinary transaction upsert (`tx_<monthKey>_<id>`). Amounts, dates, categories, cleared state and `budgetDate` are untouched;
+  - the kept shop's use count adds the duplicate's, `lastUsed` takes the later date, and it keeps its own usual category (taking the duplicate's only if it has none);
+  - the duplicate is removed from the list as a tombstone (same path as the ✕ button). Shop list, quick picks, Spending and History refresh.
+- **Scope:** Food & Travel transactions only. Bills transactions have their own free-text labels and are not touched. No undo: a merged shop can only be restored by re-adding the label and editing transactions individually.
+- **Data / sync:** no schema change; uses existing label and transaction records. Devices on older versions simply receive renamed transactions and the removed label. Merge on one device at a time and let it sync before editing on another.
+- **Unchanged:** launcher v11.11, `pal-shared.js`, totals and budgets.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and both `version` fields.
+- Tested (Stage 1): `node --check`; jsdom against the real file: three duplicate spellings across two months merge into one (preview count correct, all labels renamed, amounts unchanged, duplicate tombstoned, kept shop keeps its category and gains the count, list and sheet update, merging a shop into itself refused); v3.93–v3.95 checks still pass. Not tested: real browser/phone layout of the sheet, live Supabase push of the renamed transactions and a second device.
 
 ### v3.95 — ON--089 — Page stays where you were when a transaction is amended
 
