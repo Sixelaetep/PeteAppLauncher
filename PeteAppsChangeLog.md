@@ -15,7 +15,7 @@ This is the consolidated historical development changelog for every application 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.11 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10 and v11.11. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
-| Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.48 | v1.0 – v1.48 (complete) |
+| Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.49 | v1.0 – v1.49 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
@@ -473,6 +473,17 @@ These launcher (`index.html`) changes are described in other changelogs; their l
 `fantasy-football-tracker.html`. The source states the same entries are kept in the changelog comment at the top of the app's script block. Versions are mirrored in five places: `<title>`, the nav badge (`#navVer`), `pal-shared.js?v=`, the `FF_VERSION` constant, and the export backup `appVersion` (which reads `FF_VERSION` from v1.48).
 
 Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_advice_cache`, `ff_transfer_log`, `ff_external_check`, `ff_manual_lineup`. Live data comes through the `pal-fpl-proxy` Edge Function.
+
+### v1.49 — FF-021
+
+- Squad / Next Week split. **Squad** is now only the current squad as FPL shows it (the live picks, which usually lag a gameweek); the Live/Planned toggle is gone and the button is "Refresh from FPL". New **Next Week** tab replaces the Transfers tab: the existing transfer search / add form (unchanged ids and behaviour) sits in a collapsed "Transfers for next week" card, the FPL-synced transfer history (Sync from FPL) in a second collapsed card, and the interactive projected squad (substitutions, bench order, captain / vice) below.
+- Lock-in: new "Lock in squad" button (top and bottom of the Next Week squad) saves a snapshot of starters, bench order and captains. Status bar shows Locked in / Unsaved changes / Not locked in. Stored as `locked` + `lockedAt` nested inside the existing `ff_manual_lineup` gameweek record, so there is no schema change and old data loads unchanged. Resetting the lineup keeps the lock.
+- Advice always runs against the locked-in squad (falls back to the draft with a visible "not locked in" warning; warns when edits are unsaved). Advice mode toggle removed; previously cached Live-mode advice is ignored on load / remote pull.
+- External AI: opening the External tab or starting a review first refreshes the squad and re-runs Advice, then builds the prompt from the locked-in lineup. Export schema v6: squad sorted by position with `isStarting`, `benchOrder`, `isCaptain`, `isViceCaptain`; new `currentCaptain`, `currentViceCaptain`, `lineupLockedIn`, `activeTransfers`; prompt now asks for updates, advice and highlighted transfers; response schema gains `keyUpdates`, shown on the check card. Older pasted responses still import.
+- Known behaviour: a transfer that changes the 15 players re-seeds the lineup and drops the lock, so it must be locked in again. Multi-device: lock lives in `ff_manual_lineup`, so the existing last-write sync applies.
+- Launcher: card reads the unchanged `ff_squad_cache`; no `index.html` change assessed as needed, but `index.html` was not supplied and not tested.
+- Tested (Stage 1): `node --check` on both inline scripts; jsdom run with stubbed `pal-shared.js` and proxy: tab/collapsed-card structure, loadSquad, Next Week render, lock-in (persisted to `ff_manual_lineup`), edit after lock shows Unsaved, Advice runs and shows lock info, export prompt contains keyUpdates / lineupLockedIn / activeTransfers / schema 6; no console errors.
+- Not tested: real browser / phone layout, live Supabase and second-device sync, real FPL data, transfer search-and-add and Sync from FPL in the new containers (code moved, ids unchanged), importing an external AI response, launcher.
 
 ### v1.48 — FF-020
 
