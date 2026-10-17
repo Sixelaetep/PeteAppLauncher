@@ -14,12 +14,12 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.12 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11 and v11.12. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.13 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12 and v11.13. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.111 | v2.32 – v2.111. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.112 | v2.32 – v2.112. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.97 | v1.0 – v3.43 and v3.73 – v3.97. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -209,6 +209,18 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.13 — PET-117 — Gym Tracker card simplified, drink quick-add — 17 Oct 2026
+
+- **Why:** the Gym card repeated the app in miniature. Request: show the days planned or done, and allow a drink / water entry from the card, as the On Budget card does for spending.
+- **Change (`index.html`):**
+  - Card now shows: a Mon–Sun strip (done = green dot, planned = ring, missed = red-tinted, none = empty; today highlighted; tooltip per day), a today line (done / planned), a "N days done · M still planned this week" caption, and one water line with bar (blue; green when target reached).
+  - Removed from the card: streak, next-session line, calories / protein bars.
+  - New inline **Drink** row (ml, optional name, Add) with suggestions from saved drinks. Posts `GYM_ACTION` `quickAddWater` to the Gym iframe (loaded on demand) and shows the existing 5-second confirmation popup (Today X / Y ml, Left / Over target). Inputs clear only on success; no reply within 4 s shows a "needs gym-tracker.html v2.112" message.
+- **Unchanged:** On Budget quick-add and popup, other cards, `GYM_DATA_UPDATED` refresh.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.13.
+- Tested (Stage 1): see Gym v2.112 entry (shared test run).
+- Not tested: real browser / phone layout, live Supabase, second device.
 
 ### v11.12 — PET-116 — On Budget card simplified — 17 Oct 2026
 
@@ -1677,6 +1689,15 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.112 — GYM-098 — Launcher drink quick-add receiver
+
+- **Change (`gym-tracker.html`):** new `message` handling for `GYM_ACTION` / `quickAddWater` (same-origin guard unchanged). `handleQuickAddWater` → `quickAddWaterEntry(amount, label)`: validates 1–10000 ml; a name matching a saved drink with the same volume adds one to that drink's entry for today (as the +1 button); otherwise creates a plain water entry (default name "Water"). Saves via `save()` + `sbUpsert('waterEntry')`, refreshes calendar (and the open Food & drink modal), replies `GYM_QUICKADD_RESULT { reqId, ok, msg, totalMl, targetMl }`. Duplicate `reqId`s are ignored.
+- **Unchanged:** data model, sync, export/import, existing water UI.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline changelog set to 2.112.
+- Tested (Stage 1): syntax check of inline scripts; scripted runs of the real files (launcher card render states, quick-add round trip incl. invalid amount, duplicate reqId, no-ack); version strings consistent.
+- Not tested: real browser, live Supabase sync, second device, phone.
+- Known limitation: a drink name matching a saved drink but with a different volume is stored as a plain entry (migration may later link it by name).
 
 ### v2.111 — GYM-097 — Meals and Water combined into one Food & drink modal
 

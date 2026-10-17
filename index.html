@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.12</title>
+<title>P Apps v11.13</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -695,6 +695,16 @@
   }
   #toast.show { transform: translateX(-50%) translateY(0); }
 
+  /* PET-117 v11.13: Gym card - week strip (done / planned / missed) */
+  .gym-week { display: flex; gap: 4px; margin-top: 6px; }
+  .gym-day { flex: 1 1 0; min-width: 0; text-align: center; font-size: 10px; font-weight: 600; color: var(--ink3); border: 1px solid transparent; border-radius: 8px; padding: 3px 0 4px; }
+  .gym-day.today { border-color: var(--card-color); color: var(--ink); }
+  .gym-dot { width: 22px; height: 22px; margin: 3px auto 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; }
+  .gym-dot.done { background: #3fb950; color: #fff; }
+  .gym-dot.planned { border: 2px solid var(--card-color); color: var(--card-color); font-size: 8px; }
+  .gym-dot.missed { background: rgba(247,129,102,.15); color: #f78166; }
+  .gym-dot.none { color: var(--ink3); opacity: .5; }
+
   /* ── On Budget quick-add confirmation (PET-114 v11.10) ── */
   #obConfirm {
     position: fixed;
@@ -755,7 +765,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.12</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.13</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -862,6 +872,17 @@
         <div class="card-name">Gym Tracker</div>
       </div>
       <div class="card-stat muted" id="stat-gym"><span class="card-stat-dot"></span><span id="stat-gym-val">—</span></div>
+      <!-- PET-117 v11.13: drink quick-add (ml + optional name). Same pattern as the On Budget
+           row; saves via gym-tracker.html v2.112. Outside the stat block so a muted card never fades the inputs. -->
+      <div class="ob-quick" onclick="event.stopPropagation()">
+        <form class="ob-quick-row" autocomplete="off" onsubmit="gymQuickSubmit(event);return false">
+          <span class="ob-quick-tag" style="display:flex;align-items:center;justify-content:center">Drink</span>
+          <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="ml" aria-label="Drink amount in millilitres" oninput="gymQuickAmt(this)">
+          <input class="ob-quick-lbl" type="text" placeholder="Drink (optional)" maxlength="60" enterkeyhint="done" aria-label="Drink name" oninput="gymQuickSuggest(this)" onfocus="gymQuickSuggest(this,true)" onblur="gymQuickSuggestHideSoon(this)">
+          <button class="ob-quick-go" type="submit" aria-label="Add drink">Add</button>
+          <div class="ob-quick-sugg" hidden onpointerdown="event.preventDefault()" onclick="gymQuickPick(event)"></div>
+        </form>
+      </div>
     </div>
 
     <!-- On Budget (pete only) — reinstated PET-060 v10.41. Full width. -->
@@ -1114,6 +1135,11 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-117, v11.13): Gym Tracker card simplified and given a drink quick-add. The card now shows today's
+  plan / done line, a Mon-Sun strip (done / planned / missed days), a one-line water total with bar, and an inline
+  drink row (ml + optional name + Add) that saves through gym-tracker.html v2.112 (GYM_ACTION quickAddWater /
+  GYM_QUICKADD_RESULT) and shows the 5-second confirmation popup. Removed from the card: streak, next-session and
+  calories / protein bars. Needs gym-tracker.html v2.112 for the drink input; the display works with any version.
   CHANGED (PET-116, v11.12): On Budget card simplified. Food & Travel header is now the main figure + Headroom
   only (cleared/uncleared, "left of budget" and "Food £ · Travel £" chips removed); each bar shows just "£x left /
   over"; Bills is one line (cleared balance, lowest-projected shown only when it is £0 or below); the two quick-add
@@ -3517,6 +3543,137 @@ async function obQuickSubmit(e) {
 }
 
 
+// ── Gym Tracker drink quick-add (PET-117 v11.13) ─────────────────────
+// Posts { type:'GYM_ACTION', action:'quickAddWater', amount (ml), label, reqId }
+// to the Gym Tracker iframe, which saves through its own water-log code and
+// replies GYM_QUICKADD_RESULT. Inputs are cleared only on ok:true. No reply
+// (a gym-tracker.html older than v2.112) leaves everything untouched.
+let _gymQuickBusy = false;
+let _gymDrinkCache = [];
+function gymQuickLoadDrinks() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('gym_tracker_v1') || 'null');
+    const d = parsed && (parsed.data || parsed);
+    return ((d && d.savedWaterItems) || []).filter(w => w && !w._deleted && w.name)
+      .map(w => ({ name: String(w.name), ml: Math.round(Number(w.volumeMl) || 0), quick: !!w.quickAdd }));
+  } catch (e) { return []; }
+}
+function gymQuickAmt(el) {
+  el.value = el.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 4);
+}
+function gymQuickSuggest(input, reload) {
+  const form = input.closest('form'), box = form && form.querySelector('.ob-quick-sugg');
+  if (!box) return;
+  if (reload) _gymDrinkCache = gymQuickLoadDrinks();
+  const q = input.value.trim().toLowerCase();
+  let m = q
+    ? _gymDrinkCache.filter(w => w.name.toLowerCase().includes(q))
+        .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1) || a.name.localeCompare(b.name))
+    : _gymDrinkCache.filter(w => w.quick);
+  m = m.slice(0, 5);
+  if (m.length === 1 && m[0].name.toLowerCase() === q) m = [];
+  box.textContent = '';
+  m.forEach(w => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'ob-quick-pill';
+    b.dataset.label = w.name; b.dataset.ml = String(w.ml || '');
+    b.textContent = w.name + (w.ml ? ' · ' + w.ml + ' ml' : '');
+    box.appendChild(b);
+  });
+  box.hidden = !m.length;
+}
+function gymQuickSuggestHideSoon(input) {
+  setTimeout(() => { const box = input.closest('form').querySelector('.ob-quick-sugg'); if (box && document.activeElement !== input) box.hidden = true; }, 150);
+}
+function gymQuickPick(e) {
+  const b = e.target.closest('.ob-quick-pill');
+  if (!b) return;
+  e.stopPropagation();
+  const form = b.closest('form');
+  const lbl = form.querySelector('.ob-quick-lbl'), amt = form.querySelector('.ob-quick-amt');
+  lbl.value = b.dataset.label;
+  if (!amt.value && b.dataset.ml) amt.value = b.dataset.ml;
+  const box = form.querySelector('.ob-quick-sugg'); box.hidden = true; box.textContent = '';
+  (amt.value ? lbl : amt).focus();
+}
+function gymQuickSend(frame, payload) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { window.removeEventListener('message', onMsg); reject(new Error('NO_ACK')); }, 4000);
+    function onMsg(ev) {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (!d || d.type !== 'GYM_QUICKADD_RESULT' || d.reqId !== payload.reqId) return;
+      clearTimeout(timer);
+      window.removeEventListener('message', onMsg);
+      resolve(d);
+    }
+    window.addEventListener('message', onMsg);
+    frame.contentWindow.postMessage(Object.assign({ type: 'GYM_ACTION' }, payload), window.location.origin);
+  });
+}
+function showGymQuickConfirm(ml, label, res) {
+  const el = document.getElementById('obConfirm');
+  if (!el) return;
+  el.textContent = '';
+  const title = document.createElement('div');
+  title.className = 'obc-title';
+  title.textContent = '✓ Drink ' + ml + ' ml' + (label ? ' · ' + label : '');
+  el.appendChild(title);
+  const add = function (k, v) {
+    const row = document.createElement('div'); row.className = 'obc-row';
+    const a = document.createElement('span'); a.textContent = k;
+    const b = document.createElement('span'); b.textContent = v;
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  };
+  if (res && typeof res.totalMl === 'number') {
+    const goal = Number(res.targetMl) || 0;
+    add('Today', res.totalMl + (goal ? ' / ' + goal : '') + ' ml');
+    if (goal) add(res.totalMl > goal ? 'Over target' : 'Left', Math.abs(Math.round((goal - res.totalMl) * 100) / 100) + ' ml');
+  }
+  el.classList.add('show');
+  if (_obConfirmTimer) clearTimeout(_obConfirmTimer);
+  _obConfirmTimer = setTimeout(hideObQuickConfirm, 5000);
+}
+async function gymQuickSubmit(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const form = e.target.closest('form');
+  if (!form || _gymQuickBusy) return;
+  const amtEl = form.querySelector('.ob-quick-amt');
+  const lblEl = form.querySelector('.ob-quick-lbl');
+  const label = lblEl.value.trim();
+  let ml = parseInt(amtEl.value, 10);
+  if (!ml) { // no amount typed: a saved drink's own volume
+    const m = gymQuickLoadDrinks().find(w => w.name.toLowerCase() === label.toLowerCase());
+    if (m && m.ml > 0) ml = m.ml;
+  }
+  if (!ml || ml < 1) { toast('Enter an amount in ml'); amtEl.focus(); return; }
+  _gymQuickBusy = true;
+  form.classList.add('busy');
+  toast('Saving to Gym Tracker…');
+  try {
+    const frame = await ensureLoaded('gym');
+    const reqId = 'gq' + Date.now() + Math.random().toString(36).slice(2, 7);
+    const res = await gymQuickSend(frame, { action: 'quickAddWater', amount: ml, label: label, reqId: reqId });
+    if (res && res.ok) {
+      amtEl.value = ''; lblEl.value = '';
+      const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      showGymQuickConfirm(ml, label, res);
+      try { refreshCardStats(); } catch (_) {}
+    } else {
+      toast('Not saved — ' + ((res && res.msg) || 'Gym Tracker rejected it'));
+    }
+  } catch (err) {
+    toast(err && err.message === 'NO_ACK'
+      ? 'No confirmation from Gym Tracker — check the app before retrying (needs gym-tracker.html v2.112)'
+      : 'Gym Tracker unavailable — nothing saved');
+  } finally {
+    _gymQuickBusy = false;
+    form.classList.remove('busy');
+  }
+}
+
 // ── Individual backup trigger functions (PET-055 v10.34) ──────────
 // Each loads the app on demand (ensureLoaded) then calls its own
 // built-in export function — the same function the app's own Download
@@ -3714,50 +3871,36 @@ async function backupAll() {
 // Falls back to the old flat fields if a target record predates the
 // active/rest split.
 function statGym() {
+  // PET-117 v11.13: simplified. Today's plan / done line, a Mon-Sun strip
+  // (done / planned / missed), and one water line. Removed: streak, next
+  // planned session, calorie / protein bars. Still read straight from
+  // gym_tracker_v1 localStorage; resolvePlansForDate is a port of the app's own.
   try {
     const raw = localStorage.getItem('gym_tracker_v1');
     if (!raw) { setCardStat('stat-gym', 'No sessions yet', 'muted'); return; }
     const parsed = JSON.parse(raw);
     const data     = (parsed.data && parsed.data.sessions != null) ? parsed.data : parsed;
-    const sessions = (data.sessions       || []).filter(s => !s._deleted);
-    const allPlans = (data.plans          || []);
-    const entries  = (data.scheduleEntries|| []).filter(e => !e._deleted);
-    // GYM-062: today's meal log + targets, surfaced on the card the same
-    // way Gym Tracker itself shows them — read straight from localStorage
-    // like everything else on this card, so it's as fresh as the last
-    // time Gym Tracker ran on this device.
-    const nutritionEntries = (data.nutritionEntries || []).filter(e => !e._deleted);
-    const nutritionTargets = (data.nutritionTargets || []).find(t => !t._deleted) || { calories: 0, protein: 0 };
-    // GYM-068: same pattern for water — one target only, no active/rest split.
+    const sessions = (data.sessions        || []).filter(s => !s._deleted);
+    const allPlans = (data.plans           || []);
+    const entries  = (data.scheduleEntries || []).filter(e => !e._deleted);
     const waterEntries = (data.waterEntries || []).filter(e => !e._deleted);
-    const waterTarget = (data.waterTargets || []).find(t => !t._deleted) || { dailyMl: 0 };
-
+    const waterTarget  = (data.waterTargets || []).find(t => !t._deleted) || { dailyMl: 0 };
     const todayStr = todayISO();
-    const now = new Date(); now.setHours(0,0,0,0);
 
-    // ── Schedule helpers — exact port of gym-tracker resolvePlansForDate ──
     const planName = id => { const p = allPlans.find(p => p.id === id); return (p && p.name) ? p.name : 'Workout'; };
-
     function isoFromDate(d) {
       return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
     }
-    // PET-068: raw floating-point sums of decimal values (e.g.
-    // 12.5 + 23.05 === 35.550000000000004 in JS) were being displayed
-    // as-is. Ported from gym-tracker.html's own fmtProtein/round2 fix —
-    // caps any calorie/protein/water figure to 2 decimal places.
     function round2(n) { n = Number(n) || 0; return Math.round(n * 100) / 100; }
-
     function weekdayIdx(dateStr) {
       const [y,m,d] = dateStr.split('-').map(Number);
       return (new Date(y,m-1,d).getDay()+6)%7; // Mon=0
     }
-
     function dayDiff(fromStr, toStr) {
       const [y1,m1,d1] = fromStr.split('-').map(Number);
       const [y2,m2,d2] = toStr.split('-').map(Number);
       return Math.round((new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1)) / 86400000);
     }
-
     function ruleMatchesDate(rule, date) {
       if (date < rule.startDate) return false;
       if (rule.endDate && date > rule.endDate) return false;
@@ -3768,8 +3911,7 @@ function statGym() {
       if (rule.freq === 'everyN') return dayDiff(rule.startDate, date) % Math.max(1, rule.interval || 1) === 0;
       return false;
     }
-
-    // Returns [{planId}] for a given date — one-offs + matching repeat rules, deduped
+    // Plan ids planned for a date: one-offs + matching repeat rules, deduped
     function resolvePlansForDate(dateStr) {
       const out = [], seen = new Set();
       entries.filter(e => !e.kind && e.date === dateStr).forEach(e => {
@@ -3780,156 +3922,72 @@ function statGym() {
       });
       return out;
     }
+    const sessionsOn = ds => sessions.filter(s => (s.date || '').slice(0,10) === ds);
+    const pendingOn  = ds => { const done = sessionsOn(ds); return resolvePlansForDate(ds).filter(id => !done.some(s => s.planId === id)); };
 
-    // ── Today's planned plan IDs + done sessions ────────────────────
-    const todayPlanIds   = resolvePlansForDate(todayStr);
-    const todaySessions  = sessions.filter(s => (s.date || '').slice(0,10) === todayStr);
-    const donePlanIds    = new Set(todaySessions.map(s => s.planId).filter(Boolean));
-
-    // Plans still to do today (planned but not yet logged)
-    const pendingToday = todayPlanIds.filter(id => !donePlanIds.has(id));
-    // Plans completed today
-    const doneToday    = todaySessions;
-
-    // ── Streak ──────────────────────────────────────────────────────
-    const dow = (now.getDay()+6)%7;
-    const weekStart = new Date(now); weekStart.setDate(now.getDate()-dow);
-    let streak = 0, cursor = new Date(weekStart);
-    for (let i = 0; i < 52; i++) {
-      const ws = isoFromDate(cursor);
-      const we = isoFromDate(new Date(cursor.getTime()+6*86400000));
-      const has = sessions.some(s => { const d=(s.date||'').slice(0,10); return d>=ws&&d<=we; });
-      if (!has) { if (streak===0&&i===0){cursor.setDate(cursor.getDate()-7);continue;} break; }
-      streak++;
-      cursor.setDate(cursor.getDate()-7);
-    }
-    const weekStartStr = isoFromDate(weekStart);
-    const weekSessions = sessions.filter(s => {
-      const d=(s.date||'').slice(0,10); return d>=weekStartStr&&d<=todayStr;
-    });
-
-    // ── Next planned session (from tomorrow, up to 60 days) ─────────
-    let nextPlanned = null;
-    for (let i = 1; i <= 60; i++) {
-      const d = new Date(now.getTime() + i*86400000);
+    // Mon-Sun strip for the current week
+    const now = new Date(); now.setHours(0,0,0,0);
+    const weekStart = new Date(now); weekStart.setDate(now.getDate() - ((now.getDay()+6)%7));
+    const letters = ['M','T','W','T','F','S','S'];
+    let cells = '', doneDays = 0, toGo = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
       const ds = isoFromDate(d);
-      const ids = resolvePlansForDate(ds);
-      if (ids.length) { nextPlanned = { dateStr: ds, names: ids.map(planName), daysAway: i }; break; }
+      const daySess = sessionsOn(ds);
+      const pending = pendingOn(ds);
+      let state = 'none', sym = '·', tip = '';
+      if (daySess.length) {
+        state = 'done'; sym = '✓'; doneDays++;
+        tip = 'Done: ' + daySess.map(s => s.name || 'Session').join(', ');
+      } else if (pending.length) {
+        if (ds < todayStr) { state = 'missed'; sym = '✕'; tip = 'Not done: '; }
+        else { state = 'planned'; sym = '●'; toGo++; tip = 'Planned: '; }
+        tip += pending.map(planName).join(', ');
+      }
+      cells += '<div class="gym-day' + (ds === todayStr ? ' today' : '') + '" title="' + esc(tip) + '"><div>' + letters[i] + '</div><div class="gym-dot ' + state + '">' + sym + '</div></div>';
     }
 
-    // ── Build card ──────────────────────────────────────────────────
+    // Today's line(s)
+    const todaySess = sessionsOn(todayStr);
+    const todayPending = pendingOn(todayStr);
+    let html = '';
+    if (todaySess.length) {
+      html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span>' +
+        '<span>Done today: <span class="val" style="color:#3fb950">' + todaySess.map(s => esc(s.name || 'Session')).join(', ') + '</span></span></div>';
+    }
+    if (todayPending.length) {
+      html += '<div class="card-stat-row"' + (todaySess.length ? ' style="margin-top:3px"' : '') + '><span class="card-stat-dot" style="background:var(--accent)"></span>' +
+        '<span>' + (todaySess.length ? 'Still planned: ' : 'Planned today: ') + '<span class="val" style="color:var(--accent)">' + todayPending.map(id => esc(planName(id))).join(', ') + '</span></span></div>';
+    }
+    if (!todaySess.length && !todayPending.length) {
+      let nextTxt = 'Nothing planned';
+      for (let i = 1; i <= 60; i++) {
+        const dt = new Date(now.getTime() + i * 86400000);
+        const ids = resolvePlansForDate(isoFromDate(dt));
+        if (ids.length) {
+          nextTxt = 'Rest day · next: ' + ids.map(id => esc(planName(id))).join(', ') + ' ' + (i === 1 ? 'tomorrow' : dt.toLocaleDateString('en-GB', { weekday: 'short' }));
+          break;
+        }
+      }
+      html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--ink3)"></span><span>' + nextTxt + '</span></div>';
+    }
+
+    html += '<div class="gym-week">' + cells + '</div>';
+    html += '<div style="font-size:10px;color:var(--ink3);margin-top:4px">' + doneDays + ' day' + (doneDays === 1 ? '' : 's') + ' done · ' + toGo + ' still planned this week</div>';
+
+    // One water line + bar
+    const waterToday = round2(waterEntries.filter(e => e.date === todayStr).reduce((s, e) => s + (e.volumeMl || 0), 0));
+    const waterGoal  = round2(waterTarget.dailyMl);
+    if (waterToday || waterGoal) {
+      const pct  = waterGoal ? Math.min(100, Math.round(waterToday / waterGoal * 100)) : 0;
+      const over = waterGoal > 0 && waterToday > waterGoal;
+      html += '<div style="font-size:10px;color:var(--ink3);margin-top:5px">💧 ' + (waterGoal ? waterToday + '/' + waterGoal : waterToday) + ' ml</div>';
+      if (waterGoal) html += '<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:' + pct + '%;background:' + (over ? '#3fb950' : '#38bdf8') + '"></div></div>';
+    }
+
     const statEl = document.getElementById('stat-gym');
     if (!statEl) return;
-
-    let html = '';
-
-    // 1. Today's planned (pending)
-    if (pendingToday.length) {
-      html += `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--accent)"></span>` +
-        `<span>Planned today: <span class="val" style="color:var(--accent)">${pendingToday.map(planName).join(', ')}</span></span></div>`;
-    }
-
-    // 2. Done sessions today
-    if (doneToday.length) {
-      doneToday.forEach(s => {
-        const exCount = (s.items||[]).length;
-        const exStr   = exCount > 0 ? ` · ${exCount} exercise${exCount!==1?'s':''}` : '';
-        html += `<div class="card-stat-row" style="margin-top:3px"><span class="card-stat-dot" style="background:#3fb950"></span>` +
-          `<span>Done: <span class="val" style="color:#3fb950">${s.name||'Session'}</span>${exStr}</span></div>`;
-      });
-    }
-
-    // 3. Streak + week count
-    const streakStr = streak > 0
-      ? `🔥 ${streak} week streak · ${weekSessions.length} session${weekSessions.length!==1?'s':''} this week`
-      : `${weekSessions.length} session${weekSessions.length!==1?'s':''} this week`;
-    html += `<div style="font-size:10px;color:var(--ink3);margin-top:4px">${streakStr}</div>`;
-
-    // 4. Next planned session
-    if (nextPlanned) {
-      const dStr = nextPlanned.daysAway === 1 ? 'Tomorrow' : `in ${nextPlanned.daysAway}d`;
-      html += `<div style="font-size:10px;color:var(--ink3);margin-top:2px">📋 Next: ${nextPlanned.names.join(', ')} <span style="color:var(--ink2)">${dStr}</span></div>`;
-    }
-
-    // PET-067: pick the correct target pair for today — active (a
-    // planned or completed workout today) vs rest — same rule as
-    // gym-tracker.html's isActiveDay(). todayPlanIds/todaySessions are
-    // already computed above for the streak/pending-today logic, so
-    // this is free to derive here. Falls back to the old flat
-    // calories/protein fields if a target record predates CLA-013
-    // (active/rest fields undefined) — matches gym-tracker.html's own
-    // migration default of "both start equal to the old single value".
-    const isActiveDay = todayPlanIds.length > 0 || todaySessions.length > 0;
-    const todayCalTarget = round2(isActiveDay
-      ? (nutritionTargets.activeCalories || nutritionTargets.calories || 0)
-      : (nutritionTargets.restCalories || nutritionTargets.calories || 0));
-    const todayProteinTarget = round2(isActiveDay
-      ? (nutritionTargets.activeProtein || nutritionTargets.protein || 0)
-      : (nutritionTargets.restProtein || nutritionTargets.protein || 0));
-
-    // GYM-062: today's meals vs targets, built once here and appended
-    // after whichever branch below produces the card's base HTML —
-    // deliberately placed after the "nothing to show" early-return check
-    // too, so a day with meals logged but no gym session yet still shows
-    // something on the card instead of a flat "No sessions yet".
-    const todayMeals = nutritionEntries.filter(e => e.date === todayStr);
-    let nutritionHtml = '';
-    if (todayMeals.length || todayCalTarget || todayProteinTarget) {
-      const cal = round2(todayMeals.reduce((s,e)=>s+(e.calories||0),0));
-      const pro = round2(todayMeals.reduce((s,e)=>s+(e.protein||0),0));
-      const calPct = todayCalTarget ? Math.min(100, Math.round(cal/todayCalTarget*100)) : 0;
-      const proPct = todayProteinTarget ? Math.min(100, Math.round(pro/todayProteinTarget*100)) : 0;
-      const overCal = todayCalTarget > 0 && cal > todayCalTarget;
-      const calLabel = todayCalTarget ? `${cal}/${todayCalTarget} cal` : `${cal} cal`;
-      const proLabel = todayProteinTarget ? `${pro}/${todayProteinTarget}g protein` : `${pro}g protein`;
-      const dayTag = isActiveDay ? '🏋️' : '😴';
-      nutritionHtml = `<div style="font-size:10px;color:var(--ink3);margin-top:5px">🍽 ${dayTag} ${calLabel} · ${proLabel}</div>`;
-      if (todayCalTarget) nutritionHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${calPct}%;background:${overCal?'#f78166':'#38bdf8'}"></div></div>`;
-      if (todayProteinTarget) nutritionHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${proPct}%;background:#d2a8ff"></div></div>`;
-    }
-
-    // GYM-068: same pattern as the meal line, one target only (no
-    // active/rest split for water).
-    const todayWater = waterEntries.filter(e => e.date === todayStr);
-    let waterHtml = '';
-    const waterDailyTarget = round2(waterTarget.dailyMl);
-    if (todayWater.length || waterDailyTarget) {
-      const ml = round2(todayWater.reduce((s,e)=>s+(e.volumeMl||0),0));
-      const pct = waterDailyTarget ? Math.min(100, Math.round(ml/waterDailyTarget*100)) : 0;
-      const overTarget = waterDailyTarget > 0 && ml > waterDailyTarget;
-      const label = waterDailyTarget ? `${ml}/${waterDailyTarget} ml` : `${ml} ml`;
-      waterHtml = `<div style="font-size:10px;color:var(--ink3);margin-top:5px">💧 ${label}</div>`;
-      if (waterDailyTarget) waterHtml += `<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:${pct}%;background:${overTarget?'#3fb950':'#38bdf8'}"></div></div>`;
-    }
-    nutritionHtml += waterHtml;
-
-    // If nothing at all to show today
-    if (!pendingToday.length && !doneToday.length && !sessions.length) {
-      if (nutritionHtml) {
-        statEl.className = 'card-stat';
-        statEl.innerHTML = `<div class="card-stat-row"><span class="card-stat-dot" style="background:var(--ink3)"></span><span class="val" style="font-weight:400;font-style:italic">No sessions yet</span></div>` + nutritionHtml;
-      } else {
-        setCardStat('stat-gym', 'No sessions yet', 'muted');
-      }
-      return;
-    }
-
-    // If no plan or session today, show last session as fallback hero
-    if (!pendingToday.length && !doneToday.length) {
-      const sorted = sessions.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-      const last = sorted[0];
-      const lastDate = last ? (last.date||'').slice(0,10) : null;
-      const daysAgo  = lastDate ? Math.round((now - new Date(lastDate+'T00:00:00'))/86400000) : null;
-      const agoStr   = daysAgo===1?'yesterday':daysAgo!=null?`${daysAgo}d ago`:'';
-      html = `<div class="card-stat-row"><span class="card-stat-dot"></span>` +
-        `<span>Last: <span class="val">${last?last.name||'Session':''}</span>${agoStr?' · '+agoStr:''}</span></div>` +
-        `<div style="font-size:10px;color:var(--ink3);margin-top:4px">${streakStr}</div>` +
-        (nextPlanned ? `<div style="font-size:10px;color:var(--ink3);margin-top:2px">📋 Next: ${nextPlanned.names.join(', ')} <span style="color:var(--ink2)">${nextPlanned.daysAway===1?'Tomorrow':'in '+nextPlanned.daysAway+'d'}</span></div>` : '');
-    }
-
-    html += nutritionHtml;
-
-    statEl.className = 'card-stat' + (pendingToday.length ? '' : doneToday.length ? ' ok' : weekSessions.length ? '' : ' muted');
+    statEl.className = 'card-stat' + (todaySess.length ? ' ok' : '');
     statEl.innerHTML = html;
   } catch(e) {
     setCardStat('stat-gym', 'Open app to load', 'muted');

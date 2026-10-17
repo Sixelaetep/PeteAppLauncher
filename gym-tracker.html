@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.111</title>
+<title>Gym Tracker v2.112</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.111</div></span>
+      <span>Gym Tracker<div class="ver">v2.112</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -953,11 +953,18 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.111"></script>
+<script src="pal-shared.js?v=2.112"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.112 (GYM-098): launcher drink quick-add. The P Apps launcher Gym card
+// posts { type:'GYM_ACTION', action:'quickAddWater', amount (ml), label, reqId };
+// handleQuickAddWater() saves a water entry through the normal save()/sbUpsert()
+// path and replies GYM_QUICKADD_RESULT { reqId, ok, msg, totalMl, targetMl }.
+// A drink whose name matches a saved drink with the same volume is added to
+// that drink's entry for today (same as the +1 button); otherwise a plain
+// entry is created. Duplicate reqIds are ignored. No data-model change.
 // v2.111 (GYM-097): Meals and Water modals combined into one Food & drink
 // modal. Both calendar summary cards (🍽 and 💧) still exist and both
 // open it (openMealsModal()/openWaterModal() kept as wrappers around the
@@ -1508,7 +1515,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.111';
+const VERSION = '2.112';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2485,7 +2492,51 @@ window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
+  if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddWater') handleQuickAddWater(e);
 });
+// GYM-098: launcher drink quick-add (see v2.112 note in the constants block).
+const _gymQuickSeen = new Set();
+function handleQuickAddWater(e) {
+  const d = e.data || {};
+  const reply = (r) => { try { (e.source || window.parent).postMessage(Object.assign({ type: 'GYM_QUICKADD_RESULT', reqId: d.reqId }, r), window.location.origin); } catch (_) {} };
+  if (d.reqId && _gymQuickSeen.has(d.reqId)) return;
+  if (d.reqId) _gymQuickSeen.add(d.reqId);
+  try {
+    const r = quickAddWaterEntry(d.amount, d.label);
+    reply(r);
+  } catch (err) {
+    reply({ ok: false, msg: 'Could not save drink' });
+  }
+}
+function quickAddWaterEntry(amount, label) {
+  const ml = round2(Number(amount));
+  if (!isFinite(ml) || ml <= 0 || ml > 10000) return { ok: false, msg: 'Enter an amount in ml' };
+  const name = String(label || '').trim().slice(0, 60) || 'Water';
+  const date = todayISO();
+  const now = new Date().toISOString();
+  const saved = getSavedWaterItems().find(w => w.name.toLowerCase() === name.toLowerCase() && round2(w.volumeMl) === ml);
+  let entry;
+  if (saved) {
+    const todays = getWaterEntriesForDate(date).filter(x => x.savedItemId === saved.id).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+    entry = todays[0];
+    if (entry) {
+      entry.count = (entry.count||1) + 1;
+      entry.perUnitMl = saved.volumeMl||0;
+      entry.volumeMl = round2(entry.perUnitMl * entry.count);
+      entry.updatedAt = now;
+    }
+  }
+  if (!entry) {
+    entry = { id: uid('water'), date, name: saved ? saved.name : name, savedItemId: saved ? saved.id : null, count: 1, perUnitMl: ml, volumeMl: ml, createdAt: now, updatedAt: now };
+    _env.data.waterEntries.push(entry);
+  }
+  save(_env);
+  sbUpsert('waterEntry', entry, null);
+  try { renderCalendar(); } catch (_) {}
+  try { const im = document.getElementById('intakeModalTitle'); if (im && im.closest('.modal-overlay') && im.closest('.modal-overlay').classList.contains('open')) { _waterModalDate = _waterModalDate || date; renderWaterList(); } } catch (_) {}
+  const totalMl = round2(getWaterEntriesForDate(date).reduce((a,x)=>a+(Number(x.volumeMl)||0),0));
+  return { ok: true, msg: 'Added', totalMl, targetMl: getWaterTarget().dailyMl };
+}
 window.PalSync.initSession({
   onSession: function () {
     slog('PAL_SESSION received — user '+(window.PalSync.getUserId() ? window.PalSync.getUserId().slice(0,8)+'…' : '?'));
