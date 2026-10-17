@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.96</title>
+<title>On Budget v3.97</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -375,7 +375,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.96</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.97</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -469,6 +469,12 @@
       <div class="btn-row">
         <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save settings</button>
       </div>
+    </div>
+    <div class="settings-block">
+      <h3>Repeating transactions</h3>
+      <div class="settings-hint" style="margin-bottom:8px">Spending that repeats every month (e.g. a subscription paid from the card). On the chosen day each month it is added to Spending automatically, in its category. Edit or remove it here — transactions already added are not changed.</div>
+      <div id="ftrec-list"></div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="openFtRecSheet()">+ Add repeating transaction</button>
     </div>
     <div class="settings-block">
       <h3>Shop list</h3>
@@ -718,6 +724,39 @@
 </div>
 
 <!-- ══ BILLS: ADD/EDIT RECURRING SHEET ══ -->
+<div class="overlay" id="overlay-ftrec" onclick="overlayClickFtRec(event)">
+  <div class="sheet">
+    <div class="sheet-title">
+      <span id="ftrec-title">Repeating transaction</span>
+      <button class="sheet-close" onclick="closeFtRecSheet()">✕</button>
+    </div>
+    <div class="field-group" style="margin-top:0">
+      <label class="field-label">Name</label>
+      <input type="text" id="ftrec-name" placeholder="e.g. Spotify">
+    </div>
+    <div class="amount-row">
+      <span class="amount-sym">£</span>
+      <input type="text" class="amount-in" id="ftrec-amt" placeholder="0.00" inputmode="numeric">
+    </div>
+    <div class="field-group">
+      <label class="field-label">Category</label>
+      <select id="ftrec-cat">
+        <option value="weekly">🛒 Food</option>
+        <option value="travel">🚗 Travel</option>
+        <option value="other">📦 Other</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label class="field-label">Day of month (1–28)</label>
+      <input type="number" id="ftrec-day" min="1" max="28" inputmode="numeric" placeholder="e.g. 15">
+    </div>
+    <button class="btn btn-primary btn-full" onclick="saveFtRec()">Save</button>
+    <div class="btn-row">
+      <button class="btn btn-ghost btn-full" id="ftrec-del" onclick="deleteFtRec()">Remove</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="overlay-recur" onclick="overlayClickRecur(event)">
   <div class="sheet">
     <div class="sheet-title">
@@ -886,10 +925,16 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.96"></script>
+<script src="pal-shared.js?v=3.97"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.96
+// On Budget v3.97
+// v3.97 (ON--091): Spending hero card simplified (cleared/uncleared line and
+// "(total)" removed — the Cleared total stays above the transaction list);
+// "Food this week" now leads with the amount left; repeating Food & Travel
+// transactions (Settings > Repeating transactions, stored in settings
+// .ftRecurring, generated with deterministic ids r_<item>_<date>); History
+// months relabelled as pay cycles ("28 Sep – 27 Oct 2026").
 // v3.96 (ON--090): Settings > Shop list can merge a duplicate shop into another:
 // every Food/Travel/Other transaction using the duplicate's name is renamed to
 // the kept shop, the duplicate is removed from the list, usage counts combine.
@@ -1738,7 +1783,7 @@ const STORAGE_KEY = 'on_budget_v1';
 // v3.85 (ON--079): clearMode added. 'auto' (default — what every existing
 // user already had: nothing is ever uncleared) or 'manual' (new F&T
 // transactions start uncleared until ticked off). Display split only.
-const DEFAULT_SETTINGS = { weeklyFood:125, monthlyTravel:150, monthlyPot:700, payinDay:28, weekStartDay:6, potDirection:'decreasing', clearMode:'auto' };
+const DEFAULT_SETTINGS = { weeklyFood:125, monthlyTravel:150, monthlyPot:700, payinDay:28, weekStartDay:6, potDirection:'decreasing', clearMode:'auto', ftRecurring:[] };
 function ftManual() { return settings.clearMode === 'manual'; }
 
 // ── ON--087: count a Food spend in next week's budget ────────────
@@ -2399,6 +2444,7 @@ async function syncPull() {
     // v3.56 (ON--056): read-only sanity check, after everything above has
     // settled — bills.tx and bills.settings are both fully merged by now.
     checkClearedBalanceDrift();
+    generateFtRecurring();
     save();
     renderDash();
     populateSettings();
@@ -2454,6 +2500,7 @@ window.PalSync.initSession({
     setSyncState(_syncState);
   },
   onNoSession: function () {
+    try { generateFtRecurring(); } catch(e) {}
     const banner = document.getElementById('sync-open-banner');
     if (banner) banner.classList.add('show');
   },
@@ -2776,7 +2823,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.96', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.97', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2785,7 +2832,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.96', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.97', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3301,8 +3348,6 @@ function renderDash() {
     : ftClearedPot(d, tx);
   const unclearedDiff = showCleared ? Math.round((potShown - potClearedShown)*100)/100 : 0;
   const fmtGbp = v => '£'+v.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const clearedLine = !showCleared ? '' :
-    `<div class="stat-card-sub" style="color:var(--ink2);font-size:12px;margin-top:2px">Cleared ${fmtGbp(potClearedShown)}${unclearedTx.length ? ` · ${unclearedDiff<0?'−':'+'}${fmtGbp(Math.abs(unclearedDiff))} uncleared` : ''}</div>`;
   const today    = new Date(); today.setHours(0,0,0,0);
   const dToNext  = daysBetween(today, next);
 
@@ -3488,12 +3533,12 @@ function renderDash() {
   <div class="hero-card ${potCls}" style="margin-top:10px">
     <div class="hero-top" style="margin-bottom:0">
       <div>
-        <div class="hero-label">${potLabel}${showCleared?' (total)':''}</div>
-        <div class="hero-value">£${potShown.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>${clearedLine}
+        <div class="hero-label">${potLabel}</div>
+        <div class="hero-value">£${potShown.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         ${potBudgetSub}
       </div>
       <div class="hero-right">
-        £${spent.toFixed(2)} spent${incomeTot>0?(potDirection==='increasing'?` · £${incomeTot.toFixed(2)} paid`:` · +£${incomeTot.toFixed(2)} inc`):''}<br>${daysStr} to pay-in
+        ${(potDirection==='increasing' && Math.abs(spent-potShown)<0.005 && !(incomeTot>0)) ? '' : `£${spent.toFixed(2)} spent`}${incomeTot>0?(potDirection==='increasing'?` · £${incomeTot.toFixed(2)} paid`:` · +£${incomeTot.toFixed(2)} inc`):''}<br>${daysStr} to pay-in
         ${potDirection==='increasing' ? `<br><button class="date-toggle-btn" style="margin-top:6px;padding:3px 10px;font-size:11px" onclick="setCardBalance()">Set balance</button>` : ''}
       </div>
     </div>
@@ -3549,9 +3594,9 @@ function renderDash() {
 
   <div class="stat-card" style="margin-bottom:10px;margin-top:10px">
     <div class="stat-card-label">🛒 Food this week</div>
-    <div class="stat-card-val">£${wWeeklySpent.toFixed(2)}</div>
+    <div class="stat-card-val" style="color:var(--${weeklyCls==='warn'?'red':weeklyCls==='amber'?'amber':'accent'})">${wWeeklyLeft>=0?'£'+wWeeklyLeft.toFixed(2)+' left':'-£'+Math.abs(wWeeklyLeft).toFixed(2)+' over'}</div>
     <div class="bar-track seg" style="margin:6px 0 4px"><div class="bar-fill ${wWeeklyLeft<0?'bar-warn':wWeeklyPct>80?'bar-amber':'bar-ok'}" style="width:${wWeeklyNormPct}%"></div><div class="bar-fill bar-moved" style="width:${wWeeklyMovedPct}%"></div></div>
-    <div class="stat-card-sub">${weeklyLeftFmt} of £${wWeeklyBudget.toFixed(0)}</div>
+    <div class="stat-card-sub">£${wWeeklySpent.toFixed(2)} spent of £${wWeeklyBudget.toFixed(0)}</div>
     ${weeklyDaily!==null ? `<div class="stat-card-sub" style="color:var(--ink3);margin-top:2px">${weeklyDaily<0?'-':''}£${Math.abs(weeklyDaily).toFixed(2)}/day${weeklyDaily<0?' over':''} (after today) · ${weekDaysLeft} day${weekDaysLeft===1?'':'s'} left</div>` : ''}
     <div style="height:1px;background:var(--border);margin:10px 0 6px"></div>
     ${foodWeekBars}
@@ -3649,7 +3694,7 @@ function renderDash() {
       return `<div class="tx-row" onclick="openEditSheet('${k}','${t.id}')" style="cursor:pointer">
         <div class="tx-dot ${dotClass}"></div>
         <div class="tx-body">
-          <div class="tx-name${name?'':' unlabelled'}">${esc(name)||catEmoji+' '+catLabel}${wkTag}</div>
+          <div class="tx-name${name?'':' unlabelled'}">${esc(name)||catEmoji+' '+catLabel}${t.recurId?' <span title="Repeating" style="font-size:10px">🔁</span>':''}${wkTag}</div>
           <div class="tx-date">${dateFmt}</div>
         </div>
         <div class="tx-amt" style="${isIncome?'color:var(--accent)':''}">${isIncome?'+':''}£${(t.amount||0).toFixed(2)}</div>${clearBtn}
@@ -3701,6 +3746,7 @@ function startMonth() {
   months[k].updated_at = new Date().toISOString();
   save(true); renderDash();
   syncUpsertMonth(k);
+  generateFtRecurring();
   toast('Month started ✓');
 }
 
@@ -4210,6 +4256,116 @@ function updateProjectionPreview() {
     <strong style="color:${cls}">${sign}£${Math.abs(proj.headroom).toFixed(2)}</strong>`;
 }
 
+// ── Repeating Food & Travel transactions (v3.97, ON--091) ──────────
+// Stored as settings.ftRecurring[] inside the existing settings record
+// (very low volume, so no new synced collection). Each item:
+// { id, label, amount, category, day, from (ISO date), updated_at }.
+// A due occurrence becomes a normal transaction with the DETERMINISTIC id
+// r_<itemId>_<date>, so two devices generating the same occurrence merge
+// into one record instead of duplicating. Only the CURRENT pay cycle is
+// generated, only up to today, only from the item's start date, and never
+// for an id already present (live or deleted) or in deletedTxLog — so a
+// transaction you delete stays deleted.
+let _ftRecEditId = null;
+function ftRecList() { return Array.isArray(settings.ftRecurring) ? settings.ftRecurring : []; }
+function ftRecDueDates(item, cycleStart, cycleEnd, today) {
+  // cycleStart inclusive, cycleEnd exclusive, all midnight Dates
+  const out = [];
+  const day = Math.min(28, Math.max(1, parseInt(item.day,10)||1));
+  [new Date(cycleStart.getFullYear(), cycleStart.getMonth(), day),
+   new Date(cycleStart.getFullYear(), cycleStart.getMonth()+1, day)].forEach(d => {
+    const di = iso(d);
+    if (d >= cycleStart && d < cycleEnd && d <= today && (!item.from || di >= item.from)) out.push(di);
+  });
+  return out;
+}
+function generateFtRecurring() {
+  const items = ftRecList();
+  if (!items.length) return 0;
+  const { last, next } = getBoundaries();
+  const k = mKey(last);
+  const m = months[k];
+  if (!m || m.startBalance === null || m.startBalance === undefined) return 0; // month not started yet
+  const today = new Date(); today.setHours(0,0,0,0);
+  const have = new Set((m.transactions||[]).map(t=>t.id));
+  let made = 0;
+  items.forEach(item => {
+    if (!item || !item.id || !(item.amount>0)) return;
+    ftRecDueDates(item, last, next, today).forEach(di => {
+      const id = 'r_' + item.id + '_' + di;
+      if (have.has(id) || deletedTxLog[id]) return;
+      const now = new Date().toISOString();
+      const entry = {
+        id, monthKey:k, date:di, type:'outgoing', category:item.category||'other',
+        amount:Math.round(item.amount*100)/100, label:item.label||'', cleared:!ftManual(),
+        recurId:item.id, _ts:Date.now(), updated_at:now
+      };
+      m.transactions.push(entry);
+      have.add(id);
+      syncUpsertTx(k, entry);
+      made++;
+    });
+  });
+  if (made) { save(true); renderDash(); addSyncLog(`Added ${made} repeating transaction(s)`,'info'); }
+  return made;
+}
+function renderFtRecList() {
+  const el = document.getElementById('ftrec-list');
+  if (!el) return;
+  const items = [...ftRecList()].sort((a,b)=>(a.day||0)-(b.day||0));
+  if (!items.length) { el.innerHTML = `<div style="font-size:12px;color:var(--ink3)">None set up.</div>`; return; }
+  const emo = c => c==='weekly'?'🛒':c==='travel'?'🚗':'📦';
+  el.innerHTML = items.map(i => `<div class="tx-row" style="cursor:pointer" data-ftrec="${esc(i.id)}">
+    <div class="tx-body"><div class="tx-name">${emo(i.category)} ${esc(i.label)||'Untitled'}</div>
+    <div class="tx-date">Monthly on day ${i.day}</div></div>
+    <div class="tx-amt">£${(i.amount||0).toFixed(2)}</div></div>`).join('');
+}
+function openFtRecSheet(id) {
+  _ftRecEditId = id || null;
+  const it = id ? ftRecList().find(x=>x.id===id) : null;
+  document.getElementById('ftrec-title').textContent = it ? 'Edit repeating transaction' : 'Add repeating transaction';
+  document.getElementById('ftrec-name').value = it ? it.label : '';
+  setPennyValue('ftrec-amt', it ? it.amount : null);
+  document.getElementById('ftrec-cat').value = it ? (it.category||'other') : 'weekly';
+  document.getElementById('ftrec-day').value = it ? it.day : '';
+  document.getElementById('ftrec-del').style.display = it ? '' : 'none';
+  document.getElementById('overlay-ftrec').classList.add('open');
+}
+function closeFtRecSheet() { document.getElementById('overlay-ftrec').classList.remove('open'); _ftRecEditId = null; }
+function overlayClickFtRec(e) { if (e.target===document.getElementById('overlay-ftrec')) closeFtRecSheet(); }
+function saveFtRec() {
+  const label = document.getElementById('ftrec-name').value.trim();
+  const amt = pennyValue('ftrec-amt');
+  const cat = document.getElementById('ftrec-cat').value;
+  const day = parseInt(document.getElementById('ftrec-day').value,10);
+  if (!label) { toast('Enter a name'); return; }
+  if (!amt || isNaN(amt) || amt<=0) { toast('Enter an amount'); return; }
+  if (!day || day<1 || day>28) { toast('Day must be 1–28'); return; }
+  const now = new Date().toISOString();
+  const list = ftRecList().map(x=>({...x}));
+  const idx = _ftRecEditId ? list.findIndex(x=>x.id===_ftRecEditId) : -1;
+  if (idx>-1) {
+    // editing keeps the original start date, so past occurrences are never re-created
+    list[idx] = { ...list[idx], label, amount:Math.round(amt*100)/100, category:cat, day };
+  } else {
+    // new item: first occurrence is this month's date if it hasn't passed, else the next one
+    list.push({ id:uid(), label, amount:Math.round(amt*100)/100, category:cat, day, from:todayIso() });
+  }
+  settings = { ...settings, ftRecurring:list, updated_at:now };
+  save(true); syncUpsertSettings();
+  closeFtRecSheet(); renderFtRecList();
+  generateFtRecurring();
+  toast('Repeating transaction saved ✓');
+}
+function deleteFtRec() {
+  if (!_ftRecEditId) return;
+  if (!confirm('Remove this repeating transaction? Transactions already added stay.')) return;
+  settings = { ...settings, ftRecurring:ftRecList().filter(x=>x.id!==_ftRecEditId), updated_at:new Date().toISOString() };
+  save(true); syncUpsertSettings();
+  closeFtRecSheet(); renderFtRecList();
+  toast('Removed ✓');
+}
+
 function renderManageLabels() {
   const el = document.getElementById('manage-labels-list');
   if (!el) return;
@@ -4397,6 +4553,19 @@ function monthAgg(k) {
 
 // Stacked Food/Travel/Other bars for up to the last 12 completed
 // months, oldest on the left. Inline SVG, theme colours via CSS vars.
+// v3.97 (ON--091): pay-cycle label, e.g. "28 Sep – 27 Oct 2026". Built from
+// the real pay-in boundaries (so a weekend shift to the 26th/27th shows).
+function cycleRange(k) {
+  const [yr,mo] = k.split('-').map(Number);
+  const a = payinDate(yr, mo-1, settings.payinDay);
+  const b = payinDate(yr, mo, settings.payinDay); b.setDate(b.getDate()-1);
+  return { a, b };
+}
+function cycleLabel(k, withYear) {
+  const { a, b } = cycleRange(k);
+  const f = (d,y) => d.toLocaleDateString('en-GB',{day:'numeric',month:'short'+''}) + (y?' '+d.getFullYear():'');
+  return `${f(a,false)} – ${f(b,withYear!==false)}`;
+}
 function histTrendSvg(keysAsc, aggs) {
   const W=320, H=132, padB=16, padT=14;
   const max = Math.max(...keysAsc.map(k=>aggs[k].spend), 1);
@@ -4465,9 +4634,9 @@ function renderHist() {
   if (pastAsc.length >= 2) {
     const trendKeys = pastAsc.slice(-12);
     html += `<div class="stat-card" style="margin-bottom:10px;padding:13px 14px">
-      <div class="stat-card-label">Spending by month</div>
+      <div class="stat-card-label">Spending by pay cycle</div>
       ${histTrendSvg(trendKeys, aggs)}
-      <div style="font-size:10.5px;color:var(--ink3);margin-top:2px">Food &amp; Travel transactions only — Bills are tracked separately.</div>
+      <div style="font-size:10.5px;color:var(--ink3);margin-top:2px">Food &amp; Travel transactions only — Bills are tracked separately. Each bar is a pay cycle (28th–27th), labelled by the month it starts.</div>
       <div style="display:flex;gap:12px;margin-top:6px;font-size:10.5px;color:var(--ink2)">
         <span><span class="hist-dot" style="background:var(--weekly);display:inline-block;margin-right:4px"></span>Food</span>
         <span><span class="hist-dot" style="background:var(--travel);display:inline-block;margin-right:4px"></span>Travel</span>
@@ -4480,7 +4649,7 @@ function renderHist() {
     const baseKeys = pastAsc.slice(0,-1).slice(-6);
     if (baseKeys.length) {
       const [lyr,lmo] = latestK.split('-').map(Number);
-      const latestLabel = new Date(lyr,lmo-1,1).toLocaleDateString('en-GB',{month:'long'});
+      const latestLabel = cycleLabel(latestK, false);
       const avg = c => baseKeys.reduce((s,k)=>s+aggs[k][c],0)/baseKeys.length;
       const rows = [['food','🛒 Food'],['travel','🚗 Travel'],['other','📦 Other']].map(([c,lbl])=>{
         const v = aggs[latestK][c], a = avg(c), diff = v - a;
@@ -4491,7 +4660,7 @@ function renderHist() {
           <div class="hist-amt">£${v.toFixed(2)} <span style="color:${clr};font-weight:600">· ${dTxt}</span></div></div>`;
       }).join('');
       html += `<div class="stat-card" style="margin-bottom:10px;padding:13px 14px">
-        <div class="stat-card-label">${latestLabel} vs your ${baseKeys.length}-month average</div>${rows}
+        <div class="stat-card-label">${latestLabel} vs your ${baseKeys.length}-cycle average</div>${rows}
       </div>`;
     }
   }
@@ -4515,7 +4684,7 @@ function renderHist() {
 
   if (pastAsc.length >= 2) {
     html += `<div class="stat-card" style="margin-bottom:14px;padding:13px 14px">
-      <div class="stat-card-label">Left over each month</div>
+      <div class="stat-card-label">Left over each pay cycle</div>
       ${histRemainderSvg(pastAsc.slice(-12), aggs)}
       <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">${settings.potDirection==='increasing' ? 'Start balance − spend' : 'Start balance + income − spend'}, Food &amp; Travel pot only — Bills run on their own cleared balance. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
     </div>`;
@@ -4529,7 +4698,7 @@ function renderHist() {
     const d = months[k];
     const a = aggs[k];
     const [yr,mo] = k.split('-').map(Number);
-    const label = new Date(yr,mo-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+    const label = cycleLabel(k);
     const weekly = a.food, trav = a.travel, oth = a.other, inc = a.income, tot = a.spend;
     const overLimit = a.remainder < 0;
     const remClr = overLimit ? 'var(--red)' : 'var(--accent)';
@@ -4567,6 +4736,7 @@ function populateSettings() {
   document.getElementById('s-day').value  = settings.payinDay;
   document.getElementById('info-food').textContent = settings.weeklyFood;
   renderManageLabels();
+  renderFtRecList();
   updateProjectionPreview();
   // Week start toggle
   const wsd = settings.weekStartDay ?? 6;
@@ -4661,7 +4831,7 @@ function saveSettings() {
   // v3.85 (ON--079): clearMode must be carried explicitly too (same reason).
   const cm = _pendingClearMode !== null ? _pendingClearMode : (settings.clearMode === 'manual' ? 'manual' : 'auto');
   _pendingClearMode = null;
-  settings = { weeklyFood:food, monthlyTravel:travel, monthlyPot:pot, payinDay:day, weekStartDay:wsd, potDirection:pd, clearMode:cm, updated_at:new Date().toISOString() };
+  settings = { weeklyFood:food, monthlyTravel:travel, monthlyPot:pot, payinDay:day, weekStartDay:wsd, potDirection:pd, clearMode:cm, ftRecurring:(settings.ftRecurring||[]), updated_at:new Date().toISOString() };
   save(true); renderDash(); populateSettings();
   document.getElementById('info-food').textContent = food;
   syncUpsertSettings();
@@ -6190,7 +6360,7 @@ function txCountsPhrase() {
 // `type` parameter and its class suffix simply never engage.
 
 // ── Boot ───────────────────────────────────────────────────────
-['s-pot','s-food','s-travel','s-bills-bal','m-amt','btx-amt','rc-amt','clr-amt','scen-amt','adj-food-weekly','adj-travel-monthly'].forEach(attachPennyInput);
+['s-pot','s-food','s-travel','s-bills-bal','m-amt','btx-amt','rc-amt','clr-amt','scen-amt','adj-food-weekly','adj-travel-monthly','ftrec-amt'].forEach(attachPennyInput);
 ['s-pot','s-food','s-travel'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', updateProjectionPreview);
@@ -6219,6 +6389,11 @@ writeDashboardSummaryOnly(); // PET-058/060 v3.51: backfill for a restored/impor
   if (manage) manage.addEventListener('change', function(e){
     const sel = e.target.closest('select[data-label]');
     if (sel) setFtLabelCategory(sel.dataset.label, sel.value);
+  });
+  const frl = document.getElementById('ftrec-list');
+  if (frl) frl.addEventListener('click', function(e){
+    const row = e.target.closest('[data-ftrec]');
+    if (row) openFtRecSheet(row.dataset.ftrec);
   });
   const mlab = document.getElementById('m-label');
   if (mlab) mlab.addEventListener('input', autoCatFromLabel);
