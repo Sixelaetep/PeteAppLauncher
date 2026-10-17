@@ -14,12 +14,12 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.13 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12 and v11.13. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.14 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13 and v11.14. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.112 | v2.32 – v2.112. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.113 | v2.32 – v2.113. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.97 | v1.0 – v3.43 and v3.73 – v3.97. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -209,6 +209,13 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.14 — PET-118 — Gym card quick-add covers food as well as drink — 17 Oct 2026
+
+- **Why:** v11.13 only allowed drinks from the Gym card. Request: food as well.
+- **Change (`index.html`):** the row's tag is now a **Drink ⇄ Food** toggle (as Spend ⇄ Bills on On Budget). Food mode: kcal, protein (g, optional) and a required food name; suggestions come from saved meals (kcal and protein fill from the pill; a typed saved-meal name with no numbers uses its saved values). Posts `GYM_ACTION` `quickAddMeal`; popup shows Today kcal / target, Left or Over, and protein vs target. Drink mode unchanged. Switching mode clears the inputs.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.14. Needs `gym-tracker.html` v2.113 for food.
+- Tested (Stage 1): see Gym v2.113 entry. Not tested: real browser / phone, live Supabase, second device.
 
 ### v11.13 — PET-117 — Gym Tracker card simplified, drink quick-add — 17 Oct 2026
 
@@ -1689,6 +1696,13 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.113 — GYM-099 — Launcher food quick-add receiver
+
+- **Change (`gym-tracker.html`):** `GYM_ACTION` / `quickAddMeal` handled by `handleQuickAddMeal` → `quickAddMealEntry(calories, protein, label)`. Requires a name and at least calories or protein (limits 10000 kcal / 1000 g). Creates a `nutritionEntries` record for today and, if the name is new, a saved meal (same rule as `saveMealEntry`; existing saved meals are never altered). Saves via `save()` + `sbUpsert`, refreshes calendar and the open Food & drink list, replies `totalKcal`, `targetKcal`, `totalProtein`, `targetProtein` (base daily targets). Duplicate `reqId`s ignored. Drink handler unchanged.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline changelog set to 2.113. No data-model change.
+- Tested (Stage 1): syntax check; scripted runs of the real handler code (valid food, protein-only, missing name, no numbers, duplicate reqId, saved meal created once, drink path still works).
+- Not tested: real browser, live Supabase, second device, phone.
 
 ### v2.112 — GYM-098 — Launcher drink quick-add receiver
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.13</title>
+<title>P Apps v11.14</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -558,6 +558,11 @@
     -webkit-tap-highlight-color: transparent;
   }
   /* PET-107 v11.03: suggestion pills, shown only while the label box has a match. */
+  .ob-quick-prot { flex: 0 0 64px; min-width: 0; box-sizing: border-box; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--ink); font-size: 16px; font-family: inherit; font-weight: 600; text-align: right; }
+  .ob-quick-prot[hidden] { display: none; }
+  .ob-quick-prot:focus { outline: none; border-color: var(--card-color); }
+  .ob-quick-prot::placeholder { color: var(--ink3); font-weight: 400; }
+  .ob-quick-row[data-kind="food"] .ob-quick-tag { color: var(--card-color); border-color: var(--card-color); }
   .ob-quick-sugg { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding-left: 64px; box-sizing: border-box; }
   .ob-quick-sugg[hidden] { display: none; }
   .ob-quick-pill {
@@ -765,7 +770,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.13</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.14</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -875,9 +880,10 @@
       <!-- PET-117 v11.13: drink quick-add (ml + optional name). Same pattern as the On Budget
            row; saves via gym-tracker.html v2.112. Outside the stat block so a muted card never fades the inputs. -->
       <div class="ob-quick" onclick="event.stopPropagation()">
-        <form class="ob-quick-row" autocomplete="off" onsubmit="gymQuickSubmit(event);return false">
-          <span class="ob-quick-tag" style="display:flex;align-items:center;justify-content:center">Drink</span>
+        <form class="ob-quick-row" data-kind="drink" autocomplete="off" onsubmit="gymQuickSubmit(event);return false">
+          <button type="button" class="ob-quick-tag" title="Tap to switch between Drink and Food" aria-label="Entry type: Drink. Tap to switch to Food" onclick="gymQuickToggleKind(this)">Drink ⇄</button>
           <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="ml" aria-label="Drink amount in millilitres" oninput="gymQuickAmt(this)">
+          <input class="ob-quick-prot" type="text" inputmode="numeric" placeholder="g prot" aria-label="Protein in grams" hidden oninput="gymQuickAmt(this,3)">
           <input class="ob-quick-lbl" type="text" placeholder="Drink (optional)" maxlength="60" enterkeyhint="done" aria-label="Drink name" oninput="gymQuickSuggest(this)" onfocus="gymQuickSuggest(this,true)" onblur="gymQuickSuggestHideSoon(this)">
           <button class="ob-quick-go" type="submit" aria-label="Add drink">Add</button>
           <div class="ob-quick-sugg" hidden onpointerdown="event.preventDefault()" onclick="gymQuickPick(event)"></div>
@@ -1135,6 +1141,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-118, v11.14): Gym card quick-add row now covers food as well as drink. The tag is a toggle
+  (Drink / Food). Food mode takes kcal, protein (g, optional) and a meal name, posts GYM_ACTION quickAddMeal to
+  gym-tracker.html v2.113 and shows the confirmation popup (Today kcal / protein vs targets). Suggestions come
+  from saved meals. Drink behaviour unchanged. Needs gym-tracker.html v2.113 for food.
   CHANGED (PET-117, v11.13): Gym Tracker card simplified and given a drink quick-add. The card now shows today's
   plan / done line, a Mon-Sun strip (done / planned / missed days), a one-line water total with bar, and an inline
   drink row (ml + optional name + Add) that saves through gym-tracker.html v2.112 (GYM_ACTION quickAddWater /
@@ -3543,41 +3553,63 @@ async function obQuickSubmit(e) {
 }
 
 
-// ── Gym Tracker drink quick-add (PET-117 v11.13) ─────────────────────
-// Posts { type:'GYM_ACTION', action:'quickAddWater', amount (ml), label, reqId }
-// to the Gym Tracker iframe, which saves through its own water-log code and
-// replies GYM_QUICKADD_RESULT. Inputs are cleared only on ok:true. No reply
-// (a gym-tracker.html older than v2.112) leaves everything untouched.
+// ── Gym Tracker drink / food quick-add (PET-117 v11.13, food PET-118 v11.14) ──
+// Posts { type:'GYM_ACTION', action:'quickAddWater'|'quickAddMeal', ... , reqId }
+// to the Gym Tracker iframe, which saves through its own log code and replies
+// GYM_QUICKADD_RESULT. Inputs are cleared only on ok:true. No reply (an older
+// gym-tracker.html) leaves everything untouched.
 let _gymQuickBusy = false;
-let _gymDrinkCache = [];
-function gymQuickLoadDrinks() {
+let _gymSuggCache = [];
+function gymQuickLoadItems(kind) {
   try {
     const parsed = JSON.parse(localStorage.getItem('gym_tracker_v1') || 'null');
     const d = parsed && (parsed.data || parsed);
+    if (kind === 'food') {
+      return ((d && d.savedMeals) || []).filter(m => m && !m._deleted && m.name)
+        .map(m => ({ name: String(m.name), ml: Math.round(Number(m.calories) || 0), prot: Math.round(Number(m.protein) || 0), quick: false }));
+    }
     return ((d && d.savedWaterItems) || []).filter(w => w && !w._deleted && w.name)
-      .map(w => ({ name: String(w.name), ml: Math.round(Number(w.volumeMl) || 0), quick: !!w.quickAdd }));
+      .map(w => ({ name: String(w.name), ml: Math.round(Number(w.volumeMl) || 0), prot: 0, quick: !!w.quickAdd }));
   } catch (e) { return []; }
 }
-function gymQuickAmt(el) {
-  el.value = el.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 4);
+function gymQuickSetKind(form, kind) {
+  form.dataset.kind = kind;
+  const food = kind === 'food';
+  const tag = form.querySelector('.ob-quick-tag'), amt = form.querySelector('.ob-quick-amt'),
+        prot = form.querySelector('.ob-quick-prot'), lbl = form.querySelector('.ob-quick-lbl'),
+        go = form.querySelector('.ob-quick-go');
+  if (tag) { tag.textContent = (food ? 'Food' : 'Drink') + ' ⇄'; tag.setAttribute('aria-label', 'Entry type: ' + (food ? 'Food' : 'Drink') + '. Tap to switch to ' + (food ? 'Drink' : 'Food')); }
+  if (amt) { amt.placeholder = food ? 'kcal' : 'ml'; amt.setAttribute('aria-label', food ? 'Calories' : 'Drink amount in millilitres'); amt.value = ''; }
+  if (prot) { prot.hidden = !food; prot.value = ''; }
+  if (lbl) { lbl.placeholder = food ? 'Food name' : 'Drink (optional)'; lbl.setAttribute('aria-label', food ? 'Food name' : 'Drink name'); lbl.value = ''; }
+  if (go) go.setAttribute('aria-label', food ? 'Add food' : 'Add drink');
+  const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
+}
+function gymQuickToggleKind(btn) {
+  const form = btn.closest('form');
+  gymQuickSetKind(form, form.dataset.kind === 'food' ? 'drink' : 'food');
+}
+function gymQuickAmt(el, max) {
+  el.value = el.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, max || 4);
 }
 function gymQuickSuggest(input, reload) {
   const form = input.closest('form'), box = form && form.querySelector('.ob-quick-sugg');
   if (!box) return;
-  if (reload) _gymDrinkCache = gymQuickLoadDrinks();
+  const kind = form.dataset.kind === 'food' ? 'food' : 'drink';
+  if (reload) _gymSuggCache = gymQuickLoadItems(kind);
   const q = input.value.trim().toLowerCase();
   let m = q
-    ? _gymDrinkCache.filter(w => w.name.toLowerCase().includes(q))
+    ? _gymSuggCache.filter(w => w.name.toLowerCase().includes(q))
         .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1) || a.name.localeCompare(b.name))
-    : _gymDrinkCache.filter(w => w.quick);
+    : (kind === 'food' ? [] : _gymSuggCache.filter(w => w.quick));
   m = m.slice(0, 5);
   if (m.length === 1 && m[0].name.toLowerCase() === q) m = [];
   box.textContent = '';
   m.forEach(w => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'ob-quick-pill';
-    b.dataset.label = w.name; b.dataset.ml = String(w.ml || '');
-    b.textContent = w.name + (w.ml ? ' · ' + w.ml + ' ml' : '');
+    b.dataset.label = w.name; b.dataset.ml = String(w.ml || ''); b.dataset.prot = String(w.prot || '');
+    b.textContent = w.name + (w.ml ? ' · ' + w.ml + (kind === 'food' ? ' kcal' : ' ml') : '');
     box.appendChild(b);
   });
   box.hidden = !m.length;
@@ -3590,9 +3622,10 @@ function gymQuickPick(e) {
   if (!b) return;
   e.stopPropagation();
   const form = b.closest('form');
-  const lbl = form.querySelector('.ob-quick-lbl'), amt = form.querySelector('.ob-quick-amt');
+  const lbl = form.querySelector('.ob-quick-lbl'), amt = form.querySelector('.ob-quick-amt'), prot = form.querySelector('.ob-quick-prot');
   lbl.value = b.dataset.label;
   if (!amt.value && b.dataset.ml) amt.value = b.dataset.ml;
+  if (prot && !prot.hidden && !prot.value && b.dataset.prot) prot.value = b.dataset.prot;
   const box = form.querySelector('.ob-quick-sugg'); box.hidden = true; box.textContent = '';
   (amt.value ? lbl : amt).focus();
 }
@@ -3611,13 +3644,15 @@ function gymQuickSend(frame, payload) {
     frame.contentWindow.postMessage(Object.assign({ type: 'GYM_ACTION' }, payload), window.location.origin);
   });
 }
-function showGymQuickConfirm(ml, label, res) {
+function showGymQuickConfirm(kind, qty, label, res, protein) {
   const el = document.getElementById('obConfirm');
   if (!el) return;
   el.textContent = '';
   const title = document.createElement('div');
   title.className = 'obc-title';
-  title.textContent = '✓ Drink ' + ml + ' ml' + (label ? ' · ' + label : '');
+  title.textContent = kind === 'food'
+    ? '✓ Food ' + qty + ' kcal' + (protein ? ' · ' + protein + ' g' : '') + (label ? ' · ' + label : '')
+    : '✓ Drink ' + qty + ' ml' + (label ? ' · ' + label : '');
   el.appendChild(title);
   const add = function (k, v) {
     const row = document.createElement('div'); row.className = 'obc-row';
@@ -3625,7 +3660,17 @@ function showGymQuickConfirm(ml, label, res) {
     const b = document.createElement('span'); b.textContent = v;
     row.appendChild(a); row.appendChild(b); el.appendChild(row);
   };
-  if (res && typeof res.totalMl === 'number') {
+  if (kind === 'food') {
+    if (res && typeof res.totalKcal === 'number') {
+      const goal = Number(res.targetKcal) || 0;
+      add('Today', res.totalKcal + (goal ? ' / ' + goal : '') + ' kcal');
+      if (goal) add(res.totalKcal > goal ? 'Over target' : 'Left', Math.abs(Math.round((goal - res.totalKcal) * 100) / 100) + ' kcal');
+    }
+    if (res && typeof res.totalProtein === 'number') {
+      const pg = Number(res.targetProtein) || 0;
+      add('Protein', res.totalProtein + (pg ? ' / ' + pg : '') + ' g');
+    }
+  } else if (res && typeof res.totalMl === 'number') {
     const goal = Number(res.targetMl) || 0;
     add('Today', res.totalMl + (goal ? ' / ' + goal : '') + ' ml');
     if (goal) add(res.totalMl > goal ? 'Over target' : 'Left', Math.abs(Math.round((goal - res.totalMl) * 100) / 100) + ' ml');
@@ -3639,34 +3684,43 @@ async function gymQuickSubmit(e) {
   e.stopPropagation();
   const form = e.target.closest('form');
   if (!form || _gymQuickBusy) return;
+  const kind = form.dataset.kind === 'food' ? 'food' : 'drink';
   const amtEl = form.querySelector('.ob-quick-amt');
   const lblEl = form.querySelector('.ob-quick-lbl');
+  const protEl = form.querySelector('.ob-quick-prot');
   const label = lblEl.value.trim();
-  let ml = parseInt(amtEl.value, 10);
-  if (!ml) { // no amount typed: a saved drink's own volume
-    const m = gymQuickLoadDrinks().find(w => w.name.toLowerCase() === label.toLowerCase());
-    if (m && m.ml > 0) ml = m.ml;
+  let qty = parseInt(amtEl.value, 10);
+  let protein = kind === 'food' ? (parseInt(protEl && protEl.value, 10) || 0) : 0;
+  if (kind === 'food' && !label) { toast('Enter a food name'); lblEl.focus(); return; }
+  if (!qty) { // no amount typed: a saved item's own numbers
+    const m = gymQuickLoadItems(kind).find(w => w.name.toLowerCase() === label.toLowerCase());
+    if (m && m.ml > 0) { qty = m.ml; if (kind === 'food' && !protein) protein = m.prot || 0; }
   }
-  if (!ml || ml < 1) { toast('Enter an amount in ml'); amtEl.focus(); return; }
+  if (!qty && kind === 'food' && protein > 0) qty = 0; // protein-only food is allowed
+  if (kind === 'drink' && (!qty || qty < 1)) { toast('Enter an amount in ml'); amtEl.focus(); return; }
+  if (kind === 'food' && !qty && !protein) { toast('Enter calories or protein'); amtEl.focus(); return; }
   _gymQuickBusy = true;
   form.classList.add('busy');
   toast('Saving to Gym Tracker…');
   try {
     const frame = await ensureLoaded('gym');
     const reqId = 'gq' + Date.now() + Math.random().toString(36).slice(2, 7);
-    const res = await gymQuickSend(frame, { action: 'quickAddWater', amount: ml, label: label, reqId: reqId });
+    const payload = kind === 'food'
+      ? { action: 'quickAddMeal', calories: qty || 0, protein: protein, label: label, reqId: reqId }
+      : { action: 'quickAddWater', amount: qty, label: label, reqId: reqId };
+    const res = await gymQuickSend(frame, payload);
     if (res && res.ok) {
-      amtEl.value = ''; lblEl.value = '';
+      amtEl.value = ''; lblEl.value = ''; if (protEl) protEl.value = '';
       const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-      showGymQuickConfirm(ml, label, res);
+      showGymQuickConfirm(kind, qty || 0, label, res, protein);
       try { refreshCardStats(); } catch (_) {}
     } else {
       toast('Not saved — ' + ((res && res.msg) || 'Gym Tracker rejected it'));
     }
   } catch (err) {
     toast(err && err.message === 'NO_ACK'
-      ? 'No confirmation from Gym Tracker — check the app before retrying (needs gym-tracker.html v2.112)'
+      ? 'No confirmation from Gym Tracker — check the app before retrying (needs gym-tracker.html v2.113)'
       : 'Gym Tracker unavailable — nothing saved');
   } finally {
     _gymQuickBusy = false;

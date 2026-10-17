@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.112</title>
+<title>Gym Tracker v2.113</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.112</div></span>
+      <span>Gym Tracker<div class="ver">v2.113</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -953,11 +953,16 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.112"></script>
+<script src="pal-shared.js?v=2.113"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.113 (GYM-099): launcher food quick-add. GYM_ACTION quickAddMeal
+// { calories, protein, label (required), reqId } saves a nutritionEntry for
+// today (and a saved meal if the name is new, as saveMealEntry does) and
+// replies GYM_QUICKADD_RESULT { totalKcal, targetKcal, totalProtein,
+// targetProtein }. Targets are the base daily targets (calories / protein).
 // v2.112 (GYM-098): launcher drink quick-add. The P Apps launcher Gym card
 // posts { type:'GYM_ACTION', action:'quickAddWater', amount (ml), label, reqId };
 // handleQuickAddWater() saves a water entry through the normal save()/sbUpsert()
@@ -1515,7 +1520,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.112';
+const VERSION = '2.113';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2493,6 +2498,7 @@ window.addEventListener('message', function(e) {
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
   if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddWater') handleQuickAddWater(e);
+  if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddMeal') handleQuickAddMeal(e);
 });
 // GYM-098: launcher drink quick-add (see v2.112 note in the constants block).
 const _gymQuickSeen = new Set();
@@ -2507,6 +2513,39 @@ function handleQuickAddWater(e) {
   } catch (err) {
     reply({ ok: false, msg: 'Could not save drink' });
   }
+}
+function handleQuickAddMeal(e) {
+  const d = e.data || {};
+  const reply = (r) => { try { (e.source || window.parent).postMessage(Object.assign({ type: 'GYM_QUICKADD_RESULT', reqId: d.reqId }, r), window.location.origin); } catch (_) {} };
+  if (d.reqId && _gymQuickSeen.has(d.reqId)) return;
+  if (d.reqId) _gymQuickSeen.add(d.reqId);
+  try { reply(quickAddMealEntry(d.calories, d.protein, d.label)); }
+  catch (err) { reply({ ok: false, msg: 'Could not save food' }); }
+}
+function quickAddMealEntry(calories, protein, label) {
+  const mealName = String(label || '').trim().slice(0, 80);
+  if (!mealName) return { ok: false, msg: 'Enter a food name' };
+  const kcal = round2(Number(calories) || 0), prot = round2(Number(protein) || 0);
+  if (!isFinite(kcal) || !isFinite(prot) || kcal < 0 || prot < 0 || kcal > 10000 || prot > 1000 || (!kcal && !prot)) return { ok: false, msg: 'Enter calories or protein' };
+  const date = todayISO();
+  const now = new Date().toISOString();
+  const record = { id: uid('meal'), date, mealName, calories: kcal, protein: prot, createdAt: now, updatedAt: now };
+  _env.data.nutritionEntries.push(record);
+  let newSaved = null;
+  if (!getSavedMeals().find(m => m.name.toLowerCase() === mealName.toLowerCase())) {
+    newSaved = { id: uid('svmeal'), name: mealName, calories: kcal, protein: prot, createdAt: now, updatedAt: now };
+    _env.data.savedMeals.push(newSaved);
+  }
+  save(_env);
+  sbUpsert('nutritionEntry', record, null);
+  if (newSaved) sbUpsert('savedMeal', newSaved, null);
+  try { renderCalendar(); } catch (_) {}
+  try { const im = document.getElementById('intakeModalTitle'); if (im && im.closest('.modal-overlay') && im.closest('.modal-overlay').classList.contains('open')) renderMealsList(); } catch (_) {}
+  const today = getEntriesForDate(date);
+  const totalKcal = round2(today.reduce((a,x)=>a+(Number(x.calories)||0),0));
+  const totalProtein = round2(today.reduce((a,x)=>a+(Number(x.protein)||0),0));
+  const t = getNutritionTargets();
+  return { ok: true, msg: 'Added', totalKcal, targetKcal: t.calories || 0, totalProtein, targetProtein: t.protein || 0 };
 }
 function quickAddWaterEntry(amount, label) {
   const ml = round2(Number(amount));
