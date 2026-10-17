@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.11 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10 and v11.11. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.12 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11 and v11.12. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,18 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.12 — PET-116 — On Budget card simplified — 17 Oct 2026
+
+- **Why:** the On Budget launcher card repeated the app's screens in miniature (about 15 pieces of information plus two entry forms). Request: simplify it.
+- **Change (`index.html` only):**
+  - Food & Travel header is the main figure plus the Headroom chip only. Removed: the Cleared / uncleared chip, "(£x left of budget)" and "Food £ · Travel £".
+  - Each bar shows only "£x left" / "£x over" (the bar gives the proportion); the "£spent of £budget" text is gone.
+  - Bills is one line: label and cleared balance. The lowest-projected line shows only when it is £0 or below (amber / red as before).
+  - The two quick-add rows are merged into one. The tag is a button: tap **Spend ⇄** to switch to **Bills** (and back). It returns to Spend after every successful add. Labels, suggestions and the confirmation popup follow the selected type; messages sent to On Budget are unchanged (`quickAddFood` / `quickAddBills`).
+- **Unchanged:** `on-budget.html` (v3.97), the summary data, message protocol, card tap targets, fallbacks ("No data yet", "Open app to refresh", "Not started"). The tab-to-Bills tap target and Bills confirmation popup are untouched.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.12.
+- Tested (Stage 1): `node --check`; jsdom against the real `index.html` (config stubbed): Increasing and Decreasing mode, removed chips absent, bars text, Bills forecast shown only at £0 or below, one quick form, toggle both ways, Bills submit sends `quickAddBills` and resets to Spend, Spend submit sends `quickAddFood`, not-started and no-data fallbacks, title and badge, no boot errors. **Not tested:** real browser or phone (card height, wrapping, tag button size, light and dark themes), real On Budget iframe round trip, live synced data.
 
 ### v11.11 — PET-115 — Quick-add files spend under the shop's usual category — 11 Oct 2026
 
