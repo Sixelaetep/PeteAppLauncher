@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.20</title>
+<title>P Apps v11.21</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -811,7 +811,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.20</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.21</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1189,6 +1189,8 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-125, v11.21): ?perf=1 timeline gains browser timing diagnostics (index.html / pal-shared.js download timings,
+  service worker, visibility, connection, paint, DOMContentLoaded / load). Off unless ?perf=1; nothing else changes.
   CHANGED (PET-124, v11.20): faster launch. A stored session with more than 5 minutes left is used immediately and
   refreshed in the background (no wait on the auth call); single-flight refresh so Gym's session request can't double-
   refresh; preconnect to Supabase; card stats drawn after first paint; a loading screen while an app frame opens;
@@ -1440,6 +1442,7 @@ function perfMark(label) {
   if (typeof perfRender === 'function') perfRender();
 }
 perfMark('launcher script started');
+perfDiag(); // PET-125: browser timing facts for the ?perf=1 panel (no-op otherwise)
 
 // PET-124: a stored session with more than 5 minutes of life left is trusted for the launch itself; the refresh then
 // happens in the background. expires_at is Supabase's own unix-seconds expiry, stored as received.
@@ -4701,6 +4704,50 @@ window.addEventListener('message', function (e) {
   if (e.data && e.data.type === 'PAL_PERF' && e.data.label) perfMark('app: ' + e.data.label);
 });
 if (PAL_PERF) document.addEventListener('DOMContentLoaded', perfRender);
+
+// PET-125 v11.21: what the browser itself knows about how this page arrived — only runs with ?perf=1. The v11.20
+// timeline showed ~12.5 s before the launcher script even started on a reload; this splits that time into the
+// index.html download, the pal-shared.js download, any service worker, and the page being hidden/restored.
+function perfDiag() {
+  if (!PAL_PERF) return;
+  var r = function (v) { return Math.round(v); };
+  try {
+    var n = performance.getEntriesByType('navigation')[0];
+    if (n) {
+      perfMark('diag: nav type=' + n.type + ' protocol=' + n.nextHopProtocol + ' redirect=' + r(n.redirectEnd - n.redirectStart) + 'ms');
+      perfMark('diag: index.html dns=' + r(n.domainLookupEnd - n.domainLookupStart) + ' connect=' + r(n.connectEnd - n.connectStart) +
+        ' request-sent=' + r(n.requestStart) + ' first-byte=' + r(n.responseStart) + ' done=' + r(n.responseEnd) +
+        ' size=' + n.transferSize + ' (0 = from cache)');
+      perfMark('diag: service worker workerStart=' + r(n.workerStart) + ' (0 = none)');
+    }
+    ['pal-shared.js', 'manifest.json'].forEach(function (name) {
+      var e = performance.getEntriesByType('resource').filter(function (x) { return x.name.indexOf(name) > -1; })[0];
+      if (e) perfMark('diag: ' + name + ' started=' + r(e.startTime) + ' first-byte=' + r(e.responseStart) + ' done=' + r(e.responseEnd) +
+        ' size=' + e.transferSize + ' (0 = from cache)');
+      else perfMark('diag: ' + name + ' no resource entry yet');
+    });
+    perfMark('diag: visibility=' + document.visibilityState + (document.prerendering ? ' PRERENDERED' : '') +
+      ' sw-controller=' + (navigator.serviceWorker && navigator.serviceWorker.controller ? navigator.serviceWorker.controller.scriptURL : 'none'));
+    var c = navigator.connection;
+    if (c) perfMark('diag: network ' + c.effectiveType + ' rtt=' + c.rtt + 'ms down=' + c.downlink + 'Mbps');
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        perfMark('diag: service worker registrations: ' + (regs.length ? regs.map(function (g) { return g.scope; }).join(', ') : 'none'));
+      }).catch(function () {});
+    }
+    if (window.caches && caches.keys) {
+      caches.keys().then(function (k) { perfMark('diag: Cache Storage: ' + (k.length ? k.join(', ') : 'none')); }).catch(function () {});
+    }
+  } catch (e) { perfMark('diag: failed ' + e.message); }
+  try {
+    new PerformanceObserver(function (l) {
+      l.getEntries().forEach(function (e) { perfMark('diag: ' + e.name + ' at ' + r(e.startTime) + ' ms'); });
+    }).observe({ type: 'paint', buffered: true });
+  } catch (e) {}
+  document.addEventListener('visibilitychange', function () { perfMark('page became ' + document.visibilityState); });
+  document.addEventListener('DOMContentLoaded', function () { perfMark('DOMContentLoaded'); });
+  window.addEventListener('load', function () { perfMark('window load'); });
+}
 
 </script>
 

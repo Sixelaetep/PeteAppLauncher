@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.20 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19 and v11.20. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.21 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20 and v11.21. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.21 — PET-125 — `?perf=1` timeline gains browser timing diagnostics — 18 Oct 2026
+
+- **Why (diagnostic):** the first `?perf=1` timeline from Pete's phone (v11.20) confirmed the launch changes work (home shown 3 ms after the launcher script started; background refresh 465 ms and no longer blocking; Gym frame load 66 ms after the tap thanks to the prefetch) but showed the launcher script itself starting 12,491 ms after navigation start on a Safari tab reload. Pete reports: reload (not a home-screen icon) took about 12 s, not every time, and an immediate second reload was quicker. That time is spent before any launcher code runs (download of `index.html` and the blocking `pal-shared.js`), so v11.20 could not affect it. ⚠ Earlier 10–13 s spikes (PET-074 / PET-081) were attributed to root-scoped service workers, since removed; whether this is related is unknown.
+- **Change (`index.html`):** when the page is opened with `?perf=1`, the panel also shows: navigation type and protocol, `index.html` DNS / connect / request-sent / first-byte / done / transfer size, service-worker `workerStart`, the same for `pal-shared.js` and `manifest.json` (resource timing), visibility state and prerender flag, any service-worker controller, service-worker registrations, Cache Storage names, network type / rtt / downlink, first-paint / first-contentful-paint, DOMContentLoaded, window load, and page visibility changes.
+- **Unchanged:** everything else; nothing runs and nothing is stored without `?perf=1`.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.21.
+- Tested (Stage 1): `node --check`; the 25-scenario Playwright suite from v11.20 re-run plus a check that the diagnostic lines appear only with `?perf=1`. Not tested: real phone values (that is what this release is for).
 
 ### v11.20 — PET-124 — Faster launch: no wait on the auth call, loading screen, idle prefetch, opt-in timeline — 18 Oct 2026
 
