@@ -15,7 +15,7 @@ This is the consolidated historical development changelog for every application 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
 | P Apps Launcher | `index.html` | v11.23 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22 and v11.23. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
-| Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
+| Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.52 | v1.0 – v1.52 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
@@ -906,6 +906,18 @@ These launcher (`index.html`) changes are described in other changelogs; their l
 `fantasy-football-tracker.html`. The source states the same entries are kept in the changelog comment at the top of the app's script block. Versions are mirrored in five places: `<title>`, the nav badge (`#navVer`), `pal-shared.js?v=`, the `FF_VERSION` constant, and the export backup `appVersion` (which reads `FF_VERSION` from v1.48).
 
 Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_advice_cache`, `ff_transfer_log`, `ff_external_check`, `ff_manual_lineup`. Live data comes through the `pal-fpl-proxy` Edge Function.
+
+### v1.52 — FF-024
+
+- Reported: after the GW7 deadline (Sat 17 Oct 2026) the squad stayed on the old gameweek and games were slow to update, even after a manual refresh; and two transfers were not picked up by Sync from FPL.
+- Full time: a game now counts as FT when FPL's `finished_provisional` is set or 90+ minutes are played (previously only `finished`, which FPL flips only after bonus is confirmed, often hours later). New helpers `isFixtureFullTime` / `isMatchFullTime`; `buildMatchStateByTeam` stores `isFull`; `thisWeekBoxHtml` and `matchOutcomeSentiment` (blank-at-FT = bad) use it. Older caches without `isFull` fall back to `finished`.
+- Gameweek rollover: new `maybeRefreshAfterDeadline` reloads the squad on open (local and Supabase-synced cache) and when the app becomes visible again, if the cached `nextGwDeadline` has passed and the cache was fetched before it. No loop: after a reload `cachedAt` is later than the deadline. Guarded by `_squadLoading`, proxy config and entry id.
+- Per-player GW points badge gets `*` (with tooltip) while the gameweek is not finished (cache now stores `gwFinished`, `fpGwReported`).
+- Squad tab freshness line (`#squadFresh`): "FPL reports GWn (in progress/finished) · fetched live/from cache <time> · next deadline". Distinguishes a stale cache from FPL not yet having rolled over.
+- Transfer sync: FPL's `/entry/{id}/transfers` does list transfers made before the deadline (tagged with the upcoming `event`). `reconcileTransferLog` now matches manual planned/locked/made entries that carry no player ids (free-text / pre-picker) by normalised player names (accent-insensitive, incl. Ø/æ/ß/ł), still one-to-one and inside the existing one-gameweek tolerance. Sync's message now also reports planned/locked-in entries from an earlier gameweek that FPL does not have. Data model unchanged (no migration); `ff_transfer_log` shape unchanged.
+- Shared/launcher: `pal-shared.js` unchanged (only the `?v=1.52` cache-bust tag). Squad cache shape only gains optional fields, so no launcher change needed.
+- Stage 1 testing (jsdom running the real page script, stubbed PalSync/proxy/FPL): provisional/90-min/live full-time rules; rollover refresh fires after a passed deadline on open and on returning to the app, not before the deadline and not when the cache is newer than the deadline; freshness line and `*` badge; both GW7 transfers (68↔95, 124↔368 shapes, one manual entry with ids, one id-less by name) fold into MADE/synced-from-FPL with no duplicates; repeat sync idempotent; unrelated planned entry preserved; stale-entry report. Negative control against v1.51 fails the full-time tests. `node --check` on both inline scripts.
+- Not tested / known limits: real browser, live Supabase, phone, second device. `pal-fpl-proxy` caching beyond the force-fresh header could not be inspected (source not available); the freshness line is there to expose it. The exact cause of Pete's two unmatched transfers could not be confirmed (local log not visible) — the name fallback and unmatched report address the likely causes; if they still show as LOCKED IN after Sync, send the player names/screenshot.
 
 ### v1.51 — FF-023
 

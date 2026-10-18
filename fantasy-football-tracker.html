@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.51</title>
+<title>Fantasy Football Tracker v1.52</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -430,7 +430,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.51</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.52</span></div>
 </nav>
 
 <div class="tabs">
@@ -445,6 +445,7 @@
   <div class="tab-panel active" id="tab-squad">
     <div class="squad-header">
       <div class="squad-meta" id="squadMeta">Not loaded yet</div>
+      <div class="squad-meta" id="squadFresh" style="font-size:11px;color:var(--ink3);margin-top:2px"></div>
       <button class="btn secondary" id="squadRefreshBtn" onclick="loadSquad()">🔄 Refresh from FPL</button>
     </div>
     <div class="sub" style="padding:10px 16px 0">This is your current squad as FPL shows it. FPL only updates it after each deadline, so it is usually a bit behind what you are planning — use the <strong>Next Week</strong> tab for that.</div>
@@ -582,11 +583,21 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.51"></script>
+<script src="pal-shared.js?v=1.52"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.52 [FF-024] — (a) Game shows FT when FPL's finished_provisional
+ *   is set or 90+ min played (was only `finished`, which lags until
+ *   bonus is confirmed); same rule for result colouring. (b) Gameweek
+ *   rollover: squad refreshes on open / on returning to the app when the
+ *   cached next deadline has passed. (c) GW points badge marked * while
+ *   the gameweek is not finished. (d) Freshness line under the Squad
+ *   header (FPL GW, fetched time, live/cache). (e) Transfer sync: manual
+ *   entries without player ids now match FPL transfers by name; Sync
+ *   reports earlier-gameweek entries FPL does not have.
  *
  * v1.51 [FF-023] — (a) External-AI JSON import hardened: tolerant
  *   parser repairs the usual AI slip-ups (curly quotes, trailing commas,
@@ -1775,7 +1786,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.51';
+const FF_VERSION = '1.52';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -2433,8 +2444,11 @@ function playerCardHtml(el, team, pick, isBench, nextFixtureByTeam, maxPointsByP
   const badge = pick.is_captain ? '<span class="cap-badge">C</span>'
               : pick.is_vice_captain ? '<span class="cap-badge vc">VC</span>' : '';
   const gwPts = el.event_points;
+  const gwProvisional = !!(_lastLiveSquadCache && _lastLiveSquadCache.gwFinished === false);
   const gwBadge = gwPts != null
-    ? '<span class="gw-pts-badge ' + (gwPts > 0 ? 'pos' : gwPts < 0 ? 'neg' : 'zero') + '">' + (gwPts > 0 ? '+' : '') + gwPts + '</span>'
+    ? '<span class="gw-pts-badge ' + (gwPts > 0 ? 'pos' : gwPts < 0 ? 'neg' : 'zero') + '"' +
+      (gwProvisional ? ' title="Provisional — FPL has not confirmed this gameweek\'s points yet"' : '') + '>' +
+      (gwPts > 0 ? '+' : '') + gwPts + (gwProvisional ? '*' : '') + '</span>'
     : '';
   const multiplierNote = pick.multiplier > 2 ? ` · ${pick.multiplier}x` : '';
   const statusNote = el.news ? ' · ' + safeEsc(el.news) : '';
@@ -2568,9 +2582,12 @@ function buildTrimmedSquadCache(bootstrap, fixtures, picksData, gwId, teamName) 
   // actually shown in Live squad — already locked, so what matters
   // now is how it went, not how hard it looked in advance).
   const matchStateByTeam = buildMatchStateByTeam(fixtures, teamsById, gwId);
+  const gwEvent = (bootstrap.events || []).find(e => e.id === gwId);
   return {
     elements, teams, picksData, gwId, nextGwId: fixtureGW, nextGwDeadline: nextGwEvent ? nextGwEvent.deadline_time : null,
     teamName: teamName || null, matchStateByTeam,
+    gwFinished: gwEvent ? !!gwEvent.finished : null, fpGwReported: gwEvent ? gwEvent.id : null,
+    fetchedFresh: true,
     nextFixtureByTeam, maxPointsByPos, topPlayerIdByPos, cachedAt: Date.now(), appVersion: FF_VERSION
   };
 }
@@ -2599,7 +2616,41 @@ function renderFromCacheObject(cache, label) {
   document.getElementById('squadMeta').textContent += ` (${label} ${ageMin}m ago — tap 🔄 to refresh)`;
   updateFreeTransfersGwDisplay();
   refreshNextWeekView();
+  renderSquadFreshness(cache, label);
 }
+
+// v1.52 (FF-024): small diagnostic line under the squad header — which
+// gameweek FPL itself reported, whether it is finished, when this data
+// was fetched, and whether it is live or from cache — so a "not on the
+// right gameweek" report can be told apart (stale cache vs FPL not yet
+// rolled over) without guessing.
+function renderSquadFreshness(cache, label) {
+  const el = document.getElementById('squadFresh');
+  if (!el || !cache) return;
+  const t = cache.cachedAt ? new Date(cache.cachedAt) : null;
+  const when = t ? t.toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'unknown';
+  const fin = cache.gwFinished === true ? 'finished' : (cache.gwFinished === false ? 'in progress' : '');
+  const src = label === 'live' ? 'fetched live' : ('from ' + (label || 'cache'));
+  const nd = cache.nextGwDeadline ? ' · GW' + cache.nextGwId + ' deadline ' + (formatDeadline(cache.nextGwDeadline) || '') : '';
+  el.textContent = 'FPL reports GW' + cache.gwId + (fin ? ' (' + fin + ')' : '') + ' · ' + src + ' ' + when + nd;
+}
+
+// v1.52 (FF-024): gameweek rollover. The cached squad records the next
+// deadline; once that has passed and the cache was fetched BEFORE it,
+// the squad on screen is a gameweek behind, so reload quietly. Safe
+// against loops: after a reload cachedAt is later than the deadline.
+function maybeRefreshAfterDeadline(source) {
+  try {
+    const c = _lastLiveSquadCache;
+    if (!c || !c.nextGwDeadline || _squadLoading) return;
+    const dl = new Date(c.nextGwDeadline).getTime();
+    if (!isFinite(dl) || Date.now() < dl || (c.cachedAt || 0) >= dl) return;
+    if (!FF_PROXY_URL || !FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY' || !_settings.entryId) return;
+    console.log('Deadline for GW' + c.nextGwId + ' has passed since the squad was fetched (' + source + ') — refreshing.');
+    loadSquad();
+  } catch (e) { /* never block the app on this */ }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') maybeRefreshAfterDeadline('returned to app'); });
 
 // 'planned' (still deciding) and 'locked' (done on FPL, just not yet
 // visible via the API) both need to feed the projected squad, free-
@@ -3125,6 +3176,7 @@ async function loadSquad() {
     refreshNextWeekView();
     persistSquadCache(cache);
     updateFreeTransfersGwDisplay();
+    renderSquadFreshness(cache, 'live');
     safeToast('Squad loaded');
   } catch (e) {
     document.getElementById('squadBody').innerHTML =
@@ -3144,6 +3196,7 @@ function loadSquadFromCache() {
     const cache = JSON.parse(raw);
     renderFromCacheObject(cache, 'cached');
     maybeAutoRefreshStaleSquadCache(cache, 'local');
+    maybeRefreshAfterDeadline('open');
   } catch (e) { /* corrupt cache — ignore, user can just click Load Squad */ }
 }
 
@@ -3190,6 +3243,7 @@ async function pullRemoteSquadCache() {
       refreshNextWeekView();
       maybeAutoRefreshStaleSquadCache(localCache, 'local');
     }
+    maybeRefreshAfterDeadline('open (synced)');
   } catch (e) {
     console.error('Squad cache pull from Supabase failed:', e);
   }
@@ -3687,14 +3741,20 @@ function markTransferMade(id) {
 // entry's own gameweek is treated as a different, older move and is
 // not matched (one GW of tolerance: a transfer made just before a
 // deadline is often logged just after it). Manual entries with no
-// player ids (pre-picker, free-text) can't be matched and are left
-// for the user. Returns [{manualId, autoId}] for what was folded in.
+// player ids (pre-picker, free-text) are matched by player names
+// (v1.52). Returns [{manualId, autoId}] for what was folded in.
 function reconcileTransferLog() {
   const log = _transferLog || [];
   const pairIds = e => {
     const ids = extractTransferPlayerIds(e);
     return ids ? { outId: Number(ids.outId), inId: Number(ids.inId) } : null;
   };
+  // v1.52 (FF-024): fallback for entries that carry no player ids
+  // (free-text / pre-picker manual entries): compare the swap by
+  // normalised player names instead. Only used when an id match isn't
+  // possible, and still pairs one-to-one inside the gameweek tolerance.
+  const nk = n => String(n == null ? '' : n).toLowerCase().replace(/ø/g, 'o').replace(/æ/g, 'ae').replace(/ß/g, 'ss').replace(/[łŁ]/g, 'l').replace(/[đð]/g, 'd').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+  const sameName = (a, b) => { const x = nk(a), y = nk(b); return !!x && !!y && (x === y); };
   const autos = log.filter(t => t.status === 'made' && t.source === 'auto');
   const claimed = new Set();
   const folded = [];
@@ -3702,11 +3762,14 @@ function reconcileTransferLog() {
     .slice().sort((a, b) => new Date(a.date) - new Date(b.date))
     .forEach(m => {
       const mi = pairIds(m);
-      if (!mi) return;
       const auto = autos.find(a => {
         if (claimed.has(a.id)) return false;
-        const ai = pairIds(a);
-        if (!ai || ai.outId !== mi.outId || ai.inId !== mi.inId) return false;
+        if (mi) {
+          const ai = pairIds(a);
+          if (!ai || ai.outId !== mi.outId || ai.inId !== mi.inId) return false;
+        } else if (!(sameName(m.playerOutName, a.playerOutName) && sameName(m.playerInName, a.playerInName))) {
+          return false;
+        }
         if (m.gwId != null && a.gwId != null && a.gwId < m.gwId - 1) return false;
         return true;
       });
@@ -3794,6 +3857,12 @@ async function syncTransfersFromFPL() {
     const parts = [];
     if (matched) parts.push(matched + ' planned/locked-in transfer' + (matched === 1 ? '' : 's') + ' confirmed');
     if (added) parts.push(added + ' new transfer' + (added === 1 ? '' : 's') + ' added');
+    // v1.52 (FF-024): say so when a planned/locked-in entry is for a
+    // gameweek whose deadline has already passed yet FPL has no matching
+    // transfer, instead of silently leaving it sitting there.
+    const planGw = currentPlanningGw();
+    const unmatched = _transferLog.filter(t => isActiveTransferStatus(t.status) && planGw != null && t.gwId != null && t.gwId < planGw).length;
+    if (unmatched) parts.push(unmatched + ' planned/locked-in entr' + (unmatched === 1 ? 'y' : 'ies') + ' from an earlier gameweek not found on FPL — review or delete');
     safeToast(parts.length ? ('Synced — ' + parts.join(', ')) : 'Synced — already up to date');
   } catch (e) {
     safeToast('Sync failed: ' + e.message, 'err');
@@ -5158,6 +5227,17 @@ function buildNextFixtureByTeam(fixtures, teamsById, nextGW) {
 // architecture-principles.md). Unlike buildNextFixtureByTeam, this
 // deliberately does NOT filter out finished fixtures — showing the
 // final score after the fact is exactly the point.
+// v1.52 (FF-024): FPL only flips `finished` once bonus points are
+// confirmed (often hours after the final whistle), so a game that is
+// really over kept showing as live. `finished_provisional` (set at the
+// final whistle) or 90+ minutes now count as full time too.
+function isFixtureFullTime(f) {
+  return !!(f && (f.finished || f.finished_provisional || (f.started && (f.minutes || 0) >= 90)));
+}
+function isMatchFullTime(m) {
+  return !!(m && (m.isFull || m.finished));
+}
+
 function buildMatchStateByTeam(fixtures, teamsById, targetGw) {
   const byTeam = {};
   (fixtures || []).filter(f => f.event === targetGw).forEach(f => {
@@ -5165,11 +5245,13 @@ function buildMatchStateByTeam(fixtures, teamsById, targetGw) {
     byTeam[f.team_h] = {
       opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true,
       started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0,
+      isFull: isFixtureFullTime(f),
       ownScore: f.team_h_score, oppScore: f.team_a_score, kickoffTime: f.kickoff_time
     };
     byTeam[f.team_a] = {
       opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false,
       started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0,
+      isFull: isFixtureFullTime(f),
       ownScore: f.team_a_score, oppScore: f.team_h_score, kickoffTime: f.kickoff_time
     };
   });
@@ -5194,7 +5276,7 @@ function matchOutcomeSentiment(el, m) {
     return 'neutral';
   }
   if (m.ownScore >= 2) return 'good';
-  if (m.ownScore === 0 && m.finished) return 'bad';
+  if (m.ownScore === 0 && isMatchFullTime(m)) return 'bad';
   return 'neutral';
 }
 
@@ -5204,7 +5286,7 @@ function thisWeekBoxHtml(el, matchStateByTeam) {
   const sentiment = matchOutcomeSentiment(el, m) || 'neutral';
   const vsText = (m.isHome ? 'vs ' : '@ ') + safeEsc(m.opponentName);
   let valueText;
-  if (m.finished) {
+  if (isMatchFullTime(m)) {
     valueText = 'FT ' + m.ownScore + '-' + m.oppScore;
   } else if (m.started) {
     valueText = '🔴 ' + m.ownScore + '-' + m.oppScore + ' (' + m.minutes + '\')';
