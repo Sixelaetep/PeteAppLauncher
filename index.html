@@ -3,8 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.19</title>
+<title>P Apps v11.20</title>
 <link rel="manifest" href="manifest.json">
+<!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
+     refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
+<link rel="preconnect" href="https://gnzxsbbmfwmtkqidxgoj.supabase.co" crossorigin>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint, so
@@ -685,6 +688,36 @@
   }
   .app-frame.visible { display: block; }
 
+  /* PET-124: shown over a frame that has been made visible but has not finished loading yet */
+  #frameLoading {
+    position: fixed;
+    inset: var(--nav-h) 0 0 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--bg);
+    color: var(--ink2);
+    font-size: 13px;
+    z-index: 5;
+    pointer-events: none;
+  }
+  #frameLoading.show { display: flex; }
+  #frameLoading .fl-spin {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: flSpin 0.8s linear infinite;
+  }
+  @keyframes flSpin { to { transform: rotate(360deg); } }
+  /* PET-124: opt-in ?perf=1 panel */
+  #palPerf {
+    position: fixed; left: 8px; bottom: 8px; z-index: 20000; max-width: 92vw; max-height: 55vh; overflow: auto;
+    background: rgba(13,17,23,0.94); color: #e6edf3; border: 1px solid #30363d; border-radius: 8px;
+    padding: 8px 10px; font: 11px/1.45 ui-monospace, Menlo, monospace; white-space: pre;
+  }
+  #palPerf button { font: inherit; margin: 0 6px 6px 0; padding: 2px 8px; }
+
   /* ── Toast ── */
   #toast {
     position: fixed;
@@ -778,7 +811,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.19</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.20</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1156,6 +1189,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-124, v11.20): faster launch. A stored session with more than 5 minutes left is used immediately and
+  refreshed in the background (no wait on the auth call); single-flight refresh so Gym's session request can't double-
+  refresh; preconnect to Supabase; card stats drawn after first paint; a loading screen while an app frame opens;
+  idle prefetch (cache warm only, nothing runs) of On Budget and Gym; opt-in ?perf=1 timeline. No app or data change.
   ADDED (PET-123, v11.19): Reading Tracker card quick-log, same approach as the Gym / On Budget cards. One numeric input
   plus a Book / Audio toggle logs the page (book) or chapter (audiobook) reached for the current active Book List item
   through reading-tracker.html v3.73 (RT_ACTION ping / RT_PONG ready, then quickLogProgress with a fixed reqId re-sent
@@ -1248,6 +1285,7 @@
 <iframe id="frame-horizon"   class="app-frame" data-src="horizon.html"        title="Horizon"></iframe>
 <iframe id="frame-fantasy"   class="app-frame" data-src="fantasy-football-tracker.html" title="Fantasy Football Tracker"></iframe>
 <iframe id="frame-screen"    class="app-frame" data-src="film-tv-tracker.html"  title="Film &amp; TV Tracker"></iframe>
+<div id="frameLoading" aria-live="polite"><div class="fl-spin"></div><div id="frameLoadingLabel">Opening…</div></div>
 
 <div id="toast"></div>
 <div id="obConfirm" role="status" aria-live="polite" onclick="hideObQuickConfirm()"></div>
@@ -1392,12 +1430,47 @@ const loaded    = {};
 // other function, card, or backup mechanism touched.
 
 // ── Boot sequence ──────────────────────────────────────────────────
+// PET-124 v11.20: opt-in timeline (?perf=1). Defined first so everything below can call perfMark() unconditionally;
+// does nothing (and stores nothing) unless the page was opened with ?perf=1. See the perf block near the end of this script.
+const PAL_PERF = /[?&]perf=1(&|$)/.test(location.search);
+const _perfMarks = [];
+function perfMark(label) {
+  if (!PAL_PERF) return;
+  _perfMarks.push({ t: Math.round(performance.now()), label: label });
+  if (typeof perfRender === 'function') perfRender();
+}
+perfMark('launcher script started');
+
+// PET-124: a stored session with more than 5 minutes of life left is trusted for the launch itself; the refresh then
+// happens in the background. expires_at is Supabase's own unix-seconds expiry, stored as received.
+const SESSION_FRESH_MARGIN_MS = 5 * 60 * 1000;
+let _refreshPromise = null;   // single-flight guard for refreshLauncherSession() (declared here: boot() below runs first)
+function sessionIsFresh(s) {
+  return !!(s && s.access_token && s.refresh_token && s.user && s.user.id &&
+            typeof s.expires_at === 'number' && (s.expires_at * 1000 - Date.now()) > SESSION_FRESH_MARGIN_MS);
+}
+
 (async function boot() {
   // Try to restore existing session from localStorage
   const stored = localStorage.getItem('sb_session');
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
+      // PET-124 fast path: fresh stored session for a known user → open now, refresh behind the scenes.
+      // A definitive rejection of the refresh token (400/401/403) still sends the user to the login screen,
+      // just after the launch instead of before it; a network failure keeps the session (it is still valid).
+      if (sessionIsFresh(parsed) && KNOWN_USERS[parsed.user.id]) {
+        // The old path only reached onSignedIn() after a network await, i.e. after this whole script had finished
+        // evaluating. Now there is no await, so wait for the rest of the document's scripts to have run
+        // (DOMContentLoaded) before calling anything defined further down.
+        if (document.readyState === 'loading') await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
+        await Promise.resolve();
+        document.documentElement.removeAttribute('data-booting');
+        perfMark('boot: stored session used (no auth wait)');
+        onSignedIn(KNOWN_USERS[parsed.user.id], parsed);
+        refreshLauncherSession({ lockOnReject: true });
+        return;
+      }
       // Refresh token in background — lock screen is visually suppressed
       // via [data-booting] CSS so the user never sees the login form
       const refreshed = await sbRefreshSession(parsed.refresh_token);
@@ -1432,16 +1505,21 @@ async function sbSignIn(email, password) {
   return data;
 }
 
-async function sbRefreshSession(refreshToken) {
+// PET-124: same call as before but reports WHY it failed — status 0 = network error, otherwise the HTTP status —
+// so the background refresh can tell "offline" (keep the session) from "refresh token rejected" (sign out).
+async function sbRefreshSessionEx(refreshToken) {
   try {
     const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY },
       body: JSON.stringify({ refresh_token: refreshToken })
     });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch(e) { return null; }
+    if (!res.ok) return { session: null, status: res.status };
+    return { session: await res.json(), status: res.status };
+  } catch(e) { return { session: null, status: 0 }; }
+}
+async function sbRefreshSession(refreshToken) {
+  return (await sbRefreshSessionEx(refreshToken)).session;
 }
 
 async function sbSignOut(accessToken) {
@@ -1527,8 +1605,16 @@ function onSignedIn(userInfo, session) {
     if (loaded[frame.id.replace('frame-', '')]) pingFrame(frame);
   });
 
-  // Refresh card stats from localStorage
-  refreshCardStats();
+  // Refresh card stats from localStorage — PET-124: after the first paint rather than before it. The stats parse each
+  // app's saved data (hundreds of KB for some), which used to sit in front of the first frame and delay everything after it.
+  perfMark('signed in: home shown');
+  requestAnimationFrame(function () {
+    setTimeout(function () {
+      try { refreshCardStats(); } catch (e) {}
+      perfMark('card stats drawn');
+      schedulePrefetch();
+    }, 0);
+  });
 }
 
 // ── User visibility ────────────────────────────────────────────────
@@ -2041,18 +2127,39 @@ function broadcastSessionToAllFrames() {
   });
 }
 
-async function refreshLauncherSession() {
-  if (!sbSession?.refresh_token) return false;
-  try {
-    const refreshed = await sbRefreshSession(sbSession.refresh_token);
-    if (!refreshed) return false;
-    sbSession = refreshed;
-    localStorage.setItem('sb_session', JSON.stringify(refreshed));
-    feedPalSyncSession(); // PET-101: keep the launcher's own PalSync token fresh
-    _lastSessionRefresh = Date.now();
-    broadcastSessionToAllFrames();
-    return true;
-  } catch(e) { return false; }
+// PET-124: single-flight. Supabase rotates refresh tokens, so two overlapping refreshes (boot's background refresh
+// plus a PAL_REQUEST_SESSION from Gym, say) could present the same token twice. Every caller now shares one request.
+// opts.lockOnReject (boot only): if Supabase definitively rejects the refresh token (400/401/403) go back to the login
+// screen, exactly as the old blocking boot did. Network failures never sign the user out.
+function refreshLauncherSession(opts) {
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = (async function () {
+    if (!sbSession?.refresh_token) return false;
+    try {
+      perfMark('session refresh: started');
+      const r = await sbRefreshSessionEx(sbSession.refresh_token);
+      if (!r.session) {
+        perfMark('session refresh: failed (status ' + r.status + ')');
+        if (opts && opts.lockOnReject && (r.status === 400 || r.status === 401 || r.status === 403)) {
+          sbSession = null; currentUser = null;
+          localStorage.removeItem('sb_session');
+          try { if (window.PalSync) window.PalSync.setSession(null, null); } catch (e) {}
+          document.getElementById('lockScreen').classList.remove('hidden');
+          document.getElementById('loginError').textContent = 'Session expired — please sign in again';
+        }
+        return false;
+      }
+      const refreshed = r.session;
+      sbSession = refreshed;
+      localStorage.setItem('sb_session', JSON.stringify(refreshed));
+      feedPalSyncSession(); // PET-101: keep the launcher's own PalSync token fresh
+      _lastSessionRefresh = Date.now();
+      perfMark('session refresh: done');
+      broadcastSessionToAllFrames();
+      return true;
+    } catch(e) { return false; }
+  })().finally(function () { _refreshPromise = null; });
+  return _refreshPromise;
 }
 
 setInterval(() => { if (sbSession) refreshLauncherSession(); }, SESSION_REFRESH_INTERVAL_MS);
@@ -2080,7 +2187,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'PAL_REQUEST_SESSION') {
-    refreshLauncherSession().finally(() => {
+    const reply = () => {
       if (!sbSession || !e.source) return;
       try {
         e.source.postMessage({
@@ -2089,8 +2196,16 @@ window.addEventListener('message', function(e) {
           user_id:      sbSession.user.id,
           user_key:     currentUser?.key || 'pete'
         }, window.location.origin);
+        perfMark('PAL_SESSION sent on request');
       } catch(err) {}
-    });
+    };
+    // PET-124: Gym asks for a session the moment it starts. Refreshing first (the old behaviour) put a Supabase round
+    // trip in front of Gym's first sync, so answer straight away when the token we hold is demonstrably good: more than
+    // 5 min of life left AND either a refresh is already running (its result is broadcast to every loaded frame when it
+    // lands) or one finished / the page opened within the last 2 min. Otherwise (stale, or a 401 follow-up) refresh first, as before.
+    const recentlyGood = sessionIsFresh(sbSession) && (_refreshPromise || (Date.now() - _lastSessionRefresh) < 2 * 60 * 1000);
+    if (recentlyGood) reply();
+    else refreshLauncherSession().finally(reply);
   }
 });
 
@@ -2231,9 +2346,33 @@ function handlePalNavigate(app) {
 }
 
 // When any iframe loads, send the session and current theme
+// PET-124: _frameDone[target] = that frame's document has finished loading; used to decide whether the
+// "Opening…" screen is needed when a frame is made visible, and to remove it when the load event arrives.
+const _frameDone = {};
+function setFrameLoading(frameId, on) {
+  const el = document.getElementById('frameLoading');
+  if (!el) return;
+  if (on) {
+    const f = document.getElementById(frameId);
+    document.getElementById('frameLoadingLabel').textContent = 'Opening ' + ((f && f.title) || 'app') + '…';
+    el.dataset.for = frameId;
+    el.classList.add('show');
+    // safety net: never leave the screen up if a load event somehow never arrives
+    setTimeout(function () { if (el.dataset.for === frameId) setFrameLoading(frameId, false); }, 20000);
+  } else if (!frameId || el.dataset.for === frameId) {
+    el.classList.remove('show');
+    delete el.dataset.for;
+  }
+}
 document.querySelectorAll('.app-frame').forEach(frame => {
   frame.addEventListener('load', () => {
-    if (sbSession) setTimeout(() => pingFrame(frame), 100);
+    // about:blank fires 'load' too when src is cleared; only a frame with a real src counts as loaded
+    if (frame.getAttribute('src')) {
+      _frameDone[frame.id.replace('frame-', '')] = true;
+      setFrameLoading(frame.id, false);
+      perfMark(frame.id + ': load event');
+    }
+    if (sbSession) setTimeout(() => { pingFrame(frame); perfMark(frame.id + ': PAL_SESSION pinged'); }, 100);
     setTimeout(() => pingTheme(frame), 100);
   });
 });
@@ -2247,6 +2386,7 @@ function switchTo(target, btnEl) {
 
   document.getElementById('home-screen').classList.remove('visible');
   document.querySelectorAll('.app-frame').forEach(f => f.classList.remove('visible'));
+  setFrameLoading(null, false); // PET-124: any "Opening…" screen belongs to the frame being left
 
   if (target === 'home') {
     document.getElementById('home-screen').classList.add('visible');
@@ -2258,6 +2398,7 @@ function switchTo(target, btnEl) {
 
   const frame = document.getElementById('frame-' + target);
   if (frame && !loaded[target]) {
+    perfMark(frame.id + ': src set (cold open)');
     frame.src = frame.dataset.src;
     loaded[target] = true;
     // load listener above handles the postMessage ping
@@ -2266,6 +2407,7 @@ function switchTo(target, btnEl) {
     setTimeout(() => pingTheme(frame), 50);
   }
   if (frame) frame.classList.add('visible');
+  if (frame && !_frameDone[target]) setFrameLoading(frame.id, true); // PET-124: not finished loading yet
   currentTab = target;
 }
 
@@ -4491,6 +4633,74 @@ function statHorizonSub() {
 // behaviour now loaded from pal-utils.js (see script tag near top of
 // body); every call site here passes only msg, matching pal-utils'
 // signature exactly.
+
+// ══════════════════════════════════════════════════════════════════
+// PET-124 v11.20 — idle prefetch + opt-in ?perf=1 timeline
+// ══════════════════════════════════════════════════════════════════
+// Prefetch: after the home screen has been drawn and the browser is idle, download the HTML of the apps Pete opens
+// most (and the pal-shared.js each one names) into the normal HTTP cache. NOTHING is executed or put in an iframe —
+// no sync, no timers, no `loaded[...]` flags change — so quick-add readiness and data flow are untouched. The later
+// tap on the app finds its files already in cache. Skipped when the browser reports Data Saver. Pete-only apps are
+// skipped for other users. Failures are ignored: the app then simply loads the old way.
+const PREFETCH_TARGETS = ['gym', 'budget'];   // frame ids without the "frame-" prefix — edit here to change the list
+let _prefetchScheduled = false;
+function schedulePrefetch() {
+  if (_prefetchScheduled) return;
+  _prefetchScheduled = true;
+  try {
+    if (navigator.connection && navigator.connection.saveData) { perfMark('prefetch skipped (Data Saver)'); return; }
+  } catch (e) {}
+  const go = function () { prefetchApps().catch(function () {}); };
+  if ('requestIdleCallback' in window) requestIdleCallback(go, { timeout: 4000 });
+  else setTimeout(go, 2000);
+}
+async function prefetchApps() {
+  for (const target of PREFETCH_TARGETS) {
+    const frame = document.getElementById('frame-' + target);
+    const btn = document.querySelector('.nav-btn[data-target="' + target + '"]');
+    if (!frame || loaded[target] || !frame.dataset.src) continue;                         // already opening / open
+    if (btn && btn.classList.contains('pete-only') && !(currentUser && currentUser.isPete)) continue; // not this user's app
+    const res = await fetch(frame.dataset.src, { credentials: 'same-origin' });
+    if (!res.ok) continue;
+    const html = await res.text();
+    perfMark('prefetched ' + frame.dataset.src);
+    const m = html.match(/<script[^>]+src=["'](pal-shared\.js[^"']*)["']/);
+    if (m) {
+      const r2 = await fetch(m[1], { credentials: 'same-origin' });
+      if (r2.ok) await r2.arrayBuffer();
+      perfMark('prefetched ' + m[1]);
+    }
+  }
+}
+
+// Timeline panel — only exists when the page was opened with ?perf=1. Nothing is stored; "Copy" puts the text on the
+// clipboard so it can be pasted into the chat. Apps (from Phase 2) can add their own lines by posting
+// { type: 'PAL_PERF', label, t } to the launcher.
+function perfRender() {
+  if (!PAL_PERF || !document.body) return;
+  var el = document.getElementById('palPerf');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'palPerf';
+    var copy = document.createElement('button'); copy.textContent = 'Copy';
+    copy.onclick = function () {
+      var txt = _perfMarks.map(function (m) { return m.t + ' ms  ' + m.label; }).join('\n');
+      try { navigator.clipboard.writeText(txt); toast('Timeline copied'); } catch (e) {}
+    };
+    var close = document.createElement('button'); close.textContent = 'Hide';
+    close.onclick = function () { el.style.display = 'none'; };
+    var pre = document.createElement('div'); pre.id = 'palPerfLines';
+    el.appendChild(copy); el.appendChild(close); el.appendChild(pre);
+    document.body.appendChild(el);
+  }
+  document.getElementById('palPerfLines').textContent =
+    _perfMarks.map(function (m) { return String(m.t).padStart(6) + ' ms  ' + m.label; }).join('\n');
+}
+window.addEventListener('message', function (e) {
+  if (!PAL_PERF || e.origin !== window.location.origin) return;
+  if (e.data && e.data.type === 'PAL_PERF' && e.data.label) perfMark('app: ' + e.data.label);
+});
+if (PAL_PERF) document.addEventListener('DOMContentLoaded', perfRender);
 
 </script>
 
