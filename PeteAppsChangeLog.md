@@ -14,12 +14,12 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.16 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15 and v11.16. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.17 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16 and v11.17. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.114 | v2.32 – v2.114. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.115 | v2.32 – v2.115. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.99 | v1.0 – v3.43 and v3.73 – v3.99. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -209,6 +209,15 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.17 — PET-121 — Gym card quick-add reliable on first open / slow load — 18 Oct 2026
+
+- **Why (bug):** Pete reported quick-add failing when Gym Tracker had not been opened yet or was slow to load.
+- **Root causes found:** (1) `switchTo()` sets `loaded[target] = true` when it *starts* loading, so `ensureLoaded('gym')` returned immediately for a frame still loading and the message went to a page with no listener; (2) a cold first load can exceed `ensureLoaded`'s fixed 15 s cap and its fixed 800 ms settle delay; (3) the reply wait was a fixed 4 s, and a late save followed by a retry created a duplicate; (4) the app's first cloud pull could replace its arrays after the entry was added.
+- **Change (`index.html`):** `gymEnsureFrame()` starts the load itself; `gymWaitReady()` pings (`GYM_ACTION` `ping` / `GYM_PONG` `ready`) every 0.5 s for up to 45 s; `gymQuickSend()` then sends with one fixed `reqId` and re-sends every 2 s for up to 20 s until the reply arrives. The Add button shows "…" while waiting; inputs are kept if nothing was confirmed. Messages distinguish "did not finish loading / needs v2.115" (nothing saved) from "no confirmation, it may have saved".
+- **Unchanged:** drink and food behaviour, popup, card display, the shared `ensureLoaded()` used by other cards.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.17. Needs `gym-tracker.html` v2.115.
+- Tested (Stage 1): see the Gym v2.115 entry (shared run). Not tested: a genuinely cold load on a phone or slow network.
 
 ### v11.16 — PET-120 — Gym card shows the intake bar for the selected mode — 18 Oct 2026
 
@@ -1711,6 +1720,14 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.115 — GYM-101 — Quick-add safe on first open / slow load
+
+- **Change (`gym-tracker.html`):** (1) `GYM_ACTION` `ping` replies `GYM_PONG { ready, version }`; `ready` = `init()` has run and the first cloud pull has settled (or 12 s since boot). (2) `_gymQuickSeen` is now a Map of reqId → result: a repeated reqId re-sends the stored result and never saves twice. (3) Quick-added records are tracked in `_gymQuickPending`; `pullFromCloud` calls `gymQuickReapply()` after its merge, which restores and re-upserts any tracked record the merge dropped. (4) `pullFromCloud` marks the first pull as settled via a wrapped callback (all its exit paths already call `cb`).
+- **Unchanged:** data model, other message handling, sync logic otherwise.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline changelog set to 2.115.
+- Tested (Stage 1): syntax check; simulated slow load against the real handler and launcher code: messages sent before the app's listener exists are lost (as in a real iframe) and nothing is saved until the app reports ready, then exactly one entry; replies lost twice still give one entry and the popup; never ready or an app that does not answer pings gives NOT_READY with nothing saved and inputs kept; ready logic (init only, init + pull); pull dropping a tracked record restores it once; duplicate reqId re-replies without a second entry; earlier drink, food, PT and card tests re-run (two expectations updated: duplicates now re-send the stored result).
+- Not tested: real iframe load timing on a phone or slow network, real cloud pull merge behaviour (`pal-sync.js` not available to me, so the restore step is a safety net based on assumption), live Supabase.
 
 ### v2.114 — GYM-100 — PT session makes the day an active day
 

@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.114</title>
+<title>Gym Tracker v2.115</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.114</div></span>
+      <span>Gym Tracker<div class="ver">v2.115</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -953,11 +953,19 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.114"></script>
+<script src="pal-shared.js?v=2.115"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.115 (GYM-101): launcher quick-add made safe on first open / slow load.
+// (1) GYM_ACTION 'ping' -> GYM_PONG { ready }: ready once init() has run AND
+// the first cloud pull has finished (or 12 s have passed), so the launcher can
+// wait instead of posting into a page that is still loading. (2) Duplicate
+// reqIds now re-send the stored result instead of being ignored, so the
+// launcher can re-send safely until it hears back (never saves twice).
+// (3) Quick-added records are remembered (_gymQuickPending) and, if a cloud
+// pull's merge drops one, put back and re-upserted.
 // v2.114 (GYM-100): a logged PT session now makes its date an active day.
 // isActiveDay() also returns true when a (non-deleted) PT session exists on
 // the date, so PT days use the active-day nutrition targets and tag, and the
@@ -1526,7 +1534,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.114';
+const VERSION = '2.115';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2404,6 +2412,7 @@ function sbUpsert(kind, record, cb) {
 }
 
 function pullFromCloud(cb) {
+  const _cb0 = cb; cb = function () { _gymPullDone = true; if (_cb0) _cb0.apply(this, arguments); }; // GYM-101: lets the launcher know the first pull has settled
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
@@ -2453,6 +2462,7 @@ function pullFromCloud(cb) {
         // this table's local data is left exactly as it was
       }
     });
+    gymQuickReapply(); // GYM-101
     const exChanged = migrateExercises(_env); migratePlans(_env); migrateSessions(_env);
     const waterChanged = migrateWaterEntries(_env);
     ensureActiveNoteSet(_env); // GYM-043: a first-ever pull with zero rows shouldn't leave no active set
@@ -2504,30 +2514,47 @@ window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
+  if (e.data.type === 'GYM_ACTION' && e.data.action === 'ping') {
+    try { (e.source || window.parent).postMessage({ type: 'GYM_PONG', reqId: e.data.reqId, ready: gymQuickReady(), version: VERSION }, window.location.origin); } catch (_) {}
+  }
   if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddWater') handleQuickAddWater(e);
   if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddMeal') handleQuickAddMeal(e);
 });
 // GYM-098: launcher drink quick-add (see v2.112 note in the constants block).
-const _gymQuickSeen = new Set();
+const _gymQuickSeen = new Map();   // reqId -> stored result (re-sent on duplicates)
+const _gymQuickPending = [];       // { kind, record } added by quick-add; re-applied if a pull drops them
+const _gymBootAt = Date.now();
+let _gymInitDone = false, _gymPullDone = false;
+function gymQuickReady() { return _gymInitDone && (_gymPullDone || (Date.now() - _gymBootAt) > 12000); }
+function gymQuickTrack(kind, record) { _gymQuickPending.push({ kind: kind, record: record }); }
+function gymQuickReapply() {
+  // Called after a pull replaces the arrays: put back any quick-added record the merge dropped.
+  _gymQuickPending.forEach(p => {
+    const arr = _env.data[_gymArrKeys[p.kind]];
+    if (arr && !arr.some(x => x.id === p.record.id)) { arr.push(p.record); sbUpsert(p.kind, p.record, null); slog('Quick-add record restored after pull: '+p.kind+' '+p.record.id, 'ok'); }
+  });
+}
 function handleQuickAddWater(e) {
   const d = e.data || {};
   const reply = (r) => { try { (e.source || window.parent).postMessage(Object.assign({ type: 'GYM_QUICKADD_RESULT', reqId: d.reqId }, r), window.location.origin); } catch (_) {} };
-  if (d.reqId && _gymQuickSeen.has(d.reqId)) return;
-  if (d.reqId) _gymQuickSeen.add(d.reqId);
-  try {
-    const r = quickAddWaterEntry(d.amount, d.label);
-    reply(r);
-  } catch (err) {
-    reply({ ok: false, msg: 'Could not save drink' });
-  }
+  if (d.reqId && _gymQuickSeen.has(d.reqId)) { const prev = _gymQuickSeen.get(d.reqId); if (prev) reply(prev); return; }
+  if (d.reqId) _gymQuickSeen.set(d.reqId, null);
+  let r;
+  try { r = quickAddWaterEntry(d.amount, d.label); }
+  catch (err) { r = { ok: false, msg: 'Could not save drink' }; }
+  if (d.reqId) _gymQuickSeen.set(d.reqId, r);
+  reply(r);
 }
 function handleQuickAddMeal(e) {
   const d = e.data || {};
   const reply = (r) => { try { (e.source || window.parent).postMessage(Object.assign({ type: 'GYM_QUICKADD_RESULT', reqId: d.reqId }, r), window.location.origin); } catch (_) {} };
-  if (d.reqId && _gymQuickSeen.has(d.reqId)) return;
-  if (d.reqId) _gymQuickSeen.add(d.reqId);
-  try { reply(quickAddMealEntry(d.calories, d.protein, d.label)); }
-  catch (err) { reply({ ok: false, msg: 'Could not save food' }); }
+  if (d.reqId && _gymQuickSeen.has(d.reqId)) { const prev = _gymQuickSeen.get(d.reqId); if (prev) reply(prev); return; }
+  if (d.reqId) _gymQuickSeen.set(d.reqId, null);
+  let r;
+  try { r = quickAddMealEntry(d.calories, d.protein, d.label); }
+  catch (err) { r = { ok: false, msg: 'Could not save food' }; }
+  if (d.reqId) _gymQuickSeen.set(d.reqId, r);
+  reply(r);
 }
 function quickAddMealEntry(calories, protein, label) {
   const mealName = String(label || '').trim().slice(0, 80);
@@ -2545,7 +2572,8 @@ function quickAddMealEntry(calories, protein, label) {
   }
   save(_env);
   sbUpsert('nutritionEntry', record, null);
-  if (newSaved) sbUpsert('savedMeal', newSaved, null);
+  gymQuickTrack('nutritionEntry', record);
+  if (newSaved) { sbUpsert('savedMeal', newSaved, null); gymQuickTrack('savedMeal', newSaved); }
   try { renderCalendar(); } catch (_) {}
   try { const im = document.getElementById('intakeModalTitle'); if (im && im.closest('.modal-overlay') && im.closest('.modal-overlay').classList.contains('open')) renderMealsList(); } catch (_) {}
   const today = getEntriesForDate(date);
@@ -2578,6 +2606,7 @@ function quickAddWaterEntry(amount, label) {
   }
   save(_env);
   sbUpsert('waterEntry', entry, null);
+  gymQuickTrack('waterEntry', entry);
   try { renderCalendar(); } catch (_) {}
   try { const im = document.getElementById('intakeModalTitle'); if (im && im.closest('.modal-overlay') && im.closest('.modal-overlay').classList.contains('open')) { _waterModalDate = _waterModalDate || date; renderWaterList(); } } catch (_) {}
   const totalMl = round2(getWaterEntriesForDate(date).reduce((a,x)=>a+(Number(x.volumeMl)||0),0));
@@ -7970,6 +7999,7 @@ document.addEventListener('click', function(e) {
 // BOOT
 // ═══════════════════════════════════════════════════════════════════
 init();
+_gymInitDone = true; // GYM-101
 setSyncStatus('connecting');
 adjustBodyScrollTop();
 </script>

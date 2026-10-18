@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.16</title>
+<title>P Apps v11.17</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -774,7 +774,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.16</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.17</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1145,6 +1145,13 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-121, v11.17): Gym card quick-add no longer fails on first open / slow load. Root causes: switchTo()
+  sets loaded[gym]=true when it STARTS loading, so ensureLoaded() returned at once and the message went to a page
+  that had not loaded; the reply wait was a fixed 4 s; a retry created a second entry. Now: the card starts the load
+  itself (no 15 s cap), pings the app (GYM_ACTION ping / GYM_PONG ready) until it reports ready (init done + first
+  cloud pull settled; up to 45 s, button shows "Loading…"), then sends the entry with a fixed reqId and re-sends it
+  every 2 s for up to 20 s until the reply arrives (the app stores the result per reqId, so it never saves twice).
+  Inputs are kept if nothing was confirmed. Needs gym-tracker.html v2.115.
   CHANGED (PET-120, v11.16): Gym card shows the intake bar(s) that match the quick-add mode. Drink mode (default)
   shows the water line and bar; tap the tag to Food and the card swaps to today's calories and protein vs the
   active / rest-day targets (with the active / rest tag; a PT day counts as active) and their two bars. Display only;
@@ -3642,19 +3649,59 @@ function gymQuickPick(e) {
   const box = form.querySelector('.ob-quick-sugg'); box.hidden = true; box.textContent = '';
   (amt.value ? lbl : amt).focus();
 }
-function gymQuickSend(frame, payload) {
+// PET-121 v11.17: start the Gym frame loading WITHOUT trusting loaded[gym] (switchTo sets it when loading
+// STARTS, not when it finishes) and without ensureLoaded()'s 15 s cap, which is too short for a cold first open.
+function gymEnsureFrame() {
+  const frame = document.getElementById('frame-gym');
+  if (!frame) throw new Error('No frame for gym');
+  if (!loaded['gym'] || !frame.getAttribute('src')) {
+    frame.src = frame.dataset.src;
+    loaded['gym'] = true;
+  }
+  return frame;
+}
+// Ping until the app says it is ready (init done + first cloud pull settled). Resolves true when ready;
+// rejects NOT_READY after maxMs (an app older than v2.115 never answers a ping).
+function gymWaitReady(frame, maxMs) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { window.removeEventListener('message', onMsg); reject(new Error('NO_ACK')); }, 4000);
+    const id = 'gp' + Date.now() + Math.random().toString(36).slice(2, 6);
+    const started = Date.now();
+    let timer = null;
+    function done(fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); }
+    function onMsg(ev) {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (d && d.type === 'GYM_PONG' && d.reqId === id && d.ready) done(resolve, true);
+    }
+    function ping() {
+      if (Date.now() - started > maxMs) return done(reject, new Error('NOT_READY'));
+      try { frame.contentWindow.postMessage({ type: 'GYM_ACTION', action: 'ping', reqId: id }, window.location.origin); } catch (_) {}
+    }
+    window.addEventListener('message', onMsg);
+    ping();
+    timer = setInterval(ping, 500);
+  });
+}
+// Send the entry and keep re-sending the SAME reqId until the reply arrives (the app stores the result per
+// reqId and re-sends it, so a re-send can never save twice). Rejects NO_ACK after maxMs.
+function gymQuickSend(frame, payload, maxMs) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    let timer = null;
+    function done(fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); }
     function onMsg(ev) {
       if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'GYM_QUICKADD_RESULT' || d.reqId !== payload.reqId) return;
-      clearTimeout(timer);
-      window.removeEventListener('message', onMsg);
-      resolve(d);
+      done(resolve, d);
+    }
+    function send() {
+      if (Date.now() - started > maxMs) return done(reject, new Error('NO_ACK'));
+      try { frame.contentWindow.postMessage(Object.assign({ type: 'GYM_ACTION' }, payload), window.location.origin); } catch (_) {}
     }
     window.addEventListener('message', onMsg);
-    frame.contentWindow.postMessage(Object.assign({ type: 'GYM_ACTION' }, payload), window.location.origin);
+    send();
+    timer = setInterval(send, 2000);
   });
 }
 function showGymQuickConfirm(kind, qty, label, res, protein) {
@@ -3714,14 +3761,18 @@ async function gymQuickSubmit(e) {
   if (kind === 'food' && !qty && !protein) { toast('Enter calories or protein'); amtEl.focus(); return; }
   _gymQuickBusy = true;
   form.classList.add('busy');
-  toast('Saving to Gym Tracker…');
+  const goBtn = form.querySelector('.ob-quick-go');
+  const goLabel = goBtn ? goBtn.textContent : 'Add';
+  if (goBtn) goBtn.textContent = '…';
+  toast('Saving to Gym Tracker… (first open can take a few seconds)');
   try {
-    const frame = await ensureLoaded('gym');
+    const frame = gymEnsureFrame();
     const reqId = 'gq' + Date.now() + Math.random().toString(36).slice(2, 7);
+    await gymWaitReady(frame, 45000);
     const payload = kind === 'food'
       ? { action: 'quickAddMeal', calories: qty || 0, protein: protein, label: label, reqId: reqId }
       : { action: 'quickAddWater', amount: qty, label: label, reqId: reqId };
-    const res = await gymQuickSend(frame, payload);
+    const res = await gymQuickSend(frame, payload, 20000);
     if (res && res.ok) {
       amtEl.value = ''; lblEl.value = ''; if (protEl) protEl.value = '';
       const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
@@ -3732,11 +3783,14 @@ async function gymQuickSubmit(e) {
       toast('Not saved — ' + ((res && res.msg) || 'Gym Tracker rejected it'));
     }
   } catch (err) {
-    toast(err && err.message === 'NO_ACK'
-      ? 'No confirmation from Gym Tracker — check the app before retrying (needs gym-tracker.html v2.113)'
-      : 'Gym Tracker unavailable — nothing saved');
+    toast(err && err.message === 'NOT_READY'
+      ? 'Gym Tracker did not finish loading (or needs gym-tracker.html v2.115) — nothing saved, your entry is still here'
+      : err && err.message === 'NO_ACK'
+        ? 'No confirmation from Gym Tracker — check the app before retrying, it may have saved'
+        : 'Gym Tracker unavailable — nothing saved');
   } finally {
     _gymQuickBusy = false;
+    if (goBtn) goBtn.textContent = goLabel;
     form.classList.remove('busy');
   }
 }
