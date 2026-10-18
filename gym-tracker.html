@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.117</title>
+<title>Gym Tracker v2.118</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.117</div></span>
+      <span>Gym Tracker<div class="ver">v2.118</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -735,6 +735,22 @@
   </div>
 </div>
 
+<!-- ═══ PROGRAM WEEKLY SCHEDULE MODAL (GYM-104) ═══ -->
+<div class="modal-overlay" id="modalProgSchedule" onclick="if(event.target===this)closeModal('modalProgSchedule')">
+  <div class="modal">
+    <div class="modal-title"><span id="progSchedTitle">Weekly schedule</span><button class="modal-close" onclick="closeModal('modalProgSchedule')">✕</button></div>
+    <p style="font-size:12px;color:var(--ink2);margin-bottom:8px" id="progSchedIntro"></p>
+    <p style="font-size:12px;color:var(--accent3);margin-bottom:8px;display:none" id="progSchedSwapNote"></p>
+    <div class="section-title" style="margin-top:0">Gym days</div>
+    <div class="repeat-day-row" id="progSchedDays"></div>
+    <div class="section-title">Plans in order</div>
+    <div id="progSchedRows"></div>
+    <p style="font-size:11px;color:var(--ink3);margin:6px 0" id="progSchedHint"></p>
+    <button class="btn btn-primary btn-block" id="progSchedSaveBtn" onclick="saveProgSchedule()">Save weekly schedule</button>
+    <button class="btn btn-secondary btn-block" id="progSchedCancelBtn" style="margin-top:8px" onclick="closeModal('modalProgSchedule')">Cancel</button>
+  </div>
+</div>
+
 <!-- ═══ REPEAT OCCURRENCE REMOVE MODAL (GYM-033) ═══ -->
 <div class="modal-overlay" id="modalRepeatRemove" onclick="if(event.target===this)closeModal('modalRepeatRemove')">
   <div class="modal">
@@ -953,11 +969,22 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.117"></script>
+<script src="pal-shared.js?v=2.118"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.118 (GYM-104): weekly schedule from the ACTIVE program. The active program
+// card has a "Weekly schedule" button: tick the gym days once, the program's
+// plans fill those days in program order (any row can be changed), Save turns
+// each assignment into a weekly repeat rule (freq 'days', one weekday) tagged
+// with programId, starting today. Saving again replaces that program's own
+// rules (old ones end yesterday, or are removed if they had not started, so
+// history is kept). Setting a program active offers the same screen in swap
+// mode, which also ends the previous program's weekly repeats. Importing a
+// program offers to make it active; adding a new plan to the active program
+// offers its next free gym day. Day-level one-offs / repeats are unchanged.
+// Data: schedule rule gains programId; program gains gymDays [0-6, Mon=0].
 // v2.117 (GYM-103): drink counts and launcher quick-add drinks audited.
 // (1) The calendar water card said "N entries" = number of records, but a record
 // holds a count (Tea x3 is one record), so +1 / launcher adds to an existing drink
@@ -1554,7 +1581,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.117';
+const VERSION = '2.118';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1983,6 +2010,8 @@ function toggleActiveProgram(id) {
   const prog = programById(id); if (!prog) return;
   const now = new Date().toISOString();
   const wasActive = !!prog.isActive;
+  const prevActive = getActiveProgram();                 // GYM-104: remembered for the schedule swap offer
+  const prevId = (prevActive && prevActive.id !== id) ? prevActive.id : null;
   getAllPrograms().forEach(p => {
     if (p.isActive && p.id !== id) { p.isActive = false; p.updatedAt = now; sbUpsert('program', p, null); }
   });
@@ -1990,6 +2019,149 @@ function toggleActiveProgram(id) {
   save(_env); sbUpsert('program', prog, null);
   renderPlanList();
   toast(wasActive ? 'No longer the active program' : `"${prog.name}" set as active program ✓`);
+  // GYM-104: a newly active program offers to take over the weekly schedule
+  if (!wasActive && programPlansOrdered(id).length) openProgSchedule(id, { swapFrom: prevId, fresh: true });
+}
+// ═══ GYM-104: weekly schedule from the active program ═══
+const DAY_FULL = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+let _psProgId = null, _psSwapFrom = null, _psDays = [], _psSel = {};   // _psSel: planId -> weekday index or ''
+const programPlansOrdered = (progId) => getPickablePlans().filter(p => p.programId === progId);
+const ruleIsLive = (r) => !r.endDate || r.endDate >= todayISO();
+// rules this feature creates and manages: tagged with the program, one weekday each
+const managedProgramRules = (progId) => getRepeatRules().filter(r => r.programId === progId && r.freq === 'days' && (r.days||[]).length === 1 && ruleIsLive(r));
+function currentProgramWeek(progId) {
+  const map = {};
+  managedProgramRules(progId).forEach(r => { if (map[r.planId] === undefined) map[r.planId] = r.days[0]; });
+  return map;
+}
+// the previous program's weekly repeats: tagged with it, or on any of its plans (hand-made ones included)
+function swapOutRules(prevId) {
+  if (!prevId) return [];
+  return getRepeatRules().filter(r => ruleIsLive(r) && (r.programId === prevId || ((planById(r.planId) || {}).programId === prevId)));
+}
+// end a rule from `fromDate`: past days keep showing it; a rule that never started is removed
+function endRuleFrom(rule, fromDate) {
+  if (rule.startDate >= fromDate) rule._deleted = true;
+  else rule.endDate = addDaysIso(fromDate, -1);
+  rule.updatedAt = new Date().toISOString();
+}
+function psAutoFill() {
+  const days = _psDays.slice().sort((a,b)=>a-b);
+  _psSel = {};
+  programPlansOrdered(_psProgId).forEach((p, i) => { _psSel[p.id] = i < days.length ? days[i] : ''; });
+}
+function openProgSchedule(progId, opts) {
+  const prog = programById(progId); if (!prog) return;
+  const plans = programPlansOrdered(progId);
+  if (!plans.length) { toast('Add plans to this program first'); return; }
+  _psProgId = progId;
+  _psSwapFrom = (opts && opts.swapFrom) || null;
+  const cur = currentProgramWeek(progId);
+  const hasCur = Object.keys(cur).length > 0;
+  const swapRules = swapOutRules(_psSwapFrom);
+  if (Array.isArray(prog.gymDays) && prog.gymDays.length) _psDays = prog.gymDays.slice();
+  else if (hasCur) _psDays = Array.from(new Set(Object.values(cur).map(Number))).sort((a,b)=>a-b);
+  else {
+    const fromOld = [];
+    swapRules.forEach(r => { if (r.freq === 'days') (r.days||[]).forEach(d => fromOld.push(d)); else if (r.freq === 'weekly') fromOld.push(weekdayIdx(r.startDate)); });
+    const prevProg = _psSwapFrom ? programById(_psSwapFrom) : null;
+    if (prevProg && Array.isArray(prevProg.gymDays) && prevProg.gymDays.length) _psDays = prevProg.gymDays.slice();
+    else if (fromOld.length) _psDays = Array.from(new Set(fromOld)).sort((a,b)=>a-b);
+    else _psDays = [0,2,4];
+  }
+  if (hasCur && !_psSwapFrom) { _psSel = {}; plans.forEach(p => { _psSel[p.id] = cur[p.id] !== undefined ? cur[p.id] : ''; }); }
+  else psAutoFill();
+  const swap = !!_psSwapFrom || (opts && opts.offer);
+  document.getElementById('progSchedTitle').textContent = (opts && opts.fresh ? 'Set up weekly schedule — ' : 'Weekly schedule — ') + prog.name;
+  document.getElementById('progSchedIntro').textContent = 'Tick your gym days: the plans fill them in program order. Change any row to put a plan on a different day. Saved as weekly repeats starting today (' + fmtDate(todayISO()) + '); past days are not touched. You can still add or repeat a plan on any single day from the calendar.';
+  const noteEl = document.getElementById('progSchedSwapNote');
+  if (_psSwapFrom) {
+    const n = swapRules.length;
+    noteEl.textContent = n ? ('Replacing the current schedule will end ' + n + ' weekly repeat' + (n===1?'':'s') + ' from the previous program (they stop yesterday; history is kept).') : 'No weekly repeats from the previous program to replace.';
+    noteEl.style.display = '';
+  } else noteEl.style.display = 'none';
+  document.getElementById('progSchedSaveBtn').textContent = _psSwapFrom ? 'Replace current schedule' : 'Save weekly schedule';
+  document.getElementById('progSchedCancelBtn').textContent = _psSwapFrom ? 'Keep current schedule' : 'Cancel';
+  renderProgSchedule();
+  openModal('modalProgSchedule');
+}
+function renderProgSchedule() {
+  const plans = programPlansOrdered(_psProgId);
+  document.getElementById('progSchedDays').innerHTML = DAY_ABBR.map((d,i) =>
+    `<div class="repeat-day-chip ${_psDays.includes(i)?'active':''}" onclick="psToggleDay(${i})">${d}</div>`).join('');
+  document.getElementById('progSchedRows').innerHTML = plans.map((p, i) => {
+    const sel = _psSel[p.id] === undefined ? '' : _psSel[p.id];
+    return `<div class="list-item" style="display:flex;align-items:center;gap:8px;padding:8px 10px">
+      <div style="flex:1;min-width:0"><div class="li-name" style="margin:0">${i+1}. ${escHtml(p.name)}</div></div>
+      <select style="width:auto;margin:0;padding:5px 8px" onchange="psSetDay('${p.id}',this.value)">
+        <option value="" ${sel===''?'selected':''}>Not scheduled</option>
+        ${DAY_FULL.map((n,d) => `<option value="${d}" ${String(sel)===String(d)?'selected':''}>${n}</option>`).join('')}
+      </select></div>`;
+  }).join('');
+  const byDay = {};
+  plans.forEach(p => { const d = _psSel[p.id]; if (d !== '' && d !== undefined) (byDay[d] = byDay[d]||[]).push(p.name); });
+  const dup = Object.keys(byDay).filter(d => byDay[d].length > 1).map(d => DAY_FULL[d]);
+  const unsched = plans.filter(p => _psSel[p.id] === '' || _psSel[p.id] === undefined).length;
+  const parts = [];
+  if (dup.length) parts.push('⚠ More than one plan on ' + dup.join(', ') + ' (allowed).');
+  if (unsched) parts.push(unsched + ' plan' + (unsched===1?' is':'s are') + ' not scheduled' + (_psDays.length < plans.length ? ' — add more gym days or leave them out' : '') + '.');
+  document.getElementById('progSchedHint').textContent = parts.join(' ');
+}
+function psToggleDay(i) {
+  const k = _psDays.indexOf(i);
+  if (k >= 0) _psDays.splice(k, 1); else _psDays.push(i);
+  _psDays.sort((a,b)=>a-b);
+  psAutoFill();
+  renderProgSchedule();
+}
+function psSetDay(planId, v) { _psSel[planId] = v === '' ? '' : Number(v); renderProgSchedule(); }
+function saveProgSchedule() {
+  const prog = programById(_psProgId); if (!prog) { closeModal('modalProgSchedule'); return; }
+  const plans = programPlansOrdered(prog.id);
+  const today = todayISO();
+  const now = new Date().toISOString();
+  const assignments = plans.filter(p => _psSel[p.id] !== '' && _psSel[p.id] !== undefined).map(p => ({ planId: p.id, day: Number(_psSel[p.id]) }));
+  const toEnd = new Map();
+  managedProgramRules(prog.id).forEach(r => toEnd.set(r.id, r));
+  swapOutRules(_psSwapFrom).forEach(r => toEnd.set(r.id, r));
+  const touched = [];
+  toEnd.forEach(r => { endRuleFrom(r, today); touched.push(r); });
+  assignments.forEach(a => {
+    const rule = { id: uid('scr'), kind: 'repeat', planId: a.planId, startDate: today, freq: 'days', days: [a.day], exceptions: [], programId: prog.id, createdAt: now, updatedAt: now };
+    _env.data.scheduleEntries.push(rule);
+    touched.push(rule);
+  });
+  prog.gymDays = Array.from(new Set(_psDays.concat(assignments.map(a => a.day)))).sort((a,b)=>a-b);
+  prog.updatedAt = now;
+  save(_env);
+  sbUpsert('program', prog, null);
+  touched.forEach(r => sbUpsert('schedule', r, null));
+  closeModal('modalProgSchedule');
+  renderPlanList(); renderCalendar(); renderHome();
+  toast(assignments.length ? ('Weekly schedule saved — ' + assignments.length + ' plan' + (assignments.length===1?'':'s') + ' ✓') : 'Weekly schedule cleared');
+}
+function progWeekSummaryHtml(prog) {
+  const cur = currentProgramWeek(prog.id);
+  const rows = programPlansOrdered(prog.id).filter(p => cur[p.id] !== undefined).sort((a,b) => cur[a.id] - cur[b.id]);
+  if (!rows.length) return '<div class="li-meta" style="margin-top:4px">📅 No weekly schedule yet — tap Weekly schedule</div>';
+  return '<div class="li-meta" style="margin-top:4px">📅 ' + rows.map(p => DAY_ABBR[cur[p.id]] + ' ' + escHtml(p.name)).join(' · ') + '</div>';
+}
+// a new plan joining the active program: offer its next free gym day
+function offerPlanSlot(plan) {
+  const prog = plan && plan.programId ? programById(plan.programId) : null;
+  if (!prog || !prog.isActive || !Array.isArray(prog.gymDays) || !prog.gymDays.length) return;
+  const used = new Set(Object.values(currentProgramWeek(prog.id)).map(Number));
+  const free = prog.gymDays.slice().sort((a,b)=>a-b).find(d => !used.has(d));
+  if (free === undefined) { toast('"' + plan.name + '" added — all your gym days are taken; use Weekly schedule to place it'); return; }
+  setTimeout(() => {
+    if (!confirm('Add "' + plan.name + '" to ' + DAY_FULL[free] + ' each week (next free gym day in "' + prog.name + '")?')) return;
+    const now = new Date().toISOString();
+    const rule = { id: uid('scr'), kind: 'repeat', planId: plan.id, startDate: todayISO(), freq: 'days', days: [free], exceptions: [], programId: prog.id, createdAt: now, updatedAt: now };
+    _env.data.scheduleEntries.push(rule);
+    save(_env); sbUpsert('schedule', rule, null);
+    renderPlanList(); renderCalendar(); renderHome();
+    toast('Added to ' + DAY_FULL[free] + ' each week ✓');
+  }, 200);
 }
 // GYM-057: archiving a program cascades to all of its plans (folded into
 // the existing Archived Plans data, just also grouped under the program
@@ -3402,8 +3574,10 @@ function renderProgramCard(prog, plans, sessions, forceOpen) {
       </div>
     </div>
     ${prog.notes ? `<div class="li-meta" style="margin-top:4px">📝 ${escHtml(prog.notes)}</div>` : ''}
+    ${prog.isActive ? progWeekSummaryHtml(prog) : ''}
     <div class="li-actions">
       <button class="btn btn-secondary btn-sm" onclick="toggleActiveProgram('${prog.id}')">${prog.isActive ? '★ Active' : '☆ Set Active'}</button>
+      ${prog.isActive ? `<button class="btn btn-secondary btn-sm" onclick="openProgSchedule('${prog.id}')">📅 Weekly schedule</button>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="renameProgram('${prog.id}')">Rename</button>
       <button class="btn btn-secondary btn-sm" onclick="editProgramNotes('${prog.id}')">📝 Notes</button>
       <button class="btn btn-secondary btn-sm" onclick="archiveProgram('${prog.id}')">📦 Archive</button>
@@ -4236,7 +4410,7 @@ function renderCalendar() {
             <div class="cal-plan-name">${escHtml(plan.name)}</div>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
               ${totalMin>0 ? `<div class="cal-repeat-badge">⏱ ~${totalMin} min</div>` : ''}
-              ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}</div>` : ''}
+              ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}${r.rule.programId ? ' · 📅 program' : ''}</div>` : ''}
             </div>
           </div>
           <div class="session-detail-toggle" onclick="event.stopPropagation();togglePlanPreview('${plan.id}')">${previewOpen ? 'Hide exercises ▲' : n+' exercise'+(n===1?'':'s')+' — show ▾'}</div>
@@ -4722,6 +4896,7 @@ function savePlan() {
   closeModal('modalPlan');
   renderPlanList(); renderHome();
   toast('Plan saved ✓');
+  if (!id && record.programId) offerPlanSlot(record); // GYM-104
 }
 function deletePlan(id) {
   if (!confirm('Delete this plan? Its session history will be kept.')) return;
@@ -7972,6 +8147,7 @@ function importProgramFileHandler(event) {
       closeDataDrawer();
       renderAll();
       toast(`Imported ${plansAdded} plan${plansAdded===1?'':'s'}${program?' into "'+program.name+'"':''} and ${exercisesAdded} new exercise${exercisesAdded===1?'':'s'}${isDuplicateProgram?' · a program with that name already existed, so this landed in a new dated duplicate':(plansRenamed?' · '+plansRenamed+' renamed (name already existed)':'')} ✓`);
+      if (program && plansAdded) setTimeout(() => { if (confirm('Make "' + program.name + '" your active program and set up its weekly schedule now?')) toggleActiveProgram(program.id); }, 400); // GYM-104
     } catch(ex) { toast('Program import failed: '+ex.message); }
   };
   reader.readAsText(file);
