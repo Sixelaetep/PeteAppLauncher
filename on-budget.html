@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.101</title>
+<title>On Budget v3.102</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -378,7 +378,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.101</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.102</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -717,6 +717,14 @@
       <div class="settings-hint" id="btx-cleared-hint">Deducts from your cleared balance immediately.</div>
     </div>
 
+    <div class="field-group" id="btx-xfer-field">
+      <label class="pill-toggle" onclick="toggleBtxXfer()">
+        <span class="pill-switch" id="btx-xfer-switch"></span>
+        <span>⇄ Transfer to Spending</span>
+      </label>
+      <div class="settings-hint">Also shows in Spending (uncleared there) as a payment to the card. It isn't spend or income, so budgets are unaffected. Each side is cleared separately.</div>
+    </div>
+
     <div class="btn-row">
       <button class="btn btn-primary btn-full" id="btx-save-btn" onclick="saveBtx()">Add transaction</button>
     </div>
@@ -816,6 +824,21 @@
         <span class="pill-switch" id="rc-active-switch"></span>
         <span id="rc-active-label">Active</span>
       </label>
+    </div>
+
+    <div class="field-group" id="rc-xfer-field">
+      <label class="pill-toggle" onclick="toggleRecurXfer()">
+        <span class="pill-switch" id="rc-xfer-switch"></span>
+        <span>⇄ Transfer to Spending</span>
+      </label>
+      <div class="settings-hint">Every future occurrence also shows in Spending (uncleared there) as a card payment. Already-cleared ones are unchanged.</div>
+    </div>
+    <div class="field-group" id="rc-tied-field">
+      <label class="pill-toggle" onclick="toggleRecurTied()">
+        <span class="pill-switch" id="rc-tied-switch"></span>
+        <span>🔗 Tied to Spending (Monthly CC Pay Off)</span>
+      </label>
+      <div class="settings-hint" id="rc-tied-hint">The amount follows the monthly pot in Settings. When projected spend goes above it, Spending offers to raise the next payment.</div>
     </div>
 
     <div class="field-group">
@@ -928,10 +951,19 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.101"></script>
+<script src="pal-shared.js?v=3.102"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.101
+// On Budget v3.102
+// v3.102 (ON--096): Spend transfers (Bills → Spending, one direction). A Bills transaction — one-off or
+// recurring — can be flagged as a spend transfer. When it is recorded, a matching Spending transaction
+// (type 'transfer', deterministic id xf_<billsTxId>) appears too, starting UNCLEARED; each side is cleared
+// independently. A transfer is its own type: it never counts as spend or income, so pot, headroom, reserve,
+// % used, projections, History and the launcher figures ignore it; it only reduces the Increasing-mode card
+// balance (it pays the card off). A recurring item can also be "tied to Spending" (the Monthly CC Pay Off):
+// its amount follows the monthly pot in Settings, and when projected card balance goes above the next
+// occurrence's amount Spending offers "Update next pay-off bill" (a per-occurrence override, so the
+// standing amount is untouched). No schema change — new optional fields only (xfer, tiedToSpend, xferSrc).
 // v3.101 (ON--095): per-week Food bars (Spending) also show the amount left to spend for the current and
 // future weeks. Display only.
 // v3.100 (ON--094): launcher quick-add (Spend / Bills) is now reliable on a first open / slow load.
@@ -2463,6 +2495,7 @@ async function syncPull() {
     // v3.56 (ON--056): read-only sanity check, after everything above has
     // settled — bills.tx and bills.settings are both fully merged by now.
     checkClearedBalanceDrift();
+    try { syncTiedAmounts(); reconcileXferLegs(); } catch(e) { console.error('xfer', e); } // v3.102 (ON--096)
     generateFtRecurring();
     save();
     renderDash();
@@ -2522,6 +2555,7 @@ window.PalSync.initSession({
   onNoSession: function () {
     _obFirstPullSettled = true; // ON--094: no session will arrive — nothing to wait for
     try { generateFtRecurring(); } catch(e) {}
+    try { syncTiedAmounts(); reconcileXferLegs(); } catch(e) {} // v3.102 (ON--096)
     const banner = document.getElementById('sync-open-banner');
     if (banner) banner.classList.add('show');
   },
@@ -2602,7 +2636,7 @@ window.addEventListener('message', function(e) {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.101' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.102' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -2663,7 +2697,7 @@ window.addEventListener('message', function(e) {
           } else {
             switchTab('bills');
             switchBillsView('ledger');
-            _btxEditId = null; _btxType = 'outgoing'; _btxDateShown = false; _btxCleared = true;
+            _btxEditId = null; _btxType = 'outgoing'; _btxDateShown = false; _btxCleared = true; _btxXfer = false;
             setPennyValue('btx-amt', amt);
             document.getElementById('btx-label').value = label;
             saveBtx();
@@ -2809,12 +2843,13 @@ function computeDashboardSummary() {
     let ftUnclearedCount = null, potCleared = null, cardBalanceCleared = null;
     if (d && d.startBalance !== null && d.startBalance !== undefined) {
       cycleStarted = true;
-      const tx = (d.transactions || []).filter(t => !t._deleted);
+      const txAll = (d.transactions || []).filter(t => !t._deleted);
+      const tx = txAll.filter(t => t.type !== 'transfer'); // v3.102: transfers never count as spend/income
       const monthWeeklyFood   = d.weeklyFoodBudget ?? settings.weeklyFood;
       const monthTravelBudget = d.travelBudget ?? settings.monthlyTravel;
       const weeks     = getWeeks(last, next, monthWeeklyFood, d.weeklyFoodAdjustment ?? null);
       const reserveBd = calcReserve(weeks, tx, monthTravelBudget);
-      const spent  = tx.filter(t => t.type !== 'income').reduce((s, t) => s + (t.amount || 0), 0);
+      const spent  = tx.filter(isSpendTx).reduce((s, t) => s + (t.amount || 0), 0);
       const income = tx.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
       // v3.78 (ON--072): in Increasing mode income is a card payment, not
       // pot funding, so it's left out — same rule as the dashboard.
@@ -2826,7 +2861,7 @@ function computeDashboardSummary() {
       // v3.80 (ON--074): exported so the launcher can lead with the real
       // card balance in Increasing mode instead of re-deriving direction.
       cardBalance = settings.potDirection === 'increasing' ? cardBalanceInfo(k, false).balance : null;
-      ftUnclearedCount   = tx.filter(t => t.cleared === false).length;
+      ftUnclearedCount   = txAll.filter(t => t.cleared === false).length;
       cardBalanceCleared = settings.potDirection === 'increasing' ? cardBalanceInfo(k, false, true).balance : null;
       potCleared         = settings.potDirection === 'increasing' ? null : ftClearedPot(d, tx);
       // v3.63 (ON--062): reserve + potPct exported so the launcher card
@@ -2893,7 +2928,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.101', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.102', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2902,7 +2937,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.101', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.102', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3187,7 +3222,7 @@ function ensureMonth() {
 // the real pot, headroom and reserve always use cleared + uncleared.
 function ftClearedPot(d, tx) {
   const cl = tx.filter(t => t.cleared !== false);
-  const sp  = cl.filter(t => t.type !== 'income').reduce((s, t) => s + (t.amount || 0), 0);
+  const sp  = cl.filter(isSpendTx).reduce((s, t) => s + (t.amount || 0), 0);
   const inc = cl.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
   return Math.round((d.startBalance + inc - sp) * 100) / 100;
 }
@@ -3212,9 +3247,10 @@ function cardBalanceInfo(curK, ignoreCurAdj, clearedOnly) {
   keys.forEach(mk => {
     if (mk < startKey) return;
     const tx = (months[mk].transactions||[]).filter(t=>!t._deleted && (!clearedOnly || t.cleared!==false));
-    const spend = tx.filter(t=>t.type!=='income').reduce((a,t)=>a+(t.amount||0),0);
+    const spend = tx.filter(isSpendTx).reduce((a,t)=>a+(t.amount||0),0);
     const inc   = tx.filter(t=>t.type==='income').reduce((a,t)=>a+(t.amount||0),0);
-    bal += spend - inc;
+    const xfer  = tx.filter(t=>t.type==='transfer').reduce((a,t)=>a+(t.amount||0),0); // v3.102: pay-off from Bills
+    bal += spend - inc - xfer;
     if (!(ignoreCurAdj && mk===curK) && isSet(mk)) bal += months[mk].cardAdjust;
   });
   return { balance: Math.round(bal*100)/100, anchored: keys.some(isSet) };
@@ -3374,10 +3410,12 @@ function renderDash() {
         </div>
       </div>`);
     attachPennyInput('setup-bal');
+    if (settings.potDirection==='increasing') setPennyValue('setup-bal', settings.monthlyPot); // v3.102: the budget resets to the Settings value
     return;
   }
 
-  const tx       = (d.transactions||[]).filter(t=>!t._deleted);
+  const txAll    = (d.transactions||[]).filter(t=>!t._deleted);
+  const tx       = txAll.filter(t=>t.type!=='transfer'); // v3.102 (ON--096): transfers are not spend/income
   // Falls back to live Settings only for a month that predates this
   // feature and never got its own snapshot — every month started from
   // here on always has one, set in startMonth().
@@ -3386,7 +3424,7 @@ function renderDash() {
   const monthTravelBudget = d.travelBudget ?? settings.monthlyTravel;
   const reserveBd= calcReserve(weeks, tx, monthTravelBudget);
   const reserve  = reserveBd.total;
-  const spent    = tx.filter(t=>t.type!=='income').reduce((s,t)=>s+(t.amount||0),0);
+  const spent    = tx.filter(isSpendTx).reduce((s,t)=>s+(t.amount||0),0);
   const incomeTot= tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
   // v3.78 (ON--072): in Increasing mode income is a payment to the card,
   // not pot funding, so it doesn't raise the pot/headroom there.
@@ -3423,7 +3461,7 @@ function renderDash() {
   // (cleared + uncleared) — the same figure every budget works from — and
   // a "Cleared" line is added under it for matching against the card/bank.
   // Shown in Manual mode, or whenever any uncleared transaction exists.
-  const unclearedTx  = tx.filter(t=>t.cleared===false);
+  const unclearedTx  = txAll.filter(t=>t.cleared===false);
   const showCleared  = ftManual() || unclearedTx.length>0;
   const potClearedShown = !showCleared ? null
     : potDirection==='increasing' ? cardBalanceInfo(k, false, true).balance
@@ -3735,6 +3773,28 @@ function renderDash() {
     </div>
   </div>`;
 
+  // ── v3.102 (ON--096): Monthly CC Pay Off (tied Bills item) ──
+  if (potDirection==='increasing') {
+    const nt = nextTiedOccurrence();
+    if (nt) {
+      const dueFmt = nt.shown.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+      const proj = projSpend;
+      if (proj > nt.amount + 0.004) {
+        html += `<div class="payin-strip" style="border-color:var(--amber);flex-wrap:wrap">
+          <div style="font-size:20px">⇄</div>
+          <div class="payin-strip-info"><strong>Next pay-off £${nt.amount.toFixed(2)}</strong> · ${dueFmt}<br><span style="font-size:11px;color:var(--ink2)">Projected card balance is £${proj.toFixed(2)}</span></div>
+          <button class="btn btn-primary" style="padding:8px 12px;font-size:12px" onclick="updateNextPayoff()">Update next bill</button>
+        </div>`;
+      } else {
+        html += `<div class="payin-strip">
+          <div style="font-size:20px">⇄</div>
+          <div class="payin-strip-info"><strong>Next pay-off £${nt.amount.toFixed(2)}</strong> · ${dueFmt}</div>
+          <div class="payin-strip-days" style="font-size:11px">covers projection</div>
+        </div>`;
+      }
+    }
+  }
+
   // ── Pay-in strip ──
   const nextFmt = next.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
   const rawDay  = new Date(next.getFullYear(),next.getMonth(),settings.payinDay);
@@ -3754,7 +3814,7 @@ function renderDash() {
   // own capped-height container. Reuses the existing breakdown-toggle/
   // breakdown-body pattern already used for Headroom/Other above, rather
   // than inventing a new convention.
-  const sorted = [...tx].sort((a,b)=>b.date.localeCompare(a.date)||b._ts-a._ts);
+  const sorted = [...txAll].sort((a,b)=>b.date.localeCompare(a.date)||b._ts-a._ts);
   html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
     <div class="tx-section-label" style="margin-bottom:0">Transactions <span style="color:var(--ink3);font-weight:400;text-transform:none;letter-spacing:normal">(${sorted.length})</span></div>
     <button class="tx-collapse-btn" onclick="toggleFtTxList()" aria-label="Toggle transactions">
@@ -3769,10 +3829,11 @@ function renderDash() {
     // a heading for each — but only when something is uncleared, so with
     // nothing uncleared the list is exactly as it was.
     const txRow = t => {
+      const isXfer   = t.type==='transfer';
       const isIncome = t.type==='income';
-      const catEmoji = isIncome ? '💰' : (t.category==='weekly'?'🛒':t.category==='travel'?'🚗':'📦');
-      const catLabel = isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other');
-      const dotClass = isIncome ? 'income' : t.category;
+      const catEmoji = isXfer ? '⇄' : isIncome ? '💰' : (t.category==='weekly'?'🛒':t.category==='travel'?'🚗':'📦');
+      const catLabel = isXfer ? 'Transfer from Bills' : isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other');
+      const dotClass = (isIncome||isXfer) ? 'income' : t.category;
       const name     = t.label||'';
       const dateFmt  = new Date(t.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
       const wkTag = (t.category==='weekly' && isShifted(t)) ? (()=>{ const wk=(weeks||[]).find(w=>iso(w.start)<=t.budgetDate&&t.budgetDate<=iso(w.end)); return `<span class="tx-wk-tag">Counts in ${wk?'Wk '+wk.num:'next week'}</span>`; })() : '';
@@ -3783,7 +3844,7 @@ function renderDash() {
           <div class="tx-name${name?'':' unlabelled'}">${esc(name)||catEmoji+' '+catLabel}${t.recurId?' <span title="Repeating" style="font-size:10px">🔁</span>':''}${wkTag}</div>
           <div class="tx-date">${dateFmt}</div>
         </div>
-        <div class="tx-amt" style="${isIncome?'color:var(--accent)':''}">${isIncome?'+':''}£${(t.amount||0).toFixed(2)}</div>${clearBtn}
+        <div class="tx-amt" style="${(isIncome||isXfer)?'color:var(--accent)':''}">${isIncome?'+':isXfer?'⇄ −':''}£${(t.amount||0).toFixed(2)}</div>${clearBtn}
         <button class="tx-del" aria-label="Delete transaction" onclick="event.stopPropagation();confirmDelTx('${k}','${t.id}')">×</button>
       </div>`;
     };
@@ -3794,7 +3855,7 @@ function renderDash() {
       html += `<div class="tx-group-head"><span>Uncleared</span><span>${unclearedRows.length}</span></div>`;
       unclearedRows.forEach(t => { html += txRow(t); });
       if (clearedRows.length) {
-        const clearedSpend = clearedRows.reduce((s,t)=>s+(t.type==='income'?-1:1)*(t.amount||0),0);
+        const clearedSpend = clearedRows.reduce((s,t)=>s+((t.type==='income'||t.type==='transfer')?-1:1)*(t.amount||0),0);
         html += `<div class="tx-cleared-total">
           <div><div class="tx-cleared-label">Cleared · ${potLabel}</div><div class="tx-cleared-val">${fmtGbp(potClearedShown)}</div></div>
           <div class="tx-cleared-side">${clearedRows.length} cleared · ${clearedSpend<0?'+':''}${fmtGbp(Math.abs(clearedSpend))} ${clearedSpend<0?'net in':'spent'}<br><strong class="tx-uncleared-fig">${unclearedRows.length} uncleared · ${unclearedDiff<0?'−':'+'}${fmtGbp(Math.abs(unclearedDiff))}</strong></div>
@@ -3901,6 +3962,7 @@ function resetMonthAdjust() {
 function confirmDelTx(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
+  if (t.type === 'transfer') { toast('Transfers are removed from the Bills side'); return; }
   const isIncome = t.type==='income';
   const name = t.label || (isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other'));
   if (!confirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`)) return;
@@ -4188,6 +4250,7 @@ function openSheet() {
 function openEditSheet(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
+  if (t.type === 'transfer') { toast('Transfer from Bills — edit it in Bills. Tap ✓ to mark it cleared here.'); return; }
   _catUserPicked = false;
   _editCtx = { mk, id };
   _ftType = t.type || 'outgoing';
@@ -4365,6 +4428,143 @@ function ftRecDueDates(item, cycleStart, cycleEnd, today) {
   });
   return out;
 }
+// ══════════════════════════════════════════════════════════════
+// v3.102 (ON--096): SPEND TRANSFERS (Bills → Spending)
+// ══════════════════════════════════════════════════════════════
+// Spending rows with type 'transfer' are legs of a Bills transaction flagged `xfer`.
+// isSpendTx(): the "counts as spend" test used wherever the code used type!=='income'.
+function isSpendTx(t) { return t.type !== 'income' && t.type !== 'transfer'; }
+function xferLegId(billsTxId) { return 'xf_' + billsTxId; }
+function tiedItems() { return (bills.recurring||[]).filter(r => !r._deleted && r.active !== false && r.tiedToSpend); }
+
+// Keeps the Spending legs in step with Bills. Idempotent; safe to call often (boot, after every pull,
+// after every Bills change). Creates a leg for each recorded, flagged Bills transaction dated today or
+// earlier (a leg starts UNCLEARED and its cleared state is then never touched here), refreshes
+// amount/date/name on an existing leg, moves it if the date now falls in another pay cycle, and
+// tombstones it when the Bills side is deleted / skipped / un-flagged.
+function reconcileXferLegs() {
+  let changed = 0;
+  const today = todayIso();
+  const want = {};
+  (bills.tx||[]).forEach(bt => {
+    if (bt._deleted || bt.skipped || !bt.xfer || !(bt.amount > 0) || !bt.date) return;
+    want[xferLegId(bt.id)] = bt;
+  });
+  const found = {};
+  Object.keys(months).forEach(mk => {
+    (months[mk].transactions||[]).forEach(t => {
+      if (t.type !== 'transfer' || !t.xferSrc) return;
+      const bt = want[t.id];
+      if (!t._deleted && !bt) {
+        t._deleted = true; t.updated_at = new Date().toISOString();
+        deletedTxLog[t.id] = t.updated_at;
+        syncTombstoneTx(mk, { ...t }); changed++;
+        return;
+      }
+      if (bt) found[t.id] = { mk, t };
+    });
+  });
+  Object.keys(want).forEach(id => {
+    const bt = want[id];
+    const toKey = cycleKeyForDate(bt.date);
+    const label = bt.name || 'Transfer from Bills';
+    const amt = Math.round(bt.amount*100)/100;
+    const f = found[id];
+    const now = new Date().toISOString();
+    if (!f) {
+      if (bt.date > today) return; // not yet recorded — wait for its date
+      if (!months[toKey]) months[toKey] = { startBalance:null, transactions:[] };
+      const entry = { id, monthKey:toKey, date:bt.date, type:'transfer', amount:amt, label, cleared:false,
+                      xferSrc:bt.id, _ts:Date.now(), updated_at:now };
+      months[toKey].transactions.push(entry);
+      delete deletedTxLog[id];
+      syncUpsertTx(toKey, entry); changed++;
+      return;
+    }
+    let t = f.t, mk = f.mk;
+    if (t._deleted) { // source flagged again after being un-flagged: revive
+      if (bt.date > today) return;
+      delete t._deleted; delete deletedTxLog[id]; t.cleared = false; t.updated_at = now; syncUpsertTx(mk, t); changed++;
+    }
+    if (mk !== toKey) {
+      const old = { ...t, updated_at: new Date(Date.now()-1000).toISOString() };
+      months[mk].transactions = months[mk].transactions.filter(x => x !== t);
+      if (!months[toKey]) months[toKey] = { startBalance:null, transactions:[] };
+      t.monthKey = toKey; t.date = bt.date; t.amount = amt; t.label = label; t.updated_at = now;
+      months[toKey].transactions.push(t);
+      syncTombstoneTx(mk, old); syncUpsertTx(toKey, t); changed++;
+      return;
+    }
+    if (t.amount !== amt || t.date !== bt.date || t.label !== label ) {
+      t.amount = amt; t.date = bt.date; t.label = label; t.updated_at = now;
+      syncUpsertTx(mk, t); changed++;
+    }
+  });
+  if (changed) { save(true); try { renderDash(); } catch(e) {} }
+  return changed;
+}
+
+// Tied recurring items follow the monthly pot in Settings. Per-occurrence overrides (from "Update next
+// pay-off bill") are separate records and are left alone.
+function syncTiedAmounts() {
+  let n = 0;
+  const pot = Math.round((settings.monthlyPot||0)*100)/100;
+  if (!(pot > 0)) return 0;
+  tiedItems().forEach(r => {
+    if (r.amount !== pot) { r.amount = pot; r.updated_at = new Date().toISOString(); syncUpsertBillsRecur(r); n++; }
+  });
+  if (n) save(true);
+  return n;
+}
+
+// The next tied occurrence that is still in the future (an occurrence due today or overdue is the one
+// being paid now, for the previous month).
+function nextTiedOccurrence() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  let best = null;
+  tiedItems().forEach(item => {
+    const genStart = new Date(item.anchorDate+'T00:00:00');
+    genOccurrences(item, genStart, new Date(today.getTime()+400*86400000)).some(d => {
+      const schedIso = iso(d);
+      if (bills.tx.some(t=>t.recurringId===item.id && t.schedDate===schedIso && !t._deleted)) return false;
+      const shown = shiftWeekend(d, item.weekendShift||'none');
+      if (shown <= today) return false;
+      const ov = findOverride(item.id, schedIso);
+      const cand = { item, schedDate:schedIso, shown, amount: ov ? ov.amount : item.amount, ov };
+      if (!best || shown < best.shown) best = cand;
+      return true;
+    });
+  });
+  return best;
+}
+function updateNextPayoff() {
+  const nt = nextTiedOccurrence();
+  const d = curData();
+  if (!nt || !d || d.startBalance == null) return;
+  const { last } = getBoundaries();
+  const target = _payoffProjected(last);
+  if (!(target > nt.amount + 0.004)) { renderDash(); return; }
+  if (!confirm(`Update the ${fmtFull(nt.shown)} "${nt.ov?.name||nt.item.name}" pay-off from £${nt.amount.toFixed(2)} to £${target.toFixed(2)}? Only that one payment changes.`)) return;
+  const ov = nt.ov;
+  const rec = upsertOverride(nt.item.id, nt.schedDate, {
+    name: ov?.name || nt.item.name, amount: target,
+    date: ov?.date || iso(nt.shown), type: nt.item.type
+  });
+  save(true); renderDash();
+  syncUpsertBillsOverride(rec);
+  toast('Next pay-off updated ✓');
+}
+// Projected card balance at pay-in (same figure as the dashboard's projection).
+function _payoffProjected(last) {
+  const k = mKey(last);
+  const d = months[k]; if (!d) return 0;
+  const { next } = getBoundaries();
+  const tx = (d.transactions||[]).filter(t=>!t._deleted && t.type!=='transfer');
+  const weeks = getWeeks(last, next, d.weeklyFoodBudget ?? settings.weeklyFood, d.weeklyFoodAdjustment ?? null);
+  const reserve = calcReserve(weeks, tx, d.travelBudget ?? settings.monthlyTravel).total;
+  return Math.round((cardBalanceInfo(k, false).balance + reserve)*100)/100;
+}
+
 function generateFtRecurring() {
   const items = ftRecList();
   if (!items.length) return 0;
@@ -4613,12 +4813,12 @@ function saveSpend() {
 function monthAgg(k) {
   const d  = months[k];
   const tx = (d.transactions||[]).filter(t=>!t._deleted);
-  const cat = c => tx.filter(t=>t.type!=='income' && t.category===c).reduce((s,t)=>s+(t.amount||0),0);
+  const cat = c => tx.filter(t=>isSpendTx(t) && t.category===c).reduce((s,t)=>s+(t.amount||0),0);
   const food = cat('weekly'), travel = cat('travel'), other = cat('other');
   const income = tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
   const spend  = food + travel + other;
   const shops = {};
-  tx.filter(t=>t.type!=='income' && (t.label||'').trim()).forEach(t=>{
+  tx.filter(t=>isSpendTx(t) && (t.label||'').trim()).forEach(t=>{
     const key = t.label.trim();
     if (!shops[key]) shops[key] = { name:key, total:0, count:0 };
     shops[key].total += t.amount||0; shops[key].count++;
@@ -4918,6 +5118,7 @@ function saveSettings() {
   const cm = _pendingClearMode !== null ? _pendingClearMode : (settings.clearMode === 'manual' ? 'manual' : 'auto');
   _pendingClearMode = null;
   settings = { weeklyFood:food, monthlyTravel:travel, monthlyPot:pot, payinDay:day, weekStartDay:wsd, potDirection:pd, clearMode:cm, ftRecurring:(settings.ftRecurring||[]), updated_at:new Date().toISOString() };
+  syncTiedAmounts(); // v3.102 (ON--096): tied pay-off bills follow the monthly pot
   save(true); renderDash(); populateSettings();
   document.getElementById('info-food').textContent = food;
   syncUpsertSettings();
@@ -5091,13 +5292,14 @@ function billsForecastData() {
           amount: ov ? ov.amount : item.amount,
           overridden: !!ov,
           overdue: d < today,
+          xfer: !!item.xfer, tied: !!item.tiedToSpend,
           note: item.note
         });
       }
     });
   });
   bills.tx.filter(t=>!t._deleted && t.cleared===false).forEach(t => {
-    items.push({ kind:'adhoc', txId:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount, overdue: new Date(t.date+'T00:00:00') < today });
+    items.push({ kind:'adhoc', txId:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount, xfer:!!t.xfer, overdue: new Date(t.date+'T00:00:00') < today });
   });
   // v3.64 (ON--063): date first, then income before outgoings on a
   // shared date — recurring occurrences and ad-hoc entries are both
@@ -5160,6 +5362,7 @@ function setForecastMode(mode) {
 const BILLS_CLEARED_CAP = 30; // most recent cleared/skipped entries kept visible
 
 function renderBillsLedger() {
+  try { reconcileXferLegs(); } catch(e) { console.error('xfer reconcile', e); } // v3.102 (ON--096)
   const el = document.getElementById('bills-ledger');
   const cleared = bills.settings.clearedBalance||0;
   const fc = billsForecastData();  // uncleared items: recurring occurrences + planned ad-hoc
@@ -5255,7 +5458,7 @@ function renderBillsLedger() {
 
 // Wraps a raw bills.tx entry as a display row for the merged list.
 function billsClearedRow(t) {
-  return { kind:'cleared', id:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount, skipped:t.skipped, note:t.note };
+  return { kind:'cleared', id:t.id, date:t.date, name:t.name, type:t.type, amount:t.amount, skipped:t.skipped, xfer:!!t.xfer, note:t.note };
 }
 
 // Renders one row of the merged transaction list. Cleared rows show no
@@ -5276,7 +5479,7 @@ function billsRowHtml(it) {
     const rowOnclick = it.skipped ? '' : ` onclick="openBtxSheet('${it.id}')"`;
     return `<div class="ledger-row cleared" style="${it.skipped?'':'cursor:pointer'}"${rowOnclick}>
       <div class="ledger-body">
-        <div class="ledger-name">${it.skipped?'Skipped — ':''}${esc(it.name)}<span class="recur-badge" style="margin-left:6px">Cleared</span></div>
+        <div class="ledger-name">${it.skipped?'Skipped — ':''}${esc(it.name)}<span class="recur-badge" style="margin-left:6px">Cleared</span>${it.xfer?' <span class="recur-badge" title="Transfer to Spending">⇄ Spending</span>':''}</div>
         <div class="ledger-date">${fmtFull(new Date(it.date+'T00:00:00'))}</div>
         ${it.note?`<div class="ledger-date" style="color:var(--ink3)">${esc(it.note)}</div>`:''}
       </div>
@@ -5299,7 +5502,7 @@ function billsRowHtml(it) {
     : `quickClearUncleared('adhoc','${it.txId}')`;
   return `<div class="ledger-row ${overdraft?'overdraft':''} ${it.overdue?'overdue':''}" onclick="${onclick}">
     <div class="ledger-body">
-      <div class="ledger-name">${esc(it.name)}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.overridden?' <span class="recur-badge">Edited</span>':''}${it.overdue?' <span class="recur-badge overdue-badge">Overdue</span>':''}</div>
+      <div class="ledger-name">${esc(it.name)}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.xfer?' <span class="recur-badge" title="Transfer to Spending">⇄ Spending</span>':''}${it.overridden?' <span class="recur-badge">Edited</span>':''}${it.overdue?' <span class="recur-badge overdue-badge">Overdue</span>':''}</div>
       <div class="ledger-date">${fmtFull(new Date(it.date+'T00:00:00'))}</div>
       ${it.note?`<div class="ledger-date" style="color:var(--ink3)">${esc(it.note)}</div>`:''}
     </div>
@@ -5471,7 +5674,7 @@ function renderRecurCard({item, shown}) {
     : item.weekendShift==='after' ? ' · Mon after weekends' : '';
   return `<div class="recur-card ${item.active===false?'paused':''}" onclick="openRecurSheet('${item.id}')">
     <div class="recur-body">
-      <div class="recur-name">${esc(item.name)}${item.active===false?' <span class="recur-badge">Paused</span>':''}</div>
+      <div class="recur-name">${esc(item.name)}${item.active===false?' <span class="recur-badge">Paused</span>':''}${item.tiedToSpend?' <span class="recur-badge">🔗 Tied</span>':item.xfer?' <span class="recur-badge">⇄ Spending</span>':''}</div>
       <div class="recur-meta">${freqTxt}${shiftTxt}${shown?` · Next ${fmtShort(shown)}`:''}</div>
       ${item.note?`<div class="recur-meta" style="color:var(--ink3);margin-top:2px">${esc(item.note)}</div>`:''}
     </div>
@@ -5909,6 +6112,7 @@ function exportScenarioPdf() {
 let _btxType = 'outgoing';
 let _btxDateShown = false;
 let _btxCleared = true;
+let _btxXfer = false; // v3.102 (ON--096)
 // v3.61 (ON--060): null in Add mode, the bills.tx id when editing an
 // existing entry — mirrors the same optional-id pattern openRecurSheet()
 // already uses for recurring items.
@@ -5935,6 +6139,8 @@ function openBtxSheet(id) {
   document.getElementById('btx-date').value = t ? t.date : todayIso();
   _btxCleared = t ? (t.cleared!==false) : true;
   setBtxClearedUI();
+  _btxXfer = t ? !!t.xfer : false;
+  setBtxXferUI();
   document.getElementById('overlay-btx').classList.add('open');
   setTimeout(()=>document.getElementById('btx-amt').focus(), 280);
 }
@@ -5944,6 +6150,14 @@ function pickBtxType(t) {
   _btxType = t;
   document.getElementById('btx-type-outgoing').classList.toggle('sel', t==='outgoing');
   document.getElementById('btx-type-income').classList.toggle('sel', t==='income');
+  if (t==='income') _btxXfer = false; // transfers only go Bills → Spending (outgoing)
+  setBtxXferUI();
+}
+function toggleBtxXfer() { _btxXfer = !_btxXfer; setBtxXferUI(); }
+function setBtxXferUI() {
+  const f = document.getElementById('btx-xfer-field'); if (!f) return;
+  f.style.display = _btxType==='income' ? 'none' : '';
+  document.getElementById('btx-xfer-switch').classList.toggle('on', !!_btxXfer && _btxType!=='income');
 }
 function toggleBtxDate() {
   _btxDateShown = !_btxDateShown;
@@ -5990,6 +6204,7 @@ function saveBtx() {
     t.name = label;
     t.date = date;
     t.cleared = _btxCleared;
+    if (_btxXfer && _btxType==='outgoing') t.xfer = true; else delete t.xfer; // v3.102
     t.updated_at = new Date().toISOString();
 
     if (delta !== 0) {
@@ -6006,6 +6221,7 @@ function saveBtx() {
   }
 
   const entry = { id:billsUid(), date, name:label, type:_btxType, amount:Math.round(amt*100)/100, source:'adhoc', cleared:_btxCleared, _ts:Date.now(), updated_at:new Date().toISOString() };
+  if (_btxXfer && _btxType==='outgoing') entry.xfer = true; // v3.102 (ON--096)
   bills.tx.push(entry);
   if (_btxCleared) {
     const delta = _btxType==='income' ? amt : -amt;
@@ -6031,6 +6247,7 @@ let _rcType   = 'outgoing';
 let _rcFreq   = 'weekly';
 let _rcShift  = 'none';
 let _rcActive = true;
+let _rcXfer = false, _rcTied = false; // v3.102 (ON--096)
 
 function openRecurSheet(id) {
   _rcEditId = id || null;
@@ -6045,6 +6262,10 @@ function openRecurSheet(id) {
   pickRecurShift(item ? (item.weekendShift||'none') : 'none');
   _rcActive = item ? (item.active!==false) : true;
   setRecurActiveUI();
+  _rcTied = item ? !!item.tiedToSpend : false;
+  _rcXfer = item ? (!!item.xfer || !!item.tiedToSpend) : false;
+  if (_rcTied) setPennyValue('rc-amt', settings.monthlyPot);
+  setRecurXferUI();
   document.getElementById('rc-note').value = item ? (item.note||'') : '';
   document.getElementById('rc-delete-row').style.display = item ? 'flex' : 'none';
   document.getElementById('overlay-recur').classList.add('open');
@@ -6055,6 +6276,24 @@ function pickRecurType(t) {
   _rcType = t;
   document.getElementById('rc-type-outgoing').classList.toggle('sel', t==='outgoing');
   document.getElementById('rc-type-income').classList.toggle('sel', t==='income');
+  if (t==='income') { _rcXfer = false; _rcTied = false; }
+  setRecurXferUI();
+}
+function toggleRecurXfer() { if (_rcTied) return; _rcXfer = !_rcXfer; setRecurXferUI(); }
+function toggleRecurTied() {
+  _rcTied = !_rcTied;
+  if (_rcTied) { _rcXfer = true; setPennyValue('rc-amt', settings.monthlyPot); }
+  setRecurXferUI();
+}
+function setRecurXferUI() {
+  const inc = _rcType==='income';
+  const xf = document.getElementById('rc-xfer-field'), td = document.getElementById('rc-tied-field');
+  if (!xf || !td) return;
+  xf.style.display = td.style.display = inc ? 'none' : '';
+  document.getElementById('rc-xfer-switch').classList.toggle('on', !!_rcXfer && !inc);
+  document.getElementById('rc-tied-switch').classList.toggle('on', !!_rcTied && !inc);
+  const amt = document.getElementById('rc-amt');
+  if (amt) { amt.disabled = !!_rcTied && !inc; amt.style.opacity = (_rcTied && !inc) ? '0.55' : ''; }
 }
 function pickRecurFreq(f) {
   _rcFreq = f;
@@ -6083,13 +6322,16 @@ function saveRecur() {
   if (!name)             { toast('Enter a name'); return; }
   if (isNaN(amt)||amt<=0){ toast('Enter a valid amount'); return; }
   if (!date)             { toast('Pick a date'); return; }
+  const tied = _rcTied && _rcType==='outgoing';
   const rec = {
     id: _rcEditId || billsUid(),
-    name, type:_rcType, amount:Math.round(amt*100)/100,
+    name, type:_rcType, amount: tied ? Math.round((settings.monthlyPot||amt)*100)/100 : Math.round(amt*100)/100,
     frequency:_rcFreq, interval:_rcFreq==='custom' ? Math.max(1,interval) : 1,
     anchorDate:date, weekendShift:_rcShift, active:_rcActive, note,
     updated_at: new Date().toISOString()
   };
+  if (_rcType==='outgoing' && (_rcXfer || tied)) rec.xfer = true;      // v3.102 (ON--096)
+  if (tied) rec.tiedToSpend = true;
   if (_rcEditId) {
     const idx = bills.recurring.findIndex(r=>r.id===_rcEditId);
     if (idx>-1) bills.recurring[idx] = rec;
@@ -6130,7 +6372,7 @@ function openClearSheet(recurringId, schedDate) {
   const effDate = ov?.date || iso(shown);
   _clrCtx = { kind:'recurring', recurringId, schedDate, name:ov?.name||item.name, type:item.type, amount: ov?ov.amount:item.amount, effDate, note:item.note };
   document.getElementById('clear-sheet-title').textContent = 'Edit / clear occurrence';
-  openClearSheetCommon(`Scheduled ${fmtFull(new Date(schedDate+'T00:00:00'))}${ov?' · edited':''}`, true);
+  openClearSheetCommon(`Scheduled ${fmtFull(new Date(schedDate+'T00:00:00'))}${ov?' · edited':''}${item.tiedToSpend?' · tied to Spending':''}`, !item.tiedToSpend);
   document.getElementById('skip-clear-btn').textContent = 'Skip this occurrence';
 }
 function openClearSheetAdhoc(txId) {
@@ -6206,6 +6448,7 @@ function saveClear() {
   if (kind==='recurring') {
     const { recurringId, schedDate } = _clrCtx;
     entry = { id:billsUid(), date, name, type, amount:Math.round(amt*100)/100, source:'recurring', recurringId, schedDate, cleared:true, note:_clrCtx.note, _ts:Date.now(), updated_at:new Date().toISOString() };
+    { const _ri = bills.recurring.find(r=>r.id===recurringId); if (_ri && _ri.xfer && type==='outgoing') entry.xfer = true; } // v3.102
     bills.tx.push(entry);
     if (_clrUpdateStanding) {
       const idx = bills.recurring.findIndex(r=>r.id===recurringId);
@@ -6245,6 +6488,7 @@ function quickClearUncleared(kind, a, b) {
     const shown = shiftWeekend(new Date(b+'T00:00:00'), item.weekendShift||'none');
     name = ov?.name || item.name; type = item.type; amt = ov ? ov.amount : item.amount;
     entry = { id:billsUid(), date: ov?.date || iso(shown), name, type, amount:Math.round(amt*100)/100, source:'recurring', recurringId:a, schedDate:b, cleared:true, note:item.note, _ts:Date.now(), updated_at:new Date().toISOString() };
+    if (item.xfer && type==='outgoing') entry.xfer = true; // v3.102 (ON--096)
     bills.tx.push(entry);
     overrideSnapshot = consumeOverride(a, b);
   } else {
