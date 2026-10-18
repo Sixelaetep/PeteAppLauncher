@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.14</title>
+<title>P Apps v11.15</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -706,6 +706,7 @@
   .gym-day.today { border-color: var(--card-color); color: var(--ink); }
   .gym-dot { width: 22px; height: 22px; margin: 3px auto 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; }
   .gym-dot.done { background: #3fb950; color: #fff; }
+  .gym-dot.pt { font-size: 8px; font-weight: 700; letter-spacing: -0.02em; }
   .gym-dot.planned { border: 2px solid var(--card-color); color: var(--card-color); font-size: 8px; }
   .gym-dot.missed { background: rgba(247,129,102,.15); color: #f78166; }
   .gym-dot.none { color: var(--ink3); opacity: .5; }
@@ -770,7 +771,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.14</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.15</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1141,6 +1142,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-119, v11.15): Gym card counts a logged PT session as a done day. A day with a PT session (and
+  no exercises or plan logged) is green in the Mon-Sun strip with a PT marker, is included in "N days done", is
+  never shown as missed, and appears in the "Done today" line as "PT session". Reads ptSessions from gym_tracker_v1.
+  A plan scheduled the same day is NOT auto-completed (still listed as planned today). Display only.
   CHANGED (PET-118, v11.14): Gym card quick-add row now covers food as well as drink. The tag is a toggle
   (Drink / Food). Food mode takes kcal, protein (g, optional) and a meal name, posts GYM_ACTION quickAddMeal to
   gym-tracker.html v2.113 and shows the confirmation popup (Today kcal / protein vs targets). Suggestions come
@@ -3938,6 +3943,7 @@ function statGym() {
     const allPlans = (data.plans           || []);
     const entries  = (data.scheduleEntries || []).filter(e => !e._deleted);
     const waterEntries = (data.waterEntries || []).filter(e => !e._deleted);
+    const ptSessions = (data.ptSessions || []).filter(p => p && !p._deleted);
     const waterTarget  = (data.waterTargets || []).find(t => !t._deleted) || { dailyMl: 0 };
     const todayStr = todayISO();
 
@@ -3977,6 +3983,7 @@ function statGym() {
       return out;
     }
     const sessionsOn = ds => sessions.filter(s => (s.date || '').slice(0,10) === ds);
+    const ptOn = ds => ptSessions.filter(p => (p.date || '').slice(0,10) === ds); // PET-119: PT session = a done day
     const pendingOn  = ds => { const done = sessionsOn(ds); return resolvePlansForDate(ds).filter(id => !done.some(s => s.planId === id)); };
 
     // Mon-Sun strip for the current week
@@ -3989,25 +3996,29 @@ function statGym() {
       const ds = isoFromDate(d);
       const daySess = sessionsOn(ds);
       const pending = pendingOn(ds);
-      let state = 'none', sym = '·', tip = '';
-      if (daySess.length) {
-        state = 'done'; sym = '✓'; doneDays++;
-        tip = 'Done: ' + daySess.map(s => s.name || 'Session').join(', ');
+      const dayPT = ptOn(ds);
+      let state = 'none', sym = '·', tip = '', extra = '';
+      if (daySess.length || dayPT.length) {
+        state = 'done'; doneDays++;
+        sym = daySess.length ? '✓' : 'PT';
+        if (!daySess.length) extra = ' pt';
+        tip = 'Done: ' + daySess.map(s => s.name || 'Session').concat(dayPT.map(p => 'PT session' + (p.ptName ? ' (' + p.ptName + ')' : ''))).join(', ');
       } else if (pending.length) {
         if (ds < todayStr) { state = 'missed'; sym = '✕'; tip = 'Not done: '; }
         else { state = 'planned'; sym = '●'; toGo++; tip = 'Planned: '; }
         tip += pending.map(planName).join(', ');
       }
-      cells += '<div class="gym-day' + (ds === todayStr ? ' today' : '') + '" title="' + esc(tip) + '"><div>' + letters[i] + '</div><div class="gym-dot ' + state + '">' + sym + '</div></div>';
+      cells += '<div class="gym-day' + (ds === todayStr ? ' today' : '') + '" title="' + esc(tip) + '"><div>' + letters[i] + '</div><div class="gym-dot ' + state + extra + '">' + sym + '</div></div>';
     }
 
     // Today's line(s)
-    const todaySess = sessionsOn(todayStr);
+    const todayDoneNames = sessionsOn(todayStr).map(s => s.name || 'Session').concat(ptOn(todayStr).map(() => 'PT session'));
+    const todaySess = todayDoneNames; // length / list drive the "done today" state below
     const todayPending = pendingOn(todayStr);
     let html = '';
     if (todaySess.length) {
       html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span>' +
-        '<span>Done today: <span class="val" style="color:#3fb950">' + todaySess.map(s => esc(s.name || 'Session')).join(', ') + '</span></span></div>';
+        '<span>Done today: <span class="val" style="color:#3fb950">' + todaySess.map(n => esc(n)).join(', ') + '</span></span></div>';
     }
     if (todayPending.length) {
       html += '<div class="card-stat-row"' + (todaySess.length ? ' style="margin-top:3px"' : '') + '><span class="card-stat-dot" style="background:var(--accent)"></span>' +

@@ -14,12 +14,12 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.14 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13 and v11.14. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.15 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14 and v11.15. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.113 | v2.32 – v2.113. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.114 | v2.32 – v2.114. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.97 | v1.0 – v3.43 and v3.73 – v3.97. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -209,6 +209,13 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.15 — PET-119 — Gym card counts a PT session as a done day — 18 Oct 2026
+
+- **Why:** a PT session is logged on its own (no plan, no exercises), so the card showed that day as nothing or, if a plan was scheduled, as missed. Request: treat it as a plan taken place and an active day, with its own PT marker, on the launcher card too.
+- **Change (`index.html`):** reads `ptSessions` from `gym_tracker_v1`. A day with a PT session and no logged session is a green **PT** cell in the Mon–Sun strip (✓ stays for ordinary sessions), counts in "N days done", is never shown as missed, tooltip names the PT (and PT name if set). Today's line shows "Done today: PT session". A plan scheduled the same day is not auto-completed and is still listed as planned today.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.15. Display only; works with any Gym Tracker version, but the app side needs v2.114 for the active-day behaviour.
+- Tested (Stage 1): see Gym v2.114 entry. Not tested: real browser / phone, live data.
 
 ### v11.14 — PET-118 — Gym card quick-add covers food as well as drink — 17 Oct 2026
 
@@ -1696,6 +1703,14 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.114 — GYM-100 — PT session makes the day an active day
+
+- **Change (`gym-tracker.html`):** `isActiveDay(date)` now also returns true when a non-deleted PT session exists on the date. Consequences: PT days use the active-day nutrition targets and show the 🏋️ Active tag (Food & drink modal, summaries); the calendar day card shows "✓ 🧑‍🏫 PT session logged — active day" instead of "No plan scheduled" when nothing is planned. The existing 🧑‍🏫 PT card/Edit/Delete is unchanged and remains the PT's own marker.
+- **Unchanged:** data model, sync, export/import. A plan scheduled on a PT day is not auto-completed (that would create a false session record).
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline changelog set to 2.114.
+- Tested (Stage 1): syntax check; scripted runs of the real `isActiveDay` and the launcher card code with PT-only, PT plus session, PT plus pending plan, deleted PT, and no-PT days.
+- Not tested: real browser, live data, phone, second device. Past days already carrying a PT session change from rest to active in targets and tags (derived, not stored).
 
 ### v2.113 — GYM-099 — Launcher food quick-add receiver
 
