@@ -14,12 +14,12 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.22 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21 and v11.22. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.23 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22 and v11.23. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.115 | v2.32 – v2.115. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.116 | v2.32 – v2.116. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.101 | v1.0 – v3.43 and v3.73 – v3.101. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -40,7 +40,7 @@ This is the consolidated historical development changelog for every application 
 
 | Component | Latest version established | Notes |
 |---|---:|---|
-| `pal-shared.js` | pal-config section v1.2; pal-sync section v1.13 | Combined bundle of pal-config.js + pal-sync.js + pal-utils.js. The three standalone files are retired (no app loads them) |
+| `pal-shared.js` | pal-config section v1.2; pal-sync section v1.13 (code unchanged; comments slimmed 18 Oct 2026) | Combined bundle of pal-config.js + pal-sync.js + pal-utils.js. The three standalone files are retired (no app loads them) |
 | `pal-gcal.js` | v3 | Google Calendar access layer; consumers PeteGCal and Gigs & Trips |
 
 ---
@@ -68,6 +68,15 @@ Four applications were taken out of the launcher at **P Apps Launcher v11.01 (PE
 ## `pal-shared.js`
 
 Combined bundle of `pal-config.js` + `pal-sync.js` + `pal-utils.js`, concatenated in that load-order-critical order (config sets `window.PAL_CONFIG` before sync and utils reference it). Each section is byte-identical to its original standalone file. Loaded as `<script src="pal-shared.js?v=X.X">`. Rows handled by the sync section are shaped `{ user_id, record_key, data, updated_at }`; the library never touches an app's own localStorage or data model.
+
+### Header notes moved out of the code — comment-only slimming (18 Oct 2026)
+
+- **Why:** `pal-shared.js` was 57 KB, of which about 38 KB were comments, most of it the long per-version header notes for pal-config and pal-sync. Every app downloads and parses this file on first open (and again when an app's `?v=` tag changes), so the history was being paid for on every cold launch while the same history already lives in this changelog.
+- **Change:** the file header, the pal-config header and the pal-sync header (v1.0 – v1.13 notes) were replaced with short pointer comments. The original text is preserved **verbatim** in "Archived headers" at the end of this section. Inline explanatory comments next to the code were left in place. 57,709 → 39,040 bytes (gzip ≈ 19.7 KB → 13.5 KB).
+- **Code unchanged — proven:** the old and new files, minified with comments removed (terser, no compress/mangle), are identical (12,322 characters). `PalSync`, `PAL_CONFIG` and the utils expose exactly the same keys in both. No version number inside the file changed (pal-config v1.2, pal-sync v1.13).
+- **Affected apps / pickup:** each app loads it as `pal-shared.js?v=<own version>`, so an app receives the slimmed copy the next time its own version tag changes. Launcher (`?v=11.23`) and Gym Tracker (`?v=2.116`) pick it up in this release; all other apps keep running the identical-code previous copy until they are next released. No behaviour differs either way.
+- **Not done (changed from the original Phase 2 plan, on evidence):** (a) asking the parent for a session from `initSession()` — the v11.22 timeline shows the launcher's push already arrives within ~3 ms of the app's load, so it would add a message and a second session event for no measurable gain; (b) a single shared `?v=` for every app — it would force a simultaneous release of all nine apps for each future shared change, and the file is now 13.5 KB gzipped. Both can be revisited if a slow-open capture points at them.
+- Tested (Stage 1): see the v11.23 and Gym v2.116 entries (all nine app pages load with the slimmed file, no page errors). Not tested: Safari / phone.
 
 ### Bundle consolidation — three script tags replaced by one `pal-shared.js`
 
@@ -166,6 +175,310 @@ Recorded in the pal-sync section header of `pal-shared.js` (no dates given). App
   - Film & TV Tracker v1.1 (FTT-002) declares its own `closeModal(id)` because it uses `.modal-overlay.hidden`, so the shared version was a silent no-op.
   - Gigs & Trips backlog records the GIG-050/052/053 load-speed and pal-utils work as complete.
 
+### Archived headers (verbatim, moved out of `pal-shared.js` 18 Oct 2026)
+
+Original comment text exactly as it stood in `pal-shared.js` (with its internal line numbers as of v1.13):
+
+```text
+=== TOP (lines 1-18) ===
+/**
+ * pal-shared.js
+ * ─────────────────────────────────────────────────────────────
+ * Combined bundle: pal-config.js + pal-sync.js + pal-utils.js, in that
+ * exact order — same load-time-critical sequence every app already
+ * relied on (config sets window.PAL_CONFIG before sync/utils reference
+ * it), just concatenated into one file instead of three separate
+ * <script src="..."> tags/requests. Nothing else changed: each
+ * section below is byte-identical to its original standalone file,
+ * this header is the only new text. Loaded via
+ * <script src="pal-shared.js?v=X.X"><\/script> — same cache-busting
+ * pattern as before, one tag instead of three.
+ *
+ * Editing: change whichever section needs it, in place, exactly as
+ * you would have edited that file on its own. The section dividers
+ * below are cosmetic only and carry no meaning to the browser.
+ * ─────────────────────────────────────────────────────────────
+ */
+
+=== pal-config header (lines 22-49) ===
+/**
+ * pal-config.js
+ * ─────────────────────────────────────────────────────────────
+ * Single source of truth for app configuration.
+ * This is the ONLY file containing the Supabase credentials.
+ * All app HTML files load this first and read from PAL_CONFIG.
+ *
+ * Loaded via <script src="pal-config.js"></script> in each HTML file.
+ *
+ * v1.1 (FF-002 follow-up): added FF_PROXY_KEY — the shared header
+ * value fantasy-football-tracker.html sends to pal-fpl-proxy, matching
+ * the PAL_PROXY_KEY secret set on that Edge Function (see its own
+ * header comment for the `supabase secrets set` command). Lives here
+ * rather than hardcoded in fantasy-football-tracker.html specifically
+ * so it survives every future release of that app unchanged — this
+ * file is edited once and is never part of a per-app release diff,
+ * unlike the app HTML files which get regenerated wholesale each time.
+ * v1.2 (FTT-001): added TMDB_API_KEY / TMDB_READ_TOKEN for
+ * film-tv-tracker.html's search and metadata/availability enrichment.
+ * Same reasoning as FF_PROXY_KEY above — a personal, non-commercial
+ * TMDB key, safe to use client-side (read-only public metadata API,
+ * same risk posture as the Supabase anon key above), kept here once
+ * rather than hardcoded per-release into the app file. Only
+ * TMDB_READ_TOKEN (the v4 Bearer token) is actually used by the app;
+ * TMDB_API_KEY (the v3 key) is stored alongside it for reference/
+ * future use only, since TMDB issues both from one account.
+ * ─────────────────────────────────────────────────────────────
+ */
+
+=== pal-sync header (lines 99-344) ===
+/**
+ * pal-sync.js
+ * ─────────────────────────────────────────────────────────────
+ * Shared Supabase sync helper for Pete's Apps.
+ * v1.0 — extracted from Claim Tracker's sync layer, which was the
+ * most robust of four slightly-different implementations found
+ * across the suite (Claim Tracker / On Budget / Test & Issues used
+ * proper bidirectional last-write-wins merge; GigsAndTrips did too
+ * but with tombstones kept forever and a different field name;
+ * Gym Tracker and Fortnight Tracker did a cloud-replaces-local
+ * approach with their own tombstone workarounds). This file is the
+ * one canonical pattern going forward.
+ * v1.1 — added an optional `prefix` per table() instance. Some apps
+ * (Test & Issues) share ONE Supabase table across multiple record
+ * kinds using a record_key prefix ('app_', 'issue_'), where more than
+ * one kind carries an `id` field — without prefix scoping, pulling
+ * "apps" would also merge in "issues" that happen to expose `.id`.
+ * Each table() instance now optionally scopes itself to one prefix;
+ * omitting it (Claim Tracker's usage) is unchanged and fully backward
+ * compatible — prefix defaults to '', so id === record_key as before.
+ * v1.2 — pull() hardcoded the merge timestamp field as `updated_at`.
+ * Claim Tracker's own records use that name, but Test & Issues' apps
+ * and issues use `updatedAt` (camelCase) — so for that app, EVERY
+ * comparison silently evaluated `'' > ''` (false), meaning an existing
+ * local record could never be updated by a genuinely newer cloud copy.
+ * This wasn't a hidden risk, it was total breakage for that field
+ * convention. pull() now takes an optional updatedAtField (3rd arg,
+ * default 'updated_at' — unchanged for existing callers).
+ * v1.3 — two fixes surfaced while planning On Budget, which shares one
+ * table across SEVEN record kinds (far more than Test & Issues' two):
+ * (1) pull() did its own full-table GET every time — fine for one or
+ * two kinds, wasteful for seven near-identical fetches of the same
+ * rows. pull() now accepts an optional 4th arg, preFetchedRows; when
+ * provided, it skips the network call and merges against those rows
+ * instead. New PalSync.fetchTableRows(tableName) does the one fetch a
+ * multi-kind app needs, shared across all its table() instances.
+ * Existing 3-arg callers (Claim Tracker, Test & Issues) are unaffected
+ * — they keep doing their own single fetch exactly as before.
+ * (2) the tie-break on an exact timestamp match was local-wins (`>`).
+ * On Budget's own hand-rolled merges (already in production, proven)
+ * use cloud-wins-on-tie (`>=`) — that's what makes a push-then-pull on
+ * the same device converge cleanly instead of re-diverging. Adopted
+ * `>=` as the one canonical choice; Claim Tracker and Test & Issues
+ * inherit this too, since a tie is an edge case rare enough that
+ * consistency across apps matters more than which side wins it.
+ * v1.4 — the "push local-only records up" step in pull() excluded
+ * anything with _deleted:true. Fine for apps that splice a deleted
+ * record out of its local array immediately (Claim Tracker, Test &
+ * Issues) — there's no local tombstone left to exclude. But On Budget
+ * keeps _deleted:true records in their local arrays deliberately, so a
+ * delete made while offline survives until it's confirmed synced. With
+ * the old exclusion, that offline tombstone would never get pushed by
+ * a pull — it would just be silently stripped from the merged result
+ * (pull()'s output has always dropped _deleted records, correctly),
+ * with the cloud never having been told. Other devices would then never
+ * see the deletion. Local-only records are now always pushed up exactly
+ * as they are (including a _deleted:true one), regardless of which
+ * pattern the calling app uses — a strict correctness improvement, not
+ * a behavior choice, since a tombstone that never reaches the cloud
+ * defeats the entire point of tombstoning.
+ * v1.5 — thrown errors only ever carried a message string. Gym Tracker's
+ * retry queue needs to tell "session token expired (401) — worth queuing
+ * for automatic retry once a fresh token arrives" apart from any other
+ * failure, and parsing a status code back out of message text is fragile.
+ * Errors now carry a .status property (the HTTP status, where available)
+ * alongside .message — purely additive, no existing catch that only reads
+ * .message is affected.
+ * v1.6 — some apps (Reading Tracker, GigsAndTrips) have a second, standalone
+ * auth path — an email/password login with its own refresh-token flow —
+ * for when the app is opened directly rather than through the launcher.
+ * Until now there was no way to hand a token obtained that way to this
+ * library; _token/_userId were only ever settable via the internal
+ * PAL_SESSION postMessage listener. New PalSync.setSession(token, userId)
+ * lets an app feed in a session from any source, so a standalone-auth path
+ * can use the same table()/pull()/upsert() machinery as the normal
+ * launcher path instead of needing a second, parallel sync implementation.
+ * v1.7 — tombstone() always stamped the dead record's timestamp as
+ * `updated_at` (snake_case), with no way to override it. Every camelCase
+ * app (Test & Issues, Gym Tracker, Fortnight Tracker, Reading Tracker)
+ * noticed this during their own migration and worked around it by never
+ * calling tombstone() at all — building the tombstone object by hand
+ * instead, since the hardcoded field wouldn't refresh whatever their own
+ * merge actually reads. Not a live bug (every app already sidesteps it),
+ * but a landmine for the next migration that assumes the helper "just
+ * works" regardless of field convention. tombstone() now takes an
+ * optional updatedAtField (3rd arg, default 'updated_at' — unchanged for
+ * existing callers, e.g. Claim Tracker's and On Budget's).
+ * v1.8 — only Gym Tracker had any handling for a push failing because the
+ * session token expired mid-use (401): it queued the record and retried
+ * once a fresh PAL_SESSION arrived. On Budget, Test & Issues, Claim
+ * Tracker, and Fortnight Tracker had none — a 401 during upsert() was
+ * just logged and dropped by the caller, relying on the next full pull()
+ * to notice the local record is newer than cloud and push it again. Not
+ * data loss, but inconsistent, and something every app would otherwise
+ * have to reimplement by hand (as Gym Tracker did). Two additions, both
+ * purely additive:
+ * (1) table().upsert() now auto-queues itself internally whenever a
+ * PATCH/POST fails with status 401, then still re-throws exactly as
+ * before — existing callers that catch and log the error see no change
+ * in behaviour. The queue auto-flushes the next time a session arrives,
+ * via initSession()/setSession(), before any app code runs — no app
+ * needs to remember to call anything for the common case. New
+ * PalSync.flushRetryQueue() is also exposed for a manual/explicit flush,
+ * and PalSync.retryQueueLength() for a UI to show "N pending".
+ * (2) PalSync.errorHint(status, message) — Gym Tracker's syncErrorHint()
+ * pulled out into the shared library, so every app gets the same plain-
+ * English translation of a 401/403/404 instead of a bare status code.
+ * v1.9 — two latent-bug fixes, no API changes, no app-side changes needed:
+ * (1) PAGINATION. fetchTableRows() did one GET with no Range header, and
+ * Supabase/PostgREST caps a single response at 1,000 rows by default. No
+ * table is near that yet, but Reading Tracker history and Gym sessions
+ * grow forever and tombstones accelerate it — and a capped pull wouldn't
+ * error, it would silently truncate. Worse, pull()'s push-local-only-up
+ * step would then treat the missing rows as "not in cloud" and re-push
+ * them. fetchTableRows() now requests pages of 1,000 with a Range header
+ * (ordered by record_key for stable pages) and Prefer: count=exact, then
+ * loops until the Content-Range total confirms every row is in hand —
+ * robust even if the server's max-rows is ever configured lower than
+ * 1,000. Single-page tables behave exactly as before: one request.
+ * (2) PERSISTED RETRY QUEUE. The v1.8 401 retry queue was memory-only —
+ * a queued write followed by a tab close or launcher iframe eviction was
+ * gone until the next full pull happened to reconcile it. The queue now
+ * mirrors to localStorage ('pal_retry_queue_v1') on every change and
+ * rehydrates at script load, so a stranded write survives eviction and
+ * flushes on the next session arrival. Queue entries no longer hold live
+ * table() references (unserialisable) — they store {tableName, prefix,
+ * id, data} and the flush reconstructs a table() on demand. Deliberate
+ * consequence: localStorage is shared across the suite's origin, so ANY
+ * app with a live session flushes ANY app's stranded writes — a write
+ * stranded by Gym Tracker gets rescued the moment On Budget next opens,
+ * instead of waiting for Gym specifically. A double-flush race between
+ * two simultaneously-open apps is harmless (upserts are last-write-wins
+ * with a fresh updated_at); a read-modify-write race on the stored queue
+ * between two apps queueing at the exact same moment could in theory
+ * drop one entry, accepted as vanishingly unlikely at this scale and
+ * self-healing via the next pull. Non-401 failures during a flush are
+ * dropped, same as v1.8 (documented behaviour, not a regression).
+ * v1.10 — tombstone compaction, the suite's ONE sanctioned use of hard
+ * DELETE. Soft-delete tombstones are kept forever by design (they stop
+ * resurrection on pull), but they accumulate without bound and every
+ * pull fetches all of them. countCompactableTombstones(table, days) and
+ * compactTombstones(table, days) target only rows that are BOTH
+ * tombstoned (data->>_deleted = true) AND stale (updated_at older than
+ * the threshold, default 90 days, clamped to a 30-day minimum). Safety
+ * argument: a device offline longer than the threshold does a fresh
+ * bootstrap on return, and bootstrap treats cloud as authoritative — a
+ * compacted tombstone therefore has nothing left to protect against.
+ * Live rows and recent tombstones are untouchable by construction (the
+ * WHERE clause, plus RLS scoping everything to the caller's own rows).
+ * Deliberately NOT automatic: apps surface it as a count-then-confirm
+ * button. GigsAndTrips and Meal Planner (bespoke shared sync) are out
+ * of scope — their shared-data tombstone policy needs its own thinking.
+ * v1.11 — pull()'s final line unconditionally dropped every _deleted:true
+ * record from `merged`, regardless of whether the cloud had actually
+ * confirmed the deletion. Every calling app rebuilds its local array
+ * straight from `merged`, so this meant: delete something, and on the
+ * VERY NEXT pull — success or failure of that delete's own tombstone
+ * push — the local record of the deletion itself was gone, not just the
+ * (correctly) hidden record. If the tombstone push had failed for any
+ * reason (network blip, 401, offline), the cloud still held the old live
+ * row, and with local memory of the delete now wiped too, a LATER pull
+ * would freely adopt that stale row as if it were legitimate unseen data
+ * — the deleted record resurrects, permanently, with no further chance
+ * to self-correct. Traced through On Budget ON--049 and ON--050: the
+ * second bug was an app-level retry sweep (compare _deleted:true local
+ * records against cloud confirmation) that could never fire, because by
+ * the time it ran, pull() had already erased the local tombstone it
+ * needed to check. Root cause was here, one layer below any app's own
+ * logic, affecting every app and every table using table().pull().
+ * Two changes, no signature change, existing 3-arg and 4-arg callers
+ * both unaffected other than getting the fix:
+ * (1) merged no longer strips _deleted:true unconditionally. A record
+ * only leaves merged once the CLOUD independently confirms the
+ * deletion (its own row for that id also carries _deleted:true) — at
+ * that point it's already removed from the working map by the existing
+ * "cloud tombstone wins" branch earlier in pull(), so nothing extra is
+ * needed to drop it. Anything still _deleted:true in the map by the end
+ * is, by construction, one the cloud hasn't echoed back yet, and now
+ * stays in merged so the calling app's local array keeps remembering it
+ * across pulls instead of forgetting after one cycle.
+ * (2) an unconfirmed local tombstone whose id already exists in cloud
+ * (so the existing "local-only" push skips it, since that only fires
+ * for ids missing from cloud entirely) now gets its own explicit retry
+ * push every pull, until the cloud confirms it. Previously such a
+ * tombstone was pushed exactly once, at the moment of deletion, with no
+ * second chance if that single push failed.
+ * Consequence every calling app needs to know: merged can now contain
+ * _deleted:true records it never used to. Every app in the suite is
+ * documented as filtering !record._deleted at render/calc time — that
+ * pattern is what makes this safe; an app that instead relied on pull()
+ * having already scrubbed deletes for it will start showing tombstoned
+ * records until the cloud confirms them. Audited alongside this release
+ * (see each app's own changelog): Reading Tracker and Test & Issues had
+ * no such filtering anywhere and needed it added; Fortnight Tracker had
+ * it for codes but not bundles. On Budget, Gym Tracker, and Claim
+ * Tracker already filtered consistently and needed no changes for this.
+ *
+ * v1.12 — opt-in SHARED mode for tables that two known users read and
+ * write together (first user: Film & TV Tracker, pal_film_tracker).
+ * Everything above was strictly per-user: fetchTableRows(), upsert()'s
+ * PATCH and the compaction filters all hard-coded user_id=eq.<me>, so
+ * even when a table's RLS let both users in, each only ever saw their
+ * own rows. table(name, { shared: true }) and fetchTableRows(name,
+ * { shared: true }) change that, and ONLY for callers that pass the flag
+ * — every existing app behaves byte-for-byte as before.
+ * Shared mode: (1) fetch drops the user_id filter (RLS is the boundary)
+ * and collapses duplicate record_keys to the newest updated_at, ordered
+ * by record_key then user_id so pagination stays stable; (2) upsert()
+ * PATCHes by record_key alone and omits user_id from the PATCH body, so
+ * one user editing the other's record updates it in place instead of
+ * forking a second copy or taking ownership; POST (new record) still
+ * stamps the caller's user_id; (3) the flag rides along in the retry
+ * queue so a queued shared upsert is replayed as shared. Compaction is
+ * left per-user on purpose (see v1.10 note on shared-data tombstones).
+ *
+ * v1.13 (TI-089) — storage helpers. PURELY ADDITIVE: two new functions on
+ * the public object, nothing existing changed, so every app that does not
+ * call them behaves byte-for-byte as before. Why: every app on this origin
+ * shares ONE browser localStorage quota, and Safari on the Mac enforces
+ * about 5 MB (UTF-16, i.e. ~2.5 M characters) of it. The suite had
+ * reached ~3.3 MB before Test & Issues (a ~2 MB cache of data that is
+ * already in Supabase) tried to add itself and was refused.
+ *   storageUsage() — read-only origin scan: { totalKB, keys:[{key,kb}] }
+ *     largest first, same (key+value)*2 UTF-16 basis as trimIfLarge().
+ *     Returns null if localStorage is unavailable.
+ *   cacheSet(key, value, opts) — quota-safe write for a key that is only
+ *     a CACHE of Supabase. Never throws. opts.maxKB + opts.cloudSafe:
+ *     when the value exceeds maxKB AND the caller asserts nothing is
+ *     unsynced (cloudSafe) AND there is a live session AND the retry
+ *     queue is empty, the local copy is NOT written (and a stale one is
+ *     removed) — mode 'cloud-only'. In every other case it tries the
+ *     write and reports mode 'local' or 'failed' (with .quota true when
+ *     the browser refused for space). The library cannot know about an
+ *     app's own failed pushes, hence cloudSafe being the caller's claim.
+ *     Not valid for an app whose sync bypasses table() (Gigs & Trips):
+ *     retryQueueLength() says nothing about its pending writes.
+ *
+ * Loaded via <script src="pal-sync.js"></script> AFTER pal-config.js
+ * in each app HTML file. Depends on window.PAL_CONFIG (SB_URL, SB_KEY).
+ *
+ * Does NOT touch localStorage or any app's data model — this only
+ * knows about Supabase rows shaped { user_id, record_key, data,
+ * updated_at }. Each app still owns its own local storage, envelope
+ * shape, and rendering.
+ * ─────────────────────────────────────────────────────────────
+ */
+```
+
 ## `pal-gcal.js`
 
 Shared Google Calendar access layer, kept separate from `pal-shared.js` on purpose (pal-shared.js loads in every app; this module was unproven). Scope `https://www.googleapis.com/auth/calendar.events`. The Google Identity Services script must load before it. App metadata is stored in `extendedProperties.private` under the key `petegcal` (`META_NAMESPACE`). Access is client-side only: a GIS access token (~1 hour), silent refresh while the page is open, no refresh token.
@@ -209,6 +522,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.23 — PET-127 — Timeline can be reopened after Hide; loads the slimmed `pal-shared.js` — 18 Oct 2026
+
+- **Why:** the v11.22 timeline paste from the phone showed the launcher (home shown at 119 ms, no auth wait) and Gym's cold open (page visible 54 ms after the tap, all table reads done ~470 ms later) are fast; Pete asked how to capture a *slow* load, and the panel's **Hide** button removed the panel with no way back before a reload (which resets the marks).
+- **Change (`index.html`):** **Hide** now collapses the panel to a small ⏱ chip (bottom-left); tapping it restores the panel with all recorded lines. The launcher now loads `pal-shared.js?v=11.23` (was `?v=10.87`) so it picks up the slimmed file (see `pal-shared.js` below) — a new, never-used tag so no device holds a stale copy under it.
+- **Unchanged:** launcher logic, session handling, prefetch, data, sync. The timeline is still off unless switched on (5 taps on the version badge).
+- Version: title, nav badge and DEPLOYMENT comment set to v11.23.
+- Tested (Stage 1): `node --check`; Playwright (real Chromium): chip collapses and restores the panel with lines intact, no page errors; previous suites re-run (p122: 11/11; p1: 26 scenarios — the only assertion that differs is the hard-coded expectation of the old `?v=` tags, which now read `11.23` / `2.116` / `3.101` as intended; the "Opening…" screen check is timing-sensitive and passed on re-run when the machine was idle). Not tested: iOS Safari / home-screen app.
 
 ### v11.22 — PET-126 — Timeline switchable from the home-screen icon; reads each app's own load and Supabase timings — 18 Oct 2026
 
@@ -1777,6 +2098,16 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.116 — GYM-102 — One cloud pull per open, not two — 18 Oct 2026
+
+- **Why (measured):** the v11.22 timeline from Pete's phone showed Gym starting all 16 table reads at 17631 ms and the same 16 again at 17727 ms. On open the launcher pushes `PAL_SESSION` and Gym also asks for one (`PAL_REQUEST_SESSION`), so `onSession` fired twice about 100 ms apart and each ran a full `pullFromCloud()` (32 requests; two concurrent merges into the same data).
+- **Change (`gym-tracker.html`):** `pullFromCloud()` is single-flight. A call made while a pull is running joins it (its callback runs when that pull ends). If the running pull ended with errors and was joined, exactly one retry runs, so a fresher token from the second session event is still used. A callback that throws can no longer leave the guard stuck. `onSession` additionally skips its pull when one finished successfully within the last 3 s (session path only; **manual Pull and Push always pull**, preserving the GYM-010 pull-before-push rule). Pull/merge logic, tombstones, `_envGeneration` discard, retry queue: unchanged. Later pulls (manual, token refresh after 3 s, next open) behave as before.
+- **Shared file:** loads the slimmed `pal-shared.js?v=2.116` (comments only, code identical).
+- **Unchanged:** data model, localStorage, JSON export/import, Supabase schema and sync behaviour, quick-add, everything else.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.116.
+- Tested (Stage 1, real Chromium, Supabase mocked in the browser): old gym fires 32 table reads for two session events, new fires 16 (overlapping, and 1.5 s apart); a session event >3 s later pulls again (32); manual Pull right after a pull still pulls; three overlapping calls = one pull and all three callbacks run once; later pulls normal; a throwing callback does not stick the guard; failed first pull plus joined second event = exactly one retry (16 failed + 16 retry); failed pull with no second event does not auto-retry; merged local data identical old vs new; opening Gym through the launcher with 300 ms request latency halves Gym's reads (old 36, new 18, the extra 2 per pull being trainer-notes reads an empty account triggers); no page errors.
+- Not tested: live Supabase with real data, real timing on the phone, a second device, token expiry mid-pull.
 
 ### v2.115 — GYM-101 — Quick-add safe on first open / slow load
 

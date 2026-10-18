@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.115</title>
+<title>Gym Tracker v2.116</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.115</div></span>
+      <span>Gym Tracker<div class="ver">v2.116</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -953,11 +953,18 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.115"></script>
+<script src="pal-shared.js?v=2.116"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.116 (GYM-102): one cloud pull per open, not two. On open the launcher pushes PAL_SESSION and Gym also asks for one
+// (PAL_REQUEST_SESSION), so onSession fired twice ~100 ms apart and each ran a full 16-table pull (32 requests; measured
+// on Pete's phone, v11.22 timeline). pullFromCloud() is now single-flight: a call made while a pull is running joins it
+// (its callback runs when that pull ends) instead of starting another. If the running pull ended with errors, ONE retry
+// runs so a fresher token from the second session event still gets used. Pull/merge logic is unchanged; later pulls
+// (manual, token refresh, next open) are unaffected. A session event arriving within 3 s of a pull that succeeded skips its pull
+// (session path only; manual Pull / Push always pull — GYM-010).
 // v2.115 (GYM-101): launcher quick-add made safe on first open / slow load.
 // (1) GYM_ACTION 'ping' -> GYM_PONG { ready }: ready once init() has run AND
 // the first cloud pull has finished (or 12 s have passed), so the launcher can
@@ -1534,7 +1541,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.115';
+const VERSION = '2.116';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2411,8 +2418,30 @@ function sbUpsert(kind, record, cb) {
     });
 }
 
-function pullFromCloud(cb) {
-  const _cb0 = cb; cb = function () { _gymPullDone = true; if (_cb0) _cb0.apply(this, arguments); }; // GYM-101: lets the launcher know the first pull has settled
+let _pullRunning = false, _pullWaiters = [], _pullJoined = false, _lastPullErr = false, _lastPullOkAt = 0; // GYM-102
+function pullFromCloud(cb, opts) {
+  if (!_pullRunning && opts && opts.skipIfRecent && _lastPullOkAt && (Date.now() - _lastPullOkAt) < 3000) { // GYM-102: session event right after a pull that just succeeded (session path only; manual Pull/Push always pull)
+    slog('Pull skipped — one just completed');
+    if (cb) cb();
+    return;
+  }
+  if (_pullRunning) { // GYM-102: join the pull already in flight instead of starting a second one
+    _pullJoined = true;
+    if (cb) _pullWaiters.push(cb);
+    slog('Pull already running — joined it');
+    return;
+  }
+  _pullRunning = true; _pullJoined = false; _lastPullErr = false;
+  const _cb0 = cb; let _pullFinished = false;
+  cb = function () { // GYM-101: lets the launcher know the first pull has settled (GYM-102: also releases the single-flight guard)
+    if (_pullFinished) return; _pullFinished = true;
+    _gymPullDone = true; _pullRunning = false;
+    const waiters = _pullWaiters; _pullWaiters = [];
+    const again = _pullJoined && _lastPullErr; _pullJoined = false;
+    if (_cb0) { try { _cb0.apply(this, arguments); } catch (e) { slog('Pull callback error: ' + e.message, 'error'); } }
+    if (again) pullFromCloud(function () { waiters.forEach(function (w) { try { w(); } catch (e) {} }); }); // one retry, fresh token
+    else waiters.forEach(function (w) { try { w(); } catch (e) {} });
+  };
   if (!window.PalSync.hasSession()) { slog('Pull skipped — no auth token','error'); if (cb) cb(); return; }
   setSyncStatus('syncing');
   slog('Pull from cloud…');
@@ -2477,8 +2506,10 @@ function pullFromCloud(cb) {
     }
     setSyncStatus(anyError ? 'error' : 'synced');
     slog(anyError ? 'Pull finished with errors on some tables — see above' : 'Pull complete', 'ok');
+    _lastPullErr = anyError;
+    if (!anyError) _lastPullOkAt = Date.now();
     if (cb) cb();
-  })();
+  })().catch(function (e) { slog('Pull failed unexpectedly: ' + (e && e.message), 'error'); _lastPullErr = true; if (cb) cb(); }); // GYM-102: never leave the guard stuck
 }
 
 function manualPull() {
@@ -2626,7 +2657,7 @@ window.PalSync.initSession({
       renderAll();
       const trimResult = window.PalSync.trimIfLarge('gym_tracker_v1', 1536);
       if (trimResult.trimmed) slog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
-    });
+    }, { skipIfRecent: true }); // GYM-102
   },
   onRetryFlushed: function (result) {
     if (result.flushed) slog('Retrying '+result.flushed+' queued change(s) after reconnect — done','ok');
