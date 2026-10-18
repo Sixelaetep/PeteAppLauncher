@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.116 | v2.32 – v2.116. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.117 | v2.32 – v2.117. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.101 | v1.0 – v3.43 and v3.73 – v3.101. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2098,6 +2098,20 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.117 — GYM-103 — Drink count on the calendar card; launcher drinks linked to a saved drink
+
+- **Why (Pete's screenshot, 18 Oct):** the Food & drink screen showed Bottle (1L) ×1, Tea ×3, Protein Shake ×1 (2190 ml) while the calendar card behind it said "3 entries". Cause: the card counted water *records*, and a record holds a count (Tea ×3 is one record), so +1 and launcher adds to an existing drink never changed the number. Food was checked: one record per meal, "N meals" matches the list, no change.
+- **Second finding (audit of launcher / quick-add paths):** `quickAddWaterEntry` (v2.112+) created an entry with no `savedItemId` when no saved drink matched (including every add with no name, "Water"). Such an entry was counted in the ml total but is not shown in the Food & drink "Today" list (cards group by `savedItemId`) and could not be removed there until the next cloud pull ran `migrateWaterEntries`.
+- **Change (`gym-tracker.html`):**
+  - Calendar water card now reads "💧 N drinks" where N = sum of record counts (record with no count = 1). Meals card unchanged.
+  - `quickAddWaterEntry`: matches a saved drink by name only. No match: creates the saved drink (volume = typed ml, not Quick Add; same as typing a new name in the modal) and a linked entry, both upserted and tracked for the post-pull restore. Same volume as the saved drink: adds one to today's entry for it (as the + button). Different volume: its own linked entry at the typed volume (no new saved drink).
+  - `quickWaterIncrement` (modal +): only merges into an entry whose per-unit volume matches the saved drink (or has none stored), so a custom-volume entry is never silently re-priced; otherwise it adds a separate entry.
+- **Launcher:** `index.html` (v11.23) not changed — the card shows ml totals and bars only (no entry count), and the message protocol is unchanged.
+- **Unchanged:** data model and sync schema (existing fields only), JSON export/import, food quick-add, other screens.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.117.
+- Tested (Stage 1): syntax check; scripted runs of the real functions: the screenshot scenario gives 3 records / 5 drinks / 2190 ml; no-name add is linked and visible and a second one increments; new named drink creates one saved drink (case-insensitive, no duplicate); different-volume add is separate and the modal + does not re-price it; legacy entries still merge; "1 drink" singular; earlier slow-load, duplicate, restore and card tests re-run (one expectation updated: a new drink now also upserts its saved drink).
+- Not tested: real browser, live Supabase, second device. Existing unlinked entries are unchanged and still get linked by the existing pull migration. Could not reproduce Pete's "4" exactly from the screenshot (3 records, 5 drinks); if it was a different day or a hidden entry, send the day.
 
 ### v2.116 — GYM-102 — One cloud pull per open, not two — 18 Oct 2026
 

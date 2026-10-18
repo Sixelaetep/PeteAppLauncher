@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.116</title>
+<title>Gym Tracker v2.117</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.116</div></span>
+      <span>Gym Tracker<div class="ver">v2.117</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -953,11 +953,24 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.116"></script>
+<script src="pal-shared.js?v=2.117"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.117 (GYM-103): drink counts and launcher quick-add drinks audited.
+// (1) The calendar water card said "N entries" = number of records, but a record
+// holds a count (Tea x3 is one record), so +1 / launcher adds to an existing drink
+// never changed the number. It now says "N drinks" = total of the counts (a record
+// without a count is 1). Food stays "N meals" (one record per meal). (2) A launcher
+// quick-add with no matching saved drink used to create an UNLINKED water entry:
+// counted in the ml total but missing from the Food & drink "Today" list (and not
+// removable there) until the next cloud pull linked it. It now creates the saved
+// drink (same as typing a new name in the modal) and links the entry at once.
+// (3) A drink typed with the name of a saved drink but a different volume is linked
+// to that drink as its own entry (own per-unit volume); the modal +1 now only adds to
+// an entry whose per-unit volume matches the saved drink, so a custom-volume entry
+// is never silently re-priced.
 // v2.116 (GYM-102): one cloud pull per open, not two. On open the launcher pushes PAL_SESSION and Gym also asks for one
 // (PAL_REQUEST_SESSION), so onSession fired twice ~100 ms apart and each ran a full 16-table pull (32 requests; measured
 // on Pete's phone, v11.22 timeline). pullFromCloud() is now single-flight: a call made while a pull is running joins it
@@ -1541,7 +1554,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.116';
+const VERSION = '2.117';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2619,11 +2632,19 @@ function quickAddWaterEntry(amount, label) {
   const name = String(label || '').trim().slice(0, 60) || 'Water';
   const date = todayISO();
   const now = new Date().toISOString();
-  const saved = getSavedWaterItems().find(w => w.name.toLowerCase() === name.toLowerCase() && round2(w.volumeMl) === ml);
-  let entry;
-  if (saved) {
-    const todays = getWaterEntriesForDate(date).filter(x => x.savedItemId === saved.id).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
-    entry = todays[0];
+  // GYM-103: always link the entry to a saved drink so it shows in the Food & drink "Today" list at once.
+  let saved = getSavedWaterItems().find(w => w.name.toLowerCase() === name.toLowerCase());
+  let newItem = null;
+  if (!saved) {
+    newItem = { id: uid('svwater'), name, volumeMl: ml, quickAdd: false, createdAt: now, updatedAt: now };
+    _env.data.savedWaterItems.push(newItem);
+    saved = newItem;
+  }
+  let entry = null;
+  if (round2(saved.volumeMl) === ml) {
+    // same volume as the saved drink: add one to today's entry for it (same as the + button)
+    const todays = getWaterEntriesForDate(date).filter(x => x.savedItemId === saved.id && (x.perUnitMl === undefined || round2(x.perUnitMl) === ml)).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+    entry = todays[0] || null;
     if (entry) {
       entry.count = (entry.count||1) + 1;
       entry.perUnitMl = saved.volumeMl||0;
@@ -2632,10 +2653,12 @@ function quickAddWaterEntry(amount, label) {
     }
   }
   if (!entry) {
-    entry = { id: uid('water'), date, name: saved ? saved.name : name, savedItemId: saved ? saved.id : null, count: 1, perUnitMl: ml, volumeMl: ml, createdAt: now, updatedAt: now };
+    // new drink, or a different volume to the saved one: its own linked entry at the typed volume
+    entry = { id: uid('water'), date, name: saved.name, savedItemId: saved.id, count: 1, perUnitMl: ml, volumeMl: ml, createdAt: now, updatedAt: now };
     _env.data.waterEntries.push(entry);
   }
   save(_env);
+  if (newItem) { sbUpsert('savedWaterItem', newItem, null); gymQuickTrack('savedWaterItem', newItem); }
   sbUpsert('waterEntry', entry, null);
   gymQuickTrack('waterEntry', entry);
   try { renderCalendar(); } catch (_) {}
@@ -7072,7 +7095,9 @@ function quickWaterIncrement(savedItemId) {
   const item = _env.data.savedWaterItems.find(w => w.id === savedItemId && !w._deleted);
   if (!item) return;
   const now = new Date().toISOString();
-  const todays = getWaterEntriesForDate(_waterModalDate).filter(e => e.savedItemId === savedItemId).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  // GYM-103: only merge into an entry priced at this drink's own volume (or a legacy one with no per-unit stored),
+  // so a custom-volume entry (e.g. added from the launcher) is never silently re-priced.
+  const todays = getWaterEntriesForDate(_waterModalDate).filter(e => e.savedItemId === savedItemId && (e.perUnitMl === undefined || round2(e.perUnitMl) === round2(item.volumeMl))).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
   let entry = todays[0];
   if (entry) {
     entry.count = (entry.count||1) + 1;
@@ -7239,13 +7264,14 @@ function saveEditWaterModal() {
 function renderDayWaterSummary(date) {
   const entries = getWaterEntriesForDate(date);
   const totalMl = round2(entries.reduce((s,e)=>s+(e.volumeMl||0),0));
+  const drinkCount = entries.reduce((s,e)=>s+(e.count||1),0); // GYM-103: a record can hold several (Tea x3)
   const target = getWaterTarget();
   const line = target.dailyMl ? totalMl+'/'+target.dailyMl+' ml' : totalMl+' ml';
   const overTarget = target.dailyMl > 0 && totalMl > target.dailyMl;
   const pct = target.dailyMl ? Math.min(100, Math.round(totalMl/target.dailyMl*100)) : 0;
   return `<div class="cal-session" style="cursor:pointer" onclick="openWaterModal('${date}')">
     <div class="cal-session-head">
-      <span class="cal-session-name">💧 ${entries.length} entr${entries.length===1?'y':'ies'}</span>
+      <span class="cal-session-name">💧 ${drinkCount} drink${drinkCount===1?'':'s'}</span>
       <span class="cal-session-meta">${entries.length ? line : 'Log water'}</span>
     </div>
     ${target.dailyMl ? `<div style="margin-top:6px"><div class="nutri-bar-track"><div class="nutri-bar-fill" style="width:${pct}%;background:${overTarget?'var(--accent2)':'#38bdf8'}"></div></div></div>` : ''}
