@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.102</title>
+<title>On Budget v3.103</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -378,7 +378,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.102</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.103</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -951,9 +951,16 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.102"></script>
+<script src="pal-shared.js?v=3.103"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
+// On Budget v3.103
+// v3.103 (ON--097): (1) A one-off spend transfer now behaves like income in Spending (card balance down AND
+// pot/headroom up, like any other income); only the tied Monthly CC Pay Off leg stays budget-neutral
+// (type 'transfer'). Non-tied legs are stored as type 'income' with xferSrc set. Bills transactions cleared
+// from a tied item carry `tied:true`. (2) "Update next bill" is offered whenever the projected card balance
+// differs from the next pay-off amount, above or below (was: only above); setting it back to the standing
+// amount removes the per-occurrence override.
 // On Budget v3.102
 // v3.102 (ON--096): Spend transfers (Bills → Spending, one direction). A Bills transaction — one-off or
 // recurring — can be flagged as a spend transfer. When it is recorded, a matching Spending transaction
@@ -2636,7 +2643,7 @@ window.addEventListener('message', function(e) {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.102' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.103' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -2928,7 +2935,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.102', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.103', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2937,7 +2944,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.102', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.103', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3779,7 +3786,7 @@ function renderDash() {
     if (nt) {
       const dueFmt = nt.shown.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
       const proj = projSpend;
-      if (proj > nt.amount + 0.004) {
+      if (Math.abs(proj - nt.amount) > 0.004) {
         html += `<div class="payin-strip" style="border-color:var(--amber);flex-wrap:wrap">
           <div style="font-size:20px">⇄</div>
           <div class="payin-strip-info"><strong>Next pay-off £${nt.amount.toFixed(2)}</strong> · ${dueFmt}<br><span style="font-size:11px;color:var(--ink2)">Projected card balance is £${proj.toFixed(2)}</span></div>
@@ -3829,8 +3836,8 @@ function renderDash() {
     // a heading for each — but only when something is uncleared, so with
     // nothing uncleared the list is exactly as it was.
     const txRow = t => {
-      const isXfer   = t.type==='transfer';
-      const isIncome = t.type==='income';
+      const isXfer   = !!t.xferSrc;
+      const isIncome = t.type==='income' && !isXfer;
       const catEmoji = isXfer ? '⇄' : isIncome ? '💰' : (t.category==='weekly'?'🛒':t.category==='travel'?'🚗':'📦');
       const catLabel = isXfer ? 'Transfer from Bills' : isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other');
       const dotClass = (isIncome||isXfer) ? 'income' : t.category;
@@ -3962,7 +3969,7 @@ function resetMonthAdjust() {
 function confirmDelTx(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
-  if (t.type === 'transfer') { toast('Transfers are removed from the Bills side'); return; }
+  if (t.xferSrc) { toast('Transfers are removed from the Bills side'); return; }
   const isIncome = t.type==='income';
   const name = t.label || (isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other'));
   if (!confirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`)) return;
@@ -4250,7 +4257,7 @@ function openSheet() {
 function openEditSheet(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
-  if (t.type === 'transfer') { toast('Transfer from Bills — edit it in Bills. Tap ✓ to mark it cleared here.'); return; }
+  if (t.xferSrc) { toast('Transfer from Bills — edit it in Bills. Tap ✓ to mark it cleared here.'); return; }
   _catUserPicked = false;
   _editCtx = { mk, id };
   _ftType = t.type || 'outgoing';
@@ -4453,7 +4460,7 @@ function reconcileXferLegs() {
   const found = {};
   Object.keys(months).forEach(mk => {
     (months[mk].transactions||[]).forEach(t => {
-      if (t.type !== 'transfer' || !t.xferSrc) return;
+      if (!t.xferSrc) return;
       const bt = want[t.id];
       if (!t._deleted && !bt) {
         t._deleted = true; t.updated_at = new Date().toISOString();
@@ -4469,12 +4476,13 @@ function reconcileXferLegs() {
     const toKey = cycleKeyForDate(bt.date);
     const label = bt.name || 'Transfer from Bills';
     const amt = Math.round(bt.amount*100)/100;
+    const legType = bt.tied ? 'transfer' : 'income'; // v3.103: only the tied pay-off is budget-neutral
     const f = found[id];
     const now = new Date().toISOString();
     if (!f) {
       if (bt.date > today) return; // not yet recorded — wait for its date
       if (!months[toKey]) months[toKey] = { startBalance:null, transactions:[] };
-      const entry = { id, monthKey:toKey, date:bt.date, type:'transfer', amount:amt, label, cleared:false,
+      const entry = { id, monthKey:toKey, date:bt.date, type:legType, amount:amt, label, cleared:false,
                       xferSrc:bt.id, _ts:Date.now(), updated_at:now };
       months[toKey].transactions.push(entry);
       delete deletedTxLog[id];
@@ -4490,13 +4498,13 @@ function reconcileXferLegs() {
       const old = { ...t, updated_at: new Date(Date.now()-1000).toISOString() };
       months[mk].transactions = months[mk].transactions.filter(x => x !== t);
       if (!months[toKey]) months[toKey] = { startBalance:null, transactions:[] };
-      t.monthKey = toKey; t.date = bt.date; t.amount = amt; t.label = label; t.updated_at = now;
+      t.monthKey = toKey; t.date = bt.date; t.amount = amt; t.label = label; t.type = legType; t.updated_at = now;
       months[toKey].transactions.push(t);
       syncTombstoneTx(mk, old); syncUpsertTx(toKey, t); changed++;
       return;
     }
-    if (t.amount !== amt || t.date !== bt.date || t.label !== label ) {
-      t.amount = amt; t.date = bt.date; t.label = label; t.updated_at = now;
+    if (t.amount !== amt || t.date !== bt.date || t.label !== label || t.type !== legType) {
+      t.amount = amt; t.date = bt.date; t.label = label; t.type = legType; t.updated_at = now;
       syncUpsertTx(mk, t); changed++;
     }
   });
@@ -4543,9 +4551,16 @@ function updateNextPayoff() {
   if (!nt || !d || d.startBalance == null) return;
   const { last } = getBoundaries();
   const target = _payoffProjected(last);
-  if (!(target > nt.amount + 0.004)) { renderDash(); return; }
-  if (!confirm(`Update the ${fmtFull(nt.shown)} "${nt.ov?.name||nt.item.name}" pay-off from £${nt.amount.toFixed(2)} to £${target.toFixed(2)}? Only that one payment changes.`)) return;
+  if (Math.abs(target - nt.amount) <= 0.004) { renderDash(); return; }
+  if (!confirm(`${target>nt.amount?'Raise':'Lower'} the ${fmtFull(nt.shown)} "${nt.ov?.name||nt.item.name}" pay-off from £${nt.amount.toFixed(2)} to £${target.toFixed(2)}? Only that one payment changes.`)) return;
   const ov = nt.ov;
+  if (Math.abs(target - nt.item.amount) <= 0.004) { // back to the standing amount: drop the override
+    const snap = consumeOverride(nt.item.id, nt.schedDate);
+    save(true); renderDash();
+    if (snap) syncTombstoneBillsOverride(snap);
+    toast('Next pay-off back to the standing amount ✓');
+    return;
+  }
   const rec = upsertOverride(nt.item.id, nt.schedDate, {
     name: ov?.name || nt.item.name, amount: target,
     date: ov?.date || iso(nt.shown), type: nt.item.type
@@ -6448,7 +6463,7 @@ function saveClear() {
   if (kind==='recurring') {
     const { recurringId, schedDate } = _clrCtx;
     entry = { id:billsUid(), date, name, type, amount:Math.round(amt*100)/100, source:'recurring', recurringId, schedDate, cleared:true, note:_clrCtx.note, _ts:Date.now(), updated_at:new Date().toISOString() };
-    { const _ri = bills.recurring.find(r=>r.id===recurringId); if (_ri && _ri.xfer && type==='outgoing') entry.xfer = true; } // v3.102
+    { const _ri = bills.recurring.find(r=>r.id===recurringId); if (_ri && _ri.xfer && type==='outgoing') { entry.xfer = true; if (_ri.tiedToSpend) entry.tied = true; } } // v3.102
     bills.tx.push(entry);
     if (_clrUpdateStanding) {
       const idx = bills.recurring.findIndex(r=>r.id===recurringId);
@@ -6488,7 +6503,7 @@ function quickClearUncleared(kind, a, b) {
     const shown = shiftWeekend(new Date(b+'T00:00:00'), item.weekendShift||'none');
     name = ov?.name || item.name; type = item.type; amt = ov ? ov.amount : item.amount;
     entry = { id:billsUid(), date: ov?.date || iso(shown), name, type, amount:Math.round(amt*100)/100, source:'recurring', recurringId:a, schedDate:b, cleared:true, note:item.note, _ts:Date.now(), updated_at:new Date().toISOString() };
-    if (item.xfer && type==='outgoing') entry.xfer = true; // v3.102 (ON--096)
+    if (item.xfer && type==='outgoing') { entry.xfer = true; if (item.tiedToSpend) entry.tied = true; } // v3.102 (ON--096)
     bills.tx.push(entry);
     overrideSnapshot = consumeOverride(a, b);
   } else {

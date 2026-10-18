@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.117 | v2.32 – v2.117. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.102 | v1.0 – v3.43 and v3.73 – v3.102. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.103 | v1.0 – v3.43 and v3.73 – v3.103. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.73 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.73 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -2678,6 +2678,16 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.103 — ON--097 — One-off transfers count as income; update-next-bill offered above or below
+
+- **Why:** deployment check v3.102-T2 (failed): a one-off transfer from Bills lowered the card balance but left headroom unchanged; Pete expects it to behave like any other income (card down, headroom up). Also: the pay-off prompt should appear whenever projected spend differs from the next payment, above or below.
+- **Change (`on-budget.html` only):**
+  - Spending legs of a one-off (non-tied) transfer are stored as `type:'income'` with `xferSrc` set, so pot, headroom, over/left, % used, projections, History and the launcher treat them as income. Only the tied Monthly CC Pay Off leg stays `type:'transfer'` (budget-neutral, card balance only). Bills transactions cleared from a tied recurring item carry `tied:true`; `reconcileXferLegs()` sets the leg type from it (and converts an existing leg if it changes). Legs are recognised by `xferSrc`, so they still cannot be edited or deleted from Spending.
+  - "Update next bill" now shows whenever the projected card balance differs from the next tied payment (was: only when above). Confirming raises or lowers that one occurrence; if the target equals the standing amount the override is removed instead.
+- **Data / sync:** no schema change. A v3.102 one-off leg already created is converted to income-type on the next reconcile. ⚠ Update all devices together.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=`, the OB_PONG version and both `version` fields.
+- Tested (Stage 1): `node --check`; jsdom against the real file: one-off transfer lowers the card balance by £100 and raises headroom by £100; row displayed; prompt appears with projection below the pay-off, lowers it, clears; reappears after a change and removing the override when equal to the standing amount; the full v3.102 suite re-run (32/32). **Not tested:** real browser/phone, live Supabase and a second device.
 
 ### v3.102 — ON--096 — Spend transfers (Bills → Spending) and the tied Monthly CC Pay Off
 
