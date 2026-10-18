@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.114 | v2.32 – v2.114. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.97 | v1.0 – v3.43 and v3.73 – v3.97. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.99 | v1.0 – v3.43 and v3.73 – v3.99. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -2251,6 +2251,33 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.99 — ON--093 — Income counts toward the budget in both modes (reverses ON--072)
+
+- ⚠ **Supersedes the v3.78 (ON--072) rule** that Increasing mode ignored income for pot and headroom.
+- **Why:** Pete: Headroom and the budget figures exist to confirm he can afford the month's budget, not to track spending for its own sake, so income added to Spending must be reflected across the board. Recorded as a standing rule in the project memory.
+- **Change (`on-budget.html` only):**
+  - Pot = start balance + income − spent in **both** directions, so Headroom (pot − reserve), "(£x left of / −£x over £y budget)" in Increasing mode, the pot colour and the Spending bar all include income.
+  - "% of budget used" (`potPct`, bar and amber/red thresholds, also exported to the launcher) is now (spent − income) ÷ start balance, floored at 0 and capped at 100.
+  - History: the monthly left-over includes income in Increasing mode too; the "Card total (F&T)" figure is spend − income, so start balance − left-over = card total again; the chart note reads "Start balance + income − spend" for both.
+  - `computeDashboardSummary()` (launcher export) `pot`, `headroom`, `potPct` follow the same rule. Same field names and shape.
+  - Settings hint for Pot tracking direction updated to say income also adds to what you can afford.
+  - v3.98's projection is unchanged and now agrees with Headroom (no carried-over balance: start − projected card balance = Headroom).
+- **Launcher:** `index.html` v11.15 not edited — it reads `pot`, `headroom`, `potPct` from the summary, so its Food & Travel headline colours and Headroom figure now include income once On Budget has been opened to refresh the summary. The launcher figure shown for Increasing mode (card balance) already included payments.
+- **Data / sync:** no schema change. Existing months are recalculated on display; no stored values change. Months that were in Increasing mode will show a higher pot / headroom if they contain income.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and both `version` fields.
+- Tested (Stage 1): `node --check`; jsdom against the real file with £750 limit, £917.99 spent, £80 income: Increasing pot −£87.99 (was −£167.99), headroom = pot − reserve, hero "over £750.00 budget" text net, % used net, projection consistent; Decreasing unchanged; launcher summary `pot`/`headroom` match the screen; earlier v3.97 repeating-transaction and History checks re-run. **Not tested:** real browser/phone, live synced data, the launcher card rendering the refreshed summary.
+
+### v3.98 — ON--092 — Projected figure now includes income / payments added to Spending
+
+- **Why:** the "Projected spend this month" line under Headroom (ON--088, `spent + reserve`) ignored income. In Increasing mode the hero shows the real card balance (net of payments), so after logging a £80 payment the hero read £837.99 but the projection was built from the gross £917.99 spent. Request: projection must reflect income just added; check the launcher.
+- **Change (`on-budget.html` only):**
+  - Increasing mode: the line becomes **Projected card balance at pay-in** = card balance now (the hero figure, incl. carried-over balance, adjustments and payments) + remaining Food/Travel reserve. The "How calculated?" row shows "£card balance now + £reserve reserve".
+  - Decreasing mode: still **Projected spend this month**, now `spent − income + reserve` (working text shows the income when there is any), so start balance − projected equals Headroom. With no income it is exactly as v3.97.
+- **Not changed (decision, ON--072):** pot, reserve and Headroom maths. In Increasing mode a payment to the card still does not raise pot/headroom — spending that has happened still counts against the limit, so "over £750 budget" and Headroom stay spend-based while the projected card balance is net of payments. If Headroom should also rise with payments, that reverses ON--072 and would be a separate change.
+- **Launcher:** `index.html` (v11.15) reads only `dashboardSummary` (pot, headroom, reserve, card balance, bars); it never showed the projected figure and none of those values changed, so no launcher change.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=` and both `version` fields.
+- Tested (Stage 1): `node --check`; jsdom against the real file with the reported numbers (£917.99 spent, £80 payment, £750 limit): Increasing — projection = card balance + reserve, label and working text, Headroom unchanged, no-income case equals spent + reserve; Decreasing — projection = spent − income + reserve and 750 − projection = Headroom, no-income case unchanged. **Not tested:** real browser/phone layout of the longer label, live data.
 
 ### v3.97 — ON--091 — Simpler Spending card, Food left, repeating transactions, History as pay cycles
 
