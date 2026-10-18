@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.15</title>
+<title>P Apps v11.16</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -706,6 +706,9 @@
   .gym-day.today { border-color: var(--card-color); color: var(--ink); }
   .gym-dot { width: 22px; height: 22px; margin: 3px auto 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; }
   .gym-dot.done { background: #3fb950; color: #fff; }
+  .gym-intake-food { display: none; }
+  [data-app="gym"][data-gym-kind="food"] .gym-intake-food { display: block; }
+  [data-app="gym"][data-gym-kind="food"] .gym-intake-water { display: none; }
   .gym-dot.pt { font-size: 8px; font-weight: 700; letter-spacing: -0.02em; }
   .gym-dot.planned { border: 2px solid var(--card-color); color: var(--card-color); font-size: 8px; }
   .gym-dot.missed { background: rgba(247,129,102,.15); color: #f78166; }
@@ -771,7 +774,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.15</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.16</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1142,6 +1145,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-120, v11.16): Gym card shows the intake bar(s) that match the quick-add mode. Drink mode (default)
+  shows the water line and bar; tap the tag to Food and the card swaps to today's calories and protein vs the
+  active / rest-day targets (with the active / rest tag; a PT day counts as active) and their two bars. Display only;
+  the mode is held on the card element, so refreshes keep it. Reads nutritionEntries / nutritionTargets from gym_tracker_v1.
   CHANGED (PET-119, v11.15): Gym card counts a logged PT session as a done day. A day with a PT session (and
   no exercises or plan logged) is green in the Mon-Sun strip with a PT marker, is included in "N days done", is
   never shown as missed, and appears in the "Done today" line as "PT session". Reads ptSessions from gym_tracker_v1.
@@ -3580,6 +3587,7 @@ function gymQuickLoadItems(kind) {
 function gymQuickSetKind(form, kind) {
   form.dataset.kind = kind;
   const food = kind === 'food';
+  const gymCard = form.closest('.app-card'); if (gymCard) gymCard.dataset.gymKind = kind; // PET-120: swaps the intake bar shown
   const tag = form.querySelector('.ob-quick-tag'), amt = form.querySelector('.ob-quick-amt'),
         prot = form.querySelector('.ob-quick-prot'), lbl = form.querySelector('.ob-quick-lbl'),
         go = form.querySelector('.ob-quick-go');
@@ -3944,6 +3952,8 @@ function statGym() {
     const entries  = (data.scheduleEntries || []).filter(e => !e._deleted);
     const waterEntries = (data.waterEntries || []).filter(e => !e._deleted);
     const ptSessions = (data.ptSessions || []).filter(p => p && !p._deleted);
+    const nutritionEntries = (data.nutritionEntries || []).filter(e => e && !e._deleted);
+    const nutritionTargets = (data.nutritionTargets || []).find(t => t && !t._deleted) || {};
     const waterTarget  = (data.waterTargets || []).find(t => !t._deleted) || { dailyMl: 0 };
     const todayStr = todayISO();
 
@@ -4040,15 +4050,36 @@ function statGym() {
     html += '<div class="gym-week">' + cells + '</div>';
     html += '<div style="font-size:10px;color:var(--ink3);margin-top:4px">' + doneDays + ' day' + (doneDays === 1 ? '' : 's') + ' done · ' + toGo + ' still planned this week</div>';
 
-    // One water line + bar
+    // Intake: both blocks are rendered; CSS shows the one matching the quick-add mode
+    // (card[data-gym-kind], set by gymQuickSetKind). Drink = water, Food = calories + protein.
     const waterToday = round2(waterEntries.filter(e => e.date === todayStr).reduce((s, e) => s + (e.volumeMl || 0), 0));
     const waterGoal  = round2(waterTarget.dailyMl);
+    html += '<div class="gym-intake gym-intake-water">';
     if (waterToday || waterGoal) {
       const pct  = waterGoal ? Math.min(100, Math.round(waterToday / waterGoal * 100)) : 0;
       const over = waterGoal > 0 && waterToday > waterGoal;
       html += '<div style="font-size:10px;color:var(--ink3);margin-top:5px">💧 ' + (waterGoal ? waterToday + '/' + waterGoal : waterToday) + ' ml</div>';
       if (waterGoal) html += '<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:' + pct + '%;background:' + (over ? '#3fb950' : '#38bdf8') + '"></div></div>';
     }
+    html += '</div>';
+    // Active day = a planned or logged workout, or a PT session today (same rule as gym-tracker.html isActiveDay)
+    const isActiveToday = resolvePlansForDate(todayStr).length > 0 || sessionsOn(todayStr).length > 0 || ptOn(todayStr).length > 0;
+    const calGoal = round2(isActiveToday ? (nutritionTargets.activeCalories || nutritionTargets.calories || 0) : (nutritionTargets.restCalories || nutritionTargets.calories || 0));
+    const proGoal = round2(isActiveToday ? (nutritionTargets.activeProtein  || nutritionTargets.protein  || 0) : (nutritionTargets.restProtein  || nutritionTargets.protein  || 0));
+    const mealsToday = nutritionEntries.filter(e => e.date === todayStr);
+    html += '<div class="gym-intake gym-intake-food">';
+    if (mealsToday.length || calGoal || proGoal) {
+      const cal = round2(mealsToday.reduce((s, e) => s + (Number(e.calories) || 0), 0));
+      const pro = round2(mealsToday.reduce((s, e) => s + (Number(e.protein) || 0), 0));
+      const calPct = calGoal ? Math.min(100, Math.round(cal / calGoal * 100)) : 0;
+      const proPct = proGoal ? Math.min(100, Math.round(pro / proGoal * 100)) : 0;
+      const overCal = calGoal > 0 && cal > calGoal;
+      html += '<div style="font-size:10px;color:var(--ink3);margin-top:5px">🍽 ' + (isActiveToday ? '🏋️' : '😴') + ' ' +
+        (calGoal ? cal + '/' + calGoal : cal) + ' kcal · ' + (proGoal ? pro + '/' + proGoal : pro) + ' g protein</div>';
+      if (calGoal) html += '<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:' + calPct + '%;background:' + (overCal ? '#f78166' : '#38bdf8') + '"></div></div>';
+      if (proGoal) html += '<div class="card-nutri-bar-track"><div class="card-nutri-bar-fill" style="width:' + proPct + '%;background:#d2a8ff"></div></div>';
+    }
+    html += '</div>';
 
     const statEl = document.getElementById('stat-gym');
     if (!statEl) return;

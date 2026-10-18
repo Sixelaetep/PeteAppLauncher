@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.15 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14 and v11.15. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.16 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15 and v11.16. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.16 — PET-120 — Gym card shows the intake bar for the selected mode — 18 Oct 2026
+
+- **Why:** the card showed only the water bar, so food added from the card had no visible effect. Request: show the food bar and stats when Food is selected, and the drink bar and stats when Drink is selected (saving space).
+- **Change (`index.html` only):** the water block and a new food block are both rendered; CSS shows the one matching the quick-add tag (`data-gym-kind` on the Gym card, set by `gymQuickSetKind`; default Drink, kept across refreshes). Food block: "🍽 🏋️/😴 X/Y kcal · P/Q g protein" with a calorie bar (red when over) and a protein bar. Targets use the active / rest pair (falls back to the flat target), and a PT session counts as an active day, matching `isActiveDay()` in the app (v2.114).
+- **Unchanged:** `gym-tracker.html` (v2.114), message protocol, drink display, other cards.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.16.
+- Tested (Stage 1): see below. Not tested: real browser / phone, live data.
 
 ### v11.15 — PET-119 — Gym card counts a PT session as a done day — 18 Oct 2026
 
