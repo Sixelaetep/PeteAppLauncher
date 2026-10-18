@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.21</title>
+<title>P Apps v11.22</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -811,7 +811,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.21</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.22</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1189,6 +1189,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-126, v11.22): the timeline can be switched on without ?perf=1 (tap the version badge 5 times; ?perf=0 or the
+  panel's Off button turns it off) so it works from the home-screen icon, and it now reads each opened app's own load and
+  Supabase request timings (same-origin frame performance entries) at +5 s / +15 s after the frame loads and on a
+  Snapshot button. Off by default; no app or data change.
   CHANGED (PET-125, v11.21): ?perf=1 timeline gains browser timing diagnostics (index.html / pal-shared.js download timings,
   service worker, visibility, connection, paint, DOMContentLoaded / load). Off unless ?perf=1; nothing else changes.
   CHANGED (PET-124, v11.20): faster launch. A stored session with more than 5 minutes left is used immediately and
@@ -1434,11 +1438,13 @@ const loaded    = {};
 // ── Boot sequence ──────────────────────────────────────────────────
 // PET-124 v11.20: opt-in timeline (?perf=1). Defined first so everything below can call perfMark() unconditionally;
 // does nothing (and stores nothing) unless the page was opened with ?perf=1. See the perf block near the end of this script.
-const PAL_PERF = /[?&]perf=1(&|$)/.test(location.search);
+if (/[?&]perf=0(&|$)/.test(location.search)) { try { localStorage.removeItem('pal_perf'); } catch (e) {} }
+const PAL_PERF = /[?&]perf=1(&|$)/.test(location.search) ||
+  (function () { try { return localStorage.getItem('pal_perf') === '1'; } catch (e) { return false; } })();   // PET-126: persisted switch
 const _perfMarks = [];
-function perfMark(label) {
+function perfMark(label, t) {
   if (!PAL_PERF) return;
-  _perfMarks.push({ t: Math.round(performance.now()), label: label });
+  _perfMarks.push({ t: Math.round(t != null ? t : performance.now()), label: label });
   if (typeof perfRender === 'function') perfRender();
 }
 perfMark('launcher script started');
@@ -2374,6 +2380,10 @@ document.querySelectorAll('.app-frame').forEach(frame => {
       _frameDone[frame.id.replace('frame-', '')] = true;
       setFrameLoading(frame.id, false);
       perfMark(frame.id + ': load event');
+      if (PAL_PERF) {   // PET-126: read the app's own timings from inside its frame once it has had time to sync
+        setTimeout(() => perfSnapshot(frame, '+5s'), 5000);
+        setTimeout(() => perfSnapshot(frame, '+15s'), 15000);
+      }
     }
     if (sbSession) setTimeout(() => { pingFrame(frame); perfMark(frame.id + ': PAL_SESSION pinged'); }, 100);
     setTimeout(() => pingTheme(frame), 100);
@@ -4687,23 +4697,87 @@ function perfRender() {
     el.id = 'palPerf';
     var copy = document.createElement('button'); copy.textContent = 'Copy';
     copy.onclick = function () {
-      var txt = _perfMarks.map(function (m) { return m.t + ' ms  ' + m.label; }).join('\n');
+      var txt = _perfMarks.slice().sort(function (a, b) { return a.t - b.t; }).map(function (m) { return m.t + ' ms  ' + m.label; }).join('\n');
       try { navigator.clipboard.writeText(txt); toast('Timeline copied'); } catch (e) {}
     };
     var close = document.createElement('button'); close.textContent = 'Hide';
     close.onclick = function () { el.style.display = 'none'; };
+    var snap = document.createElement('button'); snap.textContent = 'Snapshot';
+    snap.onclick = function () {
+      document.querySelectorAll('.app-frame').forEach(function (f) { if (f.getAttribute('src')) perfSnapshot(f, 'manual'); });
+    };
+    var off = document.createElement('button'); off.textContent = 'Off';
+    off.onclick = function () { try { localStorage.removeItem('pal_perf'); } catch (e) {} el.remove(); toast('Timeline off from the next launch'); };
     var pre = document.createElement('div'); pre.id = 'palPerfLines';
-    el.appendChild(copy); el.appendChild(close); el.appendChild(pre);
+    el.appendChild(copy); el.appendChild(snap); el.appendChild(close); el.appendChild(off); el.appendChild(pre);
     document.body.appendChild(el);
   }
   document.getElementById('palPerfLines').textContent =
-    _perfMarks.map(function (m) { return String(m.t).padStart(6) + ' ms  ' + m.label; }).join('\n');
+    _perfMarks.slice().sort(function (a, b) { return a.t - b.t; }).map(function (m) { return String(m.t).padStart(6) + ' ms  ' + m.label; }).join('\n');
 }
 window.addEventListener('message', function (e) {
   if (!PAL_PERF || e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'PAL_PERF' && e.data.label) perfMark('app: ' + e.data.label);
 });
 if (PAL_PERF) document.addEventListener('DOMContentLoaded', perfRender);
+
+// PET-126 v11.22: read an opened app's own timings. The frames are same-origin, so the launcher can read the frame's
+// Performance entries without any change to the app: its HTML download, paint / load events, and every request it made
+// (Supabase reads and writes, edge functions, TMDB…) with start and end. Times are converted onto the launcher's clock
+// (frame timeOrigin minus launcher timeOrigin), so they line up with the rest of the timeline. Each request is printed once.
+const _perfSeen = {};
+function perfSnapshot(frame, why) {
+  if (!PAL_PERF) return;
+  try {
+    var w = frame.contentWindow, p = w.performance, id = frame.id.replace('frame-', '');
+    var off = p.timeOrigin - performance.timeOrigin;
+    var r = function (v) { return Math.round(v); };
+    var seen = _perfSeen[id] || (_perfSeen[id] = {});
+    var n = p.getEntriesByType('navigation')[0];
+    if (n && !seen.nav) {
+      seen.nav = true;
+      perfMark(id + ': app page first-byte', off + n.responseStart);
+      perfMark(id + ': app page downloaded (size ' + n.transferSize + ', 0 = cache)', off + n.responseEnd);
+      perfMark(id + ': app DOMContentLoaded', off + n.domContentLoadedEventEnd);
+      if (n.loadEventEnd) perfMark(id + ': app load complete', off + n.loadEventEnd);
+    }
+    p.getEntriesByType('paint').forEach(function (e) {
+      if (!seen['p' + e.name]) { seen['p' + e.name] = true; perfMark(id + ': app ' + e.name, off + e.startTime); }
+    });
+    p.getEntriesByType('resource').forEach(function (e) {
+      var key = e.name + '@' + r(e.startTime);
+      if (seen[key]) return;
+      seen[key] = true;
+      var m = e.name.match(/\/(rest|functions|auth)\/v1\/([^?\/]+)/);
+      var what = m ? m[1] + ':' + m[2] : e.name.replace(/^https?:\/\//, '').split('?')[0].slice(0, 60);
+      var st = e.responseStatus ? ' ' + e.responseStatus : '';
+      perfMark(id + ': request ' + what + ' started', off + e.startTime);
+      perfMark(id + ': request ' + what + ' finished (' + r(e.duration) + ' ms' + st + ', ' + (e.encodedBodySize || e.transferSize || 0) + ' B)', off + e.responseEnd);
+    });
+    perfMark(id + ': snapshot taken (' + why + ')');
+  } catch (e) { perfMark('snapshot failed for ' + frame.id + ': ' + e.message); }
+}
+
+// PET-126: tap the version badge 5 times (within a few seconds) to switch the timeline on or off without ?perf=1,
+// so it works from the home-screen icon. Stored as pal_perf in localStorage; the page reloads once to apply it.
+(function () {
+  var el = document.querySelector('.nav-version');
+  if (!el) return;
+  var n = 0, last = 0;
+  el.addEventListener('click', function () {
+    var now = Date.now();
+    if (now - last > 2500) n = 0;
+    last = now; n++;
+    if (n < 5) return;
+    n = 0;
+    try {
+      var on = localStorage.getItem('pal_perf') === '1';
+      if (on) localStorage.removeItem('pal_perf'); else localStorage.setItem('pal_perf', '1');
+      toast('Timeline ' + (on ? 'off' : 'on') + ' — reloading…');
+      setTimeout(function () { location.reload(); }, 700);
+    } catch (e) {}
+  });
+})();
 
 // PET-125 v11.21: what the browser itself knows about how this page arrived — only runs with ?perf=1. The v11.20
 // timeline showed ~12.5 s before the launcher script even started on a reload; this splits that time into the

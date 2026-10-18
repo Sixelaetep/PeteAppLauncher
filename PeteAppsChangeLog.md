@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.21 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20 and v11.21. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.22 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21 and v11.22. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -209,6 +209,17 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.22 — PET-126 — Timeline switchable from the home-screen icon; reads each app's own load and Supabase timings — 18 Oct 2026
+
+- **Why (diagnostic):** the v11.21 timelines (Mac Safari) showed the ~12 s delay is a reload-only stall *before* the browser sends the request for `index.html` (request sent at ~12.3 s, first byte 132 ms later; `pal-shared.js` and `manifest.json` from cache; no service worker registered or controlling; only an orphan Cache Storage entry `gym-tracker-shell-v3.2`). Fresh opens measured 17 ms and 44 ms to launcher script start; reload with no app open 13.3 s; reload after Gym 12.4 s; reload after On Budget 0.11 s. Not caused by the apps or the v11.20 prefetch (the earlier PET-074 / PET-081 10–13 s spikes predate both). Leading hypothesis (unproven): a stale pooled connection on reload. Pete reports the real launch path is the iPhone home-screen icon (not a reload), where `?perf=1` cannot be added, and that nothing has yet been measured inside the apps themselves.
+- **Change (`index.html`):**
+  - The timeline can be switched on without `?perf=1`: tap the version badge 5 times (within a few seconds) to toggle it; the choice is stored as `pal_perf` in localStorage and the page reloads once. `?perf=0` or the panel's new **Off** button turns it off. Still off by default; `?perf=1` still works for a single session.
+  - **Snapshot of an opened app:** because the app frames are same-origin, the launcher reads each frame's own Performance entries (no app change) at +5 s and +15 s after its load event, and on the panel's new **Snapshot** button: first byte and download of the app HTML, DOMContentLoaded / load complete, first paint, and every request the app made (Supabase `rest:` table reads and writes, edge functions, TMDB…) with start, finish, duration, status where the browser reports it, and size. Times are converted onto the launcher's clock (frame `timeOrigin` minus launcher `timeOrigin`) and the panel is now sorted by time. Each request is printed once per frame.
+- **Unchanged:** all apps, `pal-shared.js` (still `?v=10.87`), data, sync, prefetch, session handling, everything else. Nothing is stored unless the timeline is switched on (the single `pal_perf` flag).
+- Version: title, nav badge and DEPLOYMENT comment set to v11.22.
+- Tested (Stage 1): `node --check`; Playwright (real Chromium) on the real `index.html` and `gym-tracker.html`, 11 new scenarios: stored flag switches the panel on without a query; no flag shows nothing; 5 taps on the badge turn it on (flag stored, reload, panel) and 5 more turn it off; `?perf=0` clears the flag; Gym frame snapshot lists its page timings and its Supabase requests on the launcher clock after the tap, in time order, with no duplicate lines on a manual Snapshot; no page errors. The full 26-scenario v11.20/v11.21 suite re-run: 26/26. Not tested: Safari / iOS PWA behaviour of the badge taps and of cross-origin Resource Timing detail for Supabase (duration is exposed; finer phases may be zero), real phone values.
+- Note for later phases (observed in the test run, empty data): Gym fires 10 table reads at start and about 37 requests in the first 7 seconds against a mocked empty Supabase — to be checked against real numbers.
 
 ### v11.21 — PET-125 — `?perf=1` timeline gains browser timing diagnostics — 18 Oct 2026
 
