@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.18 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17 and v11.18. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.19 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18 and v11.19. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -23,7 +23,7 @@ This is the consolidated historical development changelog for every application 
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.100 | v1.0 – v3.43 and v3.73 – v3.100. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
-| Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
+| Reading Tracker | `reading-tracker.html` | v3.73 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.73 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
 **Applications referenced in the changelogs but with no changelog supplied**
@@ -209,6 +209,16 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.19 — PET-123 — Reading card quick-log (page / chapter) with per-mode progress bar — 18 Oct 2026
+
+- **Why (feature):** Pete asked for the Reading Tracker card to work like the Gym and On Budget cards: one input plus a toggle to log the page reached for the current book or the chapter reached for the current audiobook, showing the progress bar for the selected mode only.
+- **Change (`index.html`):** new quick-add row on the Reading card (reuses the `.ob-quick` styles): a Book ⇄ / Audio ⇄ toggle, one numeric input (placeholder "Page reached" / "Chapter reached", digits only) and a Log button. `rtEnsureFrame()`, `rtWaitReady()` (`RT_ACTION` `ping` / `RT_PONG` `ready`, 0.5 s, up to 45 s), `rtQuickSend()` (one fixed `reqId`, re-sent every 2 s up to 20 s until `RT_QUICKLOG_RESULT`), `rtQuickSubmit()` and `showRtQuickConfirm()` (reuses the 5 s `#obConfirm` popup: title, "Read +N", "Progress x / total"). Input is cleared only on a confirmed save; a rejection shows "Not saved — <reason>" and keeps the input.
+- **Per-mode bar:** `statReading()` now wraps the book and audiobook rows in `.rt-row-book` / `.rt-row-audio`; the card's `data-rt-kind` attribute (book | audiobook) hides the other one via CSS, as the Gym card does for Drink / Food. The bar maths and colours are unchanged. The toggle is not remembered between page loads (card starts on Book).
+- **Unchanged:** Gym and On Budget quick-add code, `ensureLoaded()`, other cards, `pal-shared.js?v=10.87` reference. The helpers are another deliberate copy of the pattern. ⚠ Candidate shared-platform improvement still stands: one generic ready-ping / re-send helper for all card quick-adds.
+- **Compatibility:** needs `reading-tracker.html` v3.73. An older Reading Tracker never answers the ping, so the card shows the not-ready message after 45 s with nothing saved and the input kept.
+- Version: title, nav badge and DEPLOYMENT comment set to v11.19.
+- Tested (Stage 1): `node --check`; jsdom run of the real `index.html` with a stub for the shared script and a simulated Reading Tracker frame: default Book mode, toggle both ways (placeholder, input cleared, which row is hidden by the CSS), digits-only input, empty submit rejected, ping-until-ready then send with correct kind/value, input cleared and popup shown on success, input kept and toast shown on rejection, busy state cleared. Not tested: real iframe load, a cold load on a phone or slow network, live Supabase, a second device, visual layout of the row on a phone.
 
 ### v11.18 — PET-122 — On Budget card quick-add reliable on first open / slow load — 18 Oct 2026
 
@@ -2707,6 +2717,15 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 # Reading Tracker
 
 `reading-tracker.html`. The `.md` archives part of the clean changelog block (v3.29 – v3.67) from the HTML; the inline comment keeps the 15 most recent. ⚠ Only the entries listed below were supplied; older short notes elsewhere in the code were left in place. Syncs via pal-sync across four tables (trackers, books, entries, wishlist).
+
+### v3.73 — MR-058 — Launcher quick-log receiver — 18 Oct 2026
+
+- **Why (feature):** lets the launcher's Reading card log the page (book) or chapter (audiobook) reached for the current active Book List item. See launcher v11.19 (PET-123).
+- **Change:** the existing `message` listener now also handles `RT_ACTION`. `ping` replies `RT_PONG {reqId, ready}`; ready only after `selectUser`'s first cloud pull has settled (`_rtFirstPullSettled`) and a user is selected. `quickLogProgress {kind, value, reqId}` runs `quickLogBookListProgress()`: takes `bookListQueue(type)[0]`, validates (a number above the current position, not above the total), adds an ordinary `readingEntries` record `{id, date: today, pageTo}`, sets `completedDate` when it reaches the total, then `save()` and `pushWishlistItemNow()` as the in-app logger does, and replies `RT_QUICKLOG_RESULT {ok, kind, title, value, added, total, finished}` or `{ok:false, error}`. The result is stored per `reqId` and replayed on a re-send, so the launcher's re-sends cannot log twice. `rtQuickReapply()` runs right after `reassembleFromSync()` in `pullAllFromCloud()` and puts back a quick-logged entry if a later pull dropped it (then pushes it again).
+- **Deliberate difference from the in-app logger:** an item with no page/chapter count is rejected with a message ("set it in the app first") rather than treated as "set the total", because a bare number from the launcher is ambiguous.
+- No data-model, localStorage key, export/import or sync-schema change. The launcher origin guard is unchanged (same-origin only).
+- Version: title, logo span, `pal-shared.js?v=` query and inline changelog comment set to v3.73.
+- Tested (Stage 1): `node --check`; scripted run of the real receiver, queue and entry functions (18 checks): ping not-ready then ready, no reply before ready, book log, same-`reqId` replay does not double-log, rejects not-higher / over-total / non-numeric / no item left / no page count, audiobook uses chapters and does not touch the book, finishing sets `completedDate`, re-apply after a pull drops the entry and is idempotent. Not tested: the real app boot and first pull (needs the real `pal-shared.js` and Supabase), the real browser, a second device.
 
 ### v3.72 — MR-057
 

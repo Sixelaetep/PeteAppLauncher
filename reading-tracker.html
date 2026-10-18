@@ -13,7 +13,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.72</title>
+<title>Reading Tracker v3.73</title>
 <style>
   :root {
     --bg:       #0f1923;
@@ -750,7 +750,7 @@
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.72</span></div>
+    <div class="rt-logo">My Reading <span>v3.73</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1604,7 +1604,7 @@
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-shared.js?v=3.72"></script>
+<script src="pal-shared.js?v=3.73"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -1780,6 +1780,19 @@ function renderRtSyncLog() {
 // fit, which is already a safe pattern. Didn't find an obviously cheap
 // live count for Trackers/Past/Reviews/Stats, so left all four
 // text-only.
+// v3.73 (MR-058): launcher quick-log. The P Apps launcher's Reading card
+// can now send the page (book) or chapter (audiobook) reached for the
+// current active Book List item (bookListQueue(type)[0]) via an RT_ACTION
+// postMessage. Same reliability pattern as Gym v2.115 / On Budget v3.100:
+// RT_ACTION ping -> RT_PONG {ready} (ready only once the first cloud pull
+// has settled, so a log is never made against stale/empty data); a
+// quickLogProgress request carries a reqId, its result is stored per
+// reqId and replayed on re-send (no double log), and after any later
+// pull that replaces appState.wishlist the entry is re-applied if the
+// pull dropped it. Rejects (never auto-sets the total) when the item has
+// no page/chapter count, the number is not above the current position,
+// or it exceeds the total. Replies RT_QUICKLOG_RESULT. No data-model
+// change - the entry is an ordinary readingEntries record.
 // v3.72 (MR-057): Dashboard "Monthly progress" card (this month + previous 3,
 // % of current Monthly targets, books/audiobooks separate); Stats monthly
 // history split into Books and Audiobooks sections. No data-model change.
@@ -2840,6 +2853,7 @@ async function pullAllFromCloud() {
       trackers: trackersResult.merged, books: booksResult.merged,
       entries: entriesResult.merged, wishlist: wishlistResult.merged
     });
+    try { rtQuickReapply(); } catch (err) {} // v3.73 (MR-058)
     _lastCloudError = null;
     return {
       pushedUp: trackersResult.pushedCount + booksResult.pushedCount + entriesResult.pushedCount + wishlistResult.pushedCount
@@ -2982,6 +2996,7 @@ async function selectUser(userId) {
       syncToCloud();
     }
   }
+  _rtFirstPullSettled = true; // v3.73 (MR-058): launcher quick-log may now be applied
   showDashboard();
   startCloudPoll(); // v3.3: begin quiet periodic re-pull for this user
 }
@@ -7648,7 +7663,72 @@ function applyTheme(theme) {
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return; // ── origin guard ──
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme); // v2.4
+  if (e.data && e.data.type === 'RT_ACTION') rtHandleAction(e); // v3.73 (MR-058)
 });
+
+// ── v3.73 (MR-058): launcher quick-log receiver ──────────────────────────
+let _rtFirstPullSettled = false;      // set once selectUser's first pull has finished (ok or not)
+const _rtQuickResults = new Map();    // reqId -> result object (replayed on re-send)
+const _rtQuickApplied = [];           // {itemId, entryId, pageTo, date} - for post-pull re-apply
+function rtHandleAction(e) {
+  const d = e.data || {};
+  const reply = function(msg) { try { e.source && e.source.postMessage(msg, window.location.origin); } catch (err) {} };
+  if (d.action === 'ping') {
+    reply({ type: 'RT_PONG', reqId: d.reqId, ready: !!(_rtFirstPullSettled && _currentUser) });
+    return;
+  }
+  if (d.action === 'quickLogProgress') {
+    if (!d.reqId) return;
+    if (_rtQuickResults.has(d.reqId)) { reply(_rtQuickResults.get(d.reqId)); return; }
+    if (!(_rtFirstPullSettled && _currentUser)) return; // not ready - launcher keeps re-sending
+    let res;
+    try { res = quickLogBookListProgress(d.kind === 'audiobook' ? 'audiobook' : 'book', d.value, d.reqId); }
+    catch (err) { res = { type: 'RT_QUICKLOG_RESULT', reqId: d.reqId, ok: false, error: 'Unexpected error' }; }
+    _rtQuickResults.set(d.reqId, res);
+    reply(res);
+  }
+}
+function quickLogBookListProgress(type, rawVal, reqId) {
+  const fail = function(error) { return { type: 'RT_QUICKLOG_RESULT', reqId: reqId, ok: false, error: error }; };
+  const unitS = type === 'audiobook' ? 'chapter' : 'page';
+  const unitP = type === 'audiobook' ? 'chapters' : 'pages';
+  const item = bookListQueue(type)[0];
+  if (!item) return fail('No current ' + (type === 'audiobook' ? 'audiobook' : 'book') + ' on your Book List');
+  const raw = parseInt(rawVal, 10);
+  if (isNaN(raw) || raw <= 0) return fail('Enter a valid ' + unitS + ' number');
+  if (!(item.pages > 0)) return fail('"' + item.title + '" has no ' + unitS + ' count yet - set it in the app first');
+  const current = highestPageForItem(item);
+  if (raw <= current) return fail('Must be higher than ' + unitS + ' ' + current);
+  if (raw > item.pages) return fail('Only has ' + item.pages + ' ' + unitP);
+  const entry = { id: uid('t'), date: todayISO(), pageTo: raw };
+  item.readingEntries = item.readingEntries || [];
+  item.readingEntries.push(entry);
+  const nowComplete = raw >= item.pages;
+  if (nowComplete) item.completedDate = todayISO();
+  item.updatedAt = new Date().toISOString();
+  _rtQuickApplied.push({ itemId: item.id, entryId: entry.id, pageTo: raw, date: entry.date });
+  save();
+  pushWishlistItemNow(item);
+  try { renderMonthlyWidgets(); renderCollectionCards(); } catch (err) {}
+  try { if (document.getElementById('wishlistApp')?.classList.contains('active')) renderWishlistView(); } catch (err) {}
+  return { type: 'RT_QUICKLOG_RESULT', reqId: reqId, ok: true, kind: type, title: item.title,
+           value: raw, added: raw - current, total: item.pages, finished: nowComplete };
+}
+// Called right after a pull replaces appState.wishlist: if the merge
+// dropped a quick-logged entry (pull can carry an older cloud copy),
+// put it back and push again.
+function rtQuickReapply() {
+  _rtQuickApplied.forEach(function(a) {
+    const item = (appState.wishlist || []).find(w => w.id === a.itemId);
+    if (!item) return;
+    item.readingEntries = item.readingEntries || [];
+    if (item.readingEntries.some(en => en.id === a.entryId)) return;
+    item.readingEntries.push({ id: a.entryId, date: a.date, pageTo: a.pageTo });
+    if (item.pages > 0 && a.pageTo >= item.pages && !item.completedDate) item.completedDate = a.date;
+    item.updatedAt = new Date().toISOString();
+    pushWishlistItemNow(item);
+  });
+}
 window.PalSync.initSession({
   onSession: function(token, userId) {
     // v3.31 (MR security audit): the launcher already gates entry via

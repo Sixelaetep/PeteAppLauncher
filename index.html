@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.18</title>
+<title>P Apps v11.19</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -600,6 +600,10 @@
   .ob-bar-left { color: var(--ink2); }
   .ob-bar-left.amber { color: var(--ob-amber); }
   .ob-bar-left.warn { color: var(--ob-red); }
+  /* PET-123 v11.19: Reading card shows only the selected mode's progress bar */
+  [data-app="reading"][data-rt-kind="audiobook"] .rt-row-book { display: none; }
+  [data-app="reading"]:not([data-rt-kind="audiobook"]) .rt-row-audio { display: none; }
+  [data-app="reading"] .ob-quick-amt { flex: 1 1 90px; text-align: left; }
   .ob-quick-go:disabled, .ob-quick-row.busy { opacity: 0.55; pointer-events: none; }
 
   .home-title { text-align: center; font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 4px; letter-spacing: -0.01em; }
@@ -774,7 +778,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.18</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.19</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -947,12 +951,19 @@
     <!-- Reading Tracker — full width. Moved to after the Fantasy
          Football/Food System pair (PET-093) so those two could sit
          adjacent; no change to the card itself. -->
-    <div data-app="reading" class="app-card" style="--card-color:#ffa657" onclick="switchTo('reading', document.querySelector('[data-target=reading]'))">
+    <div data-app="reading" data-rt-kind="book" class="app-card" style="--card-color:#ffa657" onclick="switchTo('reading', document.querySelector('[data-target=reading]'))">
       <div class="card-top">
         <div class="card-icon">📚</div>
         <div class="card-name">Reading Tracker</div>
       </div>
       <div class="card-stat muted" id="stat-reading"><span class="card-stat-dot"></span><span id="stat-reading-val">—</span></div>
+      <div class="ob-quick" onclick="event.stopPropagation()">
+        <form class="ob-quick-row" data-kind="book" autocomplete="off" onsubmit="rtQuickSubmit(event);return false">
+          <button type="button" class="ob-quick-tag" title="Tap to switch between Book and Audiobook" aria-label="Logging: Book. Tap to switch to Audiobook" onclick="rtQuickToggleKind(this)">Book ⇄</button>
+          <input class="ob-quick-amt" type="text" inputmode="numeric" placeholder="Page reached" aria-label="Page reached" enterkeyhint="done" oninput="rtQuickAmt(this)">
+          <button class="ob-quick-go" type="submit" aria-label="Log page">Log</button>
+        </form>
+      </div>
     </div>
 
     <!-- Horizon's dashcard removed (this release, per explicit request)
@@ -1145,6 +1156,12 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  ADDED (PET-123, v11.19): Reading Tracker card quick-log, same approach as the Gym / On Budget cards. One numeric input
+  plus a Book / Audio toggle logs the page (book) or chapter (audiobook) reached for the current active Book List item
+  through reading-tracker.html v3.73 (RT_ACTION ping / RT_PONG ready, then quickLogProgress with a fixed reqId re-sent
+  until RT_QUICKLOG_RESULT arrives; the app replays the stored result so a re-send never logs twice). The card shows the
+  progress bar for the selected mode only (CSS on data-rt-kind, as the Gym card does for Drink / Food). The 5 s
+  confirmation popup (#obConfirm) shows the new position and pages/chapters read. Needs reading-tracker.html v3.73.
   CHANGED (PET-122, v11.18): On Budget card quick-add (Spend / Bills) no longer fails or double-saves on first open /
   slow load - same pattern as the Gym fix (PET-121). Root causes: switchTo() sets loaded[budget]=true when it STARTS
   loading, so ensureLoaded() returned a half-loaded frame and the message was lost; fixed 15 s load cap, 800 ms settle
@@ -2436,7 +2453,7 @@ function statReading() {
     const el = document.getElementById('stat-reading');
     if (el) {
       el.className = 'card-stat' + ((bookRow.ok && audioRow.ok) ? ' ok' : '');
-      el.innerHTML = bookRow.html + '<div style="height:7px"></div>' + audioRow.html;
+      el.innerHTML = '<div class="rt-row-book">' + bookRow.html + '</div><div class="rt-row-audio">' + audioRow.html + '</div>'; // PET-123: one row shown per mode (CSS)
     }
   } catch(e) {
     setCardStat('stat-reading', 'Open app to load', 'muted');
@@ -3843,6 +3860,141 @@ async function gymQuickSubmit(e) {
         : 'Gym Tracker unavailable — nothing saved');
   } finally {
     _gymQuickBusy = false;
+    if (goBtn) goBtn.textContent = goLabel;
+    form.classList.remove('busy');
+  }
+}
+
+// PET-123 v11.19: Reading Tracker card quick-log (page for the current book / chapter for the current audiobook).
+// Same pattern as the Gym / On Budget quick-adds: start the frame loading ourselves, ping until reading-tracker.html
+// (v3.73+) says it is ready (first cloud pull settled), then send with a fixed reqId re-sent until the reply arrives.
+let _rtQuickBusy = false;
+function rtQuickAmt(el) {
+  el.value = el.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 5);
+}
+function rtQuickToggleKind(btn) {
+  const form = btn.closest('form');
+  const audio = form.dataset.kind !== 'audiobook';
+  form.dataset.kind = audio ? 'audiobook' : 'book';
+  const card = form.closest('[data-app="reading"]');
+  if (card) card.dataset.rtKind = form.dataset.kind;
+  const name = audio ? 'Audio' : 'Book', other = audio ? 'Book' : 'Audio';
+  btn.textContent = name + ' \u21C4';
+  btn.setAttribute('aria-label', 'Logging: ' + (audio ? 'Audiobook' : 'Book') + '. Tap to switch to ' + (audio ? 'Book' : 'Audiobook'));
+  const amt = form.querySelector('.ob-quick-amt'), go = form.querySelector('.ob-quick-go');
+  const unit = audio ? 'Chapter' : 'Page';
+  if (amt) { amt.value = ''; amt.placeholder = unit + ' reached'; amt.setAttribute('aria-label', unit + ' reached'); }
+  if (go) go.setAttribute('aria-label', 'Log ' + unit.toLowerCase());
+}
+function rtEnsureFrame() {
+  const frame = document.getElementById('frame-reading');
+  if (!frame) throw new Error('No frame for reading');
+  if (!loaded['reading'] || !frame.getAttribute('src')) {
+    frame.src = frame.dataset.src;
+    loaded['reading'] = true;
+  }
+  return frame;
+}
+function rtWaitReady(frame, maxMs) {
+  return new Promise((resolve, reject) => {
+    const id = 'rp' + Date.now() + Math.random().toString(36).slice(2, 6);
+    const started = Date.now();
+    let timer = null;
+    function done(fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); }
+    function onMsg(ev) {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (d && d.type === 'RT_PONG' && d.reqId === id && d.ready) done(resolve, true);
+    }
+    function ping() {
+      if (Date.now() - started > maxMs) return done(reject, new Error('NOT_READY'));
+      try { frame.contentWindow.postMessage({ type: 'RT_ACTION', action: 'ping', reqId: id }, window.location.origin); } catch (_) {}
+    }
+    window.addEventListener('message', onMsg);
+    ping();
+    timer = setInterval(ping, 500);
+  });
+}
+function rtQuickSend(frame, payload, maxMs) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    let timer = null;
+    function done(fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); }
+    function onMsg(ev) {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (!d || d.type !== 'RT_QUICKLOG_RESULT' || d.reqId !== payload.reqId) return;
+      done(resolve, d);
+    }
+    function send() {
+      if (Date.now() - started > maxMs) return done(reject, new Error('NO_ACK'));
+      try { frame.contentWindow.postMessage(Object.assign({ type: 'RT_ACTION' }, payload), window.location.origin); } catch (_) {}
+    }
+    window.addEventListener('message', onMsg);
+    send();
+    timer = setInterval(send, 2000);
+  });
+}
+function showRtQuickConfirm(res) {
+  const el = document.getElementById('obConfirm');
+  if (!el) return;
+  const audio = res.kind === 'audiobook';
+  const unitS = audio ? 'chapter' : 'page', unitP = audio ? 'chapters' : 'pages';
+  el.textContent = '';
+  const title = document.createElement('div');
+  title.className = 'obc-title';
+  title.textContent = res.finished ? '\uD83C\uDF89 Finished ' + (res.title || '') : '\u2713 ' + (audio ? 'Audiobook' : 'Book') + ' ' + unitS + ' ' + res.value;
+  el.appendChild(title);
+  const add = function (k, v) {
+    const row = document.createElement('div'); row.className = 'obc-row';
+    const a = document.createElement('span'); a.textContent = k;
+    const b = document.createElement('span'); b.textContent = v;
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  };
+  if (res.title && !res.finished) add('Title', res.title);
+  if (res.added > 0) add('Read', '+' + res.added + ' ' + (res.added === 1 ? unitS : unitP));
+  if (res.total > 0) add('Progress', res.value + ' / ' + res.total);
+  el.classList.add('show');
+  if (_obConfirmTimer) clearTimeout(_obConfirmTimer);
+  _obConfirmTimer = setTimeout(hideObQuickConfirm, 5000);
+}
+async function rtQuickSubmit(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const form = e.target.closest('form');
+  if (!form || _rtQuickBusy) return;
+  const kind = form.dataset.kind === 'audiobook' ? 'audiobook' : 'book';
+  const unit = kind === 'audiobook' ? 'chapter' : 'page';
+  const amtEl = form.querySelector('.ob-quick-amt');
+  const val = parseInt(amtEl.value, 10);
+  if (!val || val < 1) { toast('Enter the ' + unit + ' you have reached'); amtEl.focus(); return; }
+  _rtQuickBusy = true;
+  form.classList.add('busy');
+  const goBtn = form.querySelector('.ob-quick-go');
+  const goLabel = goBtn ? goBtn.textContent : 'Log';
+  if (goBtn) goBtn.textContent = '…';
+  toast('Saving to Reading Tracker… (first open can take a few seconds)');
+  try {
+    const frame = rtEnsureFrame();
+    const reqId = 'rq' + Date.now() + Math.random().toString(36).slice(2, 7);
+    await rtWaitReady(frame, 45000);
+    const res = await rtQuickSend(frame, { action: 'quickLogProgress', kind: kind, value: val, reqId: reqId }, 20000);
+    if (res && res.ok) {
+      amtEl.value = '';
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      showRtQuickConfirm(res);
+      try { refreshCardStats(); } catch (_) {}
+    } else {
+      toast('Not saved — ' + ((res && res.error) || 'Reading Tracker rejected it'));
+    }
+  } catch (err) {
+    toast(err && err.message === 'NOT_READY'
+      ? 'Reading Tracker did not finish loading (or needs reading-tracker.html v3.73) — nothing saved, your entry is still here'
+      : err && err.message === 'NO_ACK'
+        ? 'No confirmation from Reading Tracker — check the app before retrying, it may have saved'
+        : 'Reading Tracker unavailable — nothing saved');
+  } finally {
+    _rtQuickBusy = false;
     if (goBtn) goBtn.textContent = goLabel;
     form.classList.remove('busy');
   }
