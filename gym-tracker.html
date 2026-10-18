@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.118</title>
+<title>Gym Tracker v2.119</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.118</div></span>
+      <span>Gym Tracker<div class="ver">v2.119</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -969,11 +969,16 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.118"></script>
+<script src="pal-shared.js?v=2.119"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.119 (GYM-105): a program's weekly schedule now starts TOMORROW, never
+// today (today may already be done or in progress); old repeats are ended as
+// of today so today is left exactly as it was. Future-day plan previews in the
+// calendar now show the target reps x weight (falling back to last session's
+// numbers when a plan item has no targets) instead of just a set count.
 // v2.118 (GYM-104): weekly schedule from the ACTIVE program. The active program
 // card has a "Weekly schedule" button: tick the gym days once, the program's
 // plans fill those days in program order (any row can be changed), Save turns
@@ -1581,7 +1586,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.118';
+const VERSION = '2.119';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2041,7 +2046,10 @@ function swapOutRules(prevId) {
 }
 // end a rule from `fromDate`: past days keep showing it; a rule that never started is removed
 function endRuleFrom(rule, fromDate) {
-  if (rule.startDate >= fromDate) rule._deleted = true;
+  // fromDate = first day the replacement applies (tomorrow). A rule that began
+  // today or later (e.g. made by v2.118 starting today) is removed outright so
+  // today is left alone; an older rule simply ends today.
+  if (rule.startDate >= addDaysIso(fromDate, -1)) rule._deleted = true;
   else rule.endDate = addDaysIso(fromDate, -1);
   rule.updatedAt = new Date().toISOString();
 }
@@ -2073,11 +2081,11 @@ function openProgSchedule(progId, opts) {
   else psAutoFill();
   const swap = !!_psSwapFrom || (opts && opts.offer);
   document.getElementById('progSchedTitle').textContent = (opts && opts.fresh ? 'Set up weekly schedule — ' : 'Weekly schedule — ') + prog.name;
-  document.getElementById('progSchedIntro').textContent = 'Tick your gym days: the plans fill them in program order. Change any row to put a plan on a different day. Saved as weekly repeats starting today (' + fmtDate(todayISO()) + '); past days are not touched. You can still add or repeat a plan on any single day from the calendar.';
+  document.getElementById('progSchedIntro').textContent = 'Tick your gym days: the plans fill them in program order. Change any row to put a plan on a different day. Saved as weekly repeats starting tomorrow (' + fmtDate(addDaysIso(todayISO(),1)) + '); today and past days are not touched. You can still add or repeat a plan on any single day from the calendar.';
   const noteEl = document.getElementById('progSchedSwapNote');
   if (_psSwapFrom) {
     const n = swapRules.length;
-    noteEl.textContent = n ? ('Replacing the current schedule will end ' + n + ' weekly repeat' + (n===1?'':'s') + ' from the previous program (they stop yesterday; history is kept).') : 'No weekly repeats from the previous program to replace.';
+    noteEl.textContent = n ? ('Replacing the current schedule will end ' + n + ' weekly repeat' + (n===1?'':'s') + ' from the previous program (they stop after today; today and history are kept).') : 'No weekly repeats from the previous program to replace.';
     noteEl.style.display = '';
   } else noteEl.style.display = 'none';
   document.getElementById('progSchedSaveBtn').textContent = _psSwapFrom ? 'Replace current schedule' : 'Save weekly schedule';
@@ -2118,7 +2126,7 @@ function psSetDay(planId, v) { _psSel[planId] = v === '' ? '' : Number(v); rende
 function saveProgSchedule() {
   const prog = programById(_psProgId); if (!prog) { closeModal('modalProgSchedule'); return; }
   const plans = programPlansOrdered(prog.id);
-  const today = todayISO();
+  const today = addDaysIso(todayISO(), 1); // GYM-105: first day of the new schedule = tomorrow
   const now = new Date().toISOString();
   const assignments = plans.filter(p => _psSel[p.id] !== '' && _psSel[p.id] !== undefined).map(p => ({ planId: p.id, day: Number(_psSel[p.id]) }));
   const toEnd = new Map();
@@ -2156,7 +2164,7 @@ function offerPlanSlot(plan) {
   setTimeout(() => {
     if (!confirm('Add "' + plan.name + '" to ' + DAY_FULL[free] + ' each week (next free gym day in "' + prog.name + '")?')) return;
     const now = new Date().toISOString();
-    const rule = { id: uid('scr'), kind: 'repeat', planId: plan.id, startDate: todayISO(), freq: 'days', days: [free], exceptions: [], programId: prog.id, createdAt: now, updatedAt: now };
+    const rule = { id: uid('scr'), kind: 'repeat', planId: plan.id, startDate: addDaysIso(todayISO(), 1), freq: 'days', days: [free], exceptions: [], programId: prog.id, createdAt: now, updatedAt: now };
     _env.data.scheduleEntries.push(rule);
     save(_env); sbUpsert('schedule', rule, null);
     renderPlanList(); renderCalendar(); renderHome();
@@ -4354,13 +4362,16 @@ function togglePlanPreview(planId) {
 function planPreviewRows(plan) {
   const items = plan.items||[];
   if (!items.length) return '<div class="cal-empty" style="padding:4px 0">No exercises in this plan yet</div>';
-  return items.map(pi => {
-    const n = (pi.targetSets||[]).length;
-    return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
-      <span>${escHtml(exerciseName(pi.exerciseId))}</span>
-      <span style="color:var(--ink2)">${n} set${n===1?'':'s'}</span>
-    </div>`;
-  }).join('');
+  // GYM-105: show target reps x weight (same view as the Plans tab). A plan
+  // item with no targets falls back to the last session's numbers, labelled.
+  const view = Object.assign({}, plan, { items: items.map(pi => {
+    if ((pi.targetSets||[]).some(hasAnyValue)) return pi;
+    let last = null;
+    try { const f = lastPerformedItem(pi.exerciseId); last = f && f.item.actualSets.filter(hasAnyValue).map(stripDone); } catch (e) {}
+    if (!last || !last.length) return pi;
+    return Object.assign({}, pi, { targetSets: last, notes: pi.notes || 'No targets in this plan — showing your last session' });
+  }) });
+  return planItemsSummaryHtml(view);
 }
 
 function renderCalendar() {

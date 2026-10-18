@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.118 | v2.32 – v2.118. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.119 | v2.32 – v2.119. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.104 | v1.0 – v3.43 and v3.73 – v3.104. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2110,6 +2110,18 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.119 — GYM-105 — Schedule starts tomorrow; future-day plan preview shows reps and weight
+
+- **Why (Pete, 18 Oct, after v2.118 passed its deployment check):** (1) saving a weekly schedule put plans on today, even when a plan was already completed today; it should only add from the following days. (2) Expanding the exercises of a plan on a future day showed names and a set count but not weight and reps.
+- **Change (`gym-tracker.html`):**
+  - `saveProgSchedule` and `offerPlanSlot` now start new repeats **tomorrow**. Replaced repeats end **today** (`endRuleFrom` now removes a rule that began today or later, so a rule made by v2.118 that starts today is dropped on re-save and today is left alone). Schedule screen wording updated ("starting tomorrow", "they stop after today").
+  - `planPreviewRows` (calendar "show exercises") now uses the same per-exercise view as the Plans tab (`planItemsSummaryHtml`): target reps × weight per set, circuits grouped, minutes and notes. A plan item with no targets falls back to your last session's numbers, labelled "No targets in this plan — showing your last session".
+- **Existing data:** repeats already created by v2.118 starting today stay as they are until the schedule is next saved, at which point today's occurrence is removed. No data-model change.
+- **Unchanged:** launcher (v11.23, not edited), sync schema, JSON export/import, day-level scheduling and one-offs.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.119.
+- Tested (Stage 1): syntax check; scripted runs of the real code: new rules start tomorrow, old rules end today, a today-start rule is removed, today stays empty and next week has the plan, history unchanged, next-free-day offer starts tomorrow; preview shows reps × weight, falls back to last session, empty-plan message, circuit grouping; earlier suites still pass (test expectations updated for the new start date).
+- Not tested: real browser rendering of the preview, live Supabase, second device.
 
 ### v2.118 — GYM-104 — Weekly schedule from the active program
 
