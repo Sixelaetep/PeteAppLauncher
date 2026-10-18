@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.17 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16 and v11.17. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.18 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17 and v11.18. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.51 | v1.0 – v1.51 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.115 | v2.32 – v2.115. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.99 | v1.0 – v3.43 and v3.73 – v3.99. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.100 | v1.0 – v3.43 and v3.73 – v3.100. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.72 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.72 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -209,6 +209,16 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.18 — PET-122 — On Budget card quick-add reliable on first open / slow load — 18 Oct 2026
+
+- **Why (bug):** same class of failure as the Gym card fixed in v11.17 (PET-121); the On Budget Spend / Bills quick-add shared the weak parts of the old flow.
+- **Investigation (code evidence, v11.17 / On Budget v3.99):** (1) `switchTo()` sets `loaded[budget] = true` when loading *starts*, so `ensureLoaded('budget')` returned a half-loaded frame and the `OB_ACTION` message was lost (shown as a misleading "check the app before retrying"); (2) fixed 15 s load cap, 800 ms settle and 4 s reply wait, no re-send; (3) a new `reqId` on every submit, so a retry after a late save created a second entry, and the app's duplicate guard only replied "Already added" (no stored result / category); (4) the app's first `syncPull()` rebuilds `months[mk].transactions` and `bills.tx` from the merge, so an entry added while the pull was awaiting was dropped from local state until the next pull (it was never lost from the cloud, because the add pushes itself). No readiness signal existed.
+- **Change (`index.html`):** new `obEnsureFrame()` (starts the load without trusting `loaded[budget]`), `obWaitReady()` (`OB_ACTION` `ping` / `OB_PONG` `ready`, every 0.5 s, up to 45 s) and a rewritten `obQuickSend()` (one fixed `reqId`, re-sent every 2 s for up to 20 s until the reply arrives). `obQuickSubmit()` uses them; the Add button shows "…" while waiting and is restored afterwards. Typed input is cleared only on a confirmed save. Messages: "did not finish loading (or needs on-budget.html v3.100) — nothing saved, your entry is still here" (no pong) vs "No confirmation from On Budget — check the app before retrying, it may have saved".
+- **Unchanged:** the Gym helpers and `gymQuickSubmit()` (the Gym block is byte-identical to v11.17), shared `ensureLoaded()` (still used by the other launch paths), the confirmation popup, card display. The On Budget helpers are deliberate copies of the Gym ones rather than a shared generalisation, so Gym behaviour could not change. ⚠ Candidate shared-platform improvement: one generic ready-ping / re-send helper for all card quick-adds.
+- **Compatibility:** needs `on-budget.html` v3.100. An older On Budget never answers the ping, so the card shows the not-ready message after 45 s with nothing saved and the entry kept. The old v11.17 launcher with On Budget v3.100 still works (cold-load test).
+- Version: title, nav badge and DEPLOYMENT comment set to v11.18.
+- Tested (Stage 1): see the On Budget v3.100 entry (shared run). Not tested: a genuinely cold load on a phone or slow network, live Supabase, a second device, the Gym card in a browser (code unchanged, verified by diff only).
 
 ### v11.17 — PET-121 — Gym card quick-add reliable on first open / slow load — 18 Oct 2026
 
@@ -2276,6 +2286,18 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.100 — ON--094 — Launcher quick-add reliable on first open / slow load
+
+- **Why:** launcher card Spend / Bills quick-add could post before On Budget was listening, give up while it was still booting, duplicate on a retry, or have the entry dropped locally by the app's first cloud pull. See launcher v11.18 (PET-122) for the full investigation.
+- **Change (`on-budget.html` only, additive):**
+  - `OB_ACTION` `ping` → `OB_PONG {reqId, ready, version}`. `ready` = boot sequence finished AND the first `syncPull()` has settled (success or error, `_obFirstPullSettled`), or `onNoSession` fired, or 12 s since boot.
+  - The result of every quick-add `reqId` is stored (`_obQuickResults`) and replayed for a repeated `reqId` (same `ok`, `msg` and `category`), replacing the old "mark seen before saving, answer 'Already added'" guard. Still one `saveSpend()` / `saveBtx()` per `reqId`.
+  - Each quick-added spend / bill is tracked for 5 minutes; `obQuickReapply()` runs inside `syncPull()` after the rebuilds and before `checkClearedBalanceDrift()`. If the entry is no longer in `months[mk].transactions` / `bills.tx` (and is not in the deleted logs) it is put back and re-upserted (`syncUpsertTx` / `syncUpsertBillsTx`) once; if the pull kept it, nothing happens. The bill's cleared-balance change is not touched (it was applied by `saveBtx()` and the settings merge keeps the newer local value).
+- **Not changed:** `saveSpend()`, `saveBtx()`, categories, budget maths, data structures, JSON export/import shape, sync schema, `pal-shared.js`. Version set in title, logo badge, header comment, `pal-shared.js` cache-bust query and both backup-version fields.
+- **Data / sync:** no schema change; older launchers still work (they simply do not ping).
+- Tested (Stage 1): `node --check` of both files; jsdom run of the REAL `index.html` and `on-budget.html` (served over HTTP with an artificial load delay) with a stub `pal-shared.js` (the real one was not supplied) and an in-memory cloud: (A) cold load with a 2.5 s app delay saves exactly once after the app is ready; (B) `switchTo()` mid-load plus a slow first pull — nothing saved and the typed amount kept until ready, then exactly one local entry and one cloud row; (C) first two replies lost on the Bills row — one entry, popup shown, balance moved once; (D) new launcher with the OLD v3.99 app — not-ready message, nothing saved, entry kept; (E) repeated `reqId` ×3 — one entry, identical replayed result and category, a new `reqId` still saves; (F) spend and bill added during `syncPull()` — each present exactly once afterwards, restored once, one cloud row each, next pull restores nothing; (F0) baseline v3.99 drops the same mid-pull spend (bug reproduced); (G) baseline v11.17 + v3.99 mid-load add loses the message (bug reproduced); (H) old v11.17 launcher + v3.100 app still saves; (I) warm add ~40 ms, second deliberate add makes a second entry. The jsdom harness emulates the browser's `postMessage` origin/source.
+- ⚠ Not tested: a real cold load on a phone or slow network, live Supabase / the real `pal-shared.js` pull implementation (the bills-pull race window was simulated by adding during the pull call), a second device, the Gym card in a browser.
 
 ### v3.99 — ON--093 — Income counts toward the budget in both modes (reverses ON--072)
 

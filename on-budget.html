@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.99</title>
+<title>On Budget v3.100</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -375,7 +375,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.99</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.100</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -925,10 +925,17 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.99"></script>
+<script src="pal-shared.js?v=3.100"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.99
+// On Budget v3.100
+// v3.100 (ON--094): launcher quick-add (Spend / Bills) is now reliable on a first open / slow load.
+// (1) The OB_ACTION listener answers `ping` with OB_PONG {ready}; ready = boot finished AND the first cloud
+// pull has settled (or 12 s since boot), so the launcher no longer posts into a half-loaded app.
+// (2) The result of each quick-add reqId is stored and re-sent for a duplicate reqId (the launcher re-sends the
+// same reqId until it hears back) — one entry, with the original category, however many times it is re-sent.
+// (3) A quick-added spend / bill is tracked; if a syncPull() rebuild drops it (added while the pull was in
+// flight) obQuickReapply() puts it back once and re-upserts it. No money logic, data structure or sync-schema change.
 // v3.99 (ON--093): Income now counts toward the month's budget in BOTH directions —
 // pot, headroom, "over/left of budget", % used, History left-over and the launcher export
 // (pot, headroom, potPct) all include it. Reverses the v3.78 (ON--072) Increasing-mode rule.
@@ -2446,6 +2453,7 @@ async function syncPull() {
 
     // A cloud row can still carry an old food/travel tag if it was
     // pushed by a device that hasn't upgraded past v2.7 yet.
+    obQuickReapply(); // ON--094: restore any quick-added record the rebuilds above dropped
     migrateCategories();
     // v3.56 (ON--056): read-only sanity check, after everything above has
     // settled — bills.tx and bills.settings are both fully merged by now.
@@ -2462,6 +2470,7 @@ async function syncPull() {
     addSyncLog('Pull failed: '+window.PalSync.errorHint(err.status, err.message),'err');
   } finally {
     _syncInFlight = false;
+    _obFirstPullSettled = true; // ON--094: readiness signal for the launcher quick-add
   }
 }
 
@@ -2506,6 +2515,7 @@ window.PalSync.initSession({
     setSyncState(_syncState);
   },
   onNoSession: function () {
+    _obFirstPullSettled = true; // ON--094: no session will arrive — nothing to wait for
     try { generateFtRecurring(); } catch(e) {}
     const banner = document.getElementById('sync-open-banner');
     if (banner) banner.classList.add('show');
@@ -2526,6 +2536,45 @@ document.addEventListener('visibilitychange', function () {
   syncPull();
 });
 
+// ON--094 (v3.100): launcher quick-add reliability — readiness signal, per-reqId result replay and
+// post-pull restore. Pure additions; saveSpend()/saveBtx() and the sync code are unchanged.
+var _obBootAt = Date.now();
+var _obBootDone = false;          // set at the end of the boot sequence (bottom of this script)
+var _obFirstPullSettled = false;  // first syncPull() finished (ok or error), or no session after the grace period
+var _obQuickResults = {};         // reqId -> { ok, msg, category } (replayed for a duplicate reqId)
+var _obQuickTracked = [];         // [{ kind:'tx'|'bills', mk, entry, at }] quick-added records, for post-pull restore
+function obIsReady() {
+  return _obBootDone && (_obFirstPullSettled || (Date.now() - _obBootAt) > 12000);
+}
+// Called inside syncPull() after months / bills.tx have been rebuilt from the merge. If the rebuild dropped a
+// record that was quick-added while the pull was in flight, put it back and push it (once per pull that needs it).
+function obQuickReapply() {
+  const now = Date.now();
+  _obQuickTracked = _obQuickTracked.filter(r => now - r.at < 5 * 60 * 1000);
+  _obQuickTracked.forEach(r => {
+    try {
+      if (r.kind === 'tx') {
+        const mk = r.mk;
+        if (!months[mk]) months[mk] = { startBalance:null, transactions:[] };
+        if (!Array.isArray(months[mk].transactions)) months[mk].transactions = [];
+        const present = Object.keys(months).some(k => (months[k].transactions || []).some(t => t.id === r.entry.id));
+        if (!present && !deletedTxLog[r.entry.id]) {
+          months[mk].transactions.push(r.entry);
+          addSyncLog('Restored a spend added during sync','info');
+          syncUpsertTx(mk, r.entry);
+        }
+      } else {
+        const present = (bills.tx || []).some(t => t.id === r.entry.id);
+        if (!present && !deletedBillsTxLog[r.entry.id]) {
+          bills.tx.push(r.entry);
+          addSyncLog('Restored a bill transaction added during sync','info');
+          syncUpsertBillsTx(r.entry);
+        }
+      }
+    } catch (err) { /* never let the restore break a pull */ }
+  });
+}
+
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   // v2.9 — global theme, pushed down by the launcher (pilot app).
@@ -2545,7 +2594,11 @@ window.addEventListener('message', function(e) {
   // own standalone app (no longer nested inside On Budget), so this app
   // no longer has a Horizon tab to deep-link to.
   if (e.data && e.data.type === 'OB_ACTION') {
-    if (e.data.action === 'openFoodSheet') {
+    if (e.data.action === 'ping') {
+      // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
+      const pongTo = e.source || window.parent;
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.100' }, e.origin);
+    } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
     } else if (e.data.action === 'openBillsSheet') {
@@ -2574,18 +2627,21 @@ window.addEventListener('message', function(e) {
       // opening a sheet, then reports back so the launcher can confirm.
       const isFood = e.data.action === 'quickAddFood';
       const reqId = e.data.reqId;
-      let ok = false, msg = '', quickCat = isFood ? 'weekly' : null;
+      let ok = false, msg = '', quickCat = isFood ? 'weekly' : null, dup = false;
       try {
-        window._obQuickSeen = window._obQuickSeen || {};
         const pence = Math.round(Number(e.data.amount) * 100);
         const label = String(e.data.label == null ? '' : e.data.label).trim().slice(0, 60);
-        if (reqId && window._obQuickSeen[reqId]) {
-          ok = true; msg = 'Already added';
+        if (reqId && _obQuickResults[reqId]) {
+          // ON--094: duplicate reqId (launcher re-send) — replay the stored result, never save twice.
+          ok = _obQuickResults[reqId].ok; msg = _obQuickResults[reqId].msg; quickCat = _obQuickResults[reqId].category;
+          dup = true;
         } else if (!isFinite(pence) || pence < 1 || pence > 100000000) {
           msg = 'Invalid amount';
         } else {
-          if (reqId) window._obQuickSeen[reqId] = true;
           const amt = pence / 100;
+          const _obK = curKey();
+          const _obTxLen = (months[_obK] && months[_obK].transactions) ? months[_obK].transactions.length : 0;
+          const _obBillsLen = bills.tx.length;
           if (isFood) {
             switchTab('dashboard');
             // ON--086: the shop's usual category (Food when unknown / no label)
@@ -2598,6 +2654,7 @@ window.addEventListener('message', function(e) {
             try { saveSpend(); } finally { _ftLearnOff = false; }
             setPennyValue('m-amt', null);
             document.getElementById('m-label').value = '';
+            if (months[_obK] && months[_obK].transactions.length > _obTxLen) _obQuickTracked.push({ kind:'tx', mk:_obK, entry: months[_obK].transactions[months[_obK].transactions.length - 1], at: Date.now() });
           } else {
             switchTab('bills');
             switchBillsView('ledger');
@@ -2607,12 +2664,14 @@ window.addEventListener('message', function(e) {
             saveBtx();
             setPennyValue('btx-amt', null);
             document.getElementById('btx-label').value = '';
+            if (bills.tx.length > _obBillsLen) _obQuickTracked.push({ kind:'bills', entry: bills.tx[bills.tx.length - 1], at: Date.now() });
           }
           ok = true;
         }
       } catch (err) {
         msg = 'Error: ' + (err && err.message ? err.message : err);
       }
+      if (reqId && !dup) _obQuickResults[reqId] = { ok: ok, msg: msg, category: quickCat };
       const replyTo = e.source || window.parent;
       if (replyTo && replyTo !== window) replyTo.postMessage({ type: 'OB_QUICKADD_RESULT', reqId: reqId, ok: ok, msg: msg, category: quickCat }, e.origin);
     }
@@ -2829,7 +2888,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.99', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.100', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2838,7 +2897,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.99', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.100', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -6426,6 +6485,7 @@ writeDashboardSummaryOnly(); // PET-058/060 v3.51: backfill for a restored/impor
 window.addEventListener('beforeunload', function(e) {
   if (_syncInFlight) { e.preventDefault(); e.returnValue = ''; }
 });
+_obBootDone = true; // ON--094: boot sequence finished (listener, load(), first render) — see obIsReady()
 </script>
 </body>
 </html>

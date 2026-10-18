@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.17</title>
+<title>P Apps v11.18</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
@@ -774,7 +774,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.17</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.18</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1145,6 +1145,15 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-122, v11.18): On Budget card quick-add (Spend / Bills) no longer fails or double-saves on first open /
+  slow load - same pattern as the Gym fix (PET-121). Root causes: switchTo() sets loaded[budget]=true when it STARTS
+  loading, so ensureLoaded() returned a half-loaded frame and the message was lost; fixed 15 s load cap, 800 ms settle
+  and 4 s reply wait with no re-send; a new reqId on every try so a retry after a late save made a second entry; the
+  app's first cloud pull could drop an entry added while it ran. Now: the card starts the load itself, pings the app
+  (OB_ACTION ping / OB_PONG ready) until it reports ready (up to 45 s, button shows "..."), then sends the entry with a
+  fixed reqId and re-sends it every 2 s for up to 20 s until the reply arrives (the app replays the stored result for a
+  repeated reqId, so it never saves twice). An older On Budget that never answers the ping gives a clear "needs
+  on-budget.html v3.100" message with nothing saved and the typed entry kept. Gym code untouched. Needs on-budget.html v3.100.
   CHANGED (PET-121, v11.17): Gym card quick-add no longer fails on first open / slow load. Root causes: switchTo()
   sets loaded[gym]=true when it STARTS loading, so ensureLoaded() returned at once and the message went to a page
   that had not loaded; the reply wait was a fixed 4 s; a retry created a second entry. Now: the card starts the load
@@ -3450,22 +3459,59 @@ function obQuickPenny(el) {
   el.value = Math.floor(n / 100).toLocaleString('en-GB') + '.' + String(n % 100).padStart(2, '0');
 }
 
-function obQuickSend(frame, payload) {
+// PET-122 v11.18: same pattern as the Gym quick-add (PET-121). Start the On Budget frame loading WITHOUT trusting
+// loaded[budget] (switchTo sets it when loading STARTS, so ensureLoaded would return a half-loaded frame).
+function obEnsureFrame() {
+  const frame = document.getElementById('frame-budget');
+  if (!frame) throw new Error('No frame for budget');
+  if (!loaded['budget'] || !frame.getAttribute('src')) {
+    frame.src = frame.dataset.src;
+    loaded['budget'] = true;
+  }
+  return frame;
+}
+// Ping until On Budget says it is ready (boot done + first cloud pull settled). Rejects NOT_READY after maxMs
+// (an On Budget older than v3.100 never answers a ping).
+function obWaitReady(frame, maxMs) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      window.removeEventListener('message', onMsg);
-      reject(new Error('NO_ACK'));
-    }, 4000);
+    const id = 'op' + Date.now() + Math.random().toString(36).slice(2, 6);
+    const started = Date.now();
+    let timer = null;
+    function done(fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); }
+    function onMsg(ev) {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (d && d.type === 'OB_PONG' && d.reqId === id && d.ready) done(resolve, true);
+    }
+    function ping() {
+      if (Date.now() - started > maxMs) return done(reject, new Error('NOT_READY'));
+      try { frame.contentWindow.postMessage({ type: 'OB_ACTION', action: 'ping', reqId: id }, window.location.origin); } catch (_) {}
+    }
+    window.addEventListener('message', onMsg);
+    ping();
+    timer = setInterval(ping, 500);
+  });
+}
+// Send the entry and keep re-sending the SAME reqId until the reply arrives (On Budget stores the result per reqId and
+// replays it, so a re-send can never save twice). Rejects NO_ACK after maxMs.
+function obQuickSend(frame, payload, maxMs) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    let timer = null;
+    function done(fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); }
     function onMsg(ev) {
       if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'OB_QUICKADD_RESULT' || d.reqId !== payload.reqId) return;
-      clearTimeout(timer);
-      window.removeEventListener('message', onMsg);
-      resolve(d);
+      done(resolve, d);
+    }
+    function send() {
+      if (Date.now() - started > maxMs) return done(reject, new Error('NO_ACK'));
+      try { frame.contentWindow.postMessage(Object.assign({ type: 'OB_ACTION' }, payload), window.location.origin); } catch (_) {}
     }
     window.addEventListener('message', onMsg);
-    frame.contentWindow.postMessage(Object.assign({ type: 'OB_ACTION' }, payload), window.location.origin);
+    send();
+    timer = setInterval(send, 2000);
   });
 }
 
@@ -3540,17 +3586,21 @@ async function obQuickSubmit(e) {
   const lblText = lblEl.value.trim();
   _obQuickBusy = true;
   form.classList.add('busy');
-  toast('Saving to On Budget…');
+  const goBtn = form.querySelector('.ob-quick-go');
+  const goLabel = goBtn ? goBtn.textContent : 'Add';
+  if (goBtn) goBtn.textContent = '…';
+  toast('Saving to On Budget… (first open can take a few seconds)');
   try {
-    const frame = await ensureLoaded('budget');
-    const reqStart = Date.now();
+    const frame = obEnsureFrame();
     const reqId = 'oq' + Date.now() + Math.random().toString(36).slice(2, 7);
+    await obWaitReady(frame, 45000);
+    const reqStart = Date.now();
     const res = await obQuickSend(frame, {
       action: kind === 'food' ? 'quickAddFood' : 'quickAddBills',
       amount: pence / 100,
       label: lblText,
       reqId: reqId
-    });
+    }, 20000);
     if (res && res.ok) {
       amtEl.value = ''; amtEl.dataset.raw = ''; lblEl.value = '';
       const sg = form.querySelector('.ob-quick-sugg'); if (sg) { sg.hidden = true; sg.textContent = ''; }
@@ -3562,11 +3612,14 @@ async function obQuickSubmit(e) {
       toast('Not saved — ' + ((res && res.msg) || 'On Budget rejected it'));
     }
   } catch (err) {
-    toast(err && err.message === 'NO_ACK'
-      ? 'No confirmation from On Budget — check the app before retrying (needs on-budget.html v3.83)'
-      : 'On Budget unavailable — nothing saved');
+    toast(err && err.message === 'NOT_READY'
+      ? 'On Budget did not finish loading (or needs on-budget.html v3.100) — nothing saved, your entry is still here'
+      : err && err.message === 'NO_ACK'
+        ? 'No confirmation from On Budget — check the app before retrying, it may have saved'
+        : 'On Budget unavailable — nothing saved');
   } finally {
     _obQuickBusy = false;
+    if (goBtn) goBtn.textContent = goLabel;
     form.classList.remove('busy');
   }
 }
