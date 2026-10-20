@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.104</title>
+<title>On Budget v3.105</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -378,7 +378,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.104</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.105</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -951,10 +951,13 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.104"></script>
+<script src="pal-shared.js?v=3.105"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.104
+// On Budget v3.105
+// v3.105 (ON--099): scroll position is kept when a transaction is cleared / edited / deleted. Inner lists
+//   (#ft-tx-body, #bills-tx-body, breakdowns) no longer snap to the top on re-render (setHtmlKeep restores them),
+//   re-selecting the current tab no longer resets scroll, and two Settings lists now render via setHtmlKeep.
 // v3.104 (ON--098): a transfer row in Spending can now be set back to uncleared. Tapping a transfer row asks
 // "Mark uncleared?" (cleared row) or "Mark cleared?" (uncleared row); amount/date/delete stay Bills-only.
 // On Budget v3.103
@@ -2646,7 +2649,7 @@ window.addEventListener('message', function(e) {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.104' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.105' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -2938,7 +2941,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.104', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.105', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2947,7 +2950,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.104', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.105', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3341,6 +3344,7 @@ function setPennyValue(id, amount) {
 
 // ── Tabs ───────────────────────────────────────────────────────
 function switchTab(t) {
+  const _wasActive = document.getElementById('panel-'+t).classList.contains('active'); // ON--099
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+t).classList.add('active');
@@ -3354,9 +3358,12 @@ function switchTab(t) {
   // mid-page on the new (shorter) tab, pushing the sticky header and
   // backup banner above the visible area — "persists on every screen"
   // only holds if you're actually scrolled to see it.
-  const scroller = document.querySelector('.app-scroll');
-  if (scroller) scroller.scrollTop = 0;
-  _scrollPos = 0;
+  // ON--099: only reset when actually changing tab; re-selecting the current tab keeps position.
+  if (!_wasActive) {
+    const scroller = document.querySelector('.app-scroll');
+    if (scroller) scroller.scrollTop = 0;
+    _scrollPos = 0;
+  }
 }
 
 // ── ON--089: keep the scroll position across re-renders ──────────
@@ -3380,12 +3387,25 @@ function isShownEl(el) {
   return true;
 }
 function setHtmlKeep(el, html) {
-  el.innerHTML = html;
   const sc = document.querySelector('.app-scroll');
+  // ON--099: also keep the scroll of inner lists (e.g. #ft-tx-body, #bills-tx-body) that are
+  // re-created on every render and would otherwise snap back to the top.
+  const inner = {};
+  el.querySelectorAll('[id]').forEach(n => { if (n.scrollTop > 0) inner[n.id] = n.scrollTop; });
+  el.innerHTML = html;
+  const restoreInner = () => Object.keys(inner).forEach(id => {
+    const n = document.getElementById(id);
+    if (n && Math.abs(n.scrollTop - inner[id]) > 1) n.scrollTop = inner[id];
+  });
+  restoreInner();
   if (!sc || !isShownEl(el)) return;
   const pos = _scrollPos;
   sc.scrollTop = pos;
-  requestAnimationFrame(() => { if (Math.abs(sc.scrollTop - pos) > 1 && isShownEl(el)) sc.scrollTop = pos; });
+  requestAnimationFrame(() => {
+    if (!isShownEl(el)) return;
+    if (Math.abs(sc.scrollTop - pos) > 1) sc.scrollTop = pos;
+    restoreInner();
+  });
 }
 
 // ON--067: Horizon (nested-app relay code) removed — Horizon is
@@ -4630,12 +4650,12 @@ function renderFtRecList() {
   const el = document.getElementById('ftrec-list');
   if (!el) return;
   const items = [...ftRecList()].sort((a,b)=>(a.day||0)-(b.day||0));
-  if (!items.length) { el.innerHTML = `<div style="font-size:12px;color:var(--ink3)">None set up.</div>`; return; }
+  if (!items.length) { setHtmlKeep(el, `<div style="font-size:12px;color:var(--ink3)">None set up.</div>`); return; }
   const emo = c => c==='weekly'?'🛒':c==='travel'?'🚗':'📦';
-  el.innerHTML = items.map(i => `<div class="tx-row" style="cursor:pointer" data-ftrec="${esc(i.id)}">
+  setHtmlKeep(el, items.map(i => `<div class="tx-row" style="cursor:pointer" data-ftrec="${esc(i.id)}">
     <div class="tx-body"><div class="tx-name">${emo(i.category)} ${esc(i.label)||'Untitled'}</div>
     <div class="tx-date">Monthly on day ${i.day}</div></div>
-    <div class="tx-amt">£${(i.amount||0).toFixed(2)}</div></div>`).join('');
+    <div class="tx-amt">£${(i.amount||0).toFixed(2)}</div></div>`).join(''));
 }
 function openFtRecSheet(id) {
   _ftRecEditId = id || null;
@@ -4687,7 +4707,7 @@ function renderManageLabels() {
   const el = document.getElementById('manage-labels-list');
   if (!el) return;
   const sorted = [...ftLabels.items].filter(l=>!l._deleted).sort((a,b)=>a.name.localeCompare(b.name));
-  if (!sorted.length) { el.innerHTML = `<div style="font-size:12px;color:var(--ink3)">No shops saved yet — add a label when logging a transaction and it'll appear here.</div>`; return; }
+  if (!sorted.length) { setHtmlKeep(el, `<div style="font-size:12px;color:var(--ink3)">No shops saved yet — add a label when logging a transaction and it'll appear here.</div>`); return; }
   // ON--086: each shop also carries a usual spend category (optional)
   const opt = (v, t, cur) => `<option value="${v}"${(cur||'')===v?' selected':''}>${t}</option>`;
   setHtmlKeep(el, sorted.map(l=>
