@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.122</title>
+<title>Gym Tracker v2.123</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.122</div></span>
+      <span>Gym Tracker<div class="ver">v2.123</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -467,7 +467,7 @@
   <!-- ═══ EXERCISES ═══ -->
   <div class="tab-panel" id="panel-exercises">
     <button class="btn btn-primary btn-block" onclick="openExerciseEditor(null)">+ New Exercise</button>
-    <button class="btn btn-secondary btn-block" style="margin-top:8px" onclick="openMergeReview()">🔍 Review possible merges</button>
+    <button class="btn btn-secondary btn-block" id="mergeModeBtn" style="margin-top:8px" onclick="toggleMergeMode()">☑ Select exercises to merge</button>
     <label style="margin-top:14px">Search</label>
     <input type="text" id="exerciseSearch" placeholder="Search name or tag…" oninput="renderExerciseList()">
     <div class="chip-list" id="areaChips"></div>
@@ -700,23 +700,13 @@
   </div>
 </div>
 
-<!-- ═══ MERGE EXERCISE MODAL (GYM-107) ═══ -->
+<!-- ═══ MERGE SELECTED EXERCISES MODAL (GYM-109) ═══ -->
 <div class="modal-overlay" id="modalMergeEx" onclick="if(event.target===this)closeModal('modalMergeEx')">
   <div class="modal">
-    <div class="modal-title"><span>Merge exercise</span><button class="modal-close" onclick="closeModal('modalMergeEx')">✕</button></div>
-    <p id="mergeExIntro" style="font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:8px"></p>
-    <input type="text" id="mergeExSearch" placeholder="Search…" oninput="renderMergeExList()">
-    <div id="mergeExList" style="margin-top:10px"></div>
-    <div class="btn-row"><button class="btn btn-primary" style="flex:1" id="mergeExBtn" onclick="confirmMergeExercise()" disabled>Merge</button></div>
-  </div>
-</div>
-
-<!-- ═══ MERGE REVIEW MODAL (GYM-108) ═══ -->
-<div class="modal-overlay" id="modalMergeReview" onclick="if(event.target===this)closeModal('modalMergeReview')">
-  <div class="modal">
-    <div class="modal-title"><span>Possible duplicates</span><button class="modal-close" onclick="closeModal('modalMergeReview')">✕</button></div>
-    <p style="font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:8px">Same-type exercises with similar names. Pick the one to keep in each group; the others' history and plan entries move to it.</p>
-    <div id="mergeReviewList"></div>
+    <div class="modal-title"><span>Merge exercises</span><button class="modal-close" onclick="closeModal('modalMergeEx')">✕</button></div>
+    <p style="font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:8px">Pick the one to keep. The others' history and plan entries move into it (plan reps and weights are untouched) and the others are removed from the library.</p>
+    <div id="mergeExList"></div>
+    <div class="btn-row"><button class="btn btn-primary" style="flex:1" id="mergeExBtn" onclick="confirmMergeSelected()">Merge</button></div>
   </div>
 </div>
 
@@ -1008,11 +998,15 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.122"></script>
+<script src="pal-shared.js?v=2.123"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.123 (GYM-109): merge redesigned as select-and-merge in the library itself.
+// "Merge mode" highlights likely duplicates (grouped at the top), lets you tick
+// any same-type exercises, then choose which one to keep; the rest merge into it
+// via mergeExercises(). Replaces the v2.122 review list and the per-card Merge….
 // v2.122 (GYM-108): "🔍 Review possible merges" button in the Exercises tab.
 // Finds likely duplicate exercises (same type, similar names), shows each
 // candidate with where it is used (plans, saved circuits) and how often it
@@ -1647,7 +1641,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.122';
+const VERSION = '2.123';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3240,31 +3234,50 @@ function renderExerciseList() {
   if (!list.length) { html += `<div class="empty-state"><div class="big">💪</div>${all.length?'No exercises match':'No exercises yet'}</div>`; el.innerHTML = html; return; }
   // GYM-107: split into "In plans" (with how many / which) and "Not in any plan".
   const planUse = planUsageCounts(null);
+  const dup = _mergeMode ? findDuplicateHighlights() : { groups: [], similar: {} }; // GYM-109
   const exCard = e => {
     const n = planUse[e.id] || 0;
     const names = n ? planNamesForExercise(e.id) : [];
     const useLine = n ? `📋 In ${n} plan${n===1?'':'s'}: ${escHtml(names.slice(0,3).join(', '))}${names.length>3?' +'+(names.length-3)+' more':''}` : 'Not in any plan';
+    const sim = _mergeMode && dup.similar[e.id];
+    const sel = _mergeMode && _mergeSel.has(e.id);
+    const cardAttr = _mergeMode ? ` onclick="toggleMergeSel('${e.id}')" style="cursor:pointer;${sel?'border-color:var(--accent);background:rgba(56,189,248,0.10)':sim?'border-color:#e3b341;background:rgba(227,179,65,0.08)':''}"` : '';
     return `
-    <div class="list-item">
+    <div class="list-item"${cardAttr}>
       <div class="li-top">
-        <div>
+        ${_mergeMode ? `<span style="flex:none;width:22px;height:22px;margin-right:2px;border:2px solid ${sel?'var(--accent)':'var(--border)'};border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:var(--accent)">${sel?'✓':''}</span>` : ''}
+        <div style="flex:1;min-width:0">
           <div class="li-name">${escHtml(e.name)}</div>
           <div class="li-meta">${typeLabel(e.type)}</div>
           <div class="li-meta" style="color:${n?'var(--accent)':'var(--ink3)'}">${useLine}</div>
+          ${sim ? `<div class="li-meta" style="color:#e3b341;font-weight:600">⚠ Looks like: ${escHtml(sim.slice(0,3).join(', '))}${sim.length>3?' +'+(sim.length-3)+' more':''}</div>` : ''}
         </div>
         ${typeBadge(e.type)}
       </div>
       <div class="li-meta" style="margin-top:6px">${(e.tags||[]).map((t,i)=>`<span class="li-badge" style="background:var(--surface2);color:${i===0?'var(--accent4)':'var(--ink2)'};border:1px solid var(--border);margin-right:4px">${escHtml(t)}</span>`).join(' ') || '<span style="color:var(--ink3)">No tags</span>'}</div>
-      <div class="li-actions">
+      ${_mergeMode ? '' : `<div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openExerciseEditor('${e.id}')">Edit</button>
-        <button class="btn btn-secondary btn-sm" onclick="openMergeExercise('${e.id}')">Merge…</button>
         <button class="btn btn-danger btn-sm" onclick="deleteExercise('${e.id}')">Delete</button>
-      </div>
+      </div>`}
     </div>`;
   };
-  const inPlans = list.filter(e => planUse[e.id]), notInPlans = list.filter(e => !planUse[e.id]);
+  // GYM-109: in merge mode, likely duplicates are pulled to the top (group members adjacent)
+  let rest = list, dupHtml = '';
+  if (_mergeMode) {
+    const inList = new Set(list.map(e => e.id));
+    const dupIds = dup.groups.flat().filter(id => inList.has(id));
+    const dupSet = new Set(dupIds);
+    rest = list.filter(e => !dupSet.has(e.id));
+    const bar = `<div style="position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <span style="font-size:12.5px">${_mergeSel.size ? _mergeSel.size+' selected' : 'Tick the exercises to merge'}</span>
+      <button class="btn btn-primary btn-sm" onclick="openMergeSelected()">Merge selected…</button>
+    </div>`;
+    const dupGroups = dup.groups.map(g => g.filter(id => inList.has(id))).filter(g => g.length);
+    dupHtml = bar + (dupGroups.length ? `<div class="section-title" style="margin:6px 0 8px"><span>⚠ Possible duplicates (${dupIds.length})</span></div>` + dupGroups.map(g => `<div style="border-left:3px solid #e3b341;padding-left:8px;margin-bottom:12px">${g.map(id => exCard(exerciseById(id))).join('')}</div>`).join('') : '<p style="font-size:12px;color:var(--ink2);margin:0 0 8px">No likely duplicates spotted — you can still tick any exercises below.</p>');
+  }
+  const inPlans = rest.filter(e => planUse[e.id]), notInPlans = rest.filter(e => !planUse[e.id]);
   const grp = (title, arr) => arr.length ? `<div class="section-title" style="margin:14px 0 8px"><span>${title} (${arr.length})</span></div>` + arr.map(exCard).join('') : '';
-  html += grp('In plans', inPlans) + grp('Not in any plan', notInPlans);
+  html += dupHtml + grp(_mergeMode ? 'Other exercises in plans' : 'In plans', inPlans) + grp(_mergeMode ? 'Other exercises not in any plan' : 'Not in any plan', notInPlans);
   el.innerHTML = html;
 }
 
@@ -8508,10 +8521,8 @@ function confirmImportExMatch() {
 }
 function cancelImportExMatch() { _importPending = null; closeModal('modalImportExMatch'); toast('Import cancelled'); }
 
-// ── GYM-108: review possible merges ────────────────────────────────
-const MERGE_DISMISS_KEY = 'gym_merge_dismissed_v1';
-function mergeDismissed() { try { return new Set(JSON.parse(localStorage.getItem(MERGE_DISMISS_KEY)||'[]')); } catch(e) { return new Set(); } }
-function saveMergeDismissed(set) { try { localStorage.setItem(MERGE_DISMISS_KEY, JSON.stringify([...set])); } catch(e) {} }
+// ── GYM-109: select-and-merge in the library ────────────────────────
+let _mergeMode = false, _mergeSel = new Set(), _mergeKeep = null;
 function mergeUsageInfo(id) {
   let sess = 0, sets = 0, last = '';
   getSessions().forEach(se => {
@@ -8521,74 +8532,67 @@ function mergeUsageInfo(id) {
   const circ = getSavedCircuits().filter(c => (c.members||[]).some(m => m.exerciseId === id)).length;
   return { plans: planNamesForExercise(id), sess, sets, last, circ };
 }
-// Groups exercises (same type, name score >= 0.6) via union-find; returns
-// [{key, ids, score}] strongest first, excluding groups dismissed on this device.
-function findMergeSuggestions() {
-  const ex = getExercises(), parent = {}, best = {};
+// Likely duplicates: same type, name score >= 0.6. Returns { groups: [[ids]],
+// similar: {id: [names of the others it resembles]} } — used only to highlight.
+function findDuplicateHighlights() {
+  const ex = getExercises(), parent = {}, similar = {};
   ex.forEach(e => { parent[e.id] = e.id; });
   const find = x => parent[x] === x ? x : (parent[x] = find(parent[x]));
   for (let i = 0; i < ex.length; i++) for (let j = i+1; j < ex.length; j++) {
-    if (ex[i].type !== ex[j].type) continue;
-    const sc = exMatchScore(ex[i].name, ex[j].name);
-    if (sc >= 0.6) { parent[find(ex[i].id)] = find(ex[j].id); const r = find(ex[i].id); best[r] = Math.max(best[r]||0, sc); }
+    if (ex[i].type !== ex[j].type || exMatchScore(ex[i].name, ex[j].name) < 0.6) continue;
+    parent[find(ex[i].id)] = find(ex[j].id);
+    (similar[ex[i].id] = similar[ex[i].id] || []).push(ex[j].name);
+    (similar[ex[j].id] = similar[ex[j].id] || []).push(ex[i].name);
   }
-  const groups = {};
-  ex.forEach(e => { const r = find(e.id); (groups[r] = groups[r] || []).push(e.id); });
-  const dismissed = mergeDismissed();
-  return Object.keys(groups).filter(r => groups[r].length > 1).map(r => {
-    const ids = groups[r].slice().sort();
-    let score = 0;
-    for (let i = 0; i < ids.length; i++) for (let j = i+1; j < ids.length; j++) score = Math.max(score, exMatchScore(exerciseName(ids[i]), exerciseName(ids[j])));
-    return { key: ids.join('|'), ids, score };
-  }).filter(g => !dismissed.has(g.key)).sort((a,b) => b.score - a.score);
+  const g = {};
+  ex.forEach(e => { if (similar[e.id]) (g[find(e.id)] = g[find(e.id)] || []).push(e); });
+  const groups = Object.values(g).map(arr => arr.sort((a,b) => a.name.localeCompare(b.name)).map(e => e.id)).sort((a,b) => exerciseName(a[0]).localeCompare(exerciseName(b[0])));
+  return { groups, similar };
 }
-let _reviewKeep = {};
-function openMergeReview() {
-  if (_activeSession) { toast('Finish or discard the active session before merging exercises'); return; }
-  _reviewKeep = {};
-  renderMergeReview();
-  openModal('modalMergeReview');
+function toggleMergeMode() {
+  if (!_mergeMode && _activeSession) { toast('Finish or discard the active session before merging exercises'); return; }
+  _mergeMode = !_mergeMode; _mergeSel = new Set(); _mergeKeep = null;
+  const b = document.getElementById('mergeModeBtn');
+  if (b) b.textContent = _mergeMode ? '✕ Exit merge mode' : '☑ Select exercises to merge';
+  renderExerciseList();
 }
-function renderMergeReview() {
-  const el = document.getElementById('mergeReviewList');
-  const groups = findMergeSuggestions();
-  if (!groups.length) {
-    el.innerHTML = '<div class="empty-state"><div class="big">✅</div>No likely duplicates found</div>' + (mergeDismissed().size ? '<button class="btn btn-secondary btn-block" onclick="resetMergeDismissed()">Show dismissed suggestions again</button>' : '');
-    return;
+function toggleMergeSel(id) {
+  const e = exerciseById(id); if (!e) return;
+  if (_mergeSel.has(id)) _mergeSel.delete(id);
+  else {
+    const first = [..._mergeSel][0];
+    if (first && exerciseById(first).type !== e.type) { toast('Only exercises of the same type can be merged'); return; }
+    _mergeSel.add(id);
   }
-  el.innerHTML = groups.map((g, gi) => {
-    const infos = g.ids.map(id => ({ id, ex: exerciseById(id), u: mergeUsageInfo(id) }));
-    if (!_reviewKeep[g.key] || !g.ids.includes(_reviewKeep[g.key])) {
-      _reviewKeep[g.key] = infos.slice().sort((a,b) => b.u.sess - a.u.sess || b.u.plans.length - a.u.plans.length || a.ex.name.localeCompare(b.ex.name))[0].id;
-    }
-    const keep = _reviewKeep[g.key], keepName = exerciseName(keep);
-    return `<div class="list-item" style="padding:12px">
-      <div style="font-size:11px;color:var(--ink3);margin-bottom:6px">Group ${gi+1} · ${Math.round(g.score*100)}% name match · ${typeLabel(infos[0].ex.type)}</div>
-      ${infos.map(i => {
-        const on = i.id === keep, u = i.u;
-        return `<div class="exercise-picker-item" style="display:block;${on?'border-color:var(--accent)':''}" onclick="setReviewKeep('${g.key}','${i.id}')">
-          <div style="font-weight:600;font-size:13px"><span style="color:var(--accent);margin-right:6px">${on?'●':'○'}</span>${escHtml(i.ex.name)} ${on?'<span style="font-size:10.5px;color:var(--accent);font-weight:500">keep</span>':''}</div>
-          <div style="font-size:11.5px;color:var(--ink2);margin:4px 0 0 18px;line-height:1.5">
-            📋 ${u.plans.length ? 'In '+u.plans.length+' plan'+(u.plans.length===1?'':'s')+': '+escHtml(u.plans.slice(0,4).join(', '))+(u.plans.length>4?' +'+(u.plans.length-4)+' more':'') : 'Not in any plan'}<br>
-            🏋️ ${u.sess ? 'Logged in '+u.sess+' session'+(u.sess===1?'':'s')+' · '+u.sets+' set'+(u.sets===1?'':'s')+' · last '+escHtml(fmtDate(u.last)) : 'Never logged'}${u.circ ? '<br>🔁 In '+u.circ+' saved circuit'+(u.circ===1?'':'s') : ''}
-            ${(i.ex.tags||[]).length ? '<br>🏷 '+escHtml(i.ex.tags.join(', ')) : ''}${i.ex.notes ? '<br>📝 has a note' : ''}
-          </div>
-        </div>`;
-      }).join('')}
-      <div class="li-actions">
-        <button class="btn btn-primary btn-sm" onclick="mergeReviewGroup('${g.key}')">Merge into “${escHtml(keepName)}”</button>
-        <button class="btn btn-secondary btn-sm" onclick="dismissMergeGroup('${g.key}')">Not a duplicate</button>
+  renderExerciseList();
+}
+function openMergeSelected() {
+  if (_mergeSel.size < 2) { toast('Tick at least two exercises to merge'); return; }
+  const infos = [..._mergeSel].map(id => ({ id, u: mergeUsageInfo(id) }));
+  infos.sort((a,b) => b.u.sess - a.u.sess || b.u.plans.length - a.u.plans.length || exerciseName(a.id).localeCompare(exerciseName(b.id)));
+  _mergeKeep = infos[0].id; // suggestion: the most-logged one
+  renderMergeSelected();
+  openModal('modalMergeEx');
+}
+function setMergeKeep(id) { _mergeKeep = id; renderMergeSelected(); }
+function renderMergeSelected() {
+  const ids = [..._mergeSel];
+  document.getElementById('mergeExList').innerHTML = ids.map(id => {
+    const ex = exerciseById(id), u = mergeUsageInfo(id), on = id === _mergeKeep;
+    return `<div class="exercise-picker-item" style="display:block;${on?'border-color:var(--accent)':''}" onclick="setMergeKeep('${id}')">
+      <div style="font-weight:600;font-size:13px"><span style="color:var(--accent);margin-right:6px">${on?'●':'○'}</span>${escHtml(ex.name)} <span style="font-size:10.5px;font-weight:500;color:${on?'var(--accent)':'var(--ink3)'}">${on?'KEEP':'merge into the one kept'}</span></div>
+      <div style="font-size:11.5px;color:var(--ink2);margin:4px 0 0 18px;line-height:1.5">
+        📋 ${u.plans.length ? 'In '+u.plans.length+' plan'+(u.plans.length===1?'':'s')+': '+escHtml(u.plans.slice(0,4).join(', '))+(u.plans.length>4?' +'+(u.plans.length-4)+' more':'') : 'Not in any plan'}<br>
+        🏋️ ${u.sess ? 'Logged in '+u.sess+' session'+(u.sess===1?'':'s')+' · '+u.sets+' set'+(u.sets===1?'':'s')+' · last '+escHtml(fmtDate(u.last)) : 'Never logged'}${u.circ ? '<br>🔁 In '+u.circ+' saved circuit'+(u.circ===1?'':'s') : ''}
       </div>
     </div>`;
   }).join('');
+  document.getElementById('mergeExBtn').textContent = 'Merge ' + (ids.length-1) + ' into “' + exerciseName(_mergeKeep) + '”';
 }
-function setReviewKeep(key, id) { _reviewKeep[key] = id; renderMergeReview(); }
-function dismissMergeGroup(key) { const d = mergeDismissed(); d.add(key); saveMergeDismissed(d); renderMergeReview(); }
-function resetMergeDismissed() { saveMergeDismissed(new Set()); renderMergeReview(); }
-function mergeReviewGroup(key) {
-  const keep = _reviewKeep[key]; if (!keep) return;
-  const others = key.split('|').filter(id => id !== keep && exerciseById(id) && !exerciseById(id)._deleted);
-  if (!others.length) { renderMergeReview(); return; }
+function confirmMergeSelected() {
+  const keep = _mergeKeep;
+  const others = [..._mergeSel].filter(id => id !== keep);
+  if (!keep || !others.length || !exerciseById(keep)) return;
   const info = others.map(id => mergeUsageInfo(id));
   const nS = info.reduce((a,i)=>a+i.sess,0), nP = info.reduce((a,i)=>a+i.plans.length,0);
   if (!confirm('Merge '+others.map(id=>'"'+exerciseName(id)+'"').join(', ')+' into "'+exerciseName(keep)+'"? '+nS+' logged session'+(nS===1?'':'s')+' and '+nP+' plan entr'+(nP===1?'y':'ies')+' will move to it. This can\'t be undone from the app.')) return;
@@ -8598,45 +8602,11 @@ function mergeReviewGroup(key) {
     if (!r.ok) { toast(r.error); break; }
     sessions += r.sessions; plans += r.plans;
   }
-  renderMergeReview();
+  closeModal('modalMergeEx');
+  _mergeMode = false; _mergeSel = new Set(); _mergeKeep = null;
+  const b = document.getElementById('mergeModeBtn'); if (b) b.textContent = '☑ Select exercises to merge';
   renderExerciseList();
   toast('Merged ✓ — '+sessions+' session'+(sessions===1?'':'s')+', '+plans+' plan'+(plans===1?'':'s')+' updated');
-}
-
-let _mergeSrcId = null, _mergeTgtId = null;
-function openMergeExercise(id) {
-  if (_activeSession) { toast('Finish or discard the active session before merging exercises'); return; }
-  const src = exerciseById(id); if (!src) return;
-  _mergeSrcId = id; _mergeTgtId = null;
-  document.getElementById('mergeExSearch').value = '';
-  document.getElementById('mergeExIntro').innerHTML = 'Merge <b>'+escHtml(src.name)+'</b> into the exercise you pick. Its history and plan entries move to the exercise you keep (plan reps/weights are untouched) and <b>'+escHtml(src.name)+'</b> is removed from the library. Only '+escHtml(typeLabel(src.type))+' exercises are listed.';
-  document.getElementById('mergeExBtn').disabled = true;
-  renderMergeExList();
-  openModal('modalMergeEx');
-}
-function renderMergeExList() {
-  const src = exerciseById(_mergeSrcId); if (!src) return;
-  const q = (document.getElementById('mergeExSearch').value||'').toLowerCase();
-  const used = planUsageCounts(null);
-  const list = getExercises().filter(e => e.id !== src.id && e.type === src.type && (!q || e.name.toLowerCase().includes(q)))
-    .map(e => ({ e, score: exMatchScore(src.name, e.name) })).sort((a,b) => b.score - a.score || a.e.name.localeCompare(b.e.name));
-  document.getElementById('mergeExList').innerHTML = list.length ? list.map(({e, score}) => {
-    const on = _mergeTgtId === e.id, n = used[e.id] || 0;
-    return `<div class="exercise-picker-item" onclick="pickMergeTarget('${e.id}')" style="${on?'border-color:var(--accent)':''}">
-      <span><span style="margin-right:8px;color:var(--accent)">${on?'●':'○'}</span>${escHtml(e.name)}<span style="display:block;font-size:10.5px;color:var(--ink3);margin-left:20px">${n ? 'in '+n+' plan'+(n===1?'':'s') : 'not in a plan'}${score>=0.4?' · likely match':''}</span></span>
-    </div>`;
-  }).join('') : '<p style="font-size:12px;color:var(--ink2)">No other exercises of this type.</p>';
-}
-function pickMergeTarget(id) { _mergeTgtId = id; document.getElementById('mergeExBtn').disabled = false; renderMergeExList(); }
-function confirmMergeExercise() {
-  const src = exerciseById(_mergeSrcId), tgt = exerciseById(_mergeTgtId);
-  if (!src || !tgt) return;
-  if (!confirm('Merge "'+src.name+'" into "'+tgt.name+'"? This can\'t be undone from the app.')) return;
-  const r = mergeExercises(src.id, tgt.id);
-  if (!r.ok) { toast(r.error); return; }
-  closeModal('modalMergeEx');
-  renderExerciseList();
-  toast('Merged ✓ — '+r.sessions+' session'+(r.sessions===1?'':'s')+', '+r.plans+' plan'+(r.plans===1?'':'s')+' updated');
 }
 // Re-points every reference at the kept exercise (sessions, plans incl. day
 // copies, saved circuits), carries over tags/notes, then soft-deletes the

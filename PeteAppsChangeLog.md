@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.122 | v2.32 – v2.122. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.123 | v2.32 – v2.123. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.108 | v1.0 – v3.43 and v3.73 – v3.108. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,19 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.123 — GYM-109 — Merge redesigned: highlight duplicates, tick several, choose which to keep
+
+- **Why (Pete, 22 Oct):** he didn't like the v2.121 per-exercise Merge… picker or the v2.122 review list. He wants likely duplicates highlighted, to tick several exercises, then choose which one to keep and merge the rest into it.
+- **Change (`gym-tracker.html`):**
+  - The Exercises tab button is now **☑ Select exercises to merge** (becomes **✕ Exit merge mode**). In merge mode every card has a tick box (tap the card), Edit/Delete are hidden, and a sticky bar shows "n selected" and **Merge selected…**.
+  - Likely duplicates (same type, name similarity ≥ 60%, same scorer as the import matcher) are highlighted amber with "⚠ Looks like: …" and pulled to the top in a **Possible duplicates** section, group members adjacent. Everything else stays below in the normal In plans / Not in any plan groups. Search and area filters still apply. Any exercise can be ticked, not just highlighted ones; mixing types is refused with a message.
+  - **Merge selected…** opens a list of the ticked exercises with where each is used (plans, sessions/sets logged, last done, saved circuits). Tap one to keep it (default: most logged); the button reads "Merge n into “name”". Confirm shows how many sessions and plan entries move. Uses `mergeExercises()` from v2.121 (unchanged: sessions, plans incl. day copies and saved circuits re-pointed, tombstone, sync; blocked during an active session). Merge mode exits afterwards.
+  - **Removed:** the v2.122 review modal and its "Not a duplicate" dismissals (`gym_merge_dismissed_v1` is no longer read or written; any stored value is harmless), and the v2.121 per-card Merge… picker.
+- **Data model:** none; no sync or schema change.
+- **Unchanged:** launcher (not edited), `pal-shared.js`, import matching, plan editor/picker, JSON export/import.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.123.
+- Tested (Stage 1): syntax check; real page in jsdom with stubbed sync: merge mode toggle, highlighting and top grouping, same-type restriction, multi-select, keep default and change, merging 3 into 1 (sessions, plans and saved circuits re-pointed, tombstones, sync upserts, localStorage), cancel/exit, blocked during an active session, normal library view restored; v2.121 suite still passes. Not tested: real browser/phone layout (sticky bar), live Supabase, second device.
 
 ### v2.122 — GYM-108 — Review possible merges (suggested duplicate exercises with usage)
 
