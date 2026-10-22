@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.76 | v3.2 – v3.76. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.119 | v2.32 – v2.119. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.120 | v2.32 – v2.120. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.106 | v1.0 – v3.43 and v3.73 – v3.106. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2110,6 +2110,22 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.120 — GYM-106 — Edit a scheduled plan for one day only
+
+- **Why (Pete, 22 Oct):** editing a plan from a future day changed it everywhere (plans are shared by id across all days and repeats). He wanted the option to change just that day.
+- **Change (`gym-tracker.html`):**
+  - Each pending plan row in the calendar has **✏️ This day only**. The schedule edit screen (tap a plan row) has **Edit exercises for this day only** next to the existing "(all days)" button. The plan editor opens titled "Edit for <date> only"; saving there leaves the standard plan and every other day untouched, and skips the "update all" warning.
+  - Mechanism: no new schedule fields beyond a link. Saving creates a hidden copy of the plan (`dayCopyOf`, `dayCopyDate`). One-off day: the entry's `planId` points to the copy. Repeat day: that date is added to the rule's `exceptions` and a one-off entry (`fromRuleId`) for the copy is created. Because the day resolves through the normal one-off path, starting the session, done detection and the launcher work unchanged.
+  - `getPlans()` excludes copies, so they never show in Plans, pickers, programs, or archived lists. Plan cards' "done N times" also count sessions logged against their day copies.
+  - A day with a copy shows "✏️ edited for this day" and **↩ Standard plan**, which discards the edit (repeat day: removes the exception and the one-off; one-off: points back at the standard plan; the copy is tombstoned). Editing an already-copied day updates that copy only.
+  - The existing edit (all days) path is unchanged, including its confirmation.
+- **Data additions (backwards compatible):** plan `dayCopyOf`, `dayCopyDate`; schedule one-off `fromRuleId`. Other devices must also be on v2.120, otherwise they would list the hidden copies in their plan lists.
+- **Known limitations:** exercise-level history/insights group by exercise so are unaffected, but plan-level history for a session done on a copy is named like the standard plan and counted under it only in the "done N times" line; a copy cannot be reverted once a session is logged against it (the button only shows for undone plans); the day-only editor still shows the program dropdown but ignores it.
+- **Unchanged:** launcher (v11.23, not edited), weekly schedule from v2.118/2.119, data model otherwise, JSON export/import.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.120.
+- Tested (Stage 1): syntax check; scripted runs of the real functions: day-only on a repeat day and on a one-off day, standard plan untouched, other days unchanged, copy hidden from lists, no confirm in day-only mode, re-edit updates the same copy, revert for both origins, normal all-days edit still confirms and updates; earlier suites still pass.
+- Not tested: real browser (button layout, editor title), live Supabase, second device.
 
 ### v2.119 — GYM-105 — Schedule starts tomorrow; future-day plan preview shows reps and weight
 

@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.119</title>
+<title>Gym Tracker v2.120</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.119</div></span>
+      <span>Gym Tracker<div class="ver">v2.120</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -730,7 +730,8 @@
       </div>
       <p style="font-size:11px;color:var(--ink3);margin:6px 0 8px" id="repeatHint"></p>
       <button class="btn btn-primary btn-block" id="confirmAddPlanBtn" onclick="confirmAddPlan()">Add</button>
-      <button class="btn btn-secondary btn-block" id="editExercisesBtn" style="display:none;margin-top:8px" onclick="editExercisesFromPicker()">✏️ Edit exercises in this plan</button>
+      <button class="btn btn-secondary btn-block" id="editExercisesBtn" style="display:none;margin-top:8px" onclick="editExercisesFromPicker()">✏️ Edit exercises in this plan (all days)</button>
+      <button class="btn btn-secondary btn-block" id="editExercisesDayBtn" style="display:none;margin-top:8px" onclick="editExercisesDayFromPicker()">✏️ Edit exercises for this day only</button>
     </div>
   </div>
 </div>
@@ -969,11 +970,16 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.119"></script>
+<script src="pal-shared.js?v=2.120"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.120 (GYM-106): a scheduled plan can be edited for ONE DAY only. "This day
+// only" copies the plan (hidden record with dayCopyOf), edits the copy and
+// points just that date at it (one-off: planId swapped; repeat: the date is
+// added to the rule's exceptions and a one-off for the copy is created). The
+// standard plan and every other day are untouched; "Standard plan" reverts.
 // v2.119 (GYM-105): a program's weekly schedule now starts TOMORROW, never
 // today (today may already be done or in progress); old repeats are ended as
 // of today so today is left exactly as it was. Future-day plan previews in the
@@ -1586,7 +1592,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.119';
+const VERSION = '2.120';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -1878,7 +1884,7 @@ let _env = defaultEnvelope();
 // applying merge results computed against data that no longer exists.
 let _envGeneration = 0;
 const getExercises = () => _env.data.exercises.filter(e => !e._deleted);
-const getPlans      = () => _env.data.plans.filter(p => !p._deleted);
+const getPlans      = () => _env.data.plans.filter(p => !p._deleted && !p.dayCopyOf); // GYM-106: day-only copies stay out of every list
 // GYM-055: Programs group plans together (e.g. everything imported from
 // one PT Companion export). A plan's programId is nullable/optional —
 // ungrouped plans are entirely unaffected and keep working exactly as before.
@@ -3533,7 +3539,7 @@ function togglePlanCard(planId) {
   renderPlanList();
 }
 function renderPlanCard(p, idx, list, sessions) {
-  const done = sessions.filter(s=>s.planId===p.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const done = sessions.filter(s=>s.planId===p.id || ((planById(s.planId)||{}).dayCopyOf===p.id)).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const last = done[0];
   const spaIcon = isSpaOnlyItemSet(p.items) ? '🧖 ' : '';
   const timeTotal = planTimeTotal(p.items);
@@ -3751,6 +3757,7 @@ function handlePlanProgramChange(value) {
 }
 function openPlanEditor(id) {
   if (id && !planById(id)) { toast('That plan no longer exists'); return; }
+  _planDayOnly = null; // GYM-106: only editPlanThisDay() sets this, after calling us
   document.getElementById('planEditId').value = id||'';
   if (id) {
     const p = planById(id);
@@ -4421,6 +4428,7 @@ function renderCalendar() {
             <div class="cal-plan-name">${escHtml(plan.name)}</div>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
               ${totalMin>0 ? `<div class="cal-repeat-badge">⏱ ~${totalMin} min</div>` : ''}
+              ${plan.dayCopyOf ? `<div class="cal-repeat-badge">✏️ edited for this day</div>` : ''}
               ${r.type === 'repeat' ? `<div class="cal-repeat-badge">🔁 ${repeatLabel(r.rule)}${r.rule.programId ? ' · 📅 program' : ''}</div>` : ''}
             </div>
           </div>
@@ -4428,6 +4436,8 @@ function renderCalendar() {
           ${previewOpen ? `<div style="margin-top:4px">${planPreviewRows(plan)}</div>` : ''}
           <div class="li-actions">
             ${isToday ? `<button class="btn btn-primary btn-sm" onclick="startSession('${plan.id}')">▶ Start</button>` : ''}
+            <button class="btn btn-secondary btn-sm" onclick="editPlanThisDay('${r.type}','${itemId}','${date}')">✏️ This day only</button>
+            ${plan.dayCopyOf && r.type === 'oneoff' ? `<button class="btn btn-secondary btn-sm" onclick="revertDayPlan('${r.entry.id}')">↩ Standard plan</button>` : ''}
             ${removeBtn}
           </div>
         </div>`;
@@ -4588,6 +4598,11 @@ function openScheduleEdit(kind, id, date) {
   renderRepeatControls();
   openModal('modalSchedule');
 }
+function editExercisesDayFromPicker() { // GYM-106
+  const t = _pickerEditTarget; if (!t) return;
+  closeModal('modalSchedule');
+  editPlanThisDay(t.kind === 'repeat' ? 'repeat' : 'oneoff', t.id, t.date);
+}
 function editExercisesFromPicker() {
   if (!_pickerSelectedPlanId) return;
   closeModal('modalSchedule');
@@ -4710,6 +4725,7 @@ function renderRepeatControls() {
   document.getElementById('confirmAddPlanBtn').textContent =
     editing ? 'Save changes' : (_repeatOn ? 'Add repeating plan' : 'Add to ' + fmtDate(date));
   document.getElementById('editExercisesBtn').style.display = editing ? '' : 'none';
+  document.getElementById('editExercisesDayBtn').style.display = editing ? '' : 'none'; // GYM-106
 }
 function confirmAddPlan() {
   const editing = _pickerAction === 'edit' && _pickerEditTarget;
@@ -4872,6 +4888,74 @@ function affectedFutureSchedule(planId) {
   const repeats = getRepeatRules().filter(r => r.planId===planId);
   return { oneOffs, repeats };
 }
+// GYM-106: edit a scheduled plan for one day only.
+let _planDayOnly = null; // { type, itemId, date } while the plan editor is in "this day only" mode
+function editPlanThisDay(type, itemId, date) {
+  const item = getScheduleEntries().find(e => e.id === itemId);
+  const plan = item ? planById(item.planId) : null;
+  if (!plan) { toast('That plan no longer exists'); return; }
+  openPlanEditor(plan.id); // clears _planDayOnly
+  if (plan.dayCopyOf) { // already this day's own copy: a normal save only affects this day
+    document.getElementById('planModalTitle').textContent = 'Edit for ' + fmtDate(date) + ' only';
+    return;
+  }
+  _planDayOnly = { type, itemId, date };
+  document.getElementById('planModalTitle').textContent = 'Edit for ' + fmtDate(date) + ' only';
+}
+function saveDayOnlyPlan(origId, name, notes) {
+  const orig = planById(origId);
+  const d = _planDayOnly;
+  const item = d ? getScheduleEntries().find(e => e.id === d.itemId) : null;
+  if (!orig || !item) { toast('That schedule entry no longer exists'); closeModal('modalPlan'); _planDayOnly = null; renderCalendar(); return; }
+  const now = new Date().toISOString();
+  const copy = { id: uid('plan'), name, notes, items: _planItems, circuits: _planCircuits, programId: orig.programId || null,
+    order: orig.order || 0, archived: false, dayCopyOf: orig.id, dayCopyDate: d.date, createdAt: now, updatedAt: now };
+  _env.data.plans.push(copy);
+  const touched = [];
+  if (item.kind === 'repeat') {
+    item.exceptions = item.exceptions || [];
+    if (!item.exceptions.includes(d.date)) item.exceptions.push(d.date);
+    item.updatedAt = now;
+    const entry = { id: uid('sc'), date: d.date, planId: copy.id, fromRuleId: item.id, createdAt: now, updatedAt: now };
+    _env.data.scheduleEntries.push(entry);
+    touched.push(item, entry);
+  } else {
+    item.planId = copy.id; item.updatedAt = now;
+    touched.push(item);
+  }
+  save(_env);
+  sbUpsert('plan', copy, null);
+  touched.forEach(r => sbUpsert('schedule', r, null));
+  _planDayOnly = null;
+  closeModal('modalPlan');
+  renderPlanList(); renderCalendar(); renderHome();
+  toast('Saved for ' + fmtDate(d.date) + ' only ✓ — other days unchanged');
+}
+// back to the standard plan for that day
+function revertDayPlan(entryId) {
+  const entry = getScheduleEntries().find(e => e.id === entryId);
+  const copy = entry ? planById(entry.planId) : null;
+  if (!entry || !copy || !copy.dayCopyOf) return;
+  if (!confirm('Go back to the standard "' + copy.name + '" plan for ' + fmtDate(entry.date) + '? This day\'s edits are discarded.')) return;
+  const now = new Date().toISOString();
+  const touched = [];
+  const rule = entry.fromRuleId ? getScheduleEntries().find(e => e.id === entry.fromRuleId) : null;
+  if (rule) {
+    rule.exceptions = (rule.exceptions || []).filter(x => x !== entry.date);
+    rule.updatedAt = now;
+    entry._deleted = true; entry.updatedAt = now;
+    touched.push(rule, entry);
+  } else {
+    entry.planId = copy.dayCopyOf; entry.updatedAt = now;
+    touched.push(entry);
+  }
+  copy._deleted = true; copy.updatedAt = now; // nothing was logged against it (it is only offered for undone plans)
+  save(_env);
+  sbUpsert('plan', copy, null);
+  touched.forEach(r => sbUpsert('schedule', r, null));
+  renderCalendar(); renderHome();
+  toast('Back to the standard plan');
+}
 function savePlan() {
   const name = document.getElementById('planName').value.trim();
   if (!name) { toast('Enter a plan name'); return; }
@@ -4881,7 +4965,9 @@ function savePlan() {
   const notes = document.getElementById('planNotes').value.trim();
   const programSel = document.getElementById('planProgram').value;
   const programId = (programSel && programSel !== '__new__') ? programSel : null;
-  if (id) {
+  if (id && _planDayOnly) { saveDayOnlyPlan(id, name, notes); return; } // GYM-106
+  const _p0 = id ? planById(id) : null;
+  if (id && !(_p0 && _p0.dayCopyOf)) { // a day-only copy only ever serves its own day, nothing to warn about
     const { oneOffs, repeats } = affectedFutureSchedule(id);
     if (oneOffs.length || repeats.length) {
       const parts = [];
