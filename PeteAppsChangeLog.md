@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.121 | v2.32 – v2.121. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.122 | v2.32 – v2.122. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.107 | v1.0 – v3.43 and v3.73 – v3.107. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,18 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.122 — GYM-108 — Review possible merges (suggested duplicate exercises with usage)
+
+- **Why (Pete, 22 Oct):** the merge feature from v2.121 needed you to already know which exercise was a duplicate. He asked for a button that looks for merges and presents them with where each exercise is used and how often.
+- **Change (`gym-tracker.html`):**
+  - New **🔍 Review possible merges** button at the top of the Exercises tab. It lists groups of likely duplicates: same type, name similarity ≥ 60% (same scorer as the import matcher, so incline/decline/single etc. are never grouped). Groups of 3 or more are supported.
+  - Each exercise in a group shows: plans it is in (count and names), sessions logged / sets logged / last done date, saved circuits, tags, and whether it has a note. The suggested "keep" is the most-logged one (ties: most plans), changeable by tapping another.
+  - **Merge into "<name>"** confirms with the number of sessions and plan entries that will move, then uses `mergeExercises()` from v2.121 (same re-pointing, tombstone and sync behaviour; blocked during an active session). **Not a duplicate** hides that group; dismissals are stored in `localStorage` key `gym_merge_dismissed_v1` on this device only, with a "Show dismissed suggestions again" reset. The per-exercise **Merge…** button remains.
+- **Data model:** none. No sync or schema change; the dismiss list is local and not backed up.
+- **Unchanged:** launcher (not edited), `pal-shared.js`, JSON export/import, everything else in v2.121.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.122.
+- Tested (Stage 1): see below, added to the v2.121 jsdom suite. Not tested: real browser layout, live Supabase, second device. Known limitation: dismissals do not sync between devices.
 
 ### v2.121 — GYM-107 — Plan editor and exercise library overhaul (1-set default, collapsible plan items, tick-box picker, merge, import matching)
 
