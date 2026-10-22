@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.123</title>
+<title>Gym Tracker v2.124</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -308,7 +308,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.123</div></span>
+      <span>Gym Tracker<div class="ver">v2.124</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -998,11 +998,16 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.123"></script>
+<script src="pal-shared.js?v=2.124"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.124 (GYM-110): merge mode refinements. Possible duplicates are shown as
+// clear batches; "Not duplicates" (whole batch) and "Not in this batch" (one
+// exercise) record NOT-a-duplicate per PAIR, so an exercise dismissed from one
+// batch can still appear in another. Stored on this device only
+// (localStorage gym_merge_notdup_v1). Merge mode now stays open after a merge.
 // v2.123 (GYM-109): merge redesigned as select-and-merge in the library itself.
 // "Merge mode" highlights likely duplicates (grouped at the top), lets you tick
 // any same-type exercises, then choose which one to keep; the rest merge into it
@@ -1641,7 +1646,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.123';
+const VERSION = '2.124';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3235,7 +3240,7 @@ function renderExerciseList() {
   // GYM-107: split into "In plans" (with how many / which) and "Not in any plan".
   const planUse = planUsageCounts(null);
   const dup = _mergeMode ? findDuplicateHighlights() : { groups: [], similar: {} }; // GYM-109
-  const exCard = e => {
+  const exCard = (e, batchKey) => {
     const n = planUse[e.id] || 0;
     const names = n ? planNamesForExercise(e.id) : [];
     const useLine = n ? `📋 In ${n} plan${n===1?'':'s'}: ${escHtml(names.slice(0,3).join(', '))}${names.length>3?' +'+(names.length-3)+' more':''}` : 'Not in any plan';
@@ -3255,6 +3260,7 @@ function renderExerciseList() {
         ${typeBadge(e.type)}
       </div>
       <div class="li-meta" style="margin-top:6px">${(e.tags||[]).map((t,i)=>`<span class="li-badge" style="background:var(--surface2);color:${i===0?'var(--accent4)':'var(--ink2)'};border:1px solid var(--border);margin-right:4px">${escHtml(t)}</span>`).join(' ') || '<span style="color:var(--ink3)">No tags</span>'}</div>
+      ${batchKey && dup.groups.find(g => g.join('|') === batchKey).length > 2 ? `<div class="li-actions" style="margin-top:6px"><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();dismissFromBatch('${e.id}','${batchKey}')">Not in this batch</button></div>` : ''}
       ${_mergeMode ? '' : `<div class="li-actions">
         <button class="btn btn-secondary btn-sm" onclick="openExerciseEditor('${e.id}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="deleteExercise('${e.id}')">Delete</button>
@@ -3269,14 +3275,19 @@ function renderExerciseList() {
     const dupSet = new Set(dupIds);
     rest = list.filter(e => !dupSet.has(e.id));
     const bar = `<div style="position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px">
-      <span style="font-size:12.5px">${_mergeSel.size ? _mergeSel.size+' selected' : 'Tick the exercises to merge'}</span>
+      <span style="font-size:12.5px">${_mergeSel.size ? _mergeSel.size+' selected' : 'Tick the exercises to merge'}${notDupPairs().size ? ` · <a href="#" onclick="resetNotDup();return false" style="color:var(--accent)">reset “not duplicates”</a>` : ''}</span>
       <button class="btn btn-primary btn-sm" onclick="openMergeSelected()">Merge selected…</button>
     </div>`;
     const dupGroups = dup.groups.map(g => g.filter(id => inList.has(id))).filter(g => g.length);
-    dupHtml = bar + (dupGroups.length ? `<div class="section-title" style="margin:6px 0 8px"><span>⚠ Possible duplicates (${dupIds.length})</span></div>` + dupGroups.map(g => `<div style="border-left:3px solid #e3b341;padding-left:8px;margin-bottom:12px">${g.map(id => exCard(exerciseById(id))).join('')}</div>`).join('') : '<p style="font-size:12px;color:var(--ink2);margin:0 0 8px">No likely duplicates spotted — you can still tick any exercises below.</p>');
+    dupHtml = bar + (dupGroups.length ? `<div class="section-title" style="margin:6px 0 8px"><span>⚠ Possible duplicates (${dupIds.length})</span></div>` + dupGroups.map((g, gi) => { const key = g.join('|'); return `<div style="border:1.5px solid #e3b341;border-radius:var(--radius);padding:8px;margin-bottom:14px;background:rgba(227,179,65,0.04)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:12px;font-weight:600;color:#e3b341">Batch ${gi+1} · ${g.length} similar</span>
+        <span style="display:flex;gap:6px"><button class="btn btn-secondary btn-sm" onclick="selectBatch('${key}')">${g.every(id => _mergeSel.has(id)) ? 'Unselect all' : 'Select all'}</button><button class="btn btn-secondary btn-sm" onclick="dismissBatch('${key}')">Not duplicates</button></span>
+      </div>
+      ${g.map(id => exCard(exerciseById(id), key)).join('')}</div>`; }).join('') : '<p style="font-size:12px;color:var(--ink2);margin:0 0 8px">No likely duplicates spotted — you can still tick any exercises below.</p>');
   }
   const inPlans = rest.filter(e => planUse[e.id]), notInPlans = rest.filter(e => !planUse[e.id]);
-  const grp = (title, arr) => arr.length ? `<div class="section-title" style="margin:14px 0 8px"><span>${title} (${arr.length})</span></div>` + arr.map(exCard).join('') : '';
+  const grp = (title, arr) => arr.length ? `<div class="section-title" style="margin:14px 0 8px"><span>${title} (${arr.length})</span></div>` + arr.map(e => exCard(e)).join('') : '';
   html += dupHtml + grp(_mergeMode ? 'Other exercises in plans' : 'In plans', inPlans) + grp(_mergeMode ? 'Other exercises not in any plan' : 'Not in any plan', notInPlans);
   el.innerHTML = html;
 }
@@ -8534,12 +8545,38 @@ function mergeUsageInfo(id) {
 }
 // Likely duplicates: same type, name score >= 0.6. Returns { groups: [[ids]],
 // similar: {id: [names of the others it resembles]} } — used only to highlight.
+const MERGE_NOTDUP_KEY = 'gym_merge_notdup_v1';
+const pairKey = (a, b) => a < b ? a+'|'+b : b+'|'+a;
+function notDupPairs() { try { return new Set(JSON.parse(localStorage.getItem(MERGE_NOTDUP_KEY)||'[]')); } catch(e) { return new Set(); } }
+function saveNotDupPairs(set) { try { localStorage.setItem(MERGE_NOTDUP_KEY, JSON.stringify([...set])); } catch(e) {} }
+// A "batch" is a cluster of exercises linked by similar-name pairs that have
+// not been marked not-a-duplicate; dismissal is per pair, never per exercise.
+function dismissPairs(ids) {
+  const d = notDupPairs();
+  for (let i = 0; i < ids.length; i++) for (let j = i+1; j < ids.length; j++) d.add(pairKey(ids[i], ids[j]));
+  saveNotDupPairs(d);
+}
+function dismissBatch(key) { dismissPairs(key.split('|')); renderExerciseList(); }
+function dismissFromBatch(id, key) {
+  const others = key.split('|').filter(x => x !== id);
+  const d = notDupPairs(); others.forEach(o => d.add(pairKey(id, o))); saveNotDupPairs(d);
+  _mergeSel.delete(id);
+  renderExerciseList();
+}
+function resetNotDup() { saveNotDupPairs(new Set()); renderExerciseList(); }
+function selectBatch(key) {
+  const ids = key.split('|').filter(id => exerciseById(id) && !exerciseById(id)._deleted);
+  const all = ids.every(id => _mergeSel.has(id));
+  ids.forEach(id => { if (all) _mergeSel.delete(id); else _mergeSel.add(id); });
+  renderExerciseList();
+}
 function findDuplicateHighlights() {
+  const notDup = notDupPairs();
   const ex = getExercises(), parent = {}, similar = {};
   ex.forEach(e => { parent[e.id] = e.id; });
   const find = x => parent[x] === x ? x : (parent[x] = find(parent[x]));
   for (let i = 0; i < ex.length; i++) for (let j = i+1; j < ex.length; j++) {
-    if (ex[i].type !== ex[j].type || exMatchScore(ex[i].name, ex[j].name) < 0.6) continue;
+    if (ex[i].type !== ex[j].type || notDup.has(pairKey(ex[i].id, ex[j].id)) || exMatchScore(ex[i].name, ex[j].name) < 0.6) continue;
     parent[find(ex[i].id)] = find(ex[j].id);
     (similar[ex[i].id] = similar[ex[i].id] || []).push(ex[j].name);
     (similar[ex[j].id] = similar[ex[j].id] || []).push(ex[i].name);
@@ -8603,8 +8640,7 @@ function confirmMergeSelected() {
     sessions += r.sessions; plans += r.plans;
   }
   closeModal('modalMergeEx');
-  _mergeMode = false; _mergeSel = new Set(); _mergeKeep = null;
-  const b = document.getElementById('mergeModeBtn'); if (b) b.textContent = '☑ Select exercises to merge';
+  _mergeSel = new Set(); _mergeKeep = null; // GYM-110: stay in merge mode so the next batch can be done straight away
   renderExerciseList();
   toast('Merged ✓ — '+sessions+' session'+(sessions===1?'':'s')+', '+plans+' plan'+(plans===1?'':'s')+' updated');
 }

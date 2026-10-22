@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.123 | v2.32 – v2.123. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.124 | v2.32 – v2.124. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.108 | v1.0 – v3.43 and v3.73 – v3.108. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,18 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.124 — GYM-110 — Merge mode: duplicate batches, per-batch "not a duplicate", stays open after merging
+
+- **Why (Pete, 22 Oct, after trying v2.123):** wanted the potential duplicates grouped together, a way to mark "not a duplicate" that only applies within that batch (an exercise can be in more than one batch), and merge mode to stay open after a merge.
+- **Change (`gym-tracker.html`):**
+  - Possible duplicates now appear as bordered **Batch n · k similar** cards, each with **Select all / Unselect all** and **Not duplicates**. In a batch of 3 or more each exercise also has **Not in this batch**, which splits just that exercise off from that batch.
+  - "Not a duplicate" is recorded per **pair** of exercises (`localStorage` key `gym_merge_notdup_v1`, sorted `idA|idB` strings), never per exercise, so an exercise dismissed from one batch is still highlighted against any other exercise it resembles. **reset “not duplicates”** appears in the merge bar when any exist. Stored on this device only (not synced, not in JSON backup). Replaces the unused v2.122 key `gym_merge_dismissed_v1`.
+  - After Merge, merge mode **stays open**: the selection is cleared, the merged exercises vanish, and remaining batches stay on screen. Exit with **✕ Exit merge mode**.
+- **Data model:** none. No sync or schema change.
+- **Unchanged:** `mergeExercises()`, the keep/usage dialog, launcher, `pal-shared.js`, JSON export/import.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.124.
+- Tested (Stage 1): syntax check; real page in jsdom with stubbed sync: batches rendered with headers, select all, dismiss batch, dismiss one exercise from a 3-batch while it still shows in another batch, reset, merge keeps merge mode open and updates batches; earlier suites updated and passing. Not tested: real browser/phone layout, live Supabase, second device. Known limitation: not-duplicate marks do not sync between devices.
 
 ### v2.123 — GYM-109 — Merge redesigned: highlight duplicates, tick several, choose which to keep
 
