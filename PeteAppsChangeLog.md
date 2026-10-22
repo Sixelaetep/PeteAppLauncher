@@ -22,7 +22,7 @@ This is the consolidated historical development changelog for every application 
 | Gym Tracker | `gym-tracker.html` | v2.122 | v2.32 – v2.122. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
-| On Budget | `on-budget.html` | v3.107 | v1.0 – v3.43 and v3.73 – v3.107. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
+| On Budget | `on-budget.html` | v3.108 | v1.0 – v3.43 and v3.73 – v3.108. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
 | Reading Tracker | `reading-tracker.html` | v3.73 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.73 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
@@ -2799,6 +2799,14 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `on-budget.html`. The app's inline comment keeps the detailed recent-era releases (v3.44 onward); the `.md` holds v1.0–v3.43 plus v3.73 onward. ⚠ v3.44–v3.72 are not in the supplied changelog (ON--049 / ON--050, referenced by pal-sync v1.11 and Fortnight v3.32, fall in that range). One Supabase table shared across many record kinds via `record_key` prefixes (`billsoverride_`, `billsscenario_`, `savingsgoal_`, `savingstx_` and others). Horizon is embedded as a nested iframe tab.
 
 ⚠ Reused IDs in the source: ON--069 (v3.73 and v3.75), ON--070 (v3.74 and v3.76), ON--025 (v3.18 and v3.20). Launcher v10.89 cites "on-budget.html v3.75 (ON--071)" for the Horizon standalone flag, which has no entry here.
+
+### v3.108 — ON--102 — "Update next bill" simplified to Bal before 1st / 2nd income, red when below £0
+
+- **Why:** Pete found the v3.106/v3.107 wording ("Working but too many words") too long; he wants just the balance before the 1st and 2nd upcoming incomes, with below-£0 values in red.
+- **Change (`on-budget.html` only):** `payoffBillsImpact()`, `payoffFinalText()` and `payoffWarnText()` (ON--100/101) replaced by `payoffBalLines()` / `payoffBalText()` / `payoffBalHtml()`. Dashboard pay-off strip now shows two lines, "Bal before 1st income: £x (date)" and "Bal before 2nd income: £y (date)" (balance after the last Bills-list item before that income, new pay-off applied; date is that item's), value red when below £0. The confirm box shows the same two lines, with ⚠ on a negative one and "Update anyway?" only when one is negative. The separate sentence warnings are gone; the update is never blocked. Read-only.
+- **Data / sync:** none. Launcher not edited.
+- Version updated everywhere: `<title>`, badge, header comment, `pal-shared.js?v=`, the OB_PONG version and both `version` fields.
+- Tested (Stage 1): `node --check`; headless Chromium (Playwright, stubbed `pal-shared.js`), pay-off £100 → £946.43 with Bills opening at £5,000 / £1,000 / £700: values £3,553.57 and £4,903.57 (black); −£446.43 / £903.57 and −£746.43 / £603.57 (negative one red `rgb(220,38,38)`, ⚠ and "Update anyway?" in confirm); no page errors. **Not tested:** real data, weekend-shifted wages, ad-hoc uncleared items, a phone.
 
 ### v3.107 — ON--101 — "Update next bill" reports the Bills balance before the 2nd upcoming income
 
