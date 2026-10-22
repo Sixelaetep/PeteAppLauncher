@@ -17,7 +17,7 @@ This is the consolidated historical development changelog for every application 
 | P Apps Launcher | `index.html` | v11.23 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22 and v11.23. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.52 | v1.0 – v1.52 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
-| Fortnight Tracker | `fortnight-tracker.html` | v3.78 | v3.2 – v3.78. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
+| Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.120 | v2.32 – v2.120. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
@@ -1547,6 +1547,15 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 `fortnight-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the full history was in `fortnight-tracker.md`, resequenced newest-to-oldest because the original inline order mixed ascending and descending runs. Supabase table `fortnight_bundles` (bundles keyed by `record_key`; `code_`, `leave_`, `bh_`, `la_` prefixed rows share the table). Local key `fn_tracker_v5`, also read directly by PeteGCal and Gigs & Trips for the working-day alert.
 
 ⚠ Several FT IDs are reused across versions in the source (for example FT-062 at v3.72 and v3.68; FT-039 at v3.44 and v3.42; FT-030 at v3.36 and v3.33; FT-026 at v3.34 and v3.32; FT-020 to FT-025 at multiple versions). They are preserved as recorded.
+
+### v3.79 — FT-071 — 22 Oct 2026 — Hours done and timesheet hours logged on the day header and top bar
+
+- **Day card header:** the right-hand side now reads "Done <hours>" (the existing day total) and "Logged <hours>" (total of the day's timesheet code allocations, `allocTotal`; "–" when nothing is logged). The header row wraps on narrow screens.
+- **Top bar:** each segment keeps its coloured fill, hours and status icon (hours done) and gains a small "TS <hours>" line underneath (hours logged). Legend gains "Bar = hours done · TS = timesheet logged".
+- **Colour of logged hours (both places):** green = logged equals the day's hours done (the standard day length for a day with no status yet); amber = under; red = over; grey = nothing logged. Shared helpers `loggedCls`, `loggedLbl`, `refreshLogged`; refreshed live when code hours or the day's times/extra change, no full render.
+- No data-model, storage, sync or `index.html` / `pal-shared.js` change. Version synced in `<title>`, logo-sub, the `pal-shared.js?v=` tag and the inline history comment.
+- **Known limitation:** edits made on the Timesheet tab show here the next time the Live tab is drawn (switching tabs redraws it).
+- Tested (headless jsdom, real file, `PalSync` stubbed; 14 new checks plus the 27 from v3.78 and 42 from v3.77, all passing): initial "–" and done hours; logged hours update header and bar together; amber under / green match / red over; colour re-evaluates when done hours change; values survive a redraw; holiday day shows 8h logged in green; nine bar lines; bar links intact; no script errors. Not tested: a real browser or phone (fit of the extra text in the narrow bar and header), live Supabase and a second device.
 
 ### v3.78 — FT-070 — 22 Oct 2026 — Details open on load, timesheet codes inside each day card
 
