@@ -15,7 +15,7 @@
 <meta name="application-name" content="9D Fortnight">
 <link rel="manifest" id="pwa-manifest-link">
 <link rel="icon" id="favicon-link" type="image/png">
-<title>9-Day Fortnight Tracker v3.77</title>
+<title>9-Day Fortnight Tracker v3.78</title>
 <style>
 :root {
   --bg:#0f1923; --surface:#172130; --card:#1e2d3d; --border:#2a3f55;
@@ -186,6 +186,17 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 .seg-col{flex:1;display:flex;flex-direction:column;gap:3px;min-width:0;text-decoration:none;color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 .seg-col:hover .seg{outline:1px solid var(--muted);}
 .stag-half{background:rgba(96,165,250,.18);color:var(--blue);}
+.dcodes{margin-top:.6rem;padding:.55rem .6rem;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.02);scroll-margin-top:200px;}
+.dcodes.flash{border-color:var(--amber);box-shadow:0 0 0 2px rgba(245,158,11,.25);}
+.dcodes-hd{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.4rem;font-size:.62rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);}
+.dcodes-sum{font-size:.7rem;font-weight:600;letter-spacing:0;text-transform:none;}
+.dc-row{display:flex;align-items:center;gap:.5rem;padding:.3rem 0;border-top:1px solid var(--border);}
+.dc-row:first-of-type{border-top:none;}
+.dc-name{flex:1;min-width:0;font-size:.72rem;line-height:1.25;}
+.dc-name .cm-meta{display:block;}
+.dc-auto{font-size:.55rem;color:var(--muted);margin-left:.3rem;}
+.dc-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.45rem;align-items:center;}
+.dc-note{font-size:.62rem;color:var(--muted);}
 .focus-tag{font-size:.55rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:.1rem .4rem;border-radius:4px;background:rgba(245,158,11,.18);color:var(--amber);}
 .day-row.is-focus{border-color:var(--amber);}
 .seg-lbl{font-size:.44rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:var(--muted);text-align:center;line-height:1.25;}
@@ -556,7 +567,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <header>
   <div class="logo">
     <div class="logo-mark">9D<br>FN</div>
-    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.77</span></div></div>
+    <div><div class="logo-text">Fortnight Tracker</div><div class="logo-sub">9-day cycle &middot; 70 hr target &middot; <span style="opacity:0.6">v3.78</span></div></div>
   </div>
   <div class="header-actions">
     <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
@@ -720,7 +731,7 @@ main{padding:1.25rem;max-width:600px;margin:0 auto;}
 <div class="toast" id="toast"></div>
 
 
-<script src="pal-shared.js?v=3.77"></script>
+<script src="pal-shared.js?v=3.78"></script>
 <script>
 'use strict';
 // PWA
@@ -809,6 +820,10 @@ function normDate(s){
   return isNaN(d.getTime()) ? raw : isoDate(d);
 }
 
+// v3.78 (FT-070): Live tab opens with the active bundle's details showing (today's
+// day already expanded); each day card has a Timesheet codes section (hours per
+// code, same data as the Timesheet tab matrix); Done/Training/Conference now
+// scrolls to that section instead of switching tab (unless the bundle just completed).
 // v3.77 (FT-069): holiday/sick days now zero or reduce the clock (full day =
 // start=end, no lunch, no extra; half day = shorter shift making up the rest),
 // top bar segments are links to their day (split blue for the absence share),
@@ -1783,6 +1798,129 @@ function segFill(day,di){
   }
   return {fp:fp,bg:bg,h:h,std:std};
 }
+// FT-070: timesheet codes inside each day card. Same data as the Timesheet
+// tab matrix (day.alloc = [{codeId,mins}]), so the consolidated week view,
+// Submit and PDF/Copy export need no change. Rows shown for a day: the
+// automatic codes first (default week codes, auto holiday/sick), then codes
+// already used on earlier days that week, then anything added on this day.
+var dcPickerKey=null,dcPickerQ='';
+function dcIsAutoCode(c){
+  return !!c&&(DEFAULT_TS_CODE_IDS.indexOf(c.id)>=0||c.autoHoliday||c.autoSick);
+}
+function dcRowIds(bundle,di){
+  var start=di<5?0:5,seen={},ids=[];
+  for(var i=start;i<=di;i++){
+    (bundle.days[i].alloc||[]).forEach(function(a){ if(!seen[a.codeId]){seen[a.codeId]=true;ids.push(a.codeId);} });
+  }
+  var auto=ids.filter(function(id){return dcIsAutoCode(codeById(id));});
+  var rest=ids.filter(function(id){return !dcIsAutoCode(codeById(id));});
+  return auto.concat(rest);
+}
+function dcWeekSubmitted(bundle,di){
+  var sd=bundle.days[di<5?4:8];
+  return !!(sd&&sd.timesheetDone===true);
+}
+function dcSelHtml(bi,di,codeId,mins,over,disabled){
+  var cur=mins/60,o='',found=false;
+  for(var v=0;v<=10;v+=0.5){
+    var sel=Math.abs(v-cur)<0.001; if(sel) found=true;
+    o+='<option value="'+v+'"'+(sel?' selected':'')+'>'+(v===0?'\u00b7':v%1===0?v+'h':v.toFixed(1)+'h')+'</option>';
+  }
+  if(!found&&mins>0) o+='<option value="'+cur+'" selected>'+m2hm(mins)+'</option>';
+  return '<select id="dc-'+bi+'-'+di+'-'+codeId+'" class="ts-mx-sel'+(mins>0?' has-val':'')+(over?' over':'')+'"'
+    +' onchange="dcUpdCell('+bi+','+di+',\''+codeId+'\')"'+(disabled?' disabled':'')+'>'+o+'</select>';
+}
+function dcSummaryHtml(day,di){
+  var a=allocTotal(day),t=dayTarget(day,di);
+  var cls=a===t?'ts-ok':a>t?'ts-over':a>0?'ts-under':'';
+  var txt=a===t?'\u2713 '+m2hm(a)+' of '+m2hm(t):m2hm(a)+' of '+m2hm(t)+(a<t?' \u00b7 '+m2hm(t-a)+' left':' \u00b7 '+m2hm(a-t)+' over');
+  return '<span class="dcodes-sum '+cls+'">'+txt+'</span>';
+}
+function dayCodesHtml(bundle,bi,di,day){
+  var key=bi+'-'+di,ids=dcRowIds(bundle,di),sub=dcWeekSubmitted(bundle,di);
+  var tgt=dayTarget(day,di),tot=allocTotal(day);
+  var rows=ids.map(function(id){
+    var c=codeById(id),e=(day.alloc||[]).find(function(a){return a.codeId===id;}),mins=e?e.mins:0;
+    return '<div class="dc-row"><div class="dc-name">'+esc(c?c.desc:'(deleted code)')
+      +(dcIsAutoCode(c)?'<span class="dc-auto">auto</span>':'')
+      +(c?'<span class="cm-meta">'+esc(c.code)+'</span>':'')+'</div>'
+      +dcSelHtml(bi,di,id,mins,tot>tgt,sub)+'</div>';
+  }).join('');
+  if(!rows) rows='<div class="dc-note">No codes yet \u2014 add one below.</div>';
+  var picker='';
+  if(!sub){
+    if(dcPickerKey===key){
+      picker='<div class="dc-actions"><input type="text" id="dc-pick-q" placeholder="Search codes\u2026" value="'+esc(dcPickerQ)+'" oninput="dcPickerInput(this.value)" style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:7px;color:inherit;padding:7px 10px;font-size:16px;">'
+        +'<button type="button" class="ts-pdf-btn" onclick="dcTogglePicker(\''+key+'\')">Cancel</button></div>'
+        +'<div class="pick-pills" id="dc-pick-pills">'+dcPickerPillsHtml(bi,di)+'</div>';
+    } else {
+      picker='<div class="dc-actions"><button type="button" class="ts-add-btn" style="margin-top:0" onclick="dcTogglePicker(\''+key+'\')">\uFF0B Add code</button>'
+        +'<button type="button" class="ts-pdf-btn" onclick="dcOpenTimesheet('+bi+')">Week view \u203A</button></div>';
+    }
+  } else {
+    picker='<div class="dc-actions"><span class="dc-note">Week submitted \u2014 unsubmit in the Timesheet tab to edit.</span><button type="button" class="ts-pdf-btn" onclick="dcOpenTimesheet('+bi+')">Week view \u203A</button></div>';
+  }
+  return '<div class="dcodes" id="dcodes-'+key+'">'
+    +'<div class="dcodes-hd"><span>Timesheet codes</span><span id="dcsum-'+key+'">'+dcSummaryHtml(day,di)+'</span></div>'
+    +rows+picker+'</div>';
+}
+function dcUpdCell(bi,di,codeId){
+  var el=document.getElementById('dc-'+bi+'-'+di+'-'+codeId); if(!el) return;
+  var mins=Math.round((parseFloat(el.value)||0)*60);
+  var day=state.bundles[bi].days[di];
+  if(!day.alloc) day.alloc=[];
+  var entry=day.alloc.find(function(a){return a.codeId===codeId;});
+  if(entry) entry.mins=mins; else day.alloc.push({codeId:codeId,mins:mins});
+  save(state.bundles[bi]);
+  var tgt=dayTarget(day,di),tot=allocTotal(day);
+  document.querySelectorAll('#dcodes-'+bi+'-'+di+' select.ts-mx-sel').forEach(function(sel){
+    var v=parseFloat(sel.value)||0;
+    sel.className='ts-mx-sel'+(v>0?' has-val':'')+(tot>tgt?' over':'');
+  });
+  var sm=document.getElementById('dcsum-'+bi+'-'+di); if(sm) sm.innerHTML=dcSummaryHtml(day,di);
+  var tcTs=document.getElementById('tc-timesheet');
+  if(tcTs&&tsBundle()===state.bundles[bi]){ var n=0; state.bundles[bi].days.forEach(function(d,i){ if(allocTotal(d)!==dayTarget(d,i)) n++; }); tcTs.textContent=n; }
+}
+function dcTogglePicker(key){
+  dcPickerKey=(dcPickerKey===key?null:key); dcPickerQ=''; render();
+  if(dcPickerKey){ var el=document.getElementById('dc-pick-q'); if(el) el.focus(); }
+}
+function dcPickerPillsHtml(bi,di){
+  var b=state.bundles[bi],q=dcPickerQ.trim().toLowerCase(),have={};
+  dcRowIds(b,di).forEach(function(id){have[id]=true;});
+  return activeCodes().filter(function(c){
+    return !have[c.id]&&(!q||(c.desc+' '+c.project+' '+c.task).toLowerCase().indexOf(q)>=0);
+  }).map(function(c){
+    return '<span class="pick-pill" onclick="dcAddCode('+bi+','+di+',\''+c.id+'\')">'+esc(c.desc)+'<span class="pp-task">'+esc(c.task)+'</span></span>';
+  }).join('')||'<span class="dc-note">No matching codes \u2014 add new codes in the Timesheet tab.</span>';
+}
+function dcPickerInput(v){
+  dcPickerQ=v;
+  var m=(dcPickerKey||'').split('-'); var el=document.getElementById('dc-pick-pills');
+  if(el&&m.length===2) el.innerHTML=dcPickerPillsHtml(+m[0],+m[1]);
+}
+function dcAddCode(bi,di,codeId){
+  var day=state.bundles[bi].days[di];
+  if(!day.alloc) day.alloc=[];
+  if(!day.alloc.some(function(a){return a.codeId===codeId;})) day.alloc.push({codeId:codeId,mins:0});
+  dcPickerKey=null; dcPickerQ='';
+  save(state.bundles[bi]); render();
+}
+function dcOpenTimesheet(bi){ tsSelected=bi; tsOpenDay=null; switchTab('timesheet'); }
+// Opens the bundle details, expands the day and scrolls to its codes section.
+function showDayCodes(bi,di){
+  weekCollapseOverride[bi+'-'+(di<5?1:2)]=false;
+  openPanel=bi; openDay=bi+'-'+di;
+  render();
+  setTimeout(function(){
+    var el=document.getElementById('dcodes-'+bi+'-'+di);
+    if(!el) return;
+    if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'center'});
+    el.classList.add('flash');
+    setTimeout(function(){ el.classList.remove('flash'); },1800);
+  },80);
+}
+var _autoOpenedPanel=false;
 function jumpToDay(bi,di,ev){
   if(ev&&ev.preventDefault) ev.preventDefault();
   var bundle=state.bundles[bi]; if(!bundle) return false;
@@ -3335,6 +3473,15 @@ function render(){
   }
 
   if(currentTab==='live'){
+    // FT-070: on first open, show the active bundle's details (today's day is
+    // already expanded by focusDayIdx). Once only, so closing it stays closed.
+    if(!_autoOpenedPanel&&liveCount){
+      _autoOpenedPanel=true;
+      if(openPanel===null){
+        var ap=activeBundles.concat(inactiveBundles).filter(function(b){return focusDayIdx(b)>=0;})[0]||activeBundles[0];
+        if(ap) openPanel=state.bundles.indexOf(ap);
+      }
+    }
     if(!liveCount){
       root.innerHTML='<div class="empty"><div class="empty-icon">&#9203;</div><h3>No active bundles</h3><p>Create your first 9-day fortnight bundle to start tracking your 70-hour target.</p></div>';
       var addEl=document.createElement('div');addEl.className='add-inline-section';
@@ -3681,6 +3828,7 @@ function renderDay(container,day,bi,di,bundle){
         '<button class="sbtn'+(day.status==='training'?' s-training':'')+'" onclick="setStat('+bi+','+di+',\'training\')">'+STATUS_ICONS.training+' Training</button>'+
         '<button class="sbtn'+(day.status==='conference'?' s-conference':'')+'" onclick="setStat('+bi+','+di+',\'conference\')">'+STATUS_ICONS.conference+' Conf.</button>'+
       '</div>'+
+      dayCodesHtml(bundle,bi,di,day)+
       '<div class="note-wrap">'+
         '<div class="note-lbl">'+(day.note?'<span class="note-dot"></span>':'')+'Notes</div>'+
         '<textarea class="day-note'+(day.note?' has-note':'')+'" id="note-'+key+'" rows="2" placeholder="Add a note..." oninput="updNote('+bi+','+di+',this.value)">'+esc(day.note||'')+'</textarea>'+
@@ -4028,6 +4176,13 @@ function setStat(bi,di,status){
   // FT-020 workflow: marking a working day Done / Conference / Training
   // jumps straight to the Timesheet tab with that day's editor open.
   if(day.status==='done'||day.status==='conference'||day.status==='training'){
+    if(!isComplete(state.bundles[bi])){
+      // FT-070: stay on Live and go to this day's Timesheet codes section.
+      showDayCodes(bi,di);
+      return;
+    }
+    // Last day of the bundle: it has just moved to the archive, so the
+    // day card is gone — fall back to the Timesheet tab as before.
     tsSelected=bi; tsOpenDay=di; tsPickerDay=null;
     switchTab('timesheet');
     return;
