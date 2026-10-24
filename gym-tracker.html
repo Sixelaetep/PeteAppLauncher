@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.124</title>
+<title>Gym Tracker v2.125</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -161,6 +161,13 @@
   .tec-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
   .tec-name{font-weight:700;font-size:14.5px}
   .tec-remove{background:none;border:none;color:var(--ink3);font-size:16px;cursor:pointer}
+  .tec-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer;flex-wrap:wrap}
+  .tec-chev{background:none;border:1px solid var(--border);color:var(--ink2);font-size:12px;cursor:pointer;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex:none;padding:0}
+  .tec-sum{font-size:11.5px;color:var(--ink2);font-weight:500}
+  .track-ex-card.collapsed .tec-head{margin-bottom:0}
+  .sess-toolbar{display:flex;justify-content:flex-end;margin-bottom:8px}
+  .sess-toolbar button{background:none;border:1px solid var(--border);color:var(--ink2);font-size:12px;padding:5px 10px;border-radius:8px;cursor:pointer}
+  .sess-toolbar button:hover{border-color:var(--accent);color:var(--accent)}
   .tec-remove:hover{color:#f78166}
   .track-set-block{padding:7px 0;border-bottom:1px solid var(--border)}
   .track-set-block:last-of-type{border-bottom:none}
@@ -308,7 +315,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.124</div></span>
+      <span>Gym Tracker<div class="ver">v2.125</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -998,11 +1005,17 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.124"></script>
+<script src="pal-shared.js?v=2.125"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.125 (GYM-111): active session cards can be collapsed. Each exercise/circuit
+// card has a chevron (tap it or the name); collapsed shows name, status and a
+// done/total sets summary and KEEPS the move up/down arrows and remove button.
+// "Collapse all / Expand all" bar above the cards. Default expanded. View state
+// only (WeakSet keyed by item/circuit object): not saved, not synced, not in
+// the draft, so reorder keeps each card's state and a restored draft is expanded.
 // v2.124 (GYM-110): merge mode refinements. Possible duplicates are shown as
 // clear batches; "Not duplicates" (whole batch) and "Not in this batch" (one
 // exercise) record NOT-a-duplicate per PAIR, so an exercise dismissed from one
@@ -1646,7 +1659,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.124';
+const VERSION = '2.125';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2379,6 +2392,7 @@ let _planExpanded = new Set();  // GYM-107: plan-item ids shown expanded in the 
 let _planNotesOpen = new Set(); // GYM-107: plan-item ids whose Notes section is open
 let _planCircuits = []; // GYM-091: [{id, name, rounds}] — draft, parallel to _planItems, same commit-on-Save-Plan lifecycle
 let _activeSession = null;
+let _collapsedCards = new WeakSet(); // GYM-111: view-only collapse state, see sessionCardKey()
 let _activeTimer = null;   // { ii, si, endTime, durationSec, paused, remainingMs } — only one runs at a time
 let _timerInterval = null;
 let _wakeLock = null;      // active WakeLockSentinel while a timer is running and unpaused
@@ -5695,15 +5709,24 @@ function sessionExerciseCardHtml(item, ii) {
     <button class="type-btn sm ${item.trackType==='time'?'active':''}" onclick="setSessionItemType(${ii},'time')">Time</button>
     <button class="type-btn sm ${item.trackType==='distance'?'active':''}" onclick="setSessionItemType(${ii},'distance')">Distance</button>
   </div>`;
-  return `<div class="track-ex-card">
-    <div class="tec-head">
-      <span class="tec-name">${escHtml(item.exerciseName)}</span>${statusBadge}
+  const collapsed = isSessionCardCollapsed(ii);
+  const doneN = item.actualSets.filter(a=>a.done).length;
+  const timerOn = _activeTimer && _activeTimer.ii===ii;
+  const sumHtml = collapsed ? `<span class="tec-sum">${doneN}/${item.actualSets.length} sets${timerOn?' · ⏱ running':''}</span>` : '';
+  const headHtml = `<div class="tec-head">
+      <span class="tec-left" onclick="toggleSessionCard(${ii})">
+        <button class="tec-chev" aria-expanded="${!collapsed}" title="${collapsed?'Expand':'Collapse'}">${collapsed?'▸':'▾'}</button>
+        <span class="tec-name">${escHtml(item.exerciseName)}</span>${statusBadge}${sumHtml}
+      </span>
       <span style="display:flex;align-items:center;gap:2px">
         <button class="pib-reorder" onclick="moveSessionItem(${ii},-1)" ${ii===0?'disabled':''} title="Move up">▲</button>
         <button class="pib-reorder" onclick="moveSessionItem(${ii},1)" ${ii===_activeSession.items.length-1?'disabled':''} title="Move down">▼</button>
         <button class="tec-remove" onclick="removeSessionItem(${ii})">✕</button>
       </span>
-    </div>
+    </div>`;
+  if (collapsed) return `<div class="track-ex-card collapsed">${headHtml}</div>`;
+  return `<div class="track-ex-card">
+    ${headHtml}
     ${item.contextNote ? `<div class="li-meta" style="margin-bottom:8px">${escHtml(item.contextNote)}</div>` : ''}
     ${item.exerciseNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent3)">📝 ${escHtml(item.exerciseNote)}</div>` : ''}
     ${item.planItemNote ? `<div class="li-meta" style="margin-bottom:8px;color:var(--accent2)">📌 ${escHtml(item.planItemNote)}</div>` : ''}
@@ -5755,11 +5778,22 @@ function sessionCircuitBlockHtml(circuit, memberIdxs) {
       </span>
     </div>`;
   }).join('');
-  return `<div class="track-ex-card" style="border-color:var(--accent5)">
-    <div class="tec-head">
-      <span class="tec-name">🔁 ${escHtml(circuit ? circuit.name : 'Circuit')} <span style="font-weight:400;font-size:11px;color:var(--ink2)">— ${rounds} rounds</span></span>
+  const cFirst = memberIdxs[0];
+  const cCollapsed = isSessionCardCollapsed(cFirst);
+  let cDone = 0, cTotal = 0;
+  memberIdxs.forEach(ii => { const sets = _activeSession.items[ii].actualSets; cTotal += sets.length; cDone += sets.filter(a=>a.done).length; });
+  const cTimerOn = _activeTimer && memberIdxs.includes(_activeTimer.ii);
+  const cSum = cCollapsed ? `<span class="tec-sum">${cDone}/${cTotal} sets${cTimerOn?' · ⏱ running':''}</span>` : '';
+  const cHead = `<div class="tec-head">
+      <span class="tec-left" onclick="toggleSessionCard(${cFirst})">
+        <button class="tec-chev" aria-expanded="${!cCollapsed}" title="${cCollapsed?'Expand':'Collapse'}">${cCollapsed?'▸':'▾'}</button>
+        <span class="tec-name">🔁 ${escHtml(circuit ? circuit.name : 'Circuit')} <span style="font-weight:400;font-size:11px;color:var(--ink2)">— ${rounds} rounds</span></span>${cSum}
+      </span>
       ${circuit ? `<button class="tec-remove" onclick="removeSessionCircuit('${circuit.id}')" title="Remove circuit and its exercises">🗑</button>` : ''}
-    </div>
+    </div>`;
+  if (cCollapsed) return `<div class="track-ex-card collapsed" style="border-color:var(--accent5)">${cHead}</div>`;
+  return `<div class="track-ex-card" style="border-color:var(--accent5)">
+    ${cHead}
     ${roundBlocks.join('')}
     ${extrasHtml}
     ${membersFooter}
@@ -5776,8 +5810,10 @@ function renderSessionItems() {
   if (!_activeSession.items.length) { el.innerHTML = '<div class="empty-state"><div class="big">🔍</div>Search above to add your first exercise</div>'; return; }
   const rendered = new Set();
   let html = '';
+  const cardFirstIdxs = [];
   _activeSession.items.forEach((item, ii) => {
     if (rendered.has(ii)) return;
+    cardFirstIdxs.push(ii);
     if (item.circuitId) {
       const circuit = (_activeSession.circuits||[]).find(c => c.id === item.circuitId);
       const memberIdxs = _activeSession.items.map((it,i)=>i).filter(i => _activeSession.items[i].circuitId === item.circuitId);
@@ -5788,7 +5824,36 @@ function renderSessionItems() {
       html += sessionExerciseCardHtml(item, ii);
     }
   });
+  if (cardFirstIdxs.length >= 2) {
+    const allCollapsed = cardFirstIdxs.every(isSessionCardCollapsed);
+    html = `<div class="sess-toolbar"><button onclick="setAllSessionCardsCollapsed(${!allCollapsed})">${allCollapsed ? '▸ Expand all' : '▾ Collapse all'}</button></div>` + html;
+  }
   el.innerHTML = html;
+}
+// GYM-111: collapse state for the active-session cards. View-only: kept in a
+// WeakSet keyed by the circuit object (or, for a standalone exercise, the item
+// object) so it follows the card when ▲▼ reorders and is never written to the
+// session, the draft, Supabase or exports. Anything not in the set is expanded.
+function sessionCardKey(ii) {
+  const item = _activeSession.items[ii];
+  if (item.circuitId) {
+    const circuit = (_activeSession.circuits||[]).find(c => c.id === item.circuitId);
+    if (circuit) return circuit;
+    const first = _activeSession.items.find(it => it.circuitId === item.circuitId);
+    return first || item;
+  }
+  return item;
+}
+function isSessionCardCollapsed(ii) { return _collapsedCards.has(sessionCardKey(ii)); }
+function toggleSessionCard(ii) {
+  const k = sessionCardKey(ii);
+  if (_collapsedCards.has(k)) _collapsedCards.delete(k); else _collapsedCards.add(k);
+  renderSessionItems();
+}
+function setAllSessionCardsCollapsed(collapse) {
+  if (!collapse) { _collapsedCards = new WeakSet(); }
+  else _activeSession.items.forEach((it, ii) => _collapsedCards.add(sessionCardKey(ii)));
+  renderSessionItems();
 }
 function moveSessionItem(idx, dir) {
   const newIdx = idx + dir;

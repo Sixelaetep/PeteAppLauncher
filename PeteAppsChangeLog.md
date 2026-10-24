@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.124 | v2.32 – v2.124. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.125 | v2.32 – v2.125. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.109 | v1.0 – v3.43 and v3.73 – v3.109. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,18 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.125 — GYM-111 — Collapse / expand cards in the active session (Collapse all / Expand all)
+
+- **Why (Pete, 24 Oct):** the active session screen gets long; wanted each card collapsible, default expanded, with an expand all / collapse all toggle, and the order arrows still available when collapsed.
+- **Change (`gym-tracker.html`):**
+  - Each exercise card and circuit card in the active session now has a ▾/▸ chevron; tapping the chevron or the card's name/status area collapses or expands it. New and existing cards default to **expanded**.
+  - A collapsed card shows one row: name, status badge, and a **done/total sets** summary (e.g. `2/4 sets`; `· ⏱ running` if its set timer is running). The **▲ ▼ move buttons and ✕ remove** stay on that row, so cards can be reordered while collapsed. Circuit cards have no ▲▼ in the session (unchanged) and keep their 🗑.
+  - A **▾ Collapse all / ▸ Expand all** button appears above the cards when there are two or more cards; it reads "Expand all" only when every card is collapsed.
+- **Data model:** none. Collapse state is view-only, held in a `WeakSet` keyed by the item/circuit object (`_collapsedCards`), so it follows a card when it is reordered and is never written to the session, the local draft, Supabase or JSON export. A restored draft or a newly started/edited session therefore opens fully expanded.
+- **Unchanged:** set logging, timers (a running timer still completes and ticks the set while its card is collapsed), `moveSessionItem()`, remove, finish/save, plan editor, launcher, `pal-shared.js`.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.125. Launcher needs no change (display of version is read from the app via GYM_PONG).
+- Tested (Stage 1): syntax check of both inline scripts; real page in headless Chromium (390px wide) with stubbed `pal-shared.js` and a synthetic session of standalone + circuit items: default all expanded; Collapse all hides all set inputs and flips to Expand all; ▲▼ still present and working when collapsed, and a card stays collapsed after being moved; expanding one card gives mixed state and toggle reads Collapse all; Expand all restores; session JSON contains no collapse flag; no toolbar with a single card; a circuit whose circuit record is missing still collapses. Not tested: real data/live Supabase, running a timer on a collapsed card, phone touch behaviour, second device.
 
 ### v2.124 — GYM-110 — Merge mode: duplicate batches, per-batch "not a duplicate", stays open after merging
 
