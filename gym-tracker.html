@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.126</title>
+<title>Gym Tracker v2.127</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -315,7 +315,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.126</div></span>
+      <span>Gym Tracker<div class="ver">v2.127</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1005,11 +1005,17 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.126"></script>
+<script src="pal-shared.js?v=2.127"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.127 (GYM-113): auto-save when every exercise is complete. The moment the last
+// exercise of a NEW session becomes completed, a 5s "saving…" bar appears with
+// Cancel; at 0 it runs finishActiveSession() exactly as the Finish button does
+// (same save, sync, plan prompt). Not used when editing a saved session. Cancel
+// (or unticking/adding a set so it is no longer complete) stops it; it re-arms
+// the next time the last set is ticked. Restoring a finished draft never triggers.
 // v2.126 (GYM-112): a card auto-collapses the moment its exercise becomes
 // completed (last set ticked, or a set timer finishing the last set); a circuit
 // collapses when all its exercises are completed. Only on the transition, so a
@@ -1663,7 +1669,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.126';
+const VERSION = '2.127';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -5617,6 +5623,7 @@ function completeSetTimer() {
     const doneCount = item.actualSets.filter(a=>a.done).length;
     item.status = doneCount===0 ? 'skipped' : (doneCount===item.actualSets.length ? 'completed' : 'partial');
     autoCollapseIfCompleted(ii, prevStatus);
+    maybeStartAutoFinish(item, prevStatus);
   }
   toast('⏰ Time\'s up — set marked done ✓');
   _activeTimer = null;
@@ -5854,6 +5861,39 @@ function isSessionCardCollapsed(ii) { return _collapsedCards.has(sessionCardKey(
 // GYM-112: collapse a card when its exercise has just BECOME completed (status
 // moved from something else to 'completed'). A circuit card collapses when every
 // member is completed. Not applied on later renders, so re-expanding sticks.
+// GYM-113: auto-save countdown. State is module-level and never persisted.
+let _autoFinishTimer = null, _autoFinishDismissed = null;
+function sessionAllComplete(sess) {
+  return !!sess && sess.items.length > 0 && sess.items.every(it => it.status === 'completed' && it.actualSets.every(a => a.done));
+}
+function maybeStartAutoFinish(item, prevStatus) {
+  if (_editingSessionId || _autoFinishTimer || !_activeSession) return;
+  if (item.status !== 'completed' || prevStatus === 'completed') return;
+  if (_autoFinishDismissed === _activeSession || !sessionAllComplete(_activeSession)) return;
+  const sess = _activeSession;
+  let left = 5;
+  let bar = document.getElementById('autoFinishBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'autoFinishBar';
+    bar.style.cssText = 'position:absolute;left:12px;right:12px;bottom:16px;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface);border:1px solid var(--accent);border-radius:12px;padding:10px 12px;font-size:13.5px;font-weight:600';
+    document.getElementById('sessionOverlay').appendChild(bar);
+  }
+  const paint = () => { bar.innerHTML = '<span>✓ All exercises complete — saving in '+left+'s</span><button class="btn btn-secondary btn-sm" onclick="cancelAutoFinish(true)">Cancel</button>'; };
+  paint(); bar.style.display = 'flex';
+  _autoFinishTimer = setInterval(() => {
+    left--;
+    if (left > 0) { paint(); return; }
+    cancelAutoFinish(false);
+    if (_activeSession === sess && !_editingSessionId && sessionAllComplete(sess)) finishActiveSession();
+  }, 1000);
+}
+function cancelAutoFinish(userCancelled) {
+  if (_autoFinishTimer) { clearInterval(_autoFinishTimer); _autoFinishTimer = null; }
+  const bar = document.getElementById('autoFinishBar');
+  if (bar) bar.style.display = 'none';
+  if (userCancelled) { _autoFinishDismissed = _activeSession; toast('Auto-save cancelled'); }
+}
 function autoCollapseIfCompleted(ii, prevStatus) {
   const item = _activeSession.items[ii];
   if (!item || item.status !== 'completed' || prevStatus === 'completed') return;
@@ -5913,6 +5953,7 @@ function toggleSessionSetDone(ii, si) {
   const doneCount = item.actualSets.filter(a=>a.done).length;
   item.status = doneCount===0 ? 'skipped' : (doneCount===item.actualSets.length ? 'completed' : 'partial');
   autoCollapseIfCompleted(ii, prevStatus);
+  if (item.actualSets[si].done) maybeStartAutoFinish(item, prevStatus); else _autoFinishDismissed = null;
   renderSessionItems();
 }
 function setSessionItemType(ii, newType) {
@@ -5930,6 +5971,7 @@ function setSessionItemType(ii, newType) {
 
 function cancelActiveSession() {
   if (!confirm(_editingSessionId ? 'Discard these changes? Nothing will be saved.' : 'Discard this session? Nothing will be saved.')) return;
+  cancelAutoFinish(false);
   stopSetTimer(false);
   releaseWakeLock();
   clearActiveSessionDraft();
@@ -5963,6 +6005,7 @@ function markAllItemsCompleted(session) {
 }
 
 function finishActiveSession() {
+  cancelAutoFinish(false);
   stopSetTimer(false); // a running timer would otherwise reference a session that no longer exists
   _activeSession.name = document.getElementById('sessionNameInput').value.trim() || _activeSession.name;
   _activeSession.notes = document.getElementById('sessionNotes').value.trim();
