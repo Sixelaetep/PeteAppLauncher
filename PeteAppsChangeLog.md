@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.125 | v2.32 – v2.125. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.126 | v2.32 – v2.126. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.109 | v1.0 – v3.43 and v3.73 – v3.109. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,15 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.126 — GYM-112 — Active session: a card auto-collapses when its exercise is completed
+
+- **Why (Pete, 24 Oct, after v2.125):** finished exercises should fold away on their own.
+- **Change (`gym-tracker.html`):** when ticking a set makes an exercise **Completed** (all sets done), or a set timer finishing the last set does, its card collapses. A circuit card collapses when every exercise in it is completed. It fires only on the change to Completed: re-expanding a card keeps it open, unticking a set never re-collapses, and Collapse all / Expand all still override. New helper `autoCollapseIfCompleted()`, called from `toggleSessionSetDone()` and `completeSetTimer()`; the `_collapsedCards` declaration moved next to `_activeSession`.
+- **Data model:** none; collapse state is still view-only (not saved, synced or exported).
+- **Unchanged:** everything else in v2.125; launcher; `pal-shared.js`.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.126.
+- Tested (Stage 1): syntax check; headless Chromium with stubbed `pal-shared.js`: ticking the last set collapses a standalone card, ticking a non-final set does not; re-expanded card stays open; a circuit collapses only after all members complete; timer-completion path collapses; v2.125 scenarios rerun. Not tested: live Supabase, real phone, second device.
 
 ### v2.125 — GYM-111 — Collapse / expand cards in the active session (Collapse all / Expand all)
 
