@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.128 | v2.32 – v2.128. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.129 | v2.32 – v2.129. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.109 | v1.0 – v3.43 and v3.73 – v3.109. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,16 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.129 — GYM-115 — Active session: ▲▼ follow the moved exercise; header buttons no longer toggle collapse on a phone
+
+- **Why (Pete, 25 Oct, after v2.128):** (1) when moving an exercise with the arrows the view should stay with that exercise; (2) on the phone, tapping the arrows sometimes collapsed/expanded the card instead.
+- **Cause (2), diagnosed from the code, not reproduced on a device:** the ▲ ▼ ✕ buttons were 24px, 2px apart, directly beside the full-width collapse tap area (`.tec-left`, `flex:1`). After a move the card jumped away and the next tap landed on a different card's title. Small targets, no `touch-action`, and the page not following the card combined to cause stray toggles.
+- **Change (`gym-tracker.html`):** `moveSessionItem()` measures the card's screen position before the move and scrolls the session body afterwards so the moved card stays under the finger (falls back to scroll-into-view if clamped at the ends). Session-card header buttons (▲ ▼ ✕) are now 36px with 6px gaps in a non-shrinking `.tec-ctl` group, and `touch-action:manipulation`. Styles are scoped to `.tec-head`, so the plan editor's ▲▼ are unchanged.
+- **Data model:** none; view only.
+- **Unchanged:** collapse behaviour, GYM-114 reveal, auto-save, circuits (still no arrows), launcher, `pal-shared.js`.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.129.
+- Tested (Stage 1): syntax check; headless Chromium in 390×700 touch emulation: three ▼ taps then one ▲ on the same exercise each moved it exactly one place and the card stayed at the same screen position (±1px) so each tap hit the same exercise; no card collapsed or expanded during the taps; buttons measure 36×36. Not tested: real iPhone touch behaviour (the stray-toggle fix is unproven until Pete tries it), live Supabase, second device.
 
 ### v2.128 — GYM-114 — Active session: after a card auto-collapses, the next exercise is expanded and scrolled into view
 
