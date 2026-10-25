@@ -19,7 +19,7 @@ This is the consolidated historical development changelog for every application 
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.127 | v2.32 – v2.127. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.128 | v2.32 – v2.128. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.109 | v1.0 – v3.43 and v3.73 – v3.109. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -2145,6 +2145,15 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.128 — GYM-114 — Active session: after a card auto-collapses, the next exercise is expanded and scrolled into view
+
+- **Why (Pete, 25 Oct, after v2.127):** when an exercise completes and its card collapses, the user should be shown the next exercise (the page was left wherever the shrinking card put it).
+- **Change (`gym-tracker.html`):** `autoCollapseIfCompleted()` (GYM-112) now also picks the next card to work on: the first card **not yet completed after** the one just finished, otherwise the first not-completed card anywhere (e.g. one skipped earlier). That card is **expanded if it was collapsed** and scrolled to the top of the session body (smooth) after the next render. A circuit counts as one card and is "completed" only when all its exercises are. Nothing is scrolled when no unfinished card remains (the GYM-113 auto-save bar takes over). Works for both triggers (tick of the last set and set-timer completion). New view-only `_revealCardKey`; cards carry a `data-cidx` attribute; `.track-ex-card{scroll-margin-top:8px}`.
+- **Data model:** none; view state only (not saved, synced, drafted or exported).
+- **Unchanged:** manual collapse/expand, Collapse all / Expand all, auto-save countdown, Finish, everything from v2.127. Launcher and `pal-shared.js` not touched.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.128.
+- Tested (Stage 1): syntax check; headless Chromium (390×700) with a stubbed `pal-shared.js` served locally: non-final tick neither collapses nor scrolls; completing exercise 1 collapses it and puts exercise 2 at the top; completing exercise 3 while 2 is skipped scrolls to exercise 4; a manually collapsed next card is expanded; completing the last pending card wraps to the earlier skipped one; completing the final card scrolls nothing and the auto-save bar still appears; unticking never re-collapses or scrolls; circuit completion and set-timer completion both reveal the next card. Not tested: real iPhone Safari scroll feel, live Supabase, second device.
 
 ### v2.127 — GYM-113 — Auto-save when every exercise is complete (5-second countdown with Cancel)
 
