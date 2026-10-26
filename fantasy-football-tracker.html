@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Fantasy Football Tracker v1.52</title>
+<title>Fantasy Football Tracker v1.54</title>
 <meta name="theme-color" content="#0d1117" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -196,6 +196,17 @@
     font-size: 11px; color: var(--ink2); text-transform: uppercase; letter-spacing: .04em;
   }
   .bench-divider::before, .bench-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* FF-025: best XI / best squad within budget (Squad tab, bottom) */
+  .bs-flag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+  .bs-flag.out { background: rgba(247,129,102,.15); color: var(--accent3); }
+  .bs-flag.warn { background: rgba(255,166,87,.15); color: var(--accent5); }
+  .bs-flagline { font-size: 12px; padding: 8px 10px; border-radius: 8px; margin: 8px 0; line-height: 1.45; }
+  .bs-flagline.ok { background: rgba(63,185,80,.1); color: var(--accent2); }
+  .bs-flagline.warn { background: rgba(255,166,87,.1); color: var(--accent5); }
+  .bs-note { font-size: 11px; color: var(--ink2); line-height: 1.5; }
+  .bs-pts { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; margin-right: 8px; white-space: nowrap; }
+  .bs-controls { display: flex; gap: 8px 12px; flex-wrap: wrap; align-items: center; margin: 4px 0 8px; font-size: 12px; color: var(--ink2); }
 
   .advice-section { margin-bottom: 20px; }
   .advice-section h3 { font-size: 13px; margin-bottom: 8px; color: var(--ink); }
@@ -430,7 +441,7 @@
 </div>
 
 <nav>
-  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.52</span></div>
+  <div class="nav-title">⚽ Fantasy Football Tracker <span class="nav-ver" id="navVer">v1.54</span></div>
 </nav>
 
 <div class="tabs">
@@ -463,6 +474,18 @@
       <summary><h2>📊 Gameweek performance</h2></summary>
       <p class="sub" style="margin:6px 0 10px">Your locked-in team vs the app's Advice and any external AI, on actual points. Saved automatically when you lock in, run Advice or import an AI reply, and frozen at the deadline.</p>
       <div id="gwPerfBody"></div>
+    </details>
+
+    <details class="card" id="bestXiCard" style="margin-top:14px" ontoggle="if(this.open)renderBestXi()">
+      <summary><h2>🏆 Best overall scoring XI</h2></summary>
+      <p class="sub" style="margin:6px 0 10px">The highest-scoring XI in the whole league — best player in each position, in the best legal formation — and what it would cost. Switch between the whole season and the current gameweek.</p>
+      <div id="bestXiBody"></div>
+    </details>
+
+    <details class="card" id="bestSquadCard" style="margin-top:14px" ontoggle="if(this.open)renderBestSquad()">
+      <summary><h2>💷 Best squad within the FPL budget</h2></summary>
+      <p class="sub" style="margin:6px 0 10px">The highest-scoring legal 15-man squad you could afford: £100m by default, or set your own budget. Switch between the whole season and the current gameweek.</p>
+      <div id="bestSquadBody"></div>
     </details>
   </div>
 
@@ -583,11 +606,32 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.52"></script>
+<script src="pal-shared.js?v=1.54"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.54 [FF-026] — Best XI and Best squad within budget each get an
+ *   Overall / Gameweek toggle. Gameweek ranks on the current gameweek's
+ *   points (event_points; FPL's current GW, else last finished) and says
+ *   when the GW is still in progress (provisional). Same exact solver; the
+ *   points metric is now `bpts` on per-run copies of the players. New
+ *   display pref ff_builder_scope (JSON {xi,squad}). No data-model change.
+ *
+ * v1.53 [FF-025] — Two new collapsed sections at the bottom of the Squad
+ *   tab. (1) "Best overall scoring XI": the 11 highest season scorers
+ *   that make a legal formation (no budget, no club limit) with the XI's
+ *   total cost. (2) "Best squad within the FPL budget": the legal 15
+ *   (2/5/5/3, max 3 per club) that maximises the starting XI's points
+ *   for a budget (default £100.0m, editable, "use my value + bank"
+ *   button); exact via per-position knapsack DP + branch-and-bound on
+ *   the club limit, says if the search limit was hit. Every player shows
+ *   an injury/availability pill (🚑 at risk / 🩹 minor) and each section
+ *   a flag summary; opt-in "Skip injured / unavailable players". Full
+ *   player list fetched on first open from /bootstrap (memory only). New
+ *   localStorage display prefs: ff_builder_budget_tenths,
+ *   ff_builder_exclude_flagged. No data-model/Supabase change.
  *
  * v1.52 [FF-024] — (a) Game shows FT when FPL's finished_provisional
  *   is set or 90+ min played (was only `finished`, which lags until
@@ -1786,7 +1830,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.52';
+const FF_VERSION = '1.54';
 
 const FF_PROXY_KEY = (window.PAL_CONFIG && window.PAL_CONFIG.FF_PROXY_KEY) || null;
 
@@ -3247,6 +3291,470 @@ async function pullRemoteSquadCache() {
   } catch (e) {
     console.error('Squad cache pull from Supabase failed:', e);
   }
+}
+
+// ── Best XI / best squad within budget (FF-025) ────────────────────
+// Two collapsed sections at the bottom of the Squad tab. Each has an
+// Overall / Gameweek toggle (FF-026): Overall ranks on SEASON TOTAL POINTS,
+// Gameweek on the current gameweek's points (event_points). Past
+// performance, not a forecast. Both need the
+// FULL player list, which the trimmed squad cache deliberately does not
+// keep — so it is fetched on first open from the same /bootstrap proxy
+// route the rest of the app uses, held in memory only (nothing new is
+// cached to localStorage or Supabase; the only new stored values are
+// two display preferences, below).
+//
+//  1. Best overall XI: no budget, no club limit — the 11 highest
+//     scorers that form a legal formation (1 GK, 3-5 DEF, 2-5 MID,
+//     1-3 FWD). Exact (greedy is optimal here). Cost = sum of prices.
+//  2. Best squad within the budget: a legal 15 (2/5/5/3, max 3 per club,
+//     total price <= budget) maximising the starting XI's points; any
+//     money left buys a better bench (tie-break only). Exact: a
+//     knapsack DP per position + formation ignores the club limit, and
+//     a best-first branch-and-bound on "exclude one of the players
+//     from an over-represented club" restores it. The first legal
+//     solution popped is provably optimal; there is a node/time limit
+//     and the result says if it was hit.
+//
+// Injury/availability: nothing is hidden by default — every player
+// shows a pill built from the app's existing helpers
+// (isEffectivelyUnavailable / injuryRiskLabel), with a summary line per
+// section. An opt-in checkbox excludes at-risk players from the pick.
+const BUILDER_SQUAD_SIZE = { 1: 2, 2: 5, 3: 5, 4: 3 };
+const BUILDER_FORMATIONS = [[3,4,3],[3,5,2],[4,3,3],[4,4,2],[4,5,1],[5,3,2],[5,4,1],[5,2,3]];
+const BUILDER_BENCH_EPS = 0.0001;     // bench points count only as a tie-break
+const BUILDER_MAX_NODES = 250;
+const BUILDER_MAX_MS = 4000;
+let _builderData = null;              // { elements, teams, fetchedAt } — session memory only
+let _builderExcludeFlagged = false;
+let _builderBudgetTenths = 1000;      // £100.0m, in FPL's tenths-of-a-million
+const _builderRunId = { xi: 0, squad: 0 };
+const _builderScope = { xi: 'overall', squad: 'overall' };   // 'overall' | 'gw'
+
+function builderCmp(a, b) {
+  return (b.bpts || 0) - (a.bpts || 0) || a.now_cost - b.now_cost || a.id - b.id;
+}
+
+// null = fully available. level 'out' = the app's own "genuinely at
+// risk" gate (same one that keeps players out of the suggested XI);
+// level 'warn' = any milder flag (doubtful with decent chance, or news).
+function builderFlagInfo(el) {
+  const flagged = el.status !== 'a' || (el.news && String(el.news).trim());
+  if (!flagged) return null;
+  const out = isEffectivelyUnavailable(el);
+  let label = injuryRiskLabel(el);
+  if (el.status === 'd' && el.chance_of_playing_next_round != null) label = 'Doubtful ' + el.chance_of_playing_next_round + '%';
+  const title = injuryRiskLabel(el) + (el.news ? ' — ' + el.news : '');
+  return { level: out ? 'out' : 'warn', label, title };
+}
+
+// Best legal XI from any list of players (works on the whole league or
+// on a 15-man squad). Greedy is exact: take the mandatory 1/3/2/1 best,
+// then the 4 best remaining outfielders subject to the 5/5/3 caps.
+function builderSelectXI(players) {
+  const byPos = { 1: [], 2: [], 3: [], 4: [] };
+  players.forEach(p => { if (byPos[p.element_type]) byPos[p.element_type].push(p); });
+  [1, 2, 3, 4].forEach(t => byPos[t].sort(builderCmp));
+  const need = { 1: 1, 2: 3, 3: 2, 4: 1 }, max = { 1: 1, 2: 5, 3: 5, 4: 3 };
+  if ([1, 2, 3, 4].some(t => byPos[t].length < need[t])) return null;
+  const taken = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  const xi = [];
+  [1, 2, 3, 4].forEach(t => { for (let i = 0; i < need[t]; i++) xi.push(byPos[t][i]); taken[t] = need[t]; });
+  while (xi.length < 11) {
+    let best = null;
+    [2, 3, 4].forEach(t => {
+      if (taken[t] < max[t] && taken[t] < byPos[t].length) {
+        const c = byPos[t][taken[t]];
+        if (!best || builderCmp(c, best.c) < 0) best = { t, c };
+      }
+    });
+    if (!best) return null;
+    xi.push(best.c); taken[best.t]++;
+  }
+  const ids = new Set(xi.map(p => p.id));
+  xi.sort((a, b) => a.element_type - b.element_type || builderCmp(a, b));
+  const bench = players.filter(p => !ids.has(p.id)).sort((a, b) =>
+    (a.element_type === 1 ? 0 : 1) - (b.element_type === 1 ? 0 : 1) || builderCmp(a, b));
+  return {
+    xi, bench, formation: taken[2] + '-' + taken[3] + '-' + taken[4],
+    points: xi.reduce((s, p) => s + (p.bpts || 0), 0),
+    cost: xi.reduce((s, p) => s + p.now_cost, 0)
+  };
+}
+
+// The club (if any) with more than 3 players; returns that club's players.
+function builderClubViolation(players) {
+  const byTeam = {};
+  players.forEach(p => { (byTeam[p.team] = byTeam[p.team] || []).push(p); });
+  let worst = null;
+  Object.keys(byTeam).forEach(k => { if (byTeam[k].length > 3 && (!worst || byTeam[k].length > worst.length)) worst = byTeam[k]; });
+  return worst;
+}
+
+// Knapsack DP for ONE position. State (s starters, b bench) at exact
+// total cost c. Starters score their points; bench players score
+// BUILDER_BENCH_EPS * points (tie-break only).
+function builderPositionDp(items, n, C) {
+  const W = C + 1, NS = (n + 1) * (n + 1);
+  let dp = new Float64Array(NS * W).fill(-Infinity);
+  dp[0] = 0;
+  const choice = new Uint8Array(items.length * NS * W);
+  for (let i = 0; i < items.length; i++) {
+    const w = items[i].now_cost, v = items[i].bpts || 0, vb = v * BUILDER_BENCH_EPS;
+    const nd = dp.slice();
+    const base = i * NS * W;
+    for (let s = 0; s <= n; s++) {
+      for (let b = 0; b + s <= n; b++) {
+        const st = s * (n + 1) + b;
+        for (let c = w; c <= C; c++) {
+          let best = nd[st * W + c], ch = 0;
+          if (s > 0) { const x = dp[((s - 1) * (n + 1) + b) * W + c - w]; if (x > -Infinity && x + v > best) { best = x + v; ch = 1; } }
+          if (b > 0) { const x = dp[(s * (n + 1) + b - 1) * W + c - w]; if (x > -Infinity && x + vb > best) { best = x + vb; ch = 2; } }
+          nd[st * W + c] = best; choice[base + st * W + c] = ch;
+        }
+      }
+    }
+    dp = nd;
+  }
+  return { dp, choice, items, n, W, NS };
+}
+
+function builderDpBacktrack(P, s, b, c) {
+  const out = [];
+  for (let i = P.items.length - 1; i >= 0; i--) {
+    const ch = P.choice[i * P.NS * P.W + (s * (P.n + 1) + b) * P.W + c];
+    if (ch === 1) { out.push(P.items[i]); s--; c -= P.items[i].now_cost; }
+    else if (ch === 2) { out.push(P.items[i]); b--; c -= P.items[i].now_cost; }
+  }
+  return out;
+}
+
+function builderDpSlice(P, s) {
+  const b = P.n - s, st = s * (P.n + 1) + b;
+  return P.dp.subarray(st * P.W, (st + 1) * P.W);
+}
+
+// Max-plus convolution over cost, capped at C; remembers the split.
+function builderConv(A, B, C) {
+  const val = new Float64Array(C + 1).fill(-Infinity), split = new Int32Array(C + 1).fill(-1);
+  let loA = -1, hiA = -1, loB = -1, hiB = -1;
+  for (let i = 0; i <= C; i++) {
+    if (A[i] > -Infinity) { if (loA < 0) loA = i; hiA = i; }
+    if (B[i] > -Infinity) { if (loB < 0) loB = i; hiB = i; }
+  }
+  if (loA < 0 || loB < 0) return { val, split };
+  for (let a = loA; a <= hiA; a++) {
+    const av = A[a]; if (av === -Infinity) continue;
+    const maxb = Math.min(hiB, C - a);
+    for (let b = loB; b <= maxb; b++) {
+      const bv = B[b]; if (bv === -Infinity) continue;
+      const x = av + bv;
+      if (x > val[a + b]) { val[a + b] = x; split[a + b] = a; }
+    }
+  }
+  return { val, split };
+}
+
+// Optimal 15-man squad ignoring the club limit, excluding some players.
+// Returns { value, squad } or null when no legal squad fits the budget.
+function builderRelaxed(pool, excluded, C) {
+  const byPos = { 1: [], 2: [], 3: [], 4: [] };
+  pool.forEach(p => { if (!excluded.has(p.id) && p.now_cost <= C && byPos[p.element_type]) byPos[p.element_type].push(p); });
+  const P = {};
+  for (let t = 1; t <= 4; t++) {
+    const n = BUILDER_SQUAD_SIZE[t];
+    const sorted = byPos[t].sort(builderCmp);
+    // A player with >= n better-or-equal, no-dearer rivals is never needed.
+    const kept = [];
+    for (let i = 0; i < sorted.length; i++) {
+      let dom = 0;
+      for (let j = 0; j < i && dom < n; j++) if (sorted[j].now_cost <= sorted[i].now_cost) dom++;
+      if (dom < n) kept.push(sorted[i]);
+    }
+    if (kept.length < n) return null;
+    P[t] = builderPositionDp(kept, n, C);
+  }
+  const gk = builderDpSlice(P[1], 1);
+  let best = null;
+  const t1 = {}, t2 = {};
+  BUILDER_FORMATIONS.forEach(([d, m, f]) => {
+    const k1 = d, k2 = d + '-' + m;
+    if (!t1[k1]) t1[k1] = builderConv(gk, builderDpSlice(P[2], d), C);
+    if (!t2[k2]) t2[k2] = builderConv(t1[k1].val, builderDpSlice(P[3], m), C);
+    const t3 = builderConv(t2[k2].val, builderDpSlice(P[4], f), C);
+    for (let c = 0; c <= C; c++) {
+      if (t3.val[c] > -Infinity && (!best || t3.val[c] > best.value + 1e-12)) best = { value: t3.val[c], c, d, m, f, t3, k1, k2 };
+    }
+  });
+  if (!best) return null;
+  const c3 = best.c, a2 = best.t3.split[c3], fwdC = c3 - a2;
+  const a1 = t2[best.k2].split[a2], midC = a2 - a1;
+  const g = t1[best.k1].split[a1], defC = a1 - g;
+  const squad = [].concat(
+    builderDpBacktrack(P[1], 1, 1, g),
+    builderDpBacktrack(P[2], best.d, 5 - best.d, defC),
+    builderDpBacktrack(P[3], best.m, 5 - best.m, midC),
+    builderDpBacktrack(P[4], best.f, 3 - best.f, fwdC));
+  return { value: best.value, squad };
+}
+
+// Best legal squad within budget C (tenths). Result: { squad, cost,
+// proven, nodes } or { error }.
+function builderBestSquad(pool, C) {
+  const deadline = Date.now() + BUILDER_MAX_MS;
+  const root = builderRelaxed(pool, new Set(), C);
+  if (!root) return { error: 'The budget is too low to fill a legal 15-man squad (2 GK, 5 DEF, 5 MID, 3 FWD).' };
+  const open = [{ excl: [], r: root }];
+  const seen = new Set(['']);
+  let nodes = 1, proven = true, found = null;
+  while (open.length) {
+    open.sort((a, b) => b.r.value - a.r.value);
+    const node = open.shift();
+    const viol = builderClubViolation(node.r.squad);
+    if (!viol) { found = node.r; break; }
+    for (const v of viol) {
+      const excl = node.excl.concat(v.id).sort((a, b) => a - b);
+      const key = excl.join(',');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (nodes >= BUILDER_MAX_NODES || Date.now() > deadline) { proven = false; continue; }
+      nodes++;
+      const r = builderRelaxed(pool, new Set(excl), C);
+      if (r) open.push({ excl, r });
+    }
+  }
+  if (!found) {
+    // Limit hit with nothing legal left on the list: dive greedily —
+    // drop the weakest player of the over-represented club and re-solve.
+    proven = false;
+    const excl = new Set();
+    for (let guard = 0; guard < 200; guard++) {
+      const r = builderRelaxed(pool, excl, C);
+      if (!r) break;
+      const viol = builderClubViolation(r.squad);
+      if (!viol) { found = r; break; }
+      viol.sort((a, b) => builderCmp(b, a));
+      excl.add(viol[0].id);
+    }
+  }
+  if (!found) return { error: 'Could not find a legal squad within the budget.' };
+  return { squad: found.squad, cost: found.squad.reduce((s, p) => s + p.now_cost, 0), proven, nodes };
+}
+
+// ── Data, prefs and rendering ──────────────────────────────────────
+async function loadBuilderData(force) {
+  if (_builderData && !force) return _builderData;
+  if (!FF_PROXY_URL) throw new Error('pal-config.js did not load');
+  if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') throw new Error('FF_PROXY_KEY is not set');
+  const res = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(!!force) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  _builderData = { elements: data.elements || [], teams: data.teams || [], events: data.events || [], fetchedAt: Date.now() };
+  // Same payload the transfer picker uses — refresh that session cache too
+  // (only fills it if empty, or replaces it with fresher data on a force).
+  if (!_allPlayersCache || force) _allPlayersCache = _builderData.elements;
+  return _builderData;
+}
+
+function loadBuilderPrefs() {
+  try {
+    const b = parseInt(localStorage.getItem('ff_builder_budget_tenths'), 10);
+    if (isFinite(b) && b >= 400 && b <= 2000) _builderBudgetTenths = b;
+    if (localStorage.getItem('ff_builder_exclude_flagged') === '1') _builderExcludeFlagged = true;
+    const sc = JSON.parse(localStorage.getItem('ff_builder_scope') || 'null');
+    if (sc) { if (sc.xi === 'gw') _builderScope.xi = 'gw'; if (sc.squad === 'gw') _builderScope.squad = 'gw'; }
+  } catch (e) {}
+}
+
+// Copies of the elements with `bpts` = the points being ranked on for
+// this scope, so the solver and renderers never touch the originals.
+function builderPool(scope) {
+  let els = (_builderData && _builderData.elements) || [];
+  if (_builderExcludeFlagged) els = els.filter(e => !isEffectivelyUnavailable(e));
+  const gw = scope === 'gw';
+  return els.map(e => Object.assign({}, e, { bpts: (gw ? e.event_points : e.total_points) || 0 }));
+}
+
+// The gameweek the "Gameweek" scope reports: FPL's current one, else the
+// last finished one (same rule loadSquad uses).
+function builderGwInfo() {
+  const ev = (_builderData && _builderData.events) || [];
+  const cur = ev.find(e => e.is_current) || ev.slice().reverse().find(e => e.finished);
+  return cur ? { id: cur.id, finished: !!cur.finished } : null;
+}
+
+function builderScopeLabel(scope) {
+  const g = builderGwInfo();
+  return scope === 'gw' ? (g ? 'GW' + g.id + ' points' : 'Gameweek points') : 'season total points';
+}
+
+function builderScopeHtml(which) {
+  const g = builderGwInfo();
+  const cur = _builderScope[which];
+  return '<span style="display:inline-flex;gap:4px"><button class="sub-btn' + (cur === 'overall' ? ' active' : '') + '" style="padding:6px 10px;font-size:11px" onclick="setBuilderScope(\'' + which + '\',\'overall\')">Overall</button>' +
+    '<button class="sub-btn' + (cur === 'gw' ? ' active' : '') + '" style="padding:6px 10px;font-size:11px" onclick="setBuilderScope(\'' + which + '\',\'gw\')">' + (g ? 'GW ' + g.id : 'Gameweek') + '</button></span>';
+}
+
+function setBuilderScope(which, scope) {
+  _builderScope[which] = scope === 'gw' ? 'gw' : 'overall';
+  try { localStorage.setItem('ff_builder_scope', JSON.stringify(_builderScope)); } catch (e) {}
+  if (which === 'xi') renderBestXi(); else renderBestSquad();
+}
+
+function builderTeamsById() {
+  const m = {}; ((_builderData && _builderData.teams) || []).forEach(t => m[t.id] = t); return m;
+}
+
+function builderRowHtml(el, teamsById) {
+  const f = builderFlagInfo(el);
+  const team = teamsById[el.team];
+  const pill = f ? ' <span class="bs-flag ' + f.level + '" title="' + safeEsc(f.title) + '">' + (f.level === 'out' ? '🚑 ' : '🩹 ') + safeEsc(f.label) + '</span>' : '';
+  return '<div class="player-card" title="' + safeEsc(el.news || '') + '">' +
+    '<div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
+    '<div class="player-info"><div class="player-name" style="flex-wrap:wrap">' + safeEsc(el.web_name) + pill + '</div>' +
+    '<div class="player-sub">' + safeEsc(team ? team.short_name : '?') + ' · ' + POSITION_SHORT[el.element_type] + (el.news ? ' · ' + safeEsc(el.news) : '') + '</div></div>' +
+    '<div class="bs-pts">' + (el.bpts || 0) + ' pts</div>' +
+    '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
+}
+
+function builderFlagLineHtml(players) {
+  const flagged = players.map(p => ({ p, f: builderFlagInfo(p) })).filter(x => x.f);
+  if (!flagged.length) return '<div class="bs-flagline ok">✅ No injury or availability flags on these ' + players.length + ' players</div>';
+  return '<div class="bs-flagline warn">🚑 ' + flagged.length + ' of ' + players.length + ' flagged: ' +
+    flagged.map(x => '<strong>' + safeEsc(x.p.web_name) + '</strong> (' + safeEsc(x.f.label) + ')').join(' · ') + '</div>';
+}
+
+function builderStatBox(label, value, sub) {
+  return '<div class="stat-box"><div class="stat-label">' + label + '</div><div class="stat-value">' + value + '</div>' +
+    (sub ? '<div class="stat-sub">' + sub + '</div>' : '') + '</div>';
+}
+
+function builderGroupedHtml(players, teamsById) {
+  let h = '';
+  [1, 2, 3, 4].forEach(t => {
+    const list = players.filter(p => p.element_type === t);
+    if (!list.length) return;
+    h += '<div class="position-label">' + POSITION_NAMES[t] + '</div><div class="player-row">' +
+      list.map(p => builderRowHtml(p, teamsById)).join('') + '</div>';
+  });
+  return h;
+}
+
+function builderFooterHtml(scope) {
+  const t = _builderData ? new Date(_builderData.fetchedAt).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+  return '<div class="bs-note" style="margin-top:10px">Player data fetched ' + t + ' — injury flags are as of then (the proxy can hold data for up to 15 minutes; 🔄 forces a fresh fetch). Ranked on ' + builderScopeLabel(scope) + (scope === 'gw' && builderGwInfo() && !builderGwInfo().finished ? ' — this gameweek is still in progress, so points are provisional' : '') + '.</div>';
+}
+
+function builderControlsHtml(prefix, extra) {
+  return '<div class="bs-controls">' + builderScopeHtml(prefix === 'bestXi' ? 'xi' : 'squad') + (extra || '') +
+    '<label style="display:inline-flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="' + prefix + 'Exclude"' + (_builderExcludeFlagged ? ' checked' : '') +
+    ' onchange="setBuilderExclude(this.checked)"> Skip injured / unavailable players</label>' +
+    '<button class="btn secondary" style="padding:6px 10px;font-size:11px" onclick="refreshBuilder()">🔄 Refresh players</button></div>';
+}
+
+function builderYield() { return new Promise(r => setTimeout(r, 30)); }
+
+async function renderBestXi() {
+  const body = document.getElementById('bestXiBody');
+  if (!body) return;
+  const run = ++_builderRunId.xi;
+  body.innerHTML = builderControlsHtml('bestXi') + '<div class="bs-note">Loading all players…</div>';
+  try { await loadBuilderData(false); }
+  catch (e) { if (run === _builderRunId.xi) body.innerHTML = builderControlsHtml('bestXi') + '<div class="placeholder"><div class="emoji">⚠️</div><p><strong>Couldn\'t load players.</strong><br>' + safeEsc(e.message) + '</p></div>'; return; }
+  if (run !== _builderRunId.xi) return;
+  const scope = _builderScope.xi;
+  const sel = builderSelectXI(builderPool(scope));
+  if (!sel) { body.innerHTML = builderControlsHtml('bestXi') + '<div class="bs-note">Not enough players to build an XI.</div>'; return; }
+  const teamsById = builderTeamsById();
+  const over = builderClubViolation(sel.xi);
+  let h = builderControlsHtml('bestXi');
+  h += '<div class="stat-boxes-row" style="padding:6px 0 4px">' +
+    builderStatBox('XI cost', formatPrice(sel.cost)) + builderStatBox('XI points', sel.points) + builderStatBox('Formation', sel.formation) + '</div>';
+  h += builderFlagLineHtml(sel.xi);
+  if (over) h += '<div class="bs-flagline warn">⚠️ ' + over.length + ' players from ' + safeEsc((teamsById[over[0].team] || {}).short_name || 'one club') + ' — FPL allows at most 3 per club, so this XI is not buildable as-is.</div>';
+  h += builderGroupedHtml(sel.xi, teamsById);
+  if (scope === 'gw' && sel.points === 0) h += '<div class="bs-flagline warn">No points recorded for this gameweek yet.</div>';
+  h += '<div class="bs-note" style="margin-top:10px">The 11 highest ' + (scope === 'gw' ? 'scorers this gameweek' : 'season scorers') + ' that make a legal formation, ignoring budget and the 3-per-club rule. Cost is the XI only — a full squad also needs 4 bench players.</div>';
+  h += builderFooterHtml(scope);
+  body.innerHTML = h;
+}
+
+async function renderBestSquad() {
+  const body = document.getElementById('bestSquadBody');
+  if (!body) return;
+  const run = ++_builderRunId.squad;
+  const hist = _lastLiveSquadCache && _lastLiveSquadCache.picksData && _lastLiveSquadCache.picksData.entry_history;
+  const mine = hist && hist.value != null && hist.bank != null ? hist.value + hist.bank : null;
+  const controls = builderControlsHtml('bestSquad',
+    '<label style="display:inline-flex;gap:5px;align-items:center">Budget £<input type="number" id="bestSquadBudget" step="0.1" min="40" max="200" value="' + (_builderBudgetTenths / 10).toFixed(1) +
+    '" style="width:72px;padding:5px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--ink);font-size:12px" onchange="setBuilderBudget(this.value)">m</label>' +
+    (mine ? '<button class="btn secondary" style="padding:6px 10px;font-size:11px" onclick="useMyBuilderBudget()">Use my value + bank (' + formatPrice(mine) + ')</button>' : ''));
+  body.innerHTML = controls + '<div class="bs-note">Loading all players…</div>';
+  try { await loadBuilderData(false); }
+  catch (e) { if (run === _builderRunId.squad) body.innerHTML = controls + '<div class="placeholder"><div class="emoji">⚠️</div><p><strong>Couldn\'t load players.</strong><br>' + safeEsc(e.message) + '</p></div>'; return; }
+  if (run !== _builderRunId.squad) return;
+  body.innerHTML = controls + '<div class="bs-note">Calculating the best squad…</div>';
+  await builderYield();
+  if (run !== _builderRunId.squad) return;
+  const budget = _builderBudgetTenths;
+  const scope = _builderScope.squad;
+  const res = builderBestSquad(builderPool(scope), budget);
+  if (res.error) { body.innerHTML = controls + '<div class="bs-flagline warn">' + safeEsc(res.error) + '</div>'; return; }
+  const sel = builderSelectXI(res.squad);
+  const teamsById = builderTeamsById();
+  let h = controls;
+  h += '<div class="stat-boxes-row" style="padding:6px 0 4px">' +
+    builderStatBox('Squad cost', formatPrice(res.cost), 'of ' + formatPrice(budget)) +
+    builderStatBox('In the bank', formatPrice(budget - res.cost)) +
+    builderStatBox('XI points', sel.points, sel.formation) + '</div>';
+  h += builderFlagLineHtml(res.squad);
+  h += builderGroupedHtml(sel.xi, teamsById);
+  h += '<div class="bench-divider">Bench</div><div class="player-row">' + sel.bench.map(p => builderRowHtml(p, teamsById)).join('') + '</div>';
+  h += '<div class="bs-note" style="margin-top:10px">' + (res.proven
+    ? '✔ Provably the highest-scoring legal squad for this budget'
+    : '⚠️ Best squad found — the search limit was reached before it could be proven optimal') +
+    ' (2 GK, 5 DEF, 5 MID, 3 FWD, max 3 per club). Money left over buys the best bench.</div>';
+  h += builderFooterHtml(scope);
+  body.innerHTML = h;
+}
+
+function setBuilderExclude(on) {
+  _builderExcludeFlagged = !!on;
+  try { localStorage.setItem('ff_builder_exclude_flagged', on ? '1' : '0'); } catch (e) {}
+  ['bestXiExclude', 'bestSquadExclude'].forEach(id => { const c = document.getElementById(id); if (c) c.checked = !!on; });
+  refreshOpenBuilderCards();
+}
+
+function setBuilderBudget(val) {
+  const n = parseFloat(String(val).replace(',', '.'));
+  const input = document.getElementById('bestSquadBudget');
+  if (!isFinite(n) || n < 40 || n > 200) {
+    safeToast('Enter a budget between £40m and £200m', 'err');
+    if (input) input.value = (_builderBudgetTenths / 10).toFixed(1);
+    return;
+  }
+  _builderBudgetTenths = Math.round(n * 10);
+  try { localStorage.setItem('ff_builder_budget_tenths', String(_builderBudgetTenths)); } catch (e) {}
+  refreshOpenBuilderCards();
+}
+
+function useMyBuilderBudget() {
+  const hist = _lastLiveSquadCache && _lastLiveSquadCache.picksData && _lastLiveSquadCache.picksData.entry_history;
+  if (!hist || hist.value == null || hist.bank == null) { safeToast('Load your squad first', 'err'); return; }
+  setBuilderBudget(((hist.value + hist.bank) / 10).toFixed(1));
+}
+
+async function refreshBuilder() {
+  // One force-fresh fetch, then redraw whichever sections are open.
+  try { await loadBuilderData(true); }
+  catch (e) { safeToast('Refresh failed: ' + e.message, 'err'); return; }
+  refreshOpenBuilderCards();
+}
+
+function refreshOpenBuilderCards() {
+  const xi = document.getElementById('bestXiCard'), sq = document.getElementById('bestSquadCard');
+  if (xi && xi.open) renderBestXi();
+  if (sq && sq.open) renderBestSquad();
 }
 
 // ── Transfer log (FF-008) ──────────────────────────────────────────
@@ -6754,6 +7262,7 @@ async function loadAdvice() {
 // no-PalSync fallback too, where scopedKey() naturally falls back to
 // the plain unscoped keys since there's no session to scope by).
 loadPositionBestPref();
+loadBuilderPrefs();
 (function syncPosBestBtn() {
   const btn = document.getElementById('posBestToggleBtn');
   if (btn) btn.classList.toggle('active', _showPositionBest);
