@@ -17,7 +17,7 @@ This is the consolidated historical development changelog for every application 
 | P Apps Launcher | `index.html` | v11.23 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22 and v11.23. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.54 | v1.0 – v1.54 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
-| Fortnight Tracker | `fortnight-tracker.html` | v3.79 | v3.2 – v3.79. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
+| Fortnight Tracker | `fortnight-tracker.html` | v3.80 | v3.2 – v3.80. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.106 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v7.77 – v7.106 (GIG-072 onward). GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
 | Gym Tracker | `gym-tracker.html` | v2.129 | v2.32 – v2.129. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
@@ -1570,6 +1570,15 @@ Supabase tables used: `ff_settings`, `ff_squad_cache`, `ff_score_history`, `ff_a
 `fortnight-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the full history was in `fortnight-tracker.md`, resequenced newest-to-oldest because the original inline order mixed ascending and descending runs. Supabase table `fortnight_bundles` (bundles keyed by `record_key`; `code_`, `leave_`, `bh_`, `la_` prefixed rows share the table). Local key `fn_tracker_v5`, also read directly by PeteGCal and Gigs & Trips for the working-day alert.
 
 ⚠ Several FT IDs are reused across versions in the source (for example FT-062 at v3.72 and v3.68; FT-039 at v3.44 and v3.42; FT-030 at v3.36 and v3.33; FT-026 at v3.34 and v3.32; FT-020 to FT-025 at multiple versions). They are preserved as recorded.
+
+### v3.80 — FT-072 — 26 Oct 2026 — Field labels on timesheet codes
+
+- **Why:** codes showed bare values (e.g. a description with a code under it), so Project / Task / Code could not be told apart, especially when picking or adding a code.
+- **Change:** every list of timesheet codes now shows small uppercase labels (Description, Project, Task, Code; Definition where shown) beside the values. One shared pair of helpers (`codeDescHtml`, `codeLblHtml`) is used by: the day-card Timesheet codes rows and picker (v3.78), the Timesheet-tab matrix first column and its Add-code picker, the legacy day picker, and the Timesheet codes manager (active and archived rows). The matrix and day cards now also show Project and Task (previously only the code). Empty fields are skipped.
+- **Add / edit form:** each input now has a visible label above it (Description, Project, Task, Code, Definition) instead of a placeholder that disappears once filled. Input ids and the save logic are unchanged.
+- **Pickers:** pills are now rounded rectangles (were fully round) to fit the extra lines; the search also matches the code field.
+- No data-model, storage, sync, `index.html` or `pal-shared.js` change. Version synced in `<title>`, logo-sub, the `pal-shared.js?v=` tag and the inline history comment.
+- Tested (headless jsdom, real file, `PalSync` stubbed; 12 new checks plus the 14 from v3.79, 27 from v3.78 and 42 from v3.77, all passing): labels present in the day-card rows and picker, matrix, matrix picker, code manager and add form; adding a code through the new form saves all five values; edit pre-fills; search by code; values HTML-escaped. Not tested: a real browser or phone (how the labelled pills and rows wrap), live Supabase and a second device.
 
 ### v3.79 — FT-071 — 22 Oct 2026 — Hours done and timesheet hours logged on the day header and top bar
 
