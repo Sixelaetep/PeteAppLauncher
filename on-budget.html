@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f4f6f8" id="metaThemeColor">
-<title>On Budget v3.109</title>
+<title>On Budget v3.110</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
   :root {
@@ -378,7 +378,7 @@
     <div class="header">
       <div class="logo">
         <span class="logo-icon">🪙</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.109</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.110</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -951,9 +951,14 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.109"></script>
+<script src="pal-shared.js?v=3.110"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
+// On Budget v3.110
+// v3.110 (ON--104): Spending (Increasing mode) keeps UNCLEARED transactions from earlier cycles visible after the month rolls
+//   over (marked "Earlier cycle", with the same tick / edit / delete), so they can still be cleared to match the card. The
+//   "Cleared · Card balance" total now shows whenever anything is uncleared (previously only if the cycle also had cleared rows),
+//   the launcher uncleared count includes carried items, and the card-balance prompt knows about them. Budgets/headroom unchanged.
 // On Budget v3.109
 // v3.109 (ON--103): "Adjust this month's budgets" — the weekly food adjustment now applies to every week of the month, so all
 //   the Food bars (including weeks already finished) show the adjusted budget. Display-only for finished weeks: headroom, reserve,
@@ -2658,7 +2663,7 @@ window.addEventListener('message', function(e) {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.109' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.110' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -2883,7 +2888,7 @@ function computeDashboardSummary() {
       // v3.80 (ON--074): exported so the launcher can lead with the real
       // card balance in Increasing mode instead of re-deriving direction.
       cardBalance = settings.potDirection === 'increasing' ? cardBalanceInfo(k, false).balance : null;
-      ftUnclearedCount   = txAll.filter(t => t.cleared === false).length;
+      ftUnclearedCount   = txAll.filter(t => t.cleared === false).length + carriedUnclearedTx(k).length; // v3.110 (ON--104)
       cardBalanceCleared = settings.potDirection === 'increasing' ? cardBalanceInfo(k, false, true).balance : null;
       potCleared         = settings.potDirection === 'increasing' ? null : ftClearedPot(d, tx);
       // v3.63 (ON--062): reserve + potPct exported so the launcher card
@@ -2950,7 +2955,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.109', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.110', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -2959,7 +2964,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.109', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.110', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3283,6 +3288,27 @@ function cardBalanceInfo(curK, ignoreCurAdj, clearedOnly) {
   return { balance: Math.round(bal*100)/100, anchored: keys.some(isSet) };
 }
 
+// v3.110 (ON--104): uncleared transactions from EARLIER cycles that still
+// count in the card balance (Increasing mode). cardBalanceInfo() sums every
+// month from the first one with a card balance set, so an uncleared item
+// left in a previous cycle keeps moving the total — but the Spending list
+// only showed the current cycle, so after a rollover it could no longer be
+// seen or ticked off. This returns exactly those items ({mk, t}), using the
+// same anchoring rule as cardBalanceInfo() so the list and the balance can
+// never disagree. Cleared items are not returned (they can disappear).
+function carriedUnclearedTx(curK) {
+  if (settings.potDirection !== 'increasing') return [];
+  const keys = Object.keys(months).filter(mk => mk <= curK && months[mk]).sort();
+  const isSet = mk => typeof months[mk].cardAdjust === 'number' && !isNaN(months[mk].cardAdjust);
+  const startKey = keys.find(isSet) || curK;
+  const out = [];
+  keys.forEach(mk => {
+    if (mk >= curK || mk < startKey) return;
+    (months[mk].transactions || []).forEach(t => { if (!t._deleted && t.cleared === false) out.push({ mk, t }); });
+  });
+  return out;
+}
+
 // Type in what the card actually shows; only the difference is stored,
 // as this month's cardAdjust. Never touches transactions, the spend
 // counter, pot or headroom.
@@ -3295,7 +3321,7 @@ function setCardBalance() {
   // old total-based behaviour; with uncleared items the total then follows.
   const cur  = cardBalanceInfo(k, false, true).balance;
   const base = cardBalanceInfo(k, true, true).balance;
-  const v = prompt(`Actual card balance right now${ftManual() || (curData().transactions||[]).some(t=>!t._deleted && t.cleared===false) ? ' (cleared, as your card shows it)' : ''} — currently £${cur.toFixed(2)}:`, cur.toFixed(2));
+  const v = prompt(`Actual card balance right now${ftManual() || ((curData().transactions||[]).some(t=>!t._deleted && t.cleared===false) || carriedUnclearedTx(k).length) ? ' (cleared, as your card shows it)' : ''} — currently £${cur.toFixed(2)}:`, cur.toFixed(2));
   if (v===null) return;
   const val = parseFloat(String(v).replace(/[£,\s]/g,''));
   if (isNaN(val)) { toast('Invalid amount'); return; }
@@ -3506,7 +3532,8 @@ function renderDash() {
   // a "Cleared" line is added under it for matching against the card/bank.
   // Shown in Manual mode, or whenever any uncleared transaction exists.
   const unclearedTx  = txAll.filter(t=>t.cleared===false);
-  const showCleared  = ftManual() || unclearedTx.length>0;
+  const carriedTx    = carriedUnclearedTx(k); // v3.110 (ON--104): uncleared items left over from earlier cycles
+  const showCleared  = ftManual() || unclearedTx.length>0 || carriedTx.length>0;
   const potClearedShown = !showCleared ? null
     : potDirection==='increasing' ? cardBalanceInfo(k, false, true).balance
     : ftClearedPot(d, tx);
@@ -3860,19 +3887,20 @@ function renderDash() {
   // than inventing a new convention.
   const sorted = [...txAll].sort((a,b)=>b.date.localeCompare(a.date)||b._ts-a._ts);
   html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-    <div class="tx-section-label" style="margin-bottom:0">Transactions <span style="color:var(--ink3);font-weight:400;text-transform:none;letter-spacing:normal">(${sorted.length})</span></div>
+    <div class="tx-section-label" style="margin-bottom:0">Transactions <span style="color:var(--ink3);font-weight:400;text-transform:none;letter-spacing:normal">(${sorted.length+carriedTx.length})</span></div>
     <button class="tx-collapse-btn" onclick="toggleFtTxList()" aria-label="Toggle transactions">
       <span class="breakdown-chevron ${_ftTxOpen?'open':''}" id="ft-tx-chevron">▾</span>
     </button>
   </div>`;
   html += `<div class="breakdown-body tx-tall ${_ftTxOpen?'open':''}" id="ft-tx-body">`;
-  if (!sorted.length) {
+  if (!sorted.length && !carriedTx.length) {
     html += `<div class="tx-list"><div class="tx-empty">No spends logged yet</div></div>`;
   } else {
     // v3.85 (ON--079): uncleared rows are grouped above cleared ones, with
     // a heading for each — but only when something is uncleared, so with
     // nothing uncleared the list is exactly as it was.
-    const txRow = t => {
+    const txRow = (t, rowMk, carried) => {
+      rowMk = rowMk || k; // v3.110: carried-over rows belong to an earlier cycle's month
       const isXfer   = !!t.xferSrc;
       const isIncome = t.type==='income' && !isXfer;
       const catEmoji = isXfer ? '⇄' : isIncome ? '💰' : (t.category==='weekly'?'🛒':t.category==='travel'?'🚗':'📦');
@@ -3880,31 +3908,34 @@ function renderDash() {
       const dotClass = (isIncome||isXfer) ? 'income' : t.category;
       const name     = t.label||'';
       const dateFmt  = new Date(t.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-      const wkTag = (t.category==='weekly' && isShifted(t)) ? (()=>{ const wk=(weeks||[]).find(w=>iso(w.start)<=t.budgetDate&&t.budgetDate<=iso(w.end)); return `<span class="tx-wk-tag">Counts in ${wk?'Wk '+wk.num:'next week'}</span>`; })() : '';
-      const clearBtn = t.cleared===false ? `<button class="tx-clear" style="margin-right:8px" aria-label="Mark cleared" title="Mark cleared" onclick="event.stopPropagation();clearFtTx('${k}','${t.id}')">✓</button>` : '';
-      return `<div class="tx-row" onclick="openEditSheet('${k}','${t.id}')" style="cursor:pointer">
+      const wkTag = carried ? '<span class="tx-wk-tag">Earlier cycle</span>' : (t.category==='weekly' && isShifted(t)) ? (()=>{ const wk=(weeks||[]).find(w=>iso(w.start)<=t.budgetDate&&t.budgetDate<=iso(w.end)); return `<span class="tx-wk-tag">Counts in ${wk?'Wk '+wk.num:'next week'}</span>`; })() : '';
+      const clearBtn = t.cleared===false ? `<button class="tx-clear" style="margin-right:8px" aria-label="Mark cleared" title="Mark cleared" onclick="event.stopPropagation();clearFtTx('${rowMk}','${t.id}')">✓</button>` : '';
+      return `<div class="tx-row" onclick="openEditSheet('${rowMk}','${t.id}')" style="cursor:pointer">
         <div class="tx-dot ${dotClass}"></div>
         <div class="tx-body">
           <div class="tx-name${name?'':' unlabelled'}">${esc(name)||catEmoji+' '+catLabel}${t.recurId?' <span title="Repeating" style="font-size:10px">🔁</span>':''}${wkTag}</div>
           <div class="tx-date">${dateFmt}</div>
         </div>
         <div class="tx-amt" style="${(isIncome||isXfer)?'color:var(--accent)':''}">${isIncome?'+':isXfer?'⇄ −':''}£${(t.amount||0).toFixed(2)}</div>${clearBtn}
-        <button class="tx-del" aria-label="Delete transaction" onclick="event.stopPropagation();confirmDelTx('${k}','${t.id}')">×</button>
+        <button class="tx-del" aria-label="Delete transaction" onclick="event.stopPropagation();confirmDelTx('${rowMk}','${t.id}')">×</button>
       </div>`;
     };
-    const unclearedRows = sorted.filter(t=>t.cleared===false);
+    const unclearedRows = [
+      ...carriedTx.map(c => ({ t:c.t, mk:c.mk, carried:true })),
+      ...sorted.filter(t=>t.cleared===false).map(t => ({ t, mk:k, carried:false }))
+    ].sort((a,b)=>b.t.date.localeCompare(a.t.date)||(b.t._ts||0)-(a.t._ts||0));
     const clearedRows   = sorted.filter(t=>t.cleared!==false);
     html += `<div class="tx-list">`;
     if (unclearedRows.length) {
       html += `<div class="tx-group-head"><span>Uncleared</span><span>${unclearedRows.length}</span></div>`;
-      unclearedRows.forEach(t => { html += txRow(t); });
-      if (clearedRows.length) {
-        const clearedSpend = clearedRows.reduce((s,t)=>s+((t.type==='income'||t.type==='transfer')?-1:1)*(t.amount||0),0);
-        html += `<div class="tx-cleared-total">
-          <div><div class="tx-cleared-label">Cleared · ${potLabel}</div><div class="tx-cleared-val">${fmtGbp(potClearedShown)}</div></div>
-          <div class="tx-cleared-side">${clearedRows.length} cleared · ${clearedSpend<0?'+':''}${fmtGbp(Math.abs(clearedSpend))} ${clearedSpend<0?'net in':'spent'}<br><strong class="tx-uncleared-fig">${unclearedRows.length} uncleared · ${unclearedDiff<0?'−':'+'}${fmtGbp(Math.abs(unclearedDiff))}</strong></div>
-        </div>`;
-      }
+      unclearedRows.forEach(r => { html += txRow(r.t, r.mk, r.carried); });
+      // v3.110 (ON--104): the Cleared total shows whenever anything is uncleared (was: only when this
+      // cycle also had cleared rows — so right after a rollover, with only uncleared items, it vanished).
+      const clearedSpend = clearedRows.reduce((s,t)=>s+((t.type==='income'||t.type==='transfer')?-1:1)*(t.amount||0),0);
+      html += `<div class="tx-cleared-total">
+        <div><div class="tx-cleared-label">Cleared · ${potLabel}</div><div class="tx-cleared-val">${fmtGbp(potClearedShown)}</div></div>
+        <div class="tx-cleared-side">${clearedRows.length ? `${clearedRows.length} cleared · ${clearedSpend<0?'+':''}${fmtGbp(Math.abs(clearedSpend))} ${clearedSpend<0?'net in':'spent'}<br>` : ''}<strong class="tx-uncleared-fig">${unclearedRows.length} uncleared · ${unclearedDiff<0?'−':'+'}${fmtGbp(Math.abs(unclearedDiff))}</strong></div>
+      </div>`;
       clearedRows.forEach(t => { html += txRow(t); });
     } else {
       sorted.forEach(t => { html += txRow(t); });
