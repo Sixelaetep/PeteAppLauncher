@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.28 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22, v11.23, v11.24, v11.25, v11.26, v11.27 and v11.28. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.29 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22, v11.23, v11.24, v11.25, v11.26, v11.27, v11.28 and v11.29. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.54 | v1.0 – v1.54 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v4.0 | v1.0 – v4.0 (v4.0 / FTT-050 is the "Reel" look and feel, presentation only). ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Claim Tracker | `claim-tracker.html` | v2.21 | v2.21 only (CLA-018, "Receipt" look and feel). Earlier history (CLA-001 – CLA-017, v2.20 and before) is in the app's inline comments and was never supplied as a changelog. Backlog not supplied |
@@ -523,6 +523,14 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.29 — PET-133 — Desktop: date and Today board on the left; On Budget full row — 1 Nov 2026
+
+- **Request (Pete, 1 Nov, after viewing v11.28):** put the date and Today board on the left on desktop, and make On Budget take the full width.
+- **Change (`index.html`, CSS only, desktop ≥ 1100 px):** the home grid is now `392px | 1fr` with the date hero, Today board and the two jump rows (Customize layout, Backups) as the **left** sticky column and the tiles on the right. On Budget now spans the full tile row (like Gigs & Trips and Fortnight) so it no longer sits in one column beside an empty cell; ⚠ this applies whatever its width setting in Customize layout (a lone "half" card previously filled the row; v11.28 had lost that). Phone and tablet unchanged. The comment on `homeJump()` and the v11.28 entry's "right column" wording now read left.
+- Version updated everywhere: `<title>`, nav badge, inline change note.
+- Tested (Stage 1, as v11.28's suites, headless Chromium, stub `pal-shared.js`): desktop aside left of the tiles, On Budget row width equals the grid width, two columns elsewhere, jump rows, phone / tablet unchanged, resize both ways, Lex's view, no page errors. Not tested: your real saved layout and data, a real browser window.
+- **Known limitations:** as v11.28. A card pair set to half width on desktop is two cells in the two-column grid. The tile grid uses dense packing, so a single tile left beside a full-row tile is backfilled by a later single tile (the visual order can differ slightly from the order in Customize layout).
 
 ### v11.28 — PET-132 — "Concourse" look and feel: phone and desktop layouts, Today board — 1 Nov 2026
 
