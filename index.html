@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.24</title>
+<title>P Apps v11.25</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -813,7 +813,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.24</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.25</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1216,6 +1216,9 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-129, v11.25): the Gigs & Trips card shows the next few events UNFILTERED (including the occurrences of repeating
+  events), read from the app's own summary key pal_gat_stat (written by GigsAndTrips.html v7.107); falls back to gat_v1 if it is
+  absent. Needs GigsAndTrips.html v7.107. No other launcher change.
   CHANGED (PET-128, v11.24): Gigs & Trips reinstated for Pete and Lex (see REINSTATED above). Launcher-only; GigsAndTrips.html
   (v7.106), pal-gcal.js and pal-shared.js (?v=11.23) unchanged.
   CHANGED (PET-127, v11.23): the timeline's Hide button now collapses the panel to a small "⏱" chip that reopens it (it kept
@@ -3310,9 +3313,23 @@ function statGigs() {
     const raw = localStorage.getItem('gat_v1');
     if (!raw) { setCardStat('stat-gigs', 'Syncing…', 'muted'); return; }
     const d = JSON.parse(raw);
-    const events = (d.events || []).filter(ev => !ev._deleted && !ev.recurrence);
+    const events = (d.events || []).filter(ev => !ev._deleted && !ev.recurrence);   // real (non-repeating) events — fallback source and clash fallback
     const todayStr = todayISO();
     const now = new Date();
+
+    // PET-129 v11.25: the app (v7.107+) writes pal_gat_stat — its own next events, NOT filtered by class and including
+    // the occurrences of repeating events (which need the app's repeat engine, so they cannot be worked out here).
+    // Missing or unusable → fall back to gat_v1 as before (no repeating events).
+    let stat = null;
+    try {
+      const st = JSON.parse(localStorage.getItem('pal_gat_stat') || 'null');
+      if (st && st.v === 1 && Array.isArray(st.items)) stat = st;
+    } catch (e) {}
+    const fromStat = stat
+      ? stat.items.map(i => i.t === 'trip'
+          ? { id: i.id, type: 'trip', name: i.name, startDate: i.start, endDate: i.end, status: i.status, tripType: i.tripType }
+          : { id: i.id, type: 'gig', name: i.name, date: i.date, time: i.time, venue: i.venue, gigType: i.gigType })
+      : null;
 
     function gatSortKey(ev) {
       if (ev.type === 'gig') return (ev.date || '') + 'T' + (ev.time || '23:59');
@@ -3331,7 +3348,7 @@ function statGigs() {
       return true;
     }
 
-    const upcoming = events
+    const upcoming = (fromStat || events)
       .filter(isStillUpcoming)
       .sort((a, b) => {
         const ka = gatSortKey(a), kb = gatSortKey(b);
@@ -3340,7 +3357,9 @@ function statGigs() {
         return (a.name || '').localeCompare(b.name || '');
       });
 
-    if (!upcoming.length) { setCardStat('stat-gigs', 'Nothing upcoming', 'muted'); return; }
+    const onNowTrips = fromStat ? (stat.onNow || []).map(i => ({ id: i.id, type: 'trip', name: i.name, startDate: i.start, endDate: i.end, status: i.status, tripType: i.tripType }))
+      .filter(t => t.endDate && t.endDate >= todayStr && t.status !== 'Cancelled' && t.status !== 'Completed') : [];
+    if (!upcoming.length && !onNowTrips.length) { setCardStat('stat-gigs', 'Nothing upcoming', 'muted'); return; }
 
     const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
 
@@ -3376,7 +3395,7 @@ function statGigs() {
     function evIcon(ev) { return gigTypeIcon(ev); }
 
     // ── Check for active trip (currently on one) ──────────────────
-    const activeTrip = events.find(ev =>
+    const activeTrip = fromStat ? onNowTrips[0] : events.find(ev =>
       ev.type === 'trip' && !ev._deleted
       && ev.status !== 'Cancelled' && ev.status !== 'Completed'
       && ev.startDate && ev.endDate
@@ -3384,7 +3403,7 @@ function statGigs() {
     );
 
     // ── Next event hero ───────────────────────────────────────────
-    const next = upcoming[0];
+    const next = upcoming[0] || activeTrip;   // only a trip under way and nothing else → it is the headline
     const diff = daysUntil(next);
     const name = next.name || (next.type === 'gig' ? 'Gig' : 'Trip');
     const fmtD = fmtShortDate(next);
@@ -3393,6 +3412,7 @@ function statGigs() {
     let countdownLabel;
     if (diff === 0)      countdownLabel = `<span class="val" style="color:var(--accent)">${evIcon(next)} Today</span>`;
     else if (diff === 1) countdownLabel = `<span class="val">${evIcon(next)} Tomorrow</span>`;
+    else if (diff < 0)   countdownLabel = `<span class="val" style="color:var(--accent)">${evIcon(next)} On now</span>`;   // a trip already under way
     else                 countdownLabel = `<span class="val">${evIcon(next)} ${diff} days</span>`;
 
     // Hero block — name prominent, date + time on same row
@@ -3416,8 +3436,8 @@ function statGigs() {
       </div>`;
     }
 
-    // Pipeline — next 2 events after the first
-    const pipeline = upcoming.slice(1, 3);
+    // Pipeline — the next 3 events after the first (PET-129: "next few", unfiltered)
+    const pipeline = (upcoming[0] ? upcoming.slice(1, 4) : upcoming.slice(0, 3));
     if (pipeline.length) {
       html += `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;display:flex;flex-direction:column;gap:4px">`;
       pipeline.forEach(ev => {
@@ -3434,20 +3454,12 @@ function statGigs() {
       html += `</div>`;
     }
 
-    // Summary footer
-    const gigCount  = upcoming.filter(e => e.type === 'gig').length;
-    const tripCount = upcoming.filter(e => e.type === 'trip').length;
-    const parts = [];
-    if (gigCount)  parts.push(`${gigCount} gig${gigCount!==1?'s':''}`);
-    if (tripCount) parts.push(`${tripCount} trip${tripCount!==1?'s':''}`);
-    if (parts.length) {
-      html += `<div style="font-size:10px;color:var(--ink3);margin-top:6px">${parts.join(' · ')} upcoming</div>`;
-    }
+    // PET-129 v11.25: the "N gigs · M trips upcoming" footer is gone — with every event and repeat shown, a count says little.
 
     // ── Conflict detection ────────────────────────────────────────
     const activeGigs  = events.filter(e => e.type === 'gig'  && !e.missed && e.date  && e.date  >= todayStr);
     const activeTrips = events.filter(e => e.type === 'trip' && e.status !== 'Cancelled' && e.status !== 'Completed' && e.endDate && e.endDate >= todayStr);
-    const conflicts   = [];
+    let conflicts   = [];
 
     const gigsByDate = {};
     activeGigs.forEach(g => { if (!g.date) return; (gigsByDate[g.date] = gigsByDate[g.date] || []).push(g); });
@@ -3462,6 +3474,9 @@ function statGigs() {
       t.startDate <= t2.endDate && t.endDate >= t2.startDate
     ))) conflicts.push('⚠️ trips overlap');
 
+    // PET-129: when the app supplies its own clash result (commitments only — a bin day or gym session is not a clash),
+    // use it so the card and the app agree; otherwise the gat_v1 rules above stand.
+    if (stat && Array.isArray(stat.clash)) conflicts = stat.clash.map(c => '⚠️ ' + c);
     if (conflicts.length) {
       html += `<div style="margin-top:6px;font-size:11px;color:#d97706;font-weight:700">${conflicts.join(' · ')}</div>`;
     }
