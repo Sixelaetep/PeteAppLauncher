@@ -24,7 +24,7 @@ This is the consolidated historical development changelog for every application 
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.113 | v1.0 – v3.43 and v3.73 – v3.113. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
-| Reading Tracker | `reading-tracker.html` | v3.77 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.77 |
+| Reading Tracker | `reading-tracker.html` | v3.78 | Selected entries only: v3.29, v3.30, v3.32, v3.33, v3.47 – v3.52, v3.69, v3.70 – v3.78 |
 | Test & Issues | `test-issues.html` | v1.77 | ⏸ **On hold — removed from the launcher at v11.01 (2026-10-04).** v1.73 – v1.77. Earlier history is inline in `test-issues.html` (not supplied) |
 
 **Applications referenced in the changelogs but with no changelog supplied**
@@ -4090,6 +4090,24 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 # Reading Tracker
 
 `reading-tracker.html`. The `.md` archives part of the clean changelog block (v3.29 – v3.67) from the HTML; the inline comment keeps the 15 most recent. ⚠ Only the entries listed below were supplied; older short notes elsewhere in the code were left in place. Syncs via pal-sync across four tables (trackers, books, entries, wishlist).
+
+### v3.78 — MR-063 — Mark as read without logging pages; Tidy up; past reads no longer land on To read — 1 Nov 2026
+
+- **Reported (Pete, 1 Nov, with a backup `my-reading.json` exported 20:57):** books repeated in To read, books that have already been read showing as To read, and no way to mark a book read without logging every page.
+- ⚠ **ID note:** the backlog was not supplied, so **MR-063 is the next number after MR-062 in this changelog**, not one confirmed against the backlog.
+- **What the backup showed:** 87 Book List items, 77 unread. **11 titles were repeated** (the same book added on 13 Jul and again on 12 Sep, i.e. a book import run twice; Dracula three times), plus near-repeats (a trailing full stop, a "bk8" suffix, a subtitle). **25 unread items were books and audiobooks already finished in the "Read in Past" and "Audio Listened in past" history trackers.**
+- **Cause of the "already read" books (a defect in the v3.67 / MR-052 tracker migration):** `mergeAllTrackersIntoBookList()` decided a tracker book was finished only when `pages > 0` and the log reached it (or `manualComplete`). History books have **no page count**, so they were imported as **unread**, while the Home Book List card (v3.64 / MR-049) deliberately counts the very same books as read. Every restore re-runs that migration, so they came back each time. It also stamped finished books with **today's date** when none was recorded.
+- **Fix to the migration:** a tracker book is finished when `logged >= pages` (so no page count counts as finished, the same rule as the Home card) or `manualComplete`; the finish date is the book's own date, else its last log date, else **"date unknown"**; and when a Book List copy of a tracker book already exists (the case in your data) and is still unread, it is now **marked read** (date unknown) rather than left alone. Running the migration over your backup turns the 25 into Read automatically.
+- **Mark as read:** a book's details (modal on phone, panel on desktop) now have **✓ Mark as read (no pages needed)**: pick the date finished, or tick **I don't remember when**. Nothing is logged and the page count is untouched. A finished book offers **Not read after all** (puts it back on To read; its log is kept). The List rows have a **✓ Mark read** chip that opens the details.
+- **"Date unknown":** stored as the finish date `1900-01-01` (no new field). It is shown as "date unknown", it counts as read everywhere (Read shelf, Past, Reviews, Home card), it sorts last, and it is **not counted in any month** in Stats or "finished this month".
+- **Tidy up (Book List › Tidy up):** a review before anything changes. It lists (a) **repeated titles**, keeping the copy with the most history (logs, notes, review, active, tags) and ticking the others for removal, and (b) **To read items that are finished in the old history trackers** (matched by id, then by title), ticked to be marked read. "Similar" titles (same text before a colon, e.g. a subtitle) are listed **unticked** for you to decide. The button shows how many sure changes are waiting. Removals use the existing delete (with its cloud tombstone). On your backup it finds 17 repeats and, once the history trackers are back in place, 25 past reads.
+- **No double counting:** the Home Book List card no longer counts a finished tracker book again when a finished Book List copy of it exists (before tidying, the card showed 95 for a list of 70).
+- **Also:** dialogs now sit above the floating bar and the Add pill.
+- **Not changed:** the data model apart from the "date unknown" convention, sync, backups, Stats figures, everything frozen at v3.74.
+- Version updated everywhere: `<title>`, header logo span, `pal-shared.js?v=3.78`, inline changelog comment.
+- Tested (Stage 1, headless Chromium, stub `pal-shared.js`): the v3.77 suite re-run plus new checks, **176 passed, repeated twice**; and a run against **your actual backup**: before 87 items; the migration heals the 25; Tidy finds 17 repeats (1 similar left unticked) and removes them (70 left); no repeated titles remain; the Read shelf holds 24 books and 12 audiobooks, none counted in a month; the card total goes from 95 to 70 with no double count; a book marked read without pages keeps its 68 pages and 0 logs; no page errors.
+- **Not tested:** the real `pal-shared.js` and cloud (so how the cloud treats the removals and the healed copies on your other devices); the real launcher; a real phone and Safari.
+- **Known limitations:** matching is by title (and tracker book id), so two different books with the same title would be listed together (review before pressing Apply). "Similar" titles are only suggestions. Marked-read books have no finish date to show in the monthly history until you edit them. Take a backup before pressing Apply if you want a way back.
 
 ### v3.77 — MR-062 — Plants and shelf settings now sync; an easier way to the bookcase on phone — 1 Nov 2026
 
