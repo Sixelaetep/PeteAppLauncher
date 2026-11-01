@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>P Apps v11.26</title>
+<title>P Apps v11.27</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -751,6 +751,7 @@
   .gym-dot.pt { font-size: 8px; font-weight: 700; letter-spacing: -0.02em; }
   .gym-dot.planned { border: 2px solid var(--card-color); color: var(--card-color); font-size: 8px; }
   .gym-dot.missed { background: rgba(247,129,102,.15); color: #f78166; }
+  .gym-dot.ill { background: rgba(210,153,34,.15); font-size: 12px; } /* PET-131 */
   .gym-dot.none { color: var(--ink3); opacity: .5; }
 
   /* ── On Budget quick-add confirmation (PET-114 v11.10) ── */
@@ -813,7 +814,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.26</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home">P <span>Apps</span> <span class="nav-version" style="font-size:9px;opacity:0.4;font-weight:400;letter-spacing:0">v11.27</span></button>
       <div class="nav-icons-group">
         <!-- PET-085 v10.78: Horizon moved after Reading Tracker (both in
              the icon row and the home-grid, which now goes Gigs, Gym,
@@ -1216,6 +1217,10 @@
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-131, v11.27): the Gym card's Mon-Sun strip shows 😷 for a day marked "missed - ill" in Gym Tracker
+  (schedule record kind:'illness', written by gym-tracker.html v2.130), and the Today line says "Ill today" instead of "Planned
+  today". A day with a logged session still shows as done. Ill days are not counted as missed or still planned. Reads the
+  existing gym_tracker_v1 scheduleEntries; no new key, no message type. Needs gym-tracker.html v2.130 to create the marks.
   CHANGED (PET-130, v11.26): the Gigs & Trips card uses the emoji from the app's own category table (pal_gat_stat items carry `ic`), so
   emoji you change or add in Gigs & Trips > More > Categories show here too. Falls back to the built-in icons. Needs GigsAndTrips.html v7.108.
   CHANGED (PET-129, v11.25): the Gigs & Trips card shows the next few events UNFILTERED (including the occurrences of repeating
@@ -4617,6 +4622,7 @@ function statGym() {
     const sessions = (data.sessions        || []).filter(s => !s._deleted);
     const allPlans = (data.plans           || []);
     const entries  = (data.scheduleEntries || []).filter(e => !e._deleted);
+    const illDays  = new Set(entries.filter(e => e.kind === 'illness' && e.date).map(e => e.date)); // PET-131: 'missed - ill' days (Gym v2.130)
     const waterEntries = (data.waterEntries || []).filter(e => !e._deleted);
     const ptSessions = (data.ptSessions || []).filter(p => p && !p._deleted);
     const nutritionEntries = (data.nutritionEntries || []).filter(e => e && !e._deleted);
@@ -4667,7 +4673,7 @@ function statGym() {
     const now = new Date(); now.setHours(0,0,0,0);
     const weekStart = new Date(now); weekStart.setDate(now.getDate() - ((now.getDay()+6)%7));
     const letters = ['M','T','W','T','F','S','S'];
-    let cells = '', doneDays = 0, toGo = 0;
+    let cells = '', doneDays = 0, toGo = 0, illCount = 0;
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
       const ds = isoFromDate(d);
@@ -4680,6 +4686,8 @@ function statGym() {
         sym = daySess.length ? '✓' : 'PT';
         if (!daySess.length) extra = ' pt';
         tip = 'Done: ' + daySess.map(s => s.name || 'Session').concat(dayPT.map(p => 'PT session' + (p.ptName ? ' (' + p.ptName + ')' : ''))).join(', ');
+      } else if (illDays.has(ds)) {
+        state = 'ill'; sym = '😷'; illCount++; tip = 'Missed — ill' + (pending.length ? ': ' + pending.map(planName).join(', ') : '');
       } else if (pending.length) {
         if (ds < todayStr) { state = 'missed'; sym = '✕'; tip = 'Not done: '; }
         else { state = 'planned'; sym = '●'; toGo++; tip = 'Planned: '; }
@@ -4692,16 +4700,20 @@ function statGym() {
     const todayDoneNames = sessionsOn(todayStr).map(s => s.name || 'Session').concat(ptOn(todayStr).map(() => 'PT session'));
     const todaySess = todayDoneNames; // length / list drive the "done today" state below
     const todayPending = pendingOn(todayStr);
+    const illToday = illDays.has(todayStr) && !todaySess.length; // PET-131
     let html = '';
     if (todaySess.length) {
       html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:#3fb950"></span>' +
         '<span>Done today: <span class="val" style="color:#3fb950">' + todaySess.map(n => esc(n)).join(', ') + '</span></span></div>';
     }
-    if (todayPending.length) {
+    if (illToday) {
+      html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:#d29922"></span>' +
+        '<span>😷 <span class="val" style="color:#d29922">Ill today' + (todayPending.length ? ' — ' + todayPending.map(id => esc(planName(id))).join(', ') + ' missed' : '') + '</span></span></div>';
+    } else if (todayPending.length) {
       html += '<div class="card-stat-row"' + (todaySess.length ? ' style="margin-top:3px"' : '') + '><span class="card-stat-dot" style="background:var(--accent)"></span>' +
         '<span>' + (todaySess.length ? 'Still planned: ' : 'Planned today: ') + '<span class="val" style="color:var(--accent)">' + todayPending.map(id => esc(planName(id))).join(', ') + '</span></span></div>';
     }
-    if (!todaySess.length && !todayPending.length) {
+    if (!todaySess.length && !todayPending.length && !illToday) {
       let nextTxt = 'Nothing planned';
       for (let i = 1; i <= 60; i++) {
         const dt = new Date(now.getTime() + i * 86400000);
@@ -4715,7 +4727,7 @@ function statGym() {
     }
 
     html += '<div class="gym-week">' + cells + '</div>';
-    html += '<div style="font-size:10px;color:var(--ink3);margin-top:4px">' + doneDays + ' day' + (doneDays === 1 ? '' : 's') + ' done · ' + toGo + ' still planned this week</div>';
+    html += '<div style="font-size:10px;color:var(--ink3);margin-top:4px">' + doneDays + ' day' + (doneDays === 1 ? '' : 's') + ' done · ' + toGo + ' still planned this week' + (illCount ? ' · 😷 ' + illCount + ' ill' : '') + '</div>';
 
     // Intake: both blocks are rendered; CSS shows the one matching the quick-add mode
     // (card[data-gym-kind], set by gymQuickSetKind). Drink = water, Food = calories + protein.

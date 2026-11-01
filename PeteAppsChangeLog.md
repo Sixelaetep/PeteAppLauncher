@@ -14,12 +14,12 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.26 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22, v11.23, v11.24, v11.25 and v11.26. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.27 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22, v11.23, v11.24, v11.25, v11.26 and v11.27. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.54 | v1.0 – v1.54 (complete) |
 | Film & TV Tracker | `film-tv-tracker.html` | v3.8 | v1.0 – v3.8. ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Fortnight Tracker | `fortnight-tracker.html` | v3.80 | v3.2 – v3.80. ⚠ Not recorded: v3.1, v3.7, v3.10–v3.16, v3.46, v3.51–v3.67 |
 | Gigs & Trips | `GigsAndTrips.html` | v7.109 | ✅ **Back in the launcher at v11.24 (PET-128), for Pete and Lex** (on hold from v11.01, 2026-10-04 to v11.23). v7.77 – v7.109 (GIG-072 onward); full `GigsAndTrips.md` release notes (v7.77 – v7.104) are also included verbatim below the condensed entries. GIG-001 – GIG-071 remain as inline HTML comments (not supplied). Backlog rev 3 is recorded separately |
-| Gym Tracker | `gym-tracker.html` | v2.129 | v2.32 – v2.129. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
+| Gym Tracker | `gym-tracker.html` | v2.130 | v2.32 – v2.130. ⚠ Not recorded: v2.33, v2.91 – v2.106; anything before v2.32. ⚠ The v2.110 entry was added retrospectively (from the inline comment in the v2.110 file; it was missing from this changelog) |
 | Horizon | `horizon.html` | v4.12 (2026-09-26) | v1.0 (2026-08-05) – v4.12 (2026-09-26). ⚠ No standalone v3.0 entry (only v3.0.1) |
 | HTML Vault | `html-vault.html` | v1.8 | v1.8 only. Earlier history is in `html-vault.html` inline comments (not supplied) |
 | On Budget | `on-budget.html` | v3.112 | v1.0 – v3.43 and v3.73 – v3.112. ⚠ v3.82 is a retrospective entry (see it). ⚠ v3.44 – v3.72 are kept inline in `on-budget.html` (not supplied); v3.14 and v3.21 have no entry; v3.22 – v3.24 retired |
@@ -522,6 +522,15 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.27 — PET-131 — Gym card shows 😷 for a day marked "missed — ill" — 1 Nov 2026
+
+- **Why (Pete, 1 Nov):** a day missed through illness should be recorded as such and show on the launcher's Gym card.
+- **Change (`index.html` only):** `statGym()` reads `kind:'illness'` records from `scheduleEntries` in `gym_tracker_v1` (written by Gym Tracker v2.130). In the Mon–Sun strip an ill day with no logged session shows 😷 (amber background) instead of ✕ missed / ● planned; the Today line shows "😷 Ill today" (with "— <plan> missed" if a plan was scheduled) instead of "Planned today" / "Rest day"; ill days are excluded from "still planned" and counted in the footer ("· 😷 N ill"). A logged session or PT session on the day still wins and shows as done. New `.gym-dot.ill` style.
+- **Unchanged:** quick-add, water/food bars, `isActiveToday` rule, `pal-shared.js?v=11.23`, all other cards, no new storage key or message type (the card already refreshes on `GYM_DATA_UPDATED`, sent by Gym's `save()`).
+- Version: title, nav badge and inline comment set to v11.27.
+- Needs `gym-tracker.html` v2.130 to create the marks; with an older Gym Tracker the card is unchanged.
+- Tested (Stage 1): `node --check` on all three inline scripts; the real `statGym()` extracted from the file and run in Chromium against seeded `gym_tracker_v1` data, 12 checks: ill today with a plan; ill today with no plan; deleted (tombstoned) illness ignored; ill plus logged session shows done; past ill day shows 😷 while another past planned day still shows ✕; no illness behaves exactly as before; no data message; legacy flat data shape; no page errors; screenshot of the card at 360px checked. Not tested: the full launcher in a browser (auth and iframes), a future ill day (not testable on a Sunday), Safari / phone, live data.
 
 ### v11.26 — PET-130 — Gigs & Trips card uses the app's own category emoji — 1 Nov 2026
 
@@ -2715,6 +2724,16 @@ R-1 preserve `calendarEventId` verbatim; R-2 `calendarAdded` without id stays un
 `gym-tracker.html`. The app's inline comment block keeps the 15 most recent releases; the rest was in `gym-tracker.md`, resequenced newest-to-oldest. Supabase tables follow the generic `gym_*` shape (`record_key` + jsonb `data`, RLS `auth.uid() = user_id`). Local key `gym_tracker_v1`; cross-app summary key `gym_pal_xapp`.
 
 ⚠ Source notes: v2.48 was used for two unrelated fixes, kept as (i) and (ii). GYM-072, GYM-073, GYM-059 and GYM-074 are each reused for different tickets. v2.68 is labelled CLA-013 and v2.47 FT-031 (misfiled IDs; both are Gym Tracker changes).
+
+### v2.130 — GYM-116 — Mark a day as "missed — ill" (😷)
+
+- **Why (Pete, 1 Nov):** be able to set a day as missed due to illness, shown with 😷 on the launcher card.
+- **Design decision:** stored as a schedule record `{id, kind:'illness', date, _deleted, createdAt, updatedAt}` in `scheduleEntries`, not a new array. It syncs through the existing `gym_schedule` table, so **no new Supabase table and no migration**. Every existing reader treats schedule entries as one-offs (no `kind`) or `kind==='repeat'`, so it is ignored by plan resolution, "This day only", repeat rules and `isActiveDay()`; older app copies on other devices ignore it the same way. The cost is that the record shares an array with plans; the alternative (a dedicated `illnessDays` array and table, like `fullyLoggedDays`) would need a database migration for a one-bit flag.
+- **Change (`gym-tracker.html`):** every calendar day card has a "😷 Mark day as missed — ill" button (any date; tap again to undo). A marked day shows "· 😷 Ill" in its header and the button becomes "😷 Missed — ill (tap to undo)". New `getIllDays()`, `isIllDay()`, `toggleIllDay()`, `renderDayIllnessToggle()`. Un-marking soft-deletes (tombstone) so it syncs; re-marking the same date revives the same record (one record per date). A session logged on the day still counts as done.
+- **Not changed (deliberately):** the weekly streak (`currentStreakWeeks`) and the active/rest-day calorie and protein targets (`isActiveDay`) ignore the flag, so a planned workout on an ill day still counts as an active day for targets and a week lost entirely to illness still breaks the streak. Either could be made illness-aware on request.
+- **Data model:** additive; existing data, backup / JSON import-export and sync unchanged.
+- Version: title, `.ver`, `VERSION`, `pal-shared.js?v=`, inline comment set to 2.130.
+- Tested (Stage 1): `node --check`; headless Chromium with a stubbed `pal-shared.js`: button on all 7 day cards; marking sets the header, flips the button and writes `{kind:'illness'}` to localStorage and pushes it to `gym_schedule`; the record is not seen by one-off / repeat / plan resolution and `isActiveDay` is unchanged; undo leaves one tombstoned record, re-mark revives it; flag survives a reload; no page errors. Launcher side: see v11.27. Not tested: real `pal-shared.js` and live Supabase (the write path is verified at the stub), a second device pulling the record, phone / Safari, importing an old backup (code path untouched).
 
 ### v2.129 — GYM-115 — Active session: ▲▼ follow the moved exercise; header buttons no longer toggle collapse on a phone
 

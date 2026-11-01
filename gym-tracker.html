@@ -8,7 +8,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.129</title>
+<title>Gym Tracker v2.130</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='700' font-size='15' fill='%2338bdf8' text-anchor='middle'>GY</text></svg>">
 <style>
   :root {
@@ -320,7 +320,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.129</div></span>
+      <span>Gym Tracker<div class="ver">v2.130</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1010,11 +1010,18 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.129"></script>
+<script src="pal-shared.js?v=2.130"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.130 (GYM-116): a day can be marked "missed - ill". Every calendar day card has a
+// 😷 button (tap again to undo); a marked day shows "😷 Ill" in its header, and the launcher's Gym card
+// shows 😷 for that day in the Mon-Sun strip (launcher v11.27). Stored as a schedule record
+// {kind:'illness', date, _deleted} in scheduleEntries, so it syncs through the existing
+// schedule table (no new table, no migration). All existing code reads schedule entries as one-offs
+// (no kind) or kind==='repeat', so it ignores these; older app copies do the same. Un-marking
+// soft-deletes (tombstone) like every other record. A logged session on the day still shows as done.
 // v2.129 (GYM-115): active-session ▲▼ now follow the card: after a move the page
 // scrolls so the moved exercise stays where it was under your finger (repeat taps
 // keep moving the same exercise). Header controls on phones: ▲ ▼ ✕ are bigger
@@ -1687,7 +1694,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.129';
+const VERSION = '2.130';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2047,6 +2054,31 @@ function toggleFullyLoggedDay(date) {
   renderCalendar();
   renderInsights(); // averages may have shifted
   toast(record._deleted ? 'No longer marked fully logged' : 'Marked as fully logged — now counts toward averages');
+}
+// GYM-116: "missed - ill" day flag. Lives in scheduleEntries as kind:'illness' so it syncs
+// via the existing schedule table; un-marking soft-deletes (tombstone) so the retraction syncs.
+function getIllDays() { return _env.data.scheduleEntries.filter(e => e.kind === 'illness' && !e._deleted); }
+function isIllDay(date) { return getIllDays().some(e => e.date === date); }
+function toggleIllDay(date) {
+  const now = new Date().toISOString();
+  let record = _env.data.scheduleEntries.find(e => e.kind === 'illness' && e.date === date);
+  if (record) {
+    record._deleted = !record._deleted;
+    record.updatedAt = now;
+  } else {
+    record = { id: uid('ill'), kind: 'illness', date, _deleted: false, createdAt: now, updatedAt: now };
+    _env.data.scheduleEntries.push(record);
+  }
+  save(_env);
+  sbUpsert('schedule', record, null);
+  renderCalendar();
+  toast(record._deleted ? 'No longer marked as ill' : '😷 Marked as missed — ill');
+}
+function renderDayIllnessToggle(date) {
+  const ill = isIllDay(date);
+  return `<div class="li-actions" style="margin-top:6px">
+    <button class="btn ${ill?'btn-primary':'btn-secondary'} btn-sm btn-block" onclick="toggleIllDay('${date}')">${ill?'😷 Missed — ill (tap to undo)':'😷 Mark day as missed — ill'}</button>
+  </div>`;
 }
 function getTargetsForDate(date) {
   const t = getNutritionTargets();
@@ -4720,11 +4752,12 @@ function renderCalendar() {
     body += renderDayNutritionSummary(date);
     body += renderDayWaterSummary(date);
     body += renderDayFullyLoggedToggle(date); // GYM-088
+    body += renderDayIllnessToggle(date); // GYM-116
     body += dayPTSummary(date); // GYM-078: PT logging moved here from Insights
     const done = isCurrentWeek && date < today;
     html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}" id="calDay-${date}">
       <div class="cal-day-head">
-        <span class="cal-day-label">${DAY_NAMES[weekdayIdx(date)]}${isToday?' · Today':''}</span>
+        <span class="cal-day-label">${DAY_NAMES[weekdayIdx(date)]}${isToday?' · Today':''}${isIllDay(date)?' · 😷 Ill':''}</span>
         <span class="cal-day-date">${fmtDate(date)}</span>
       </div>
       ${body}
