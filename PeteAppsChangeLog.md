@@ -14,7 +14,7 @@ This is the consolidated historical development changelog for every application 
 
 | Application | File | Current / Latest Version | Changelog Coverage |
 |---|---|---:|---|
-| P Apps Launcher | `index.html` | v11.29 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22, v11.23, v11.24, v11.25, v11.26, v11.27, v11.28 and v11.29. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
+| P Apps Launcher | `index.html` | v11.30 | v10.89 – v10.99, v11.00, v11.01, v11.02, v11.03, v11.04, v11.05, v11.06, v11.07, v11.08, v11.09, v11.10, v11.11, v11.12, v11.13, v11.14, v11.15, v11.16, v11.17, v11.18, v11.19, v11.20, v11.21, v11.22, v11.23, v11.24, v11.25, v11.26, v11.27, v11.28, v11.29 and v11.30. Earlier history is in inline comments in `index.html` (not supplied). ⚠ The v10.99 entry was added retrospectively (from the Gigs & Trips v7.101 release notes, not from a diff of the file) |
 | Fantasy Football Tracker | `fantasy-football-tracker.html` | v1.56 | v1.0 – v1.56 (complete). ⚠ v1.55 / FF-027 was missing from this file and is back-filled from the app's own header comment. |
 | Film & TV Tracker | `film-tv-tracker.html` | v4.0 | v1.0 – v4.0 (v4.0 / FTT-050 is the "Reel" look and feel, presentation only). ⚠ v2.2 and v2.6 are each used for two builds; v2.8 (current lineage) was not logged when it was built — see its entry; v2.9 and v2.10 were also used by older, unrelated builds (FTT-029, FTT-030) |
 | Claim Tracker | `claim-tracker.html` | v2.21 | v2.21 only (CLA-018, "Receipt" look and feel). Earlier history (CLA-001 – CLA-017, v2.20 and before) is in the app's inline comments and was never supplied as a changelog. Backlog not supplied |
@@ -523,6 +523,16 @@ Affected applications: PeteGCal (first consumer) and Gigs & Trips. ⏸ Both cons
 # P Apps Launcher
 
 `index.html`. From v10.89, full entries live in `index.md`; the inline HTML comment keeps a short pointer only.
+
+### v11.30 — PET-134 — Phone / tablet: P opens an account menu; app icons use the full bar — 2 Nov 2026
+
+- **Request (Pete, 2 Nov):** on phone the app icons scroll behind the light / dark button; show only the P and version, and put the theme toggle and user (with sign out) in a small drop-down opened by tapping the P.
+- **Change (`index.html`, under 1100 px — phone and tablet):** the theme button and user pill are hidden, so the app icons run the full width of the bar (the fade at the edge now only marks genuine overflow). Tapping the **P** (it now carries a small ▾) opens a menu: **Home**, **Switch to light / dark theme**, who is signed in (name and initial), and **Sign out** (same confirmation dialog as before). It closes on a second tap of the P, a tap outside, Escape, any choice, or when the window is widened to desktop. Tapping the **version badge** no longer goes home on phone: it only counts towards the 5-tap timeline switch (otherwise those taps would toggle the menu).
+- ⚠ **Behaviour change:** on phone / tablet the P no longer goes straight home; Home is the first item in the menu (one extra tap). On **desktop (≥ 1100 px) nothing changes**: the P goes home, the theme button and user pill stay on the right.
+- New: `navHomeClick()`, `navMenuOpen/Close/Home/Theme/SignOut()`, `#navMenu`; existing `toggleTheme()`, `confirmSignOut()`, `switchTo()` are reused unchanged. No data, storage key, sync, message or backup change.
+- Version updated everywhere: `<title>`, nav badge, inline change note.
+- Tested (Stage 1, headless Chromium, stub `pal-shared.js`, seeded data; built on your uploaded v11.29): phone — theme and user hidden, icon row reaches the edge, P opens the menu (name Pete, correct theme label, fits the screen, items ≥ 44 px), theme item switches and closes, the label flips, outside tap and Escape close, Home returns home, Sign out asks and locks, cancelling stays signed in, five taps on the version badge still switch the timeline and do not open the menu; tablet — P opens the menu; desktop — theme and user visible, no caret, P goes straight home; resize phone ↔ desktop closes the menu and restores the controls; no page errors; `node --check` on all inline scripts; screenshot of the open menu checked. Not tested: a real phone (touch, safe areas), real Safari, signing out and back in against live Supabase.
+- **Known limitations:** as v11.29. Home is now two taps on phone; say if you would rather the P go home and the menu hang off the version badge or a separate button.
 
 ### v11.29 — PET-133 — Desktop: date and Today board on the left; On Budget full row — 1 Nov 2026
 
