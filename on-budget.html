@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F4F0E6" id="metaThemeColor">
-<title>On Budget v3.114</title>
+<title>On Budget v3.115</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
@@ -756,7 +756,7 @@ input.amount-in:focus{border-color:transparent}
     <div class="header">
       <div class="logo">
         <span class="logo-icon" aria-hidden="true">£</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.114</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.115</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -1348,10 +1348,14 @@ input.amount-in:focus{border-color:transparent}
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.114"></script>
+<script src="pal-shared.js?v=3.115"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.114
+// On Budget v3.115
+// v3.115 (ON--109): publishes a small read-only summary for the launcher (PalContract, key pal_x_budget): Needs Attention
+// (bills forecast below zero, overdue uncleared bills, bills due in the next 3 days) and upcoming bills (next 30 days).
+// Built from the existing billsForecastData() items, so nothing is re-derived. Also answers a generic PAL_OPEN {view:'bills'}.
+// No budget maths, storage key, Supabase record, backup or import change.
 // v3.114 (ON--108): the Bills runway chart is interactive and labelled — hover (mouse), tap / drag (touch), ← → keys or ‹ › buttons step
 //   through each day with a movement; a readout shows the date, the balance after that day, how far above £0 (or overdrawn) it is, the
 //   change since today and the items that day. Lowest point, today, big outgoings and incomes are labelled; the chart redraws at the real
@@ -2991,6 +2995,7 @@ window.PalSync.initSession({
     addSyncLog('PAL_SESSION received — starting sync','info');
     setSyncState('connecting');
     await syncPull();
+    publishContract();   // v3.115 (ON--109): the user id is known now
     const trimResult = window.PalSync.trimIfLarge('on_budget_v1', 500);
     if (trimResult.trimmed) addSyncLog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
   },
@@ -3078,11 +3083,13 @@ window.addEventListener('message', function(e) {
   // ON--067: openHorizonTab case removed — Horizon is reinstated as its
   // own standalone app (no longer nested inside On Budget), so this app
   // no longer has a Horizon tab to deep-link to.
+  // v3.115 (ON--109): generic open-this-screen request from the launcher (Needs Attention / Upcoming).
+  if (e.data && e.data.type === 'PAL_OPEN' && e.data.view === 'bills') { switchTab('bills'); switchBillsView('ledger'); }
   if (e.data && e.data.type === 'OB_ACTION') {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.114' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.115' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -3278,6 +3285,40 @@ function backfillSyncTimestamps() {
 // reflected via bills.settings.clearedBalance and goalBalance()), and
 // the toFT path adds a real months[] transaction with category:null,
 // which the existing income/spend split already handles correctly.
+// v3.115 (ON--109): launcher contract. Reads billsForecastData() only; excludes transfers and income from the lists.
+function publishContract() {
+  try {
+    if (!window.PalContract) return;
+    const fc = billsForecastData();
+    const todayD = new Date(); todayD.setHours(0,0,0,0);
+    const todayIso = iso(todayD);
+    const plus = n => iso(new Date(todayD.getTime() + n*86400000));
+    const bill = it => it.type !== 'income' && !it.xfer;
+    const money = n => '\u00a3' + (Math.round(n*100)/100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const bills_ = fc.items.filter(bill);
+    const attention = [];
+    if (fc.lowest < 0) {
+      attention.push({ id:'ob-below-zero', level:'action', title:'Bills forecast goes below zero',
+        sub:'Lowest ' + money(fc.lowest) + (fc.lowestDate ? ' on ' + fc.lowestDate : '') + ' (' + fc.label + ')', due: fc.lowestDate || undefined, open:{ view:'bills' } });
+    }
+    const overdue = bills_.filter(it => it.overdue);
+    if (overdue.length) {
+      attention.push({ id:'ob-overdue', level:'action',
+        title: overdue.length + ' bill' + (overdue.length === 1 ? '' : 's') + ' past due and not cleared',
+        sub: money(overdue.reduce((s,it) => s + it.amount, 0)) + ' \u00b7 ' + overdue.slice(0,3).map(it => it.name).join(', '), open:{ view:'bills' } });
+    }
+    const soon = bills_.filter(it => !it.overdue && it.date >= todayIso && it.date <= plus(3));
+    if (soon.length) {
+      attention.push({ id:'ob-due-soon', level:'soon',
+        title: soon.length + ' bill' + (soon.length === 1 ? '' : 's') + ' due in the next 3 days',
+        sub: money(soon.reduce((s,it) => s + it.amount, 0)) + ' \u00b7 ' + soon.slice(0,3).map(it => it.name).join(', '), due: soon[0].date, open:{ view:'bills' } });
+    }
+    const upcoming = bills_.filter(it => !it.overdue && it.date >= todayIso && it.date <= plus(30)).slice(0, 30).map(it => ({
+      id: 'ob-' + (it.recurringId ? it.recurringId + '-' + it.schedDate : it.txId), date: it.date, title: it.name, sub: money(it.amount), kind:'bill', open:{ view:'bills' } }));
+    window.PalContract.publish('budget', { upcoming, attention });
+  } catch (e) {}
+}
+
 function computeDashboardSummary() {
   try {
     const { last, next } = getBoundaries();
@@ -3367,6 +3408,7 @@ function writeDashboardSummaryOnly() {
     parsed.dashboardSummary = computeDashboardSummary();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
   } catch (e) {}
+  publishContract();   // v3.115 (ON--109)
 }
 
 function save(trackChange) {
@@ -3374,16 +3416,17 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.114', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.115', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
   // Notify launcher so the dashboard card refreshes live
   try { window.parent.postMessage({ type:'OB_DATA_UPDATED' }, window.location.origin); } catch(e) {}
+  publishContract();   // v3.115 (ON--109)
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.114', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.115', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';

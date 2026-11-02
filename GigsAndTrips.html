@@ -12,7 +12,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.109</title>
+<title>Gigs &amp; Trips v7.110</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -605,6 +605,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .gym-plan-badge:hover{background:rgba(56,189,248,.22)}
 [data-theme="dark"] .gym-plan-badge{color:#7dd3fc;background:rgba(56,189,248,.15)}
 
+/* v7.110 (GIG-092): launcher contract + PAL_OPEN; no visual change. */
 /* ═══ v7.109 — "Stub": responsive layer. Phone (<700px) and tablet (<1100px) get a floating bottom bar; desktop
    (>=1100px) gets a left rail and a details pane. One DOM, two layouts: the same #mainNav and #fab move. ═══ */
 
@@ -791,7 +792,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.109</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.110</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -854,7 +855,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.109"></script>
+<script src="pal-shared.js?v=7.110"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=3"></script>
@@ -4055,7 +4056,45 @@ function gatWriteLauncherStat(){
   try{ dashAttention(up,getData(),'all').forEach(a=>{ kinds[a.key.charAt(0)]=1; }); }catch(e){}
   payload.clash=[kinds.o?'gig/gig clash':'',kinds.t?'gig/trip clash':'',kinds.x?'trips overlap':''].filter(Boolean);
   try{ localStorage.setItem(GAT_STAT_KEY,JSON.stringify(payload)); }catch(e){ /* storage full — the launcher falls back to gat_v1 */ }
+  gatPublishContract(up,today);
 }
+
+// v7.110 (GIG-092): launcher contract (PalContract, key pal_x_gigs). Attention = the app's own dashAttention() list (clashes,
+// overlaps), upcoming = the next 30 days from the same list the launcher card already uses. Derived cache; the launcher never
+// recomputes clash rules. `open` carries the id so the launcher can ask the app to open that record (PAL_OPEN, handled below).
+function gatPublishContract(up,today){
+  try{
+    if(!window.PalContract) return;
+    const uid_=getUserId(); if(!uid_) return;
+    const d=getData();
+    const attention=dashAttention(up,d,'all').slice(0,10).map(a=>{
+      const m=/^(open\w+)\('([^']+)'\)/.exec(a.open||'');
+      return {id:'gigs-'+a.key,level:'action',title:a.title,sub:a.text,due:a.date||undefined,
+        open:m?{view:m[1]==='openTripDetail'?'trip':'gig',id:m[2]}:undefined};
+    });
+    const lim=new Date(today+'T00:00:00'); lim.setDate(lim.getDate()+30); const limIso=localDateStr(lim);
+    const upcoming=capPerSeries(up.filter(ev=>!gatIsOnNow(ev,today))).map(ev=>{
+      const date=ev.type==='trip'?(ev.startDate||''):(ev.date||'');
+      return {id:'gigs-'+ev.id+'-'+date,date:date,time:ev.type==='gig'?(ev.time||''):'',
+        title:ev.name||(ev.type==='trip'?'Trip':'Event'),
+        sub:ev.type==='gig'?(ev.venue||''):((ev.endDate&&ev.endDate!==ev.startDate)?'to '+ev.endDate:''),
+        kind:ev.type==='trip'?'trip':'gig',open:{view:ev.type==='trip'?'trip':'gig',id:ev.id}};
+    }).filter(u=>u.date && u.date>=today && u.date<=limIso).slice(0,30);
+    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention},{userId:uid_});
+  }catch(e){}
+}
+
+// v7.110 (GIG-092): the launcher asks us to open a specific record (from Needs Attention / Upcoming). Waits for the app to finish
+// starting (the launcher's message can arrive just before unlock); unknown views are ignored.
+window.addEventListener('message',function(e){
+  if(e.origin!==window.location.origin) return;
+  const m=e.data; if(!m||m.type!=='PAL_OPEN'||(m.view!=='gig'&&m.view!=='trip')||!m.id) return;
+  let tries=0;
+  (function go(){
+    if(window._gatInited){ try{ m.view==='trip'?openTripDetail(m.id):openGigDetail(m.id); }catch(err){} return; }
+    if(++tries<30) setTimeout(go,250);
+  })();
+});
 
 // ── Countdown pill helpers (GIG-035) ────────────────────────────────
 // Sensible scale: today/tomorrow called out by name, then days for the

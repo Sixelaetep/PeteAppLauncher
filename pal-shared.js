@@ -1,12 +1,12 @@
 /**
- * pal-shared.js — pal-config + pal-sync + pal-utils, concatenated in that order
+ * pal-shared.js — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
  * (the long per-version header notes were moved there verbatim, no code changed).
  */
 
-// SECTION 1 of 3 — originally pal-config.js
+// SECTION 1 of 4 — originally pal-config.js
 
 /**
  * pal-config v1.2 — single source of app configuration (Supabase anon credentials,
@@ -58,7 +58,7 @@ window.PAL_CONFIG = {
 };
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 2 of 3 — originally pal-sync.js
+// SECTION 2 of 4 — originally pal-sync.js
 // ══════════════════════════════════════════════════════════════════
 
 /**
@@ -598,7 +598,7 @@ window.PalSync = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 3 of 3 — originally pal-utils.js
+// SECTION 3 of 4 — originally pal-utils.js
 // ══════════════════════════════════════════════════════════════════
 
 /**
@@ -717,3 +717,81 @@ function closeModal(id) {
 function uid(prefix) {
   return (prefix ? prefix + '_' : '') + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
+
+// ══════════════════════════════════════════════════════════════════
+// SECTION 4 of 4 — pal-contract v1 (added with launcher v11.35)
+// ══════════════════════════════════════════════════════════════════
+
+/**
+ * PalContract — optional, read-only summary an app publishes for the launcher.
+ * One localStorage key per app: 'pal_x_<appId>'. It is a DERIVED CACHE: the app stays the
+ * only owner of its data, nothing here is ever read back by the app, and deleting the key
+ * loses nothing (the app republishes on its next save). Every field is optional:
+ *   { v:1, appId, userId, built, summary:{}, upcoming:[], attention:[], search:[] }
+ *   upcoming  [{ id, date:'YYYY-MM-DD', time?, title, sub?, kind?, open? }]            (max 30)
+ *   attention [{ id, level:'action'|'soon'|'info', title, sub?, due?, open? }]          (max 10)
+ *   search    [{ id, t, s?, k?, d?, open? }]                                            (reserved; max 400)
+ *   open      { view?, id? }  → the launcher sends the app { type:'PAL_OPEN', view, id }
+ * userId is the publisher's Supabase user id; the launcher ignores a contract whose userId is not
+ * the signed-in user and removes all pal_x_* keys on sign-out. publish() never throws, and does
+ * nothing without a user id, so an app calling it keeps working if this section is absent
+ * (callers guard with `if (window.PalContract)`).
+ */
+window.PalContract = (function () {
+  var PREFIX = 'pal_x_';
+  var CAPS = { upcoming: 30, attention: 10, search: 400 };
+  var MAX_KB = 48;
+  function clip(v, n) { v = v == null ? '' : String(v); return v.length > n ? v.slice(0, n - 1) + '…' : v; }
+  function cleanOpen(o) {
+    if (!o || typeof o !== 'object') return undefined;
+    var r = {}; if (o.view) r.view = clip(o.view, 40); if (o.id) r.id = clip(o.id, 120);
+    return (r.view || r.id) ? r : undefined;
+  }
+  function cleanList(list, cap, fields) {
+    if (!Array.isArray(list)) return undefined;
+    return list.slice(0, cap).map(function (it) {
+      var o = {};
+      Object.keys(fields).forEach(function (k) {
+        if (it[k] == null || it[k] === '') return;
+        o[k] = fields[k] === 'open' ? cleanOpen(it[k]) : clip(it[k], fields[k]);
+        if (o[k] === undefined) delete o[k];
+      });
+      return o;
+    });
+  }
+  function publish(appId, payload, opts) {
+    try {
+      var userId = (opts && opts.userId) || (window.PalSync && window.PalSync.getUserId && window.PalSync.getUserId());
+      if (!appId || !userId) return { stored: false, reason: 'no-user' };
+      payload = payload || {};
+      var o = { v: 1, appId: appId, userId: userId, built: new Date().toISOString() };
+      if (payload.summary && typeof payload.summary === 'object') o.summary = payload.summary;
+      var up = cleanList(payload.upcoming, CAPS.upcoming, { id: 120, date: 10, time: 5, title: 120, sub: 160, kind: 24, open: 'open' });
+      var at = cleanList(payload.attention, CAPS.attention, { id: 120, level: 8, title: 120, sub: 160, due: 10, open: 'open' });
+      var se = cleanList(payload.search, CAPS.search, { id: 120, t: 120, s: 120, k: 24, d: 10, open: 'open' });
+      if (up) o.upcoming = up; if (at) o.attention = at; if (se) o.search = se;
+      var json = JSON.stringify(o);
+      if (json.length * 2 / 1024 > MAX_KB && o.search) {   // trim the (reserved) search list first, then give up quietly
+        while (o.search.length && JSON.stringify(o).length * 2 / 1024 > MAX_KB) o.search.length = Math.floor(o.search.length / 2);
+        json = JSON.stringify(o);
+      }
+      if (json.length * 2 / 1024 > MAX_KB) return { stored: false, reason: 'too-large' };
+      var res = window.PalSync && window.PalSync.cacheSet ? window.PalSync.cacheSet(PREFIX + appId, json) : null;
+      if (res) return res;
+      localStorage.setItem(PREFIX + appId, json); return { stored: true, mode: 'local' };
+    } catch (e) { return { stored: false, reason: 'error' }; }
+  }
+  function read(appId) {
+    try { var o = JSON.parse(localStorage.getItem(PREFIX + appId) || 'null'); return (o && o.v === 1 && o.appId === appId) ? o : null; }
+    catch (e) { return null; }
+  }
+  function clearAll() {
+    try {
+      var del = [];
+      for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf(PREFIX) === 0) del.push(k); }
+      del.forEach(function (k) { localStorage.removeItem(k); });
+      return del.length;
+    } catch (e) { return 0; }
+  }
+  return { publish: publish, read: read, clearAll: clearAll, PREFIX: PREFIX, VERSION: 1 };
+})();

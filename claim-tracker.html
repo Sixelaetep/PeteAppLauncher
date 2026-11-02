@@ -11,10 +11,12 @@
 <script>
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
+// v2.22 (CLA-019): publishes a small read-only summary for the launcher (PalContract, key pal_x_claims): claims about to expire
+// (Needs Attention) and the next submission date (Upcoming). Derived cache only; no data, storage, sync or backup change.
 // v2.21: nested inside Fortnight Tracker's Claims tab (it loads this file with ?embedded=ft).
 (function(){try{if(/[?&]embedded=ft(&|$)/.test(location.search))document.documentElement.classList.add('embedded');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.21</title>
+<title>Claim Tracker v2.22</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -507,7 +509,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.21</div>
+        <div class="ver">v2.22</div>
       </div>
     </div>
     <div class="header-actions">
@@ -525,7 +527,7 @@
     <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11M12 20V5M19 20v-7"/></svg><span class="tab-lbl">Stats</span></button>
     <button class="tab-btn" onclick="switchTab('settings')" id="tab-settings"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span class="tab-lbl">Settings</span></button>
   </div>
-  <div class="rail-foot">Receipt &middot; v2.21</div>
+  <div class="rail-foot">Receipt &middot; v2.22</div>
 </div>
 
 <!-- Non-blocking sync banner (shown if no PAL_SESSION within 3s) -->
@@ -793,7 +795,7 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=2.21"></script>
+<script src="pal-shared.js?v=2.22"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1013,7 +1015,7 @@
 // uniform radius, shadow) and added click-outside-to-close, matching
 // the Sync & Backup drawer's existing behaviour. Sync & Backup drawer
 // itself is untouched — it's a deliberate bottom sheet, not a modal.
-const VERSION  = '2.21';
+const VERSION  = '2.22';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -1182,7 +1184,37 @@ window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme); // v1.9
 });
 
+// v2.22 (CLA-019): launcher contract. Uses the app's own claimStatus()/daysToExpiry()/computeAmount()/nextSubmissionDate(),
+// so the launcher never re-derives claims rules. Attention = unclaimed entries inside the existing 30-day warning window
+// (the same ones the in-app amber banner lists). Expired entries are not published (they live in the app's Cannot Claim list).
+function publishContract() {
+  try {
+    if (!window.PalContract) return;
+    const isoOf = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    const money = n => '\u00a3' + (Math.round(n*100)/100).toFixed(2);
+    const claimable = getEntries().filter(e => !e.claimed && !e._deleted && claimStatus(e) !== 'expired');
+    const warning   = claimable.filter(e => claimStatus(e) === 'warning');
+    const total     = claimable.reduce((s,e) => s + computeAmount(e), 0);
+    const attention = [], upcoming = [];
+    if (warning.length) {
+      const minDays = Math.min(...warning.map(e => daysToExpiry(e)));
+      const wTotal  = warning.reduce((s,e) => s + computeAmount(e), 0);
+      attention.push({ id:'claims-expiring', level:'action',
+        title: warning.length + ' claim entr' + (warning.length === 1 ? 'y' : 'ies') + ' expiring soon',
+        sub: 'Earliest expires in ' + minDays + ' day' + (minDays === 1 ? '' : 's') + ' \u00b7 ' + money(wTotal),
+        due: isoOf(new Date(Date.now() + minDays*86400000)), open:{ view:'claims' } });
+    }
+    if (claimable.length) {
+      const sub = nextSubmissionDate();
+      upcoming.push({ id:'claims-submit-' + isoOf(sub), date:isoOf(sub), title:'Claims submission day',
+        sub: money(total) + ' to claim \u00b7 ' + claimable.length + ' entr' + (claimable.length === 1 ? 'y' : 'ies'), kind:'deadline', open:{ view:'claims' } });
+    }
+    window.PalContract.publish('claims', { summary:{ toClaim:Math.round(total*100)/100, count:claimable.length }, upcoming, attention });
+  } catch (e) {}
+}
+
 function reportToLauncher() {
+  publishContract();   // v2.22: before the early return, so a standalone / nested copy publishes too
   if (window.parent === window) return;
   try {
     const unclaimed = getEntries().filter(e => !e.claimed && !e._deleted && claimStatus(e) !== 'expired');
