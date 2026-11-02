@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fantasy Football Tracker v1.60</title>
+<title>Fantasy Football Tracker v1.61</title>
 <meta name="theme-color" content="#0E0D12" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -646,7 +646,7 @@
   .pp.vt-split .plate .pv { color: var(--accent5); }
   .pp.vt-none { opacity: .7; }
   /* FF-033: always-visible opponent under captain / vice, source colours, overlay dots */
-  .pl.pl-force { display: inline-flex; }
+  .pl.pl-force, #tab-advice .pl-next { display: inline-flex; gap: 3px; flex-wrap: wrap; justify-content: center; }
   .src-app { --sc: var(--accent); } .src-claude { --sc: #E07A55; } .src-chatgpt { --sc: #2FA884; } .src-gemini { --sc: #5B8DEF; } .src-other { --sc: #9A7FE8; }
   .pdots { display: flex; gap: 3px; justify-content: center; margin-top: 2px; }
   .pdots i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--sc); box-sizing: border-box; }
@@ -748,7 +748,7 @@
 </div>
 
 <nav>
-  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.60</span></div>
+  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.61</span></div>
   <div class="nav-actions"><span class="sync-chip"><i></i><span id="navSyncTxt">Not loaded</span></span>
     <button type="button" class="nav-refresh" aria-label="Refresh from FPL" onclick="loadSquad()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button></div>
 </nav>
@@ -929,12 +929,19 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.60"></script>
+<script src="pal-shared.js?v=1.61"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
  *
+ * v1.61 [FF-035] — Advice: every player on every proposed squad (Recommended team, each AI
+ *   sheet, Consensus; pitch, bench strips and list views) now shows the team he plays next,
+ *   not just the captain and vice. A team with no fixture that gameweek says "No fixture"
+ *   instead of a dash. Double gameweeks: buildNextFixtureByTeam kept only the last fixture
+ *   of a team; it now keeps the first and records the others in an optional `also` list, and
+ *   plates, fixture lines and the Where-to-choose block show every fixture. Older squad
+ *   caches are rebuilt automatically (app version changed). No stored-data change.
  * v1.60 [FF-034] — Advice: tapping a player on the app's Recommended team, an AI sheet or
  *   the Consensus pitch now shows, at the top of the player sheet, what every source says
  *   about him: the app's own read and each current AI reply's note (fitness, start
@@ -2196,7 +2203,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.60';
+const FF_VERSION = '1.61';
 
 // v1.57 (FF-031): launcher contract (PalContract, key pal_x_fantasy). Uses the next-gameweek deadline already held in the squad cache
 // (nextGwDeadline): Needs attention (level action) when it is within 24 hours, and an upcoming item for the deadline. Nothing is
@@ -2397,7 +2404,9 @@ function ppPlateHtml(it, ctx) {
   let pts = it.pts != null ? it.pts : (el.event_points != null ? el.event_points * mult : null);
   const ptsTxt = pts == null ? '—' : (pts + (ctx.provisional && it.pick && pts != null ? '*' : '') + ' pts');
   const fx = ctx.nextFx ? ctx.nextFx[el.team] : null;
-  const nextTxt = fx ? '<span class="fdrc fd' + fx.difficulty + '">' + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ')</span>' : '—';
+  const fxChip1 = f => '<span class="fdrc fd' + f.difficulty + '">' + safeEsc(f.opponentName) + ' (' + (f.isHome ? 'H' : 'A') + ')</span>';
+  const nextTxt = fx ? fxChip1(fx) + (fx.also || []).map(fxChip1).join('')
+    : (ctx.kind === 'adv' && ctx.nextFx ? '<span class="sub" style="font-size:11px">No fixture</span>' : '—');
   return '<span class="plate"><span class="pn">' + safeEsc(el.web_name) + '</span>' +
     (it.vote ? '<span class="pv">' + safeEsc(it.vote) + '</span>' : '') + (it.extra || '') +
     '<span class="pl pl-pts">' + ptsTxt + '</span><span class="pl pl-next' + (it.showNext ? ' pl-force' : '') + '">' + nextTxt + '</span><span class="pl pl-price">' + formatPrice(el.now_cost) + '</span></span>';
@@ -6639,10 +6648,16 @@ function findNextFixtureGW(events) {
 
 function buildNextFixtureByTeam(fixtures, teamsById, nextGW) {
   const byTeam = {};
+  // FF-035: a team can play twice in a gameweek. The first fixture keeps the fields every
+  // caller already reads; any further ones are listed in `also` (absent for a single game).
+  const put = (teamId, entry) => {
+    if (!byTeam[teamId]) byTeam[teamId] = entry;
+    else (byTeam[teamId].also = byTeam[teamId].also || []).push(entry);
+  };
   (fixtures || []).filter(f => f.event === nextGW && !f.finished).forEach(f => {
     const homeTeam = teamsById[f.team_h], awayTeam = teamsById[f.team_a];
-    byTeam[f.team_h] = { opponentId: f.team_a, opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true, difficulty: f.team_h_difficulty };
-    byTeam[f.team_a] = { opponentId: f.team_h, opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false, difficulty: f.team_a_difficulty };
+    put(f.team_h, { opponentId: f.team_a, opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true, difficulty: f.team_h_difficulty });
+    put(f.team_a, { opponentId: f.team_h, opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false, difficulty: f.team_a_difficulty });
   });
   return byTeam;
 }
@@ -7116,10 +7131,11 @@ function componentBreakdownHtml(components) {
 function fixtureLineHtml(el, nextFixtureByTeam) {
   const fx = nextFixtureByTeam ? nextFixtureByTeam[el.team] : null;
   if (!fx) return '<div class="sub" style="margin:2px 0 0">No fixture this gameweek</div>';
-  const diffLabel = fx.difficulty <= 2 ? 'easy' : fx.difficulty >= 4 ? 'hard' : 'medium';
-  return '<div class="sub" style="margin:2px 0 0">' +
-    (fx.isHome ? 'vs ' : '@ ') + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ') · FDR ' + fx.difficulty + '/5 (' + diffLabel + ')' +
-    '</div>';
+  const one = f => {
+    const diffLabel = f.difficulty <= 2 ? 'easy' : f.difficulty >= 4 ? 'hard' : 'medium';
+    return (f.isHome ? 'vs ' : '@ ') + safeEsc(f.opponentName) + ' (' + (f.isHome ? 'H' : 'A') + ') · FDR ' + f.difficulty + '/5 (' + diffLabel + ')';
+  };
+  return '<div class="sub" style="margin:2px 0 0">' + [fx].concat(fx.also || []).map(one).join(' &amp; ') + '</div>';
 }
 
 function formatDeadline(iso) {
@@ -7246,7 +7262,7 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
         '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
         (isCap ? ' <span class="tv-cv">C</span>' : (isVice ? ' <span class="tv-cv v">V</span>' : '')) +
         (isNew ? ' <span class="tag-in">IN</span>' : '') + '</div>' + disagreementLineHtml(el) +
-        ((isCap || isVice) ? fixtureLineHtml(el, _lastLiveSquadCache ? _lastLiveSquadCache.nextFixtureByTeam : null) : '') + '</div>' +
+        fixtureLineHtml(el, _lastLiveSquadCache ? _lastLiveSquadCache.nextFixtureByTeam : null) + '</div>' +
         '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
     });
     html += '</div>';
@@ -7276,7 +7292,7 @@ function recommendedTeamHtml(picks, elementsById, optimal, transferOpportunities
       '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
       (movedDown ? ' <span class="tag-out">OUT</span>' : '') + '</div>' +
       '<div class="sub">' + safeEsc(subLabels[idx] || ((idx + 1) + 'th sub')) + '</div>' +
-      disagreementLineHtml(el) + '</div>' +
+      disagreementLineHtml(el) + fixtureLineHtml(el, _lastLiveSquadCache ? _lastLiveSquadCache.nextFixtureByTeam : null) + '</div>' +
       '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
   });
   html += '</div></div>';
@@ -7492,7 +7508,7 @@ function tvSheetHtml(m, ctx) {
   const subLabels = ['1st sub', '2nd sub', '3rd sub', '4th sub'];
   const cv = el => m.captainId === el.id ? ' <span class="tv-cv">C</span>' : (m.viceId === el.id ? ' <span class="tv-cv v">V</span>' : '');
   const isCV = el => m.captainId === el.id || m.viceId === el.id;
-  const fxLine = el => isCV(el) ? fixtureLineHtml(el, ctx.nextFixtureByTeam || (_lastLiveSquadCache ? _lastLiveSquadCache.nextFixtureByTeam : null)) : '';
+  const fxLine = el => fixtureLineHtml(el, ctx.nextFixtureByTeam || (_lastLiveSquadCache ? _lastLiveSquadCache.nextFixtureByTeam : null));
 
   let list = '<div class="view-list">';
   [1, 2, 3, 4].forEach(type => {
@@ -7512,7 +7528,7 @@ function tvSheetHtml(m, ctx) {
     list += '<div class="player-card bench"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
       '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) + cv(el) +
       (actualStart.has(el.id) ? ' <span class="tag-out">OUT</span>' : '') + '</div>' +
-      '<div class="sub">' + safeEsc(subLabels[i] || ((i + 1) + 'th sub')) + '</div></div>' +
+      '<div class="sub">' + safeEsc(subLabels[i] || ((i + 1) + 'th sub')) + '</div>' + fxLine(el) + '</div>' +
       '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
   });
   list += '</div></div>';
@@ -7677,7 +7693,7 @@ function tvConsensusHtml(ctx, models, planningGw) {
       list += '<div class="player-card' + (isAll ? '' : ' tv-split') + '"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
         '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) + cvTag(el) + viceTag(el) +
         (isAll && !actualStart.has(el.id) ? ' <span class="tag-in">IN</span>' : '') + '</div>' +
-        '<div class="sub">' + voteLine(el) + '</div>' + (isCV ? fixtureLineHtml(el, nfxAll) : '') + '</div>' +
+        '<div class="sub">' + voteLine(el) + '</div>' + fixtureLineHtml(el, nfxAll) + '</div>' +
         '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
     });
     list += '</div>';
@@ -7687,7 +7703,7 @@ function tvConsensusHtml(ctx, models, planningGw) {
     benched.forEach(el => {
       list += '<div class="player-card bench"><div class="player-dot ' + statusDotClass(el.status) + '"></div>' +
         '<div class="player-info"><div class="player-name">' + safeEsc(el.web_name) +
-        (actualStart.has(el.id) ? ' <span class="tag-out">OUT</span>' : '') + '</div></div>' +
+        (actualStart.has(el.id) ? ' <span class="tag-out">OUT</span>' : '') + '</div>' + fixtureLineHtml(el, nfxAll) + '</div>' +
         '<div class="player-price">' + formatPrice(el.now_cost) + '</div></div>';
     });
     list += '</div>';
@@ -7695,11 +7711,7 @@ function tvConsensusHtml(ctx, models, planningGw) {
   list += '</div>';
 
   // where to choose: contested players and captain candidates, with what helps decide
-  const fxChip = el => {
-    const fx = nfxAll ? nfxAll[el.team] : null;
-    if (!fx) return 'no fixture this gameweek';
-    return (fx.isHome ? 'vs ' : '@ ') + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ') · <span class="fdrc fd' + fx.difficulty + '">FDR ' + fx.difficulty + '</span>';
-  };
+  const fxChip = el => tvFxChip(el, nfxAll);
   const infoLine = el => '<div class="fx">' + fxChip(el) + ' · ep ' + safeEsc(String(el.ep_next != null ? el.ep_next : '—')) +
     (el.status && el.status !== 'a' ? ' · <strong>' + (el.status === 'd' ? 'doubtful' : 'unavailable') + '</strong>' : '') +
     (el.news ? ' · ' + safeEsc(el.news) : '') + '</div>';
@@ -7789,7 +7801,7 @@ function tvOpenPlayer(id) { _pdAdvBase = _pdAdvBaseKeep; openPlayerDetail(id); }
 function tvFxChip(el, nfx) {
   const fx = nfx ? nfx[el.team] : null;
   if (!fx) return 'no fixture this gameweek';
-  return (fx.isHome ? 'vs ' : '@ ') + safeEsc(fx.opponentName) + ' (' + (fx.isHome ? 'H' : 'A') + ') · <span class="fdrc fd' + fx.difficulty + '">FDR ' + fx.difficulty + '</span>';
+  return [fx].concat(fx.also || []).map(f => (f.isHome ? 'vs ' : '@ ') + safeEsc(f.opponentName) + ' (' + (f.isHome ? 'H' : 'A') + ') · <span class="fdrc fd' + f.difficulty + '">FDR ' + f.difficulty + '</span>').join(' &amp; ');
 }
 
 function tvNoteFor(ec, id, cand) {
