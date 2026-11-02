@@ -16,7 +16,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.83</title>
+<title>Reading Tracker v3.84</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1114,6 +1114,13 @@ body.wl-add-open #wlAddToggle { display: none; }
 .bk-item:hover:not(.bk-decor) { transform: translateY(-4px); }
 .bk-item.sel .sp-spine { box-shadow: 0 0 0 2px var(--sig); }
 .bk-item .sp-spine { width: auto; }
+.bk-cv { position: relative; border-radius: 3px 5px 5px 3px; overflow: hidden; background: var(--sc); color: var(--st); box-shadow: inset 3px 0 0 rgba(0,0,0,.18), 0 2px 4px rgba(0,0,0,.28); display: flex; align-items: center; justify-content: center; }
+.bk-cv-t { position: absolute; inset: 4px 4px 4px 7px; font-size: 9px; font-weight: 700; line-height: 1.15; overflow: hidden; text-align: center; display: flex; align-items: center; justify-content: center; }
+.bk-cv img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--sc); }
+.bk-cv .ok { position: absolute; right: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--success); color: #fff; font-size: 11px; line-height: 16px; text-align: center; z-index: 2; }
+.bk-cv-p { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--sig); z-index: 2; }
+.bk-cv .act { position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--sig); z-index: 2; }
+.bk-item.sel .bk-cv { box-shadow: 0 0 0 2px var(--sig); }
 .bk-decor { cursor: default; padding: 0 2px; }
 .bk-decor svg { display: block; }
 .bk-x { position: absolute; top: -10px; right: -8px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: var(--danger); color: var(--bg); font-size: 16px; line-height: 1; cursor: pointer; }
@@ -1258,7 +1265,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.83</span></div>
+    <div class="rt-logo">My Reading <span>v3.84</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2135,7 +2142,7 @@ body.wl-add-open #wlAddToggle { display: none; }
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-shared.js?v=3.83"></script>
+<script src="pal-shared.js?v=3.84"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -8033,10 +8040,22 @@ function bkIsbn(raw) {   // → cleaned ISBN-10 / ISBN-13 with a valid check dig
   if (/^\d{13}$/.test(s)) { let n = 0; for (let i = 0; i < 12; i++) n += +s[i] * (i % 2 ? 3 : 1); return (10 - n % 10) % 10 === +s[12] ? s : null; }
   return null;
 }
-async function bkGet(url) {
-  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 8000);
-  try { const r = await fetch(url, { signal: ac.signal }); if (!r.ok) throw new Error("HTTP " + r.status); return await r.json(); }
-  finally { clearTimeout(t); }
+async function bkGet(url, ms) {   // v3.84: 20 s default, one retry on timeout / network error / 429 / 5xx; errors say what happened
+  let last = null;
+  for (let n = 0; n < 2; n++) {
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms || 20000);
+    try {
+      const r = await fetch(url, { signal: ac.signal });
+      if (r.ok) return await r.json();
+      last = new Error("HTTP " + r.status);
+      if (!(r.status === 429 || r.status >= 500)) throw last;
+    } catch (e) {
+      if (e === last && !/^HTTP (429|5)/.test(e.message)) throw e;
+      if (e !== last) last = new Error(e && e.name === "AbortError" ? "timed out" : "blocked or offline");
+    } finally { clearTimeout(t); }
+    if (n === 0) await new Promise(r => setTimeout(r, 1500));
+  }
+  throw last;
 }
 function bkCoverSrc(x, size) {
   if (x && x.coverId) return "https://covers.openlibrary.org/b/id/" + encodeURIComponent(x.coverId) + "-" + (size || "M") + ".jpg";
@@ -8064,7 +8083,8 @@ function bkFromGB(v, isbn) {
     publishYear: bkYear(i.publishedDate), isbn: pick, coverId: "", coverUrl: img, genre: bkGenre(i.categories), source: "gb" };
 }
 async function bkLookup(isbn, title, author) {   // → { results: [...], note: "" }
-  const out = { results: [], note: "" };
+  const out = { results: [], note: "", failed: false };
+  let olErr = "";
   try {
     if (isbn) {
       const j = await bkGet("https://openlibrary.org/api/books?bibkeys=ISBN:" + isbn + "&format=json&jscmd=data");
@@ -8078,13 +8098,13 @@ async function bkLookup(isbn, title, author) {   // → { results: [...], note: 
         isbn: (d.isbn || []).find(x => x.length === 13 && bkIsbn(x)) || (d.isbn || []).find(x => bkIsbn(x)) || "",
         coverId: d.cover_i ? String(d.cover_i) : "", coverUrl: "", genre: bkGenre(d.subject), source: "ol" }));
     }
-  } catch (e) { out.note = "Open Library could not be reached; tried Google Books. "; }
+  } catch (e) { olErr = (e && e.message) || "error"; out.note = "Open Library could not be reached (" + olErr + "); tried Google Books. "; }
   if (out.results.length) return out;
   try {
     const q = isbn ? "isbn:" + isbn : [title ? "intitle:" + title : "", author ? "inauthor:" + author : ""].filter(Boolean).join("+");
     const j = await bkGet("https://www.googleapis.com/books/v1/volumes?maxResults=5&printType=books&q=" + encodeURIComponent(q).replace(/%2B/g, "+"));
     (j.items || []).slice(0, 5).forEach(v => out.results.push(bkFromGB(v, isbn)));
-  } catch (e) { out.note += "Google Books could not be reached either."; }
+  } catch (e) { out.note += "Google Books could not be reached either (" + ((e && e.message) || "error") + ")."; if (olErr) out.failed = true; }
   return out;
 }
 function bkIds(kind, wid) {
@@ -8157,10 +8177,10 @@ function bkFindBlock(kind, wid, val) {   // markup for the add form and the edit
 // Press "Covers" next to Tidy up. It looks each book up (title + author, about one request a second so Open Library's limit is respected),
 // then shows a REVIEW LIST: nothing is changed until you tick matches and press Apply. Only missing details are added (cover, publisher,
 // year, ISBN if empty, pages only if empty); title, author, genre, notes, progress and everything else are never touched. Books with no match
-// are remembered on this device (rt_bk_nomatch_v1) so they are not asked about again; unticked "check this" suggestions are asked again next time.
+// are remembered on this device (rt_bk_nomatch_v2) so they are not asked about again; unticked "check this" suggestions are asked again next time.
 // ══════════════════════════════════════════════════════════════════
-const BK_NOMATCH_KEY = "rt_bk_nomatch_v1";
-let _bkB = { running: false, cancel: false, rows: [], skipped: 0, noMatch: 0 };
+const BK_NOMATCH_KEY = "rt_bk_nomatch_v2";   // v3.84: v1 wrongly held books whose look-up FAILED; v2 only holds genuine no-matches
+let _bkB = { running: false, cancel: false, rows: [], skipped: 0, noMatch: 0, failed: 0 };
 function bkNorm(s) { return String(s == null ? "" : s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9 ]+/g, " ").replace(/\b(the|a|an)\b/g, " ").replace(/\s+/g, " ").trim(); }
 function bkNoMatchLoad() { try { return JSON.parse(localStorage.getItem(BK_NOMATCH_KEY) || "{}") || {}; } catch (e) { return {}; } }
 function bkNoMatchSave(o) { try { localStorage.setItem(BK_NOMATCH_KEY, JSON.stringify(o)); } catch (e) {} }
@@ -8197,7 +8217,7 @@ function bkResolve(c) {   // the live record NOW (a background sync can replace 
 function bkBulkOpen() {
   const box = document.getElementById("bkBulkBox"), ov = document.getElementById("bkBulkModal");
   if (!box || !ov) return;
-  _bkB = { running: false, cancel: false, rows: [], skipped: 0, noMatch: 0 };
+  _bkB = { running: false, cancel: false, rows: [], skipped: 0, noMatch: 0, failed: 0 };
   const nm = bkNoMatchLoad(), all = bkBulkCollect(), todo = all.filter(c => !nm[c.item.id]);
   box.textContent = "";
   const head = bkMake("div", "rt-modal-title"); head.appendChild(bkMake("span", null, "Covers and details"));
@@ -8218,7 +8238,7 @@ async function bkBulkRun(todo) {
   _bkB.running = true; _bkB.cancel = false; body.textContent = "";
   const prog = bkMake("p", "bk-msg"); prog.setAttribute("aria-live", "polite"); body.appendChild(prog);
   const stop = bkMake("button", "btn btn-ghost btn-sm btn-wide", "Stop and review what was found so far"); stop.type = "button"; stop.addEventListener("click", () => { _bkB.cancel = true; }); body.appendChild(stop);
-  const cache = {}, nm = bkNoMatchLoad(); let fails = 0, done = 0, aborted = "";
+  const cache = {}, nm = bkNoMatchLoad(); let fails = 0, done = 0, aborted = "", lastNote = "";
   for (const c of todo) {
     if (_bkB.cancel) break;
     prog.textContent = "Looking up " + (done + 1) + " of " + todo.length + ": " + c.item.title;
@@ -8226,8 +8246,12 @@ async function bkBulkRun(todo) {
     let r = cache[key];
     if (!r) {
       r = await bkLookup(null, c.item.title, c.item.author || "");
-      cache[key] = r;
-      if (!r.results.length && /could not be reached either/.test(r.note || "")) { fails++; if (fails >= 3) { aborted = "Open Library and Google Books could not be reached (3 times in a row). Check your connection and try again."; break; } } else fails = 0;
+      if (r.failed) {   // the services did not answer: NOT a "no match" - leave the book alone so it is tried again next time
+        fails++; _bkB.failed++; lastNote = r.note; _bkB.why = r.note;
+        if (fails >= 3) { aborted = "Stopped: the look-up service did not answer three times in a row. " + lastNote.replace(/Open Library could not be reached/, "Open Library: could not be reached").trim() + " Nothing was marked as 'no match'; try again in a few minutes."; break; }
+        done++; await bkSleep(3000); continue;
+      }
+      fails = 0; cache[key] = r;
       await bkSleep(1100);
     }
     done++;
@@ -8242,7 +8266,7 @@ function bkBulkReview(note) {
   body.textContent = "";
   const rows = _bkB.rows.slice().sort((a, b) => (b.conf === "good") - (a.conf === "good"));
   const goodN = rows.filter(r => r.conf === "good").length;
-  body.appendChild(bkMake("p", "bk-msg", (note ? note + " " : "") + rows.length + " suggestion" + (rows.length === 1 ? "" : "s") + " (" + goodN + " look right, ticked; " + (rows.length - goodN) + " to check, unticked)" + (_bkB.noMatch ? "; " + _bkB.noMatch + " with no match" : "") + ". Tick what is correct, then Apply."));
+  body.appendChild(bkMake("p", "bk-msg", (note ? note + " " : "") + rows.length + " suggestion" + (rows.length === 1 ? "" : "s") + " (" + goodN + " look right, ticked; " + (rows.length - goodN) + " to check, unticked)" + (_bkB.noMatch ? "; " + _bkB.noMatch + " with no match" : "") + (_bkB.failed ? "; " + _bkB.failed + " could not be looked up (service did not answer) and will be tried again next time" + (_bkB.why ? " (" + _bkB.why.trim() + ")" : "") : "") + ". Tick what is correct, then Apply."));
   if (!rows.length) return;
   const list = bkMake("div", "bk-results"); list.style.maxHeight = "46vh"; list.style.overflowY = "auto";
   const apply = bkMake("button", "btn btn-primary btn-sm btn-wide"); apply.type = "button";
@@ -9149,6 +9173,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     var audio = isAudio(w), p = Math.round(progOf(w) * 100), unit = audio ? "chapters" : "pages";
     var c = colFor(w);
     var spine = '<div class="sp-spine ' + (w.completedDate ? "done" : p > 0 ? "cur" : "todo") + (audio ? " audio" : "") + spineCls(w) + '" style="--sc:' + c + ";--st:" + inkFor(c) + ";--p:" + p + '%;height:150px;width:56px">' + (p > 0 && !w.completedDate ? '<span class="mark"></span>' : "") + "</div>";
+    if (hasCover(w)) spine = '<div class="bk-cv" style="width:100px;height:150px;flex:none;--sc:' + c + ";--st:" + inkFor(c) + '"><img src="' + esc(bkCoverSrc(w, "M")) + '" alt="Cover of ' + esc(w.title) + '" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'"></div>';
     var tags = (w.tags || []).map(function (t) { return '<span class="wl-tag-chip">' + esc(t) + "</span>"; }).join(" ");
     return '<div class="card"><div class="wl-pane-head">' + spine + '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><span class="sp-title" style="font-size:22px;font-weight:800;line-height:1.1">' + esc(w.title) + "</span>" +
       '<span style="font-size:13px;color:var(--muted)">' + esc([w.author, w.genre].filter(Boolean).join(" · ")) + "</span>" + (tags ? '<div style="display:flex;gap:4px;flex-wrap:wrap">' + tags + "</div>" : "") + "</div></div>" +
@@ -9207,6 +9232,10 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
   var layout = "case";
   try { var ls = localStorage.getItem("rt_wl_layout"); if (ls === "list" || ls === "case") layout = ls; } catch (e) {}
   var arrange = false, dragging = false, modalId = null, modalRec = [], lastW = 0;
+  var coversOn = false;   // v3.84: per-device "Spines | Covers" choice
+  try { coversOn = localStorage.getItem("rt_bk_covers") === "1"; } catch (e) {}
+  var CV = { w: 60, h: 90 };
+  function hasCover(w) { return !!(w && typeof bkCoverSrc === "function" && bkCoverSrc(w, "M")); }
 
   var DECOR = {
     fern:      { n: "Fern",       w: 52, h: 66, s: '<path d="M15 46h22l-3 16H18z" fill="var(--accent)"/><path d="M26 46C26 30 24 20 16 12M26 46C26 28 28 18 36 10M26 46C24 34 14 30 8 28M26 46C28 34 38 30 44 28M26 46V8" stroke="var(--success)" stroke-width="3" fill="none" stroke-linecap="round"/>' },
@@ -9238,7 +9267,17 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
   function activeSet() {
     var set = {}; (appState.wishlist || []).forEach(function (w) { if (isActive(w)) set[w.id] = 1; }); return set;
   }
+  function coverItemHTML(w, act, isSel) {   // v3.84: same button/attributes as a spine so select, drag and the detail modal all work unchanged
+    var p = Math.round(progOf(w) * 100), done = !!w.completedDate;
+    var label = w.title + (w.author ? " by " + w.author : "") + (done ? ", finished" : p > 0 ? ", " + p + "% read" : ", not started") + (act && !done ? ", active" : "");
+    var c = colFor(w);
+    return '<button type="button" class="bk-item bk-cvi' + (act && !done ? " act" : "") + (isSel ? " sel" : "") + '" data-k="b" data-id="' + esc(w.id) + '" data-g="' + (isAudio(w) ? "audiobook" : "book") + '" aria-label="' + esc(label) + '" title="' + esc(label) + '">' +
+      '<div class="bk-cv" style="width:' + CV.w + "px;height:" + CV.h + "px;--sc:" + c + ";--st:" + inkFor(c) + '"><span class="bk-cv-t">' + esc(w.title) + "</span>" +
+      '<img src="' + esc(bkCoverSrc(w, "M")) + '" alt="" loading="lazy" referrerpolicy="no-referrer" draggable="false" onerror="this.style.display=\'none\'">' +
+      (done ? '<span class="ok" aria-hidden="true">✓</span>' : "") + (p > 0 && !done ? '<span class="bk-cv-p" style="width:' + p + '%"></span>' : "") + (act && !done ? '<i class="act" aria-hidden="true"></i>' : "") + "</div></button>";
+  }
   function bookItemHTML(w, act, isSel) {
+    if (coversOn && hasCover(w)) return coverItemHTML(w, act, isSel);
     var d = dims(w), c = colFor(w), p = Math.round(progOf(w) * 100), done = !!w.completedDate;
     var st = done ? "done" : (p > 0 ? "cur" : "todo");
     var inner = '<span class="t">' + esc(w.title) + "</span>" + spineExtras(w, d);
@@ -9264,7 +9303,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     decor.forEach(function (d) { if (!used[d.id]) { used[d.id] = 1; seq.push({ k: "d", d: d }); } });
     return { seq: seq, count: books.length };
   }
-  function itemW(it) { return (it.k === "b" ? dims(it.w).w : DECOR[it.d.kind].w) + 7; }
+  function itemW(it) { return (it.k === "b" ? (coversOn && hasCover(it.w) ? CV.w : dims(it.w).w) : DECOR[it.d.kind].w) + 7; }
 
   function renderBookcase() {
     var host = $("wlCase"), app = $("wishlistApp"); if (!host || !app) return;
@@ -9281,7 +9320,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     var act = activeSet();
     var width = Math.max(260, (host.clientWidth || 340) - 52);
     lastW = host.clientWidth;
-    var html = '<div class="bk-bar"><span class="bk-hint">' + (arrange ? "Drag books and decor to move them. Book order is your Book List manual order; your monthly queue follows it when the reading order is set to Manual." : (past ? "Books you've finished." : "Books you want to read. A lime tab marks the books you're reading.")) + '</span><button type="button" class="btn ' + (arrange ? "btn-primary" : "btn-ghost") + ' btn-sm" onclick="bkToggleArrange()">' + (arrange ? "Done" : "Arrange") + "</button></div>" + keyHTML();
+    var html = '<div class="bk-bar"><span class="bk-hint">' + (arrange ? "Drag books and decor to move them. Book order is your Book List manual order; your monthly queue follows it when the reading order is set to Manual." : (past ? "Books you've finished." : "Books you want to read. A lime tab marks the books you're reading.")) + '</span><span style="display:flex;gap:6px;flex:none">' + (arrange ? "" : '<button type="button" class="btn btn-ghost btn-sm" onclick="bkToggleCovers()" aria-pressed="' + coversOn + '" title="Show books with covers instead of spines (books without a cover stay as spines)">' + (coversOn ? "Show spines" : "Show covers") + "</button>") + '<button type="button" class="btn ' + (arrange ? "btn-primary" : "btn-ghost") + ' btn-sm" onclick="bkToggleArrange()">' + (arrange ? "Done" : "Arrange") + "</button></span></div>" + keyHTML();
     [["book", "Books"], ["audiobook", "Audiobooks"]].forEach(function (g) {
       var gs = groupSeq(items, g[0], scope, cfg);
       html += '<section class="bk-group" data-g="' + g[0] + '"><div class="bk-group-head"><span class="sp-title" style="font-size:18px;font-weight:800">' + g[1] + '</span><span class="sp-chip">' + gs.count + "</span></div>";
@@ -9309,6 +9348,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     arrange = false; renderWishlistView();
   };
   window.bkToggleArrange = function () { arrange = !arrange; renderBookcase(); };
+  window.bkToggleCovers = function () { coversOn = !coversOn; try { localStorage.setItem("rt_bk_covers", coversOn ? "1" : "0"); } catch (e) {} renderBookcase(); };
   window.bkAddDecor = function (kind, group) {
     var cfg = ensureCfg(), scope = _wlViewMode === "past" ? "read" : "want";
     var gs = groupSeq((appState.wishlist || []).filter(function (w) { return !!w.completedDate === (scope === "read"); }), group, scope, cfg).seq;
