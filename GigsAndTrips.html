@@ -12,7 +12,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.111</title>
+<title>Gigs &amp; Trips v7.112</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -605,6 +605,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .gym-plan-badge:hover{background:rgba(56,189,248,.22)}
 [data-theme="dark"] .gym-plan-badge{color:#7dd3fc;background:rgba(56,189,248,.15)}
 
+/* v7.112 (GIG-094): More › Fortnight holidays (adds work holiday days as events, with duplicate checks); no visual change elsewhere. */
 /* v7.111 (GIG-093): also publishes a search list (Universal Search, IndexedDB); no visual change. */
 /* v7.110 (GIG-092): launcher contract + PAL_OPEN; no visual change. */
 /* ═══ v7.109 — "Stub": responsive layer. Phone (<700px) and tablet (<1100px) get a floating bottom bar; desktop
@@ -793,7 +794,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.111</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.112</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -856,7 +857,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.111"></script>
+<script src="pal-shared.js?v=7.112"></script>
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="pal-gcal.js?v=3"></script>
@@ -3656,12 +3657,20 @@ function renderMore(){
   const venues=normaliseVenues(d.venues).filter(v=>!v._deleted).length;
   const reviewed=(d.events||[]).filter(ev=>!ev._deleted && ev.review && ev.review.rating).length;
   const row=(icon,title,sub,tab)=>'<div class="more-row" onclick="switchTab(\''+tab+'\')"><span class="more-ic">'+icon+'</span><span class="more-t">'+title+'</span><span class="more-s">'+sub+'</span><span class="ev-chev">›</span></div>';
+  let holRow='';   // v7.112 (GIG-094): only for Pete, and only when this device has Fortnight Tracker data
+  try {
+    if (_currentUserKey==='pete'){
+      const hp=fnHolidayPlan();
+      if (hp) holRow='<div class="more-row" onclick="fnHolidaySyncPrompt()"><span class="more-ic">🌴</span><span class="more-t">Fortnight holidays</span><span class="more-s">'+(hp.create.length||hp.remove.length?(hp.create.length?hp.create.length+' to add':'')+(hp.create.length&&hp.remove.length?' · ':'')+(hp.remove.length?hp.remove.length+' to remove':''):'up to date')+'</span><span class="ev-chev">›</span></div>';
+    }
+  } catch(e){}
   document.getElementById('appInner').innerHTML=
     '<div class="dash-hdr"><h2>More</h2><p>Reviews, locations and categories</p></div>'+
     '<div class="lst-rows">'+
       row('⭐','Reviews',reviewed+' reviewed','reviews')+
       row('📍','Locations',venues+' saved','venues')+
       row('🏷️','Categories',GIG_TYPES.length+' types','categories')+
+      holRow+
     '</div>';
 }
 function moreBackHtml(){ return '<div class="more-back" onclick="switchTab(\'more\')">‹ More</div>'; }
@@ -6896,6 +6905,89 @@ function getFortnightWorkingDates(){
     });
   });
   return map;
+}
+
+// ── v7.112 (GIG-094): Fortnight Tracker holidays → Gigs & Trips events (and so Google Calendar) ──────────────────────────────
+// Reads Fortnight Tracker's own saved data on this device (same keys as above), never writes to it. Pete only (it is his work leave).
+// Holiday days from today onward = bundle days marked Holiday + manual leave records of type holiday. Each becomes ONE event with the stable id
+// fnhol_YYYYMMDD (so a second run, or another device, updates the same record instead of adding another) and goes to Google through the normal
+// gcalSyncGig() path, exactly as a gig saved by hand does. Checks before adding anything:
+//   - the event already exists                         -> left alone
+//   - you deleted that holiday event earlier           -> not re-created. Gigs removes a local tombstone once the cloud confirms it (v4.8), so this
+//                                                         is remembered in a small per-device list of ids this feature has created or seen (gat_fnhol_seen_v1);
+//                                                         limitation: a device that never saw the event live cannot know it was deleted
+//   - another live event that day looks like a holiday -> skipped as a duplicate (title: holiday / leave / day off / time off), whether you
+//                                                         typed it or it was imported from Google
+// Holidays that are no longer in Fortnight Tracker are removed again, but only events this feature created (flag fnHoliday).
+// Nothing happens until you confirm the summary shown by fnHolidaySyncPrompt().
+const FN_HOL_RE = /\b(holiday|annual leave|leave|days? off|time off|off work)\b/i;
+const FN_SEEN_KEY = 'gat_fnhol_seen_v1';
+function fnSeenLoad(){ try { const a = JSON.parse(localStorage.getItem(FN_SEEN_KEY) || '[]'); const o = {}; (Array.isArray(a)?a:[]).forEach(i=>{ o[i]=1; }); return o; } catch(e){ return {}; } }
+function fnSeenSave(o){ try { localStorage.setItem(FN_SEEN_KEY, JSON.stringify(Object.keys(o))); } catch(e){} }
+function fnHolidayDaysWanted(){
+  let raw = null;
+  for (let i = 0; i < FORTNIGHT_KEYS.length; i++){ raw = localStorage.getItem(FORTNIGHT_KEYS[i]); if (raw) break; }
+  if (!raw) return null;
+  let parsed; try { parsed = JSON.parse(raw); } catch(e){ return null; }
+  const data = parsed.data || parsed;
+  const today = localDateStr(new Date()), set = {};
+  (Array.isArray(data.bundles) ? data.bundles : []).filter(b=>!b._deleted).forEach(b=>(b.days||[]).forEach(dy=>{
+    if (dy.status==='holiday' && dy.date && dy.date>=today) set[dy.date]=1; }));
+  (Array.isArray(data.leave) ? data.leave : []).filter(r=>!r._deleted && r.type==='holiday').forEach(r=>{
+    if (r.date && r.date>=today) set[r.date]=1; });
+  return { dates:Object.keys(set).sort(), savedAt: parsed.lastUpdated || data.lastUpdated || '' };
+}
+function fnHolidayPlan(){
+  const w = fnHolidayDaysWanted(); if (!w) return null;
+  const today = localDateStr(new Date()), evs = getData().events || [], byId = {}, wanted = {};
+  evs.forEach(e=>{ byId[e.id]=e; });
+  const plan = { savedAt:w.savedAt, create:[], existing:[], duplicates:[], leftDeleted:[], remove:[] };
+  const seen = fnSeenLoad(); let seenChanged = false;
+  w.dates.forEach(date=>{
+    wanted[date]=1;
+    const id = 'fnhol_'+date.replace(/-/g,''), ex = byId[id];
+    if (ex && !ex._deleted){ plan.existing.push(date); if (!seen[id]){ seen[id]=1; seenChanged=true; } return; }
+    if ((ex && ex._deleted) || seen[id]){ plan.leftDeleted.push(date); return; }
+    const dup = evs.find(e=>!e._deleted && e.type==='gig' && e.date===date && FN_HOL_RE.test(e.name||''));
+    if (dup){ plan.duplicates.push({ date:date, name:dup.name }); return; }
+    plan.create.push({ id:id, date:date });
+  });
+  evs.forEach(e=>{ if (e.fnHoliday && !e._deleted && e.date>=today && !wanted[e.date]) plan.remove.push({ id:e.id, date:e.date, name:e.name }); });
+  if (seenChanged) fnSeenSave(seen);
+  return plan;
+}
+function fnHolidayFmt(d){ return new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
+async function fnHolidaySyncPrompt(){
+  if (_currentUserKey !== 'pete'){ showToast('Fortnight holidays are for Pete only'); return; }
+  const p = fnHolidayPlan();
+  if (!p){ showToast('No Fortnight Tracker data on this device yet — open Fortnight Tracker once'); return; }
+  if (!p.create.length && !p.remove.length){ showToast('Nothing to change: '+p.existing.length+' holiday day'+(p.existing.length===1?'':'s')+' already here'+(p.duplicates.length?', '+p.duplicates.length+' skipped as duplicates':'')); return; }
+  const L = ['Fortnight Tracker holidays from today'+(p.savedAt?' (data last saved on this device '+new Date(p.savedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short'})+')':'')+':',''];
+  if (p.create.length) L.push('• '+p.create.length+' will be added here and sent to Google Calendar: '+p.create.slice(0,6).map(x=>fnHolidayFmt(x.date)).join(', ')+(p.create.length>6?'…':''));
+  if (p.existing.length) L.push('• '+p.existing.length+' already here');
+  if (p.duplicates.length) L.push('• '+p.duplicates.length+' skipped, another event that day looks like a holiday: '+p.duplicates.slice(0,3).map(x=>fnHolidayFmt(x.date)+' "'+x.name+'"').join(', '));
+  if (p.leftDeleted.length) L.push('• '+p.leftDeleted.length+' left alone because you deleted them earlier');
+  if (p.remove.length) L.push('• '+p.remove.length+' no longer in Fortnight Tracker and will be removed (also from Google Calendar): '+p.remove.slice(0,6).map(x=>fnHolidayFmt(x.date)).join(', '));
+  L.push('', 'Continue?');
+  if (!confirm(L.join('\n'))) return;
+  let added=0, removed=0;
+  for (const c of p.create){
+    const ev = { id:c.id, type:'gig', createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), done:false, missed:false, addedBy:_currentUserKey,
+      name:'Holiday', date:c.date, time:'', venue:'', gigType:'other', notes:'Added from Fortnight Tracker', fnHoliday:true };
+    saveEvent(ev); added++; { const s = fnSeenLoad(); s[ev.id]=1; fnSeenSave(s); }
+    try { await gcalSyncGig(getEvent(ev.id), true); } catch(e){ syncLog('Calendar send for holiday '+c.date+' failed: '+(e&&e.message||e),'err'); }
+    await new Promise(r=>setTimeout(r,350));
+  }
+  for (const r of p.remove){
+    const g = getEvent(r.id); if (!g) continue;
+    if (g.calendarEventId){
+      let ok=false; try { ok = await gcalDeleteGig(g.calendarEventId, g.name); } catch(e){}
+      if (ok!==true) gcalQueueAdd('delete','gig',{calendarEventId:g.calendarEventId},g.name);   // no silent orphans (same rule as deleting by hand)
+      gcalQueueRemove('upsert','gig',{id:g.id});
+    }
+    deleteEvent(r.id); removed++; { const s = fnSeenLoad(); delete s[r.id]; fnSeenSave(s); }   // gone from Fortnight on purpose: allowed to come back later
+  }
+  render(); showToast((added?added+' holiday'+(added===1?'':'s')+' added':'')+(added&&removed?', ':'')+(removed?removed+' removed':'')+' ✓');
 }
 
 function isWorkingDay(dateStr){
