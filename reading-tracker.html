@@ -16,7 +16,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.84</title>
+<title>Reading Tracker v3.85</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1118,6 +1118,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 .bk-cv-t { position: absolute; inset: 4px 4px 4px 7px; font-size: 9px; font-weight: 700; line-height: 1.15; overflow: hidden; text-align: center; display: flex; align-items: center; justify-content: center; }
 .bk-cv img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--sc); }
 .bk-cv .ok { position: absolute; right: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--success); color: #fff; font-size: 11px; line-height: 16px; text-align: center; z-index: 2; }
+.bk-seg { display: inline-flex; gap: 4px; }
 .bk-cv-p { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--sig); z-index: 2; }
 .bk-cv .act { position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--sig); z-index: 2; }
 .bk-item.sel .bk-cv { box-shadow: 0 0 0 2px var(--sig); }
@@ -1265,7 +1266,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.84</span></div>
+    <div class="rt-logo">My Reading <span>v3.85</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2142,7 +2143,7 @@ body.wl-add-open #wlAddToggle { display: none; }
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-shared.js?v=3.84"></script>
+<script src="pal-shared.js?v=3.85"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -8082,28 +8083,73 @@ function bkFromGB(v, isbn) {
   return { title: (i.title || "") + (i.subtitle ? ": " + i.subtitle : ""), author: (i.authors || []).join(", "), pages: i.pageCount || 0, publisher: i.publisher || "",
     publishYear: bkYear(i.publishedDate), isbn: pick, coverId: "", coverUrl: img, genre: bkGenre(i.categories), source: "gb" };
 }
-async function bkLookup(isbn, title, author) {   // → { results: [...], note: "" }
+function bkWords(s, n) { const w = bkNorm(String(s || "").split(":")[0]).split(" ").filter(x => x.length > 1); return (n ? w.slice(0, n) : w).join(" "); }
+function bkImgOk(url) {   // does this image really exist? (resolves false after 6 s)
+  return new Promise(res => { const im = new Image(); const t = setTimeout(() => { im.onload = im.onerror = null; res(false); }, 6000);
+    im.onload = () => { clearTimeout(t); res(im.naturalWidth > 0); }; im.onerror = () => { clearTimeout(t); res(false); }; im.referrerPolicy = "no-referrer"; im.src = url; });
+}
+async function bkEnrichCovers(results) {   // v3.85: Open Library often knows a book but has no cover for it: fill the gap from Google Books, then Open Library's by-ISBN cover
+  let n = 0;
+  for (const x of results) {
+    if (x.coverId || x.coverUrl || n >= 3) continue;
+    n++;
+    try {
+      let img = "";
+      if (x.isbn) {
+        const j = await bkGet("https://www.googleapis.com/books/v1/volumes?maxResults=1&q=isbn:" + encodeURIComponent(x.isbn), 12000);
+        const v = (j.items || [])[0], il = v && v.volumeInfo && v.volumeInfo.imageLinks;
+        if (il) img = il.thumbnail || il.smallThumbnail || "";
+        if (!img) { const u = "https://covers.openlibrary.org/b/isbn/" + encodeURIComponent(x.isbn) + "-M.jpg?default=false"; if (await bkImgOk(u)) img = u; }
+      } else if (x.title) {
+        const j = await bkGet("https://www.googleapis.com/books/v1/volumes?maxResults=1&q=" + encodeURIComponent("intitle:" + x.title + (x.author ? " inauthor:" + x.author.split(",")[0] : "")), 12000);
+        const v = (j.items || [])[0], il = v && v.volumeInfo && v.volumeInfo.imageLinks;
+        if (il && bkNorm(v.volumeInfo.title || "").indexOf(bkNorm(String(x.title).split(":")[0])) >= 0) img = il.thumbnail || il.smallThumbnail || "";
+      }
+      if (img) x.coverUrl = String(img).replace(/^http:/, "https:");
+    } catch (e) { /* a cover is a bonus: ignore */ }
+  }
+}
+async function bkLookup(isbn, title, author) {   // → { results: [...], note: "", failed }
+  const out = await bkLookupCore(isbn, title, author);
+  if (out.results.length) { try { await bkEnrichCovers(out.results); } catch (e) {} }
+  return out;
+}
+async function bkLookupCore(isbn, title, author) {
   const out = { results: [], note: "", failed: false };
   let olErr = "";
+  const OLF = "&fields=title,author_name,first_publish_year,cover_i,isbn,number_of_pages_median,publisher,subject";
+  const olMap = d => ({ title: d.title || "", author: (d.author_name || []).slice(0, 2).join(", "), pages: d.number_of_pages_median || 0,
+    publisher: (d.publisher || [])[0] || "", publishYear: d.first_publish_year ? String(d.first_publish_year) : "",
+    isbn: (d.isbn || []).find(x => x.length === 13 && bkIsbn(x)) || (d.isbn || []).find(x => bkIsbn(x)) || "",
+    coverId: d.cover_i ? String(d.cover_i) : "", coverUrl: "", genre: bkGenre(d.subject), source: "ol" });
   try {
     if (isbn) {
       const j = await bkGet("https://openlibrary.org/api/books?bibkeys=ISBN:" + isbn + "&format=json&jscmd=data");
       if (j["ISBN:" + isbn]) out.results.push(bkFromOLData(j["ISBN:" + isbn], isbn));
     } else {
-      const q = "https://openlibrary.org/search.json?limit=5&fields=title,author_name,first_publish_year,cover_i,isbn,number_of_pages_median,publisher,subject" +
-        (title ? "&title=" + encodeURIComponent(title) : "") + (author ? "&author=" + encodeURIComponent(author) : "");
-      const j = await bkGet(q);
-      (j.docs || []).slice(0, 5).forEach(d => out.results.push({ title: d.title || "", author: (d.author_name || []).slice(0, 2).join(", "), pages: d.number_of_pages_median || 0,
-        publisher: (d.publisher || [])[0] || "", publishYear: d.first_publish_year ? String(d.first_publish_year) : "",
-        isbn: (d.isbn || []).find(x => x.length === 13 && bkIsbn(x)) || (d.isbn || []).find(x => bkIsbn(x)) || "",
-        coverId: d.cover_i ? String(d.cover_i) : "", coverUrl: "", genre: bkGenre(d.subject), source: "ol" }));
+      // v3.85: an exact title is not needed. Strict title/author first, then a loose free-text search, then the first words of the title only
+      const tries = [];
+      if (title || author) tries.push("limit=5" + OLF + (title ? "&title=" + encodeURIComponent(title) : "") + (author ? "&author=" + encodeURIComponent(author) : ""));
+      const loose = [bkWords(title), bkWords(author)].filter(Boolean).join(" ");
+      if (loose && title) tries.push("limit=5" + OLF + "&q=" + encodeURIComponent(loose));
+      if (title && bkWords(title).split(" ").length > 2) tries.push("limit=5" + OLF + "&q=" + encodeURIComponent(bkWords(title, 3) + (author ? " " + bkWords(author) : "")));
+      for (const t of tries) {
+        const j = await bkGet("https://openlibrary.org/search.json?" + t);
+        (j.docs || []).slice(0, 5).forEach(d => out.results.push(olMap(d)));
+        if (out.results.length) break;
+        await bkSleep(1000);
+      }
     }
   } catch (e) { olErr = (e && e.message) || "error"; out.note = "Open Library could not be reached (" + olErr + "); tried Google Books. "; }
   if (out.results.length) return out;
   try {
-    const q = isbn ? "isbn:" + isbn : [title ? "intitle:" + title : "", author ? "inauthor:" + author : ""].filter(Boolean).join("+");
-    const j = await bkGet("https://www.googleapis.com/books/v1/volumes?maxResults=5&printType=books&q=" + encodeURIComponent(q).replace(/%2B/g, "+"));
-    (j.items || []).slice(0, 5).forEach(v => out.results.push(bkFromGB(v, isbn)));
+    const qs = isbn ? ["isbn:" + isbn] : [[title ? "intitle:" + title : "", author ? "inauthor:" + author : ""].filter(Boolean).join("+"), [bkWords(title), bkWords(author)].filter(Boolean).join(" ")];
+    for (const q of qs) {
+      if (!q) continue;
+      const j = await bkGet("https://www.googleapis.com/books/v1/volumes?maxResults=5&printType=books&q=" + encodeURIComponent(q).replace(/%2B/g, "+"));
+      (j.items || []).slice(0, 5).forEach(v => out.results.push(bkFromGB(v, isbn)));
+      if (out.results.length) break;
+    }
   } catch (e) { out.note += "Google Books could not be reached either (" + ((e && e.message) || "error") + ")."; if (olErr) out.failed = true; }
   return out;
 }
@@ -8201,6 +8247,7 @@ function bkPickBest(item, results) {   // → { pick, conf: "good" | "check" } o
     const rt = bkNorm(r.title), main = bkNorm(String(r.title).split(":")[0]);
     let ts = 0;
     if (rt === nt || main === nt) ts = 3; else if (nt.length >= 4 && (rt.indexOf(nt) === 0 || nt.indexOf(main) === 0 && main.length >= 4)) ts = 2;
+    else { const A = nt.split(" ").filter(x => x.length > 2), B = rt.split(" "); if (A.length && A.filter(x => B.indexOf(x) >= 0).length / A.length >= 0.6) ts = 1; }
     const sc = ts * 10 + (bkAuthorOk(item, r) ? 5 : 0) + ((r.coverId || r.coverUrl) ? 3 : 0) + (r.publishYear ? 1 : 0);
     if (!best || sc > best.sc) best = { r: r, ts: ts, sc: sc };
   });
@@ -8242,10 +8289,12 @@ async function bkBulkRun(todo) {
   for (const c of todo) {
     if (_bkB.cancel) break;
     prog.textContent = "Looking up " + (done + 1) + " of " + todo.length + ": " + c.item.title;
-    const key = bkNorm(c.item.title) + "|" + bkNorm(c.item.author);
+    const isb = c.item.isbn ? bkIsbn(c.item.isbn) : null;   // v3.84: a book that already has an ISBN is looked up by it (exact), not by title
+    const key = isb ? "i" + isb : bkNorm(c.item.title) + "|" + bkNorm(c.item.author);
     let r = cache[key];
     if (!r) {
-      r = await bkLookup(null, c.item.title, c.item.author || "");
+      r = await bkLookup(isb, c.item.title, c.item.author || "");
+      if (!r.results.length && isb && !r.failed) r = await bkLookup(null, c.item.title, c.item.author || "");   // ISBN unknown to the service: fall back to a title search
       if (r.failed) {   // the services did not answer: NOT a "no match" - leave the book alone so it is tried again next time
         fails++; _bkB.failed++; lastNote = r.note; _bkB.why = r.note;
         if (fails >= 3) { aborted = "Stopped: the look-up service did not answer three times in a row. " + lastNote.replace(/Open Library could not be reached/, "Open Library: could not be reached").trim() + " Nothing was marked as 'no match'; try again in a few minutes."; break; }
@@ -9178,6 +9227,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     return '<div class="card"><div class="wl-pane-head">' + spine + '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><span class="sp-title" style="font-size:22px;font-weight:800;line-height:1.1">' + esc(w.title) + "</span>" +
       '<span style="font-size:13px;color:var(--muted)">' + esc([w.author, w.genre].filter(Boolean).join(" · ")) + "</span>" + (tags ? '<div style="display:flex;gap:4px;flex-wrap:wrap">' + tags + "</div>" : "") + "</div></div>" +
       '<div style="display:flex;align-items:baseline;justify-content:space-between"><span><span class="sp-big" style="font-size:30px">' + highestPageForItem(w) + '</span> <span class="sp-meter-sub">of ' + (Number(w.pages) || 0) + " " + unit + "</span></span><b style=\"color:var(--accent)\">" + p + '%</b></div><div class="sp-bar" style="margin-top:8px"><i style="width:' + p + '%"></i></div>' +
+      (hasCover(w) ? '<div class="bk-actrow"><span>On the bookshelf<small>Show this book as</small></span><span class="bk-seg" role="group" aria-label="Show on bookshelf as"><button type="button" class="btn btn-sm ' + (useCover(w) ? "btn-ghost" : "btn-primary") + '" aria-pressed="' + !useCover(w) + '" onclick="bkSetShelf(\'' + esc(w.id) + '\',\'spine\')">Spine</button><button type="button" class="btn btn-sm ' + (useCover(w) ? "btn-primary" : "btn-ghost") + '" aria-pressed="' + useCover(w) + '" onclick="bkSetShelf(\'' + esc(w.id) + '\',\'cover\')">Cover</button></span></div>' : "") +
       (typeof markBoxHTML === "function" ? markBoxHTML(w) : "") + (w.completedDate ? "" : '<div class="bk-actrow"><span>Reading now<small>Shows on your Home shelf</small></span><button type="button" role="switch" class="bk-sw' + (isActive(w) ? " on" : "") + '" aria-checked="' + (isActive(w) ? "true" : "false") + '" aria-label="Reading now" onclick="spineSetActive(\'' + esc(w.id) + '\')"><i></i></button></div>') + (typeof logRowHTML === "function" ? logRowHTML(w) : "") + '<div id="' + (secsId || "wlPaneSecs") + '"></div></div>';
   }
   function buildPane() {
@@ -9235,6 +9285,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
   var coversOn = false;   // v3.84: per-device "Spines | Covers" choice
   try { coversOn = localStorage.getItem("rt_bk_covers") === "1"; } catch (e) {}
   var CV = { w: 60, h: 90 };
+  function useCover(w) { return hasCover(w) && (w.shelfStyle === "cover" || (w.shelfStyle !== "spine" && coversOn)); }   // v3.84: per-book choice wins over the shelf-wide toggle
   function hasCover(w) { return !!(w && typeof bkCoverSrc === "function" && bkCoverSrc(w, "M")); }
 
   var DECOR = {
@@ -9277,7 +9328,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
       (done ? '<span class="ok" aria-hidden="true">✓</span>' : "") + (p > 0 && !done ? '<span class="bk-cv-p" style="width:' + p + '%"></span>' : "") + (act && !done ? '<i class="act" aria-hidden="true"></i>' : "") + "</div></button>";
   }
   function bookItemHTML(w, act, isSel) {
-    if (coversOn && hasCover(w)) return coverItemHTML(w, act, isSel);
+    if (useCover(w)) return coverItemHTML(w, act, isSel);
     var d = dims(w), c = colFor(w), p = Math.round(progOf(w) * 100), done = !!w.completedDate;
     var st = done ? "done" : (p > 0 ? "cur" : "todo");
     var inner = '<span class="t">' + esc(w.title) + "</span>" + spineExtras(w, d);
@@ -9303,7 +9354,7 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     decor.forEach(function (d) { if (!used[d.id]) { used[d.id] = 1; seq.push({ k: "d", d: d }); } });
     return { seq: seq, count: books.length };
   }
-  function itemW(it) { return (it.k === "b" ? (coversOn && hasCover(it.w) ? CV.w : dims(it.w).w) : DECOR[it.d.kind].w) + 7; }
+  function itemW(it) { return (it.k === "b" ? (useCover(it.w) ? CV.w : dims(it.w).w) : DECOR[it.d.kind].w) + 7; }
 
   function renderBookcase() {
     var host = $("wlCase"), app = $("wishlistApp"); if (!host || !app) return;
@@ -9348,6 +9399,12 @@ if (isIOS && !isInStandaloneMode && !localStorage.getItem("pwa-dismissed")) {
     arrange = false; renderWishlistView();
   };
   window.bkToggleArrange = function () { arrange = !arrange; renderBookcase(); };
+  window.bkSetShelf = function (id, style) {   // v3.84: per-book "spine" | "cover" (stored on the book; syncs with it)
+    var w = (appState.wishlist || []).filter(function (x) { return x.id === id; })[0]; if (!w) return;
+    w.shelfStyle = style === "cover" ? "cover" : "spine"; w.updatedAt = new Date().toISOString();
+    save(); try { pushWishlistItemNow(w); } catch (e) {}
+    renderBookcase(); if (modalId === id && typeof refreshModal === "function") refreshModal(); else if (typeof buildPane === "function") buildPane();
+  };
   window.bkToggleCovers = function () { coversOn = !coversOn; try { localStorage.setItem("rt_bk_covers", coversOn ? "1" : "0"); } catch (e) {} renderBookcase(); };
   window.bkAddDecor = function (kind, group) {
     var cfg = ensureCfg(), scope = _wlViewMode === "past" ? "read" : "want";
