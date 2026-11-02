@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fantasy Football Tracker v1.62</title>
+<title>Fantasy Football Tracker v1.63</title>
 <meta name="theme-color" content="#0E0D12" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -769,7 +769,7 @@
 </div>
 
 <nav>
-  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.62</span></div>
+  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.63</span></div>
   <div class="nav-actions"><span class="sync-chip"><i></i><span id="navSyncTxt">Not loaded</span></span>
     <button type="button" class="nav-refresh" aria-label="Refresh from FPL" onclick="loadSquad()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button></div>
 </nav>
@@ -950,11 +950,16 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.62"></script>
+<script src="pal-shared.js?v=1.63"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
+ *
+ * v1.63 [FF-037] — Launcher card shows the locked-in squad. The Next Week view now also writes a small display summary of the
+ *   locked-in lineup (ff_locked_card, per-user key: gameweek, lock time, starters with name / position / club / kit colours /
+ *   captain and vice-captain, bench in order) and tells the launcher to refresh. Derived copy only: the locked lineup itself
+ *   (ff_manual_lineup), its Supabase sync, backups and import/export are untouched. Removed again when nothing is locked in.
  *
  * v1.62 [FF-036] — Advice: simple, reasoned lineup advice you can accept. (1) The AI prompt
  *   and JSON gain `lineupChanges` (each swap: who to take out of your current XI, who to
@@ -2239,7 +2244,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.62';
+const FF_VERSION = '1.63';
 
 // v1.57 (FF-031): launcher contract (PalContract, key pal_x_fantasy). Uses the next-gameweek deadline already held in the squad cache
 // (nextGwDeadline): Needs attention (level action) when it is within 24 hours, and an upcoming item for the deadline. Nothing is
@@ -2953,6 +2958,8 @@ let _lastLiveSquadCache = null;
 // data, so there's no reason two people sharing a browser shouldn't
 // share that too.
 const FF_PER_USER_KEYS = ['ff_settings_local', 'ff_squad_cache', 'ff_score_history', 'ff_advice_cache', 'ff_transfer_log', 'ff_external_check', 'ff_manual_lineup'];
+// v1.63 (FF-037): ff_locked_card is a derived display copy for the launcher card (see ffPublishLockedCard). It is deliberately not in
+// the list above: it is never migrated, synced or backed up; it is rebuilt from the locked lineup whenever Next Week is shown.
 
 function scopedKey(base) {
   const uid = (window.PalSync && typeof PalSync.getUserId === 'function') ? PalSync.getUserId() : null;
@@ -3949,6 +3956,7 @@ async function renderPlannedSquadView() {
   // returns the live squad unchanged, which is exactly what is wanted here.
   const projected = buildProjectedSquad(planningBaseCache(allPlayers), allPlayers);
   const effectivePicks = getEffectiveLockedInPicks(projected);
+  ffPublishLockedCard(projected);
   container.innerHTML = '';
   renderInteractiveLockedInSquad(projected.elements, projected.teams, { picks: effectivePicks, entry_history: projected.picksData.entry_history },
     projected.gwId, projected.nextFixtureByTeam, projected.maxPointsByPos, projected.topPlayerIdByPos, projected.picksData.picks, projected.appliedSwaps.length);
@@ -3977,6 +3985,32 @@ async function renderPlannedSquadView() {
 }
 
 function refreshNextWeekView() { renderPlannedSquadView(); }
+
+// v1.63 (FF-037): display summary of the LOCKED-IN lineup for the launcher's Fantasy card (read straight off localStorage, same
+// pattern as ff_squad_cache). Only the locked snapshot is published (not an unsaved draft); nothing is stored if it cannot be resolved
+// to 11 starters + 4 bench players, and the key is removed when nothing is locked in. The launcher is only told when the content changed.
+function ffPublishLockedCard(projected) {
+  try {
+    const key = scopedKey('ff_locked_card');
+    const lineup = _manualLineup[projected.gwId], lk = lineup && lineup.locked;
+    let out = null;
+    if (lk && Array.isArray(lk.starterIds) && Array.isArray(lk.benchOrder) && lk.starterIds.length === 11 && lk.benchOrder.length === 4) {
+      const byId = {}; projected.elements.forEach(e => { byId[e.id] = e; });
+      const teamsById = {}; (projected.teams || []).forEach(t => { teamsById[t.id] = t; });
+      const one = id => {
+        const el = byId[id]; if (!el) return null;
+        const tm = teamsById[el.team], kit = tm ? TEAM_KITS[tm.short_name] : null;
+        return { id: id, n: el.web_name, t: el.element_type, tm: tm ? tm.short_name : '', b: kit ? kit.b : '', c: kit ? kit.c : '', cap: id === lk.captainId ? 1 : (id === lk.viceCaptainId ? 2 : 0) };
+      };
+      const starters = lk.starterIds.map(one), bench = lk.benchOrder.map(one);
+      if (starters.every(Boolean) && bench.every(Boolean)) out = { v: 1, gw: projected.gwId, lockedAt: lineup.lockedAt || null, starters: starters, bench: bench };
+    }
+    const prev = localStorage.getItem(key), next = out ? JSON.stringify(out) : null;
+    if (prev === next) return;
+    if (next) localStorage.setItem(key, next); else localStorage.removeItem(key);
+    try { window.parent.postMessage({ type: 'FF_DATA_UPDATED' }, window.location.origin); } catch (e) {}
+  } catch (e) {}
+}
 
 // ── Free Hit: keep the pre-Free-Hit squad (FF-029) ──────────────
 // FPL's picks for a Free Hit gameweek are the one-week Free Hit team, and the
