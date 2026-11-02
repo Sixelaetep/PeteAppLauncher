@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v4.2</title>
+<title>Film &amp; TV Tracker v4.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -698,7 +698,7 @@
 <body>
 
 <div class="chrome">
-  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.2</span></span></h1>
+  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.3</span></span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -1087,7 +1087,7 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=4.2"></script>   <!-- v4.2: tag now follows the app version so the copy with PalContract is fetched -->
+<script src="pal-shared.js?v=4.3"></script>   <!-- v4.2: tag now follows the app version so the copy with PalContract is fetched -->
 <script>
 // ══════════════════════════════════════════════════════════════════
 // FILM & TV TRACKER v4.0 (FTT-001..FTT-050) — see film-tv-tracker.md.
@@ -1399,6 +1399,7 @@ function writeStatCache() {
   filmPublishContract();   // v4.2 (FTT-052)
 }
 
+// v4.3 (FTT-053): also publishes a search list (Universal Search, IndexedDB) and the app opens a title on request (PAL_OPEN view 'title').
 // v4.2 (FTT-052): launcher contract (PalContract, key pal_x_screen). Upcoming = unwatched titles whose release date (releaseInfo(): the
 // same rule as "New release") falls in the next 30 days. Library is shared between users, so each person publishes it under their own id.
 // No attention items. Derived cache only; no data, storage, sync or backup change.
@@ -1415,7 +1416,17 @@ function filmPublishContract() {
       upcoming.push({ id: 'ftt-' + t.id, date: r.date, title: t.title || 'Untitled', sub: releaseKindLabel(r.kind) + ' release' + (t.year ? ' · ' + t.year : ''), kind: 'release', open: { view: 'title', id: String(t.id) } });
     });
     upcoming.sort((a, b) => a.date.localeCompare(b.date));
+    // v4.3 (FTT-053): search list for Universal Search: Watchlist titles first (newest first), then Watched (most recent first), all of them (IndexedDB).
+    // Title, type, year and status only; no overview, poster or availability data. Opens the title's detail on request (PAL_OPEN 'title').
+    const live = state.titles.filter(t => t && !t._deleted && t.title);
+    const stamp = t => String(t.updatedAt || t.addedAt || t.createdAt || t.watchedDate || '');
+    const wl = live.filter(t => t.status !== 'watched').sort((a, b) => stamp(b).localeCompare(stamp(a)));
+    const wd = live.filter(t => t.status === 'watched').sort((a, b) => stamp(b).localeCompare(stamp(a)));
+    const search = wl.concat(wd).map(t => ({ id: 'ftt-t-' + t.id, t: t.title,
+      s: [t.type === 'tv' ? 'TV' : 'Film', t.year || '', t.status === 'watched' ? 'Watched' : 'Watchlist'].filter(Boolean).join(' · '),
+      k: t.type === 'tv' ? 'tv' : 'film', open: { view: 'title', id: String(t.id) } }));
     window.PalContract.publish('screen', { upcoming: upcoming.slice(0, 30) });
+    window.PalContract.publishSearch('screen', search, live.length);   // v4.3: IndexedDB, not localStorage
   } catch (e) {}
 }
 
@@ -4598,6 +4609,14 @@ function openDataModal() {
   document.getElementById('dataModal').classList.add('open');
 }
 function closeDataModal() { document.getElementById('dataModal').classList.remove('open'); }
+
+window.addEventListener('message', (e) => {   // v4.3 (FTT-053): open a title when the launcher's search asks
+  if (e.origin !== window.location.origin || !e.data || e.data.type !== 'PAL_OPEN' || e.data.view !== 'title' || !e.data.id) return;
+  let tries = 0;
+  (function go() { const t = state && state.titles && state.titles.find(x => String(x.id) === String(e.data.id) && !x._deleted);
+    if (t) { try { openDetail(t.id); } catch (_) {} return; }
+    if (++tries < 30) setTimeout(go, 250); })();
+});
 
 window.PalSync.initSession({
   // FTT-039's trimIfLarge('ftt_v1', 2048) was removed in v3.0 (FTT-041): the real library is over 2 MB, so it deleted the local copy

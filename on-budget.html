@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F4F0E6" id="metaThemeColor">
-<title>On Budget v3.115</title>
+<title>On Budget v3.116</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
@@ -756,7 +756,7 @@ input.amount-in:focus{border-color:transparent}
     <div class="header">
       <div class="logo">
         <span class="logo-icon" aria-hidden="true">£</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.115</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.116</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -1348,10 +1348,12 @@ input.amount-in:focus{border-color:transparent}
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.115"></script>
+<script src="pal-shared.js?v=3.116"></script>
 <script>
 // ══════════════════════════════════════════════════════════════
-// On Budget v3.115
+// On Budget v3.116
+// v3.116 (ON--110): also publishes a search list for Universal Search (IndexedDB via PalContract.publishSearch): recurring bills (name, amount, frequency) and saved
+// Food & Travel labels (name, category, times used). Transactions are deliberately NOT indexed. Derived cache only; no budget, storage, sync or backup change.
 // v3.115 (ON--109): publishes a small read-only summary for the launcher (PalContract, key pal_x_budget): Needs Attention
 // (bills forecast below zero, overdue uncleared bills, bills due in the next 3 days) and upcoming bills (next 30 days).
 // Built from the existing billsForecastData() items, so nothing is re-derived. Also answers a generic PAL_OPEN {view:'bills'}.
@@ -3085,11 +3087,12 @@ window.addEventListener('message', function(e) {
   // no longer has a Horizon tab to deep-link to.
   // v3.115 (ON--109): generic open-this-screen request from the launcher (Needs Attention / Upcoming).
   if (e.data && e.data.type === 'PAL_OPEN' && e.data.view === 'bills') { switchTab('bills'); switchBillsView('ledger'); }
+  if (e.data && e.data.type === 'PAL_OPEN' && e.data.view === 'dashboard') { switchTab('dashboard'); }   // v3.116 (ON--110)
   if (e.data && e.data.type === 'OB_ACTION') {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.115' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.116' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -3315,7 +3318,16 @@ function publishContract() {
     }
     const upcoming = bills_.filter(it => !it.overdue && it.date >= todayIso && it.date <= plus(30)).slice(0, 30).map(it => ({
       id: 'ob-' + (it.recurringId ? it.recurringId + '-' + it.schedDate : it.txId), date: it.date, title: it.name, sub: money(it.amount), kind:'bill', open:{ view:'bills' } }));
+    const search = [];
+    (bills.recurring || []).filter(r => r.active !== false && !r._deleted).forEach(r => {
+      const f = r.frequency === 'weekly' ? 'weekly' : r.frequency === 'custom' ? 'every ' + r.interval + ' weeks' : r.frequency === 'yearly' ? 'yearly' : 'monthly';
+      search.push({ id:'ob-bill-' + r.id, t:r.name || 'Bill', s:(r.type === 'income' ? 'Income' : 'Bill') + ' \u00b7 ' + money(r.amount) + ' \u00b7 ' + f, k:'bill', open:{ view:'bills' } });
+    });
+    ((ftLabels && ftLabels.items) || []).filter(l => !l._deleted).sort((a,b) => (b.count||0) - (a.count||0)).slice(0, 1500).forEach(l => {
+      search.push({ id:'ob-label-' + l.id, t:l.name, s:'Food & Travel label' + (l.category ? ' \u00b7 ' + l.category : '') + (l.count ? ' \u00b7 used ' + l.count + 'x' : ''), k:'label', open:{ view:'dashboard' } });
+    });
     window.PalContract.publish('budget', { upcoming, attention });
+    window.PalContract.publishSearch('budget', search, search.length);   // v3.116: IndexedDB, not localStorage
   } catch (e) {}
 }
 
@@ -3416,7 +3428,7 @@ function save(trackChange) {
     meta.changesSinceBackup = (meta.changesSinceBackup||0) + 1;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    version:'3.115', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.116', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   }));
@@ -3426,7 +3438,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.115', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.116', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';

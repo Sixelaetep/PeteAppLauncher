@@ -16,7 +16,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.80</title>
+<title>Reading Tracker v3.81</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1222,6 +1222,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 @media (min-width: 700px) { .bk-key .kgrid { grid-template-columns: 1fr 1fr; } }
 .sp-spine.audio, .sp-spine.audio.todo, .sp-spine.audio.cur, .sp-spine.audio.done { border-top: 5px solid var(--au); }
 
+/* v3.81 (MR-066): publishes a search list for the launcher's Universal Search (PalContract, key pal_x_reading): books from every tracker and the wishlist (title, author, genre, pages), stored in IndexedDB. Derived cache only; no data, storage, sync or backup change. */
 /* ═══ v3.80 (MR-065) — spine colour and icon ═══ */
 .sp-spine .ic { position: absolute; left: 50%; margin-left: -6px; width: 12px; height: 12px; color: var(--st); }
 .sp-spine .ic.top { top: 11px; } .sp-spine .ic.bot { bottom: 12px; }
@@ -1246,7 +1247,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.80</span></div>
+    <div class="rt-logo">My Reading <span>v3.81</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2120,7 +2121,7 @@ body.wl-add-open #wlAddToggle { display: none; }
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-shared.js?v=3.80"></script>
+<script src="pal-shared.js?v=3.81"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -3691,6 +3692,26 @@ async function backgroundPullFromCloud() {
   }
 }
 
+// v3.81 (MR-066): search list for the launcher. Books from every tracker (deduplicated by title + author) then wishlist items.
+// Nothing is written back; deleted records and tombstones are skipped. Needs a signed-in user (PalSync), otherwise nothing is published.
+function publishContract() {
+  try {
+    if (!window.PalContract || !appState) return;
+    const seen = {}, search = [];
+    const add = (b, k, tname) => {
+      if (!b || b._deleted || !b.title) return;
+      const key = (b.title + '|' + (b.author || '')).toLowerCase();
+      if (seen[key]) return; seen[key] = 1;
+      search.push({ id: 'rt-' + k + '-' + b.id, t: b.title,
+        s: [b.author || '', b.genre || '', b.pages ? b.pages + ' pages' : '', k === 'w' ? 'Wishlist' : (tname || '')].filter(Boolean).join(' \u00b7 '),
+        k: k === 'w' ? 'wishlist' : 'book', d: b.completedDate && b.completedDate !== '1900-01-01' ? b.completedDate : '', open: { view: 'books' } });
+    };
+    (appState.trackers || []).forEach(t => { if (!t._deleted) (t.books || []).forEach(b => add(b, 'b', t.trackerName)); });
+    (appState.wishlist || []).forEach(b => add(b, 'w'));
+    window.PalContract.publishSearch('reading', search, search.length);   // IndexedDB; Reading publishes no localStorage summary
+  } catch (e) {}
+}
+
 function save() {
   const data = JSON.stringify({ ...appState, version: 6 });
   let ok = false;
@@ -3698,6 +3719,7 @@ function save() {
   try { sessionStorage.setItem(STORE_KEY, data); } catch(e) {}
   // Notify the launcher to refresh its card stat (S8 suite-wide enhancement).
   try { window.parent.postMessage({ type: 'RT_DATA_UPDATED' }, window.location.origin); } catch(_) {}
+  publishContract();   // v3.81 (MR-066)
   // Trigger debounced cloud sync if a user is selected. Suppressed while
   // pushAllToCloud() is applying a just-merged pull result back to
   // appState (see _syncingNow) — that save must not schedule another push.
@@ -8293,6 +8315,7 @@ window.PalSync.initSession({
     _sbUserId = userId;
     hidePinScreen();
     if (!window._rtInited) { window._rtInited = true; afterRtAuth(userKey); }
+    setTimeout(publishContract, 3000); setTimeout(publishContract, 12000);   // v3.81 (MR-066): the user id is known; later saves publish too
   },
   onNoSession: function() {
     if (!window._rtInited) showRtDirectLogin();

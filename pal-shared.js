@@ -730,7 +730,8 @@ function uid(prefix) {
  *   { v:1, appId, userId, built, summary:{}, upcoming:[], attention:[], search:[] }
  *   upcoming  [{ id, date:'YYYY-MM-DD', time?, title, sub?, kind?, open? }]            (max 30)
  *   attention [{ id, level:'action'|'soon'|'info', title, sub?, due?, open? }]          (max 10)
- *   search    [{ id, t, s?, k?, d?, open? }]                                            (reserved; max 400)
+ *   (search lists are NOT part of this key: since v11.38 they go through PalContract.publishSearch() into IndexedDB 'pal_x_db' so they
+ *    cost nothing against the shared 5 MB localStorage quota; rows are { id, t: title, s: detail, k: kind, d: date, open })
  *   open      { view?, id? }  → the launcher sends the app { type:'PAL_OPEN', view, id }
  * userId is the publisher's Supabase user id; the launcher ignores a contract whose userId is not
  * the signed-in user and removes all pal_x_* keys on sign-out. publish() never throws, and does
@@ -773,6 +774,7 @@ window.PalContract = (function () {
       var json = JSON.stringify(o);
       if (json.length * 2 / 1024 > MAX_KB && o.search) {   // trim the (reserved) search list first, then give up quietly
         while (o.search.length && JSON.stringify(o).length * 2 / 1024 > MAX_KB) o.search.length = Math.floor(o.search.length / 2);
+        o.trimmed = true;
         json = JSON.stringify(o);
       }
       if (json.length * 2 / 1024 > MAX_KB) return { stored: false, reason: 'too-large' };
@@ -780,6 +782,56 @@ window.PalContract = (function () {
       if (res) return res;
       localStorage.setItem(PREFIX + appId, json); return { stored: true, mode: 'local' };
     } catch (e) { return { stored: false, reason: 'error' }; }
+  }
+  // ── Universal Search index (v11.38) ──────────────────────────────────────────────────────────────────────────────
+  // One IndexedDB record per app { appId, v, userId, built, total, rows }. Derived cache like the rest of PalContract: only the launcher's
+  // search reads it, the app never does, and clearAll() (sign-out) empties it. Writes are debounced per app (saves can be frequent) and every
+  // failure is swallowed: no IndexedDB (private mode, old browser) simply means no results from that app.
+  var DB = 'pal_x_db', STORE = 'search', SEARCH_MAX = 3000, _timers = {};
+  function db() {
+    return new Promise(function (res, rej) {
+      try {
+        var r = indexedDB.open(DB, 1);
+        r.onupgradeneeded = function () { if (!r.result.objectStoreNames.contains(STORE)) r.result.createObjectStore(STORE, { keyPath: 'appId' }); };
+        r.onsuccess = function () { res(r.result); };
+        r.onerror = function () { rej(r.error); };
+        r.onblocked = function () { rej(new Error('blocked')); };
+      } catch (e) { rej(e); }
+    });
+  }
+  function publishSearch(appId, rows, total, opts) {
+    try {
+      if (!appId || !Array.isArray(rows)) return;
+      var userId = (opts && opts.userId) || (window.PalSync && window.PalSync.getUserId && window.PalSync.getUserId());
+      if (!userId) return;
+      clearTimeout(_timers[appId]);
+      _timers[appId] = setTimeout(function () {
+        try {
+          var clean = cleanList(rows, SEARCH_MAX, { id: 120, t: 120, s: 160, k: 24, d: 10, open: 'open' }).filter(function (r) { return r.t; });
+          var rec = { appId: appId, v: 1, userId: userId, built: new Date().toISOString(), total: Math.max(total || 0, clean.length), rows: clean };
+          db().then(function (d) {
+            var tx = d.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(rec);
+            tx.oncomplete = function () { d.close(); }; tx.onerror = function () { d.close(); };
+          }).catch(function () {});
+        } catch (e) {}
+      }, (opts && opts.delay != null) ? opts.delay : 1200);
+    } catch (e) {}
+  }
+  // Resolves { appId: { rows, total, built } } for records published by this user only. Never rejects.
+  function readSearchAll(userId) {
+    return db().then(function (d) {
+      return new Promise(function (res) {
+        var out = {}, tx = d.transaction(STORE, 'readonly'), rq = tx.objectStore(STORE).getAll();
+        rq.onsuccess = function () {
+          (rq.result || []).forEach(function (r) { if (r && r.v === 1 && r.userId === userId && Array.isArray(r.rows)) out[r.appId] = { rows: r.rows, total: r.total || r.rows.length, built: r.built }; });
+          d.close(); res(out);
+        };
+        rq.onerror = function () { d.close(); res({}); };
+      });
+    }).catch(function () { return {}; });
+  }
+  function clearSearch() {
+    try { db().then(function (d) { var tx = d.transaction(STORE, 'readwrite'); tx.objectStore(STORE).clear(); tx.oncomplete = function () { d.close(); }; tx.onerror = function () { d.close(); }; }).catch(function () {}); } catch (e) {}
   }
   function read(appId) {
     try { var o = JSON.parse(localStorage.getItem(PREFIX + appId) || 'null'); return (o && o.v === 1 && o.appId === appId) ? o : null; }
@@ -790,8 +842,21 @@ window.PalContract = (function () {
       var del = [];
       for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf(PREFIX) === 0) del.push(k); }
       del.forEach(function (k) { localStorage.removeItem(k); });
+      clearSearch();   // v11.38
       return del.length;
     } catch (e) { return 0; }
   }
-  return { publish: publish, read: read, clearAll: clearAll, PREFIX: PREFIX, VERSION: 1 };
+  // v11.38: Cmd/Ctrl+K pressed while an app (inside the launcher) has the focus is handed to the launcher, which opens Universal Search.
+  // Only acts when embedded; a standalone app is untouched. Harmless if the launcher does not know the message.
+  try {
+    if (window.parent && window.parent !== window) {
+      window.addEventListener('keydown', function (e) {
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && String(e.key).toLowerCase() === 'k') {
+          e.preventDefault();
+          try { window.parent.postMessage({ type: 'PAL_SEARCH' }, window.location.origin); } catch (x) {}
+        }
+      });
+    }
+  } catch (e) {}
+  return { publish: publish, read: read, clearAll: clearAll, publishSearch: publishSearch, readSearchAll: readSearchAll, clearSearch: clearSearch, PREFIX: PREFIX, VERSION: 1 };
 })();
