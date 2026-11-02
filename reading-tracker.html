@@ -16,7 +16,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.82</title>
+<title>Reading Tracker v3.83</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1231,6 +1231,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 @media (min-width: 700px) { .bk-key .kgrid { grid-template-columns: 1fr 1fr; } }
 .sp-spine.audio, .sp-spine.audio.todo, .sp-spine.audio.cur, .sp-spine.audio.done { border-top: 5px solid var(--au); }
 
+/* v3.83 (MR-068): Book List › Covers: looks up every existing book without a cover, shows a review list, and adds only the details you tick (cover, publisher, year, ISBN, pages if empty). Also: Find details now works with an author alone. */
 /* v3.82 (MR-067): Book List add form and edit panel can fetch book details by ISBN or title (Open Library, then Google Books): title, author, pages, publisher, year, genre and a cover, shown as a small cover and detail line on the Book List. New optional item fields isbn, coverId, coverUrl, publisher, publishYear, metaSource; manual entry unchanged. */
 /* v3.81 (MR-066): publishes a search list for the launcher's Universal Search (PalContract, key pal_x_reading): books from every tracker and the wishlist (title, author, genre, pages), stored in IndexedDB. Derived cache only; no data, storage, sync or backup change. */
 /* ═══ v3.80 (MR-065) — spine colour and icon ═══ */
@@ -1257,7 +1258,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.82</span></div>
+    <div class="rt-logo">My Reading <span>v3.83</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -1365,6 +1366,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <div class="rt-modal-overlay" id="bkModal" onclick="bkCloseOutside(event)" role="dialog" aria-modal="true" aria-label="Book details"><div class="rt-modal" id="bkModalBox"></div></div>
 
 <div class="rt-modal-overlay" id="tidyModal" role="dialog" aria-modal="true" aria-label="Tidy up"><div class="rt-modal" id="tidyBox"></div></div>
+<div class="rt-modal-overlay" id="bkBulkModal" role="dialog" aria-modal="true" aria-label="Covers and details" onclick="if(event.target===this)bkBulkClose()"><div class="rt-modal" id="bkBulkBox"></div></div>
 
 <div class="app">
 
@@ -1876,7 +1878,7 @@ body.wl-add-open #wlAddToggle { display: none; }
   <div class="wl-tools-row"><div class="stats-period-tabs wl-layout-tabs" role="group" aria-label="Book List view">
     <button class="stats-period-tab" id="wlLayoutList" onclick="setWlLayout('list')">List</button>
     <button class="stats-period-tab on" id="wlLayoutCase" onclick="setWlLayout('case')">Bookcase</button>
-  </div><button class="btn btn-ghost btn-sm" id="wlTidyBtn" onclick="rtOpenTidy()">Tidy up</button></div>
+  </div><button class="btn btn-ghost btn-sm" id="wlTidyBtn" onclick="rtOpenTidy()">Tidy up</button> <button class="btn btn-ghost btn-sm" id="bkBulkBtn" onclick="bkBulkOpen()" title="Add covers and details to books you already have">Covers</button></div>
 
   <!-- v3.47 (MR-032): Monthly reading targets + per-type reading order,
        plus dated reading-goal collections — collapsed by default, same
@@ -2133,7 +2135,7 @@ body.wl-add-open #wlAddToggle { display: none; }
      cleaner, lower-risk case than either of those. No merge, tombstone,
      or reassembly logic changed — verified via node --check and an
      automated integration test against the real extracted code. -->
-<script src="pal-shared.js?v=3.82"></script>
+<script src="pal-shared.js?v=3.83"></script>
 <script>
 // ── Default data ──────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -8068,8 +8070,8 @@ async function bkLookup(isbn, title, author) {   // → { results: [...], note: 
       const j = await bkGet("https://openlibrary.org/api/books?bibkeys=ISBN:" + isbn + "&format=json&jscmd=data");
       if (j["ISBN:" + isbn]) out.results.push(bkFromOLData(j["ISBN:" + isbn], isbn));
     } else {
-      const q = "https://openlibrary.org/search.json?limit=5&fields=title,author_name,first_publish_year,cover_i,isbn,number_of_pages_median,publisher,subject&title=" +
-        encodeURIComponent(title) + (author ? "&author=" + encodeURIComponent(author) : "");
+      const q = "https://openlibrary.org/search.json?limit=5&fields=title,author_name,first_publish_year,cover_i,isbn,number_of_pages_median,publisher,subject" +
+        (title ? "&title=" + encodeURIComponent(title) : "") + (author ? "&author=" + encodeURIComponent(author) : "");
       const j = await bkGet(q);
       (j.docs || []).slice(0, 5).forEach(d => out.results.push({ title: d.title || "", author: (d.author_name || []).slice(0, 2).join(", "), pages: d.number_of_pages_median || 0,
         publisher: (d.publisher || [])[0] || "", publishYear: d.first_publish_year ? String(d.first_publish_year) : "",
@@ -8079,7 +8081,7 @@ async function bkLookup(isbn, title, author) {   // → { results: [...], note: 
   } catch (e) { out.note = "Open Library could not be reached; tried Google Books. "; }
   if (out.results.length) return out;
   try {
-    const q = isbn ? "isbn:" + isbn : "intitle:" + title + (author ? "+inauthor:" + author : "");
+    const q = isbn ? "isbn:" + isbn : [title ? "intitle:" + title : "", author ? "inauthor:" + author : ""].filter(Boolean).join("+");
     const j = await bkGet("https://www.googleapis.com/books/v1/volumes?maxResults=5&printType=books&q=" + encodeURIComponent(q).replace(/%2B/g, "+"));
     (j.items || []).slice(0, 5).forEach(v => out.results.push(bkFromGB(v, isbn)));
   } catch (e) { out.note += "Google Books could not be reached either."; }
@@ -8098,7 +8100,7 @@ async function bkFind(kind, wid) {
   const rawIsbn = ($(I.isbn).value || "").trim(), title = ($(I.title).value || "").trim(), author = ($(I.author).value || "").trim();
   let isbn = null;
   if (rawIsbn) { isbn = bkIsbn(rawIsbn); if (!isbn) { msg.textContent = "That ISBN does not look right (check the digits), or clear it to search by title."; return; } }
-  else if (!title) { msg.textContent = "Enter an ISBN, or a title (and author if you like), then press Find details."; return; }
+  else if (!title && !author) { msg.textContent = "Enter an ISBN, a title or an author, then press Find details."; return; }
   msg.textContent = "Looking up…";
   const r = await bkLookup(isbn, title, author);
   if (!r.results.length) { msg.textContent = (r.note || "") + "No match found. You can still type the details yourself."; return; }
@@ -8148,6 +8150,145 @@ function bkFindBlock(kind, wid, val) {   // markup for the add form and the edit
     '<div style="display:flex;gap:6px"><input type="text" id="' + ids.i + '" inputmode="text" autocomplete="off" placeholder="e.g. 9780547928227" value="' + esc(val || "") + '" style="flex:1;min-width:0">' +
     '<button type="button" class="btn btn-ghost btn-sm" onclick="bkFind(\'' + kind + '\',\'' + wid + '\')">Find details</button></div>' +
     '<div id="' + ids.m + '" class="bk-msg" aria-live="polite"></div><div id="' + ids.r + '" class="bk-results"></div></div>';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// v3.83 (MR-068) — add covers and details to EXISTING books (Book List items and every tracker's books that have no cover yet).
+// Press "Covers" next to Tidy up. It looks each book up (title + author, about one request a second so Open Library's limit is respected),
+// then shows a REVIEW LIST: nothing is changed until you tick matches and press Apply. Only missing details are added (cover, publisher,
+// year, ISBN if empty, pages only if empty); title, author, genre, notes, progress and everything else are never touched. Books with no match
+// are remembered on this device (rt_bk_nomatch_v1) so they are not asked about again; unticked "check this" suggestions are asked again next time.
+// ══════════════════════════════════════════════════════════════════
+const BK_NOMATCH_KEY = "rt_bk_nomatch_v1";
+let _bkB = { running: false, cancel: false, rows: [], skipped: 0, noMatch: 0 };
+function bkNorm(s) { return String(s == null ? "" : s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9 ]+/g, " ").replace(/\b(the|a|an)\b/g, " ").replace(/\s+/g, " ").trim(); }
+function bkNoMatchLoad() { try { return JSON.parse(localStorage.getItem(BK_NOMATCH_KEY) || "{}") || {}; } catch (e) { return {}; } }
+function bkNoMatchSave(o) { try { localStorage.setItem(BK_NOMATCH_KEY, JSON.stringify(o)); } catch (e) {} }
+function bkBulkCollect() {
+  const out = [];
+  (appState.wishlist || []).forEach(w => { if (w && !w._deleted && w.title && !w.coverId && !w.coverUrl) out.push({ kind: "w", item: w, where: "Book List" }); });
+  (appState.trackers || []).forEach(t => { if (!t || t._deleted) return; (t.books || []).forEach(b => { if (b && !b._deleted && b.title && !b.coverId && !b.coverUrl) out.push({ kind: "b", item: b, tracker: t, where: t.trackerName || "Tracker" }); }); });
+  return out;
+}
+function bkAuthorOk(item, r) {
+  if (!item.author) return true;
+  const have = bkNorm(r.author);
+  return bkNorm(item.author).split(" ").filter(x => x.length > 2).some(tok => have.indexOf(tok) >= 0);
+}
+function bkPickBest(item, results) {   // → { pick, conf: "good" | "check" } or null
+  const nt = bkNorm(item.title); let best = null;
+  results.forEach(r => {
+    const rt = bkNorm(r.title), main = bkNorm(String(r.title).split(":")[0]);
+    let ts = 0;
+    if (rt === nt || main === nt) ts = 3; else if (nt.length >= 4 && (rt.indexOf(nt) === 0 || nt.indexOf(main) === 0 && main.length >= 4)) ts = 2;
+    const sc = ts * 10 + (bkAuthorOk(item, r) ? 5 : 0) + ((r.coverId || r.coverUrl) ? 3 : 0) + (r.publishYear ? 1 : 0);
+    if (!best || sc > best.sc) best = { r: r, ts: ts, sc: sc };
+  });
+  if (!best) return null;
+  const good = best.ts >= 2 && bkAuthorOk(item, best.r) && (best.r.coverId || best.r.coverUrl);
+  return { pick: best.r, conf: good ? "good" : "check" };
+}
+function bkSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function bkResolve(c) {   // the live record NOW (a background sync can replace the objects seen when the look-ups started)
+  if (c.kind === "w") { const w = (appState.wishlist || []).find(x => x.id === c.item.id && !x._deleted); return w ? { item: w, tracker: null } : null; }
+  const t = (appState.trackers || []).find(x => x.id === c.tracker.id && !x._deleted); if (!t) return null;
+  const b = (t.books || []).find(x => x.id === c.item.id && !x._deleted); return b ? { item: b, tracker: t } : null;
+}
+function bkBulkOpen() {
+  const box = document.getElementById("bkBulkBox"), ov = document.getElementById("bkBulkModal");
+  if (!box || !ov) return;
+  _bkB = { running: false, cancel: false, rows: [], skipped: 0, noMatch: 0 };
+  const nm = bkNoMatchLoad(), all = bkBulkCollect(), todo = all.filter(c => !nm[c.item.id]);
+  box.textContent = "";
+  const head = bkMake("div", "rt-modal-title"); head.appendChild(bkMake("span", null, "Covers and details"));
+  const x = bkMake("button", "rt-modal-close", "✕"); x.type = "button"; x.setAttribute("aria-label", "Close"); x.addEventListener("click", bkBulkClose); head.appendChild(x); box.appendChild(head);
+  const body = bkMake("div"); body.id = "bkBulkBody"; box.appendChild(body);
+  if (!all.length) body.appendChild(bkMake("p", "bk-msg", "Every book already has a cover or details. Nothing to do."));
+  else {
+    body.appendChild(bkMake("p", "bk-msg", todo.length + " book" + (todo.length === 1 ? "" : "s") + " without a cover" + (all.length > todo.length ? " (" + (all.length - todo.length) + " more had no match last time and are skipped)" : "") + ". Each is looked up on Open Library (Google Books if needed), about one a second, then you review the matches. Nothing changes until you press Apply."));
+    const go = bkMake("button", "btn btn-primary btn-sm btn-wide", "Look them up (about " + Math.max(1, Math.ceil(todo.length * 1.2 / 60)) + " min)"); go.type = "button";
+    go.addEventListener("click", () => bkBulkRun(todo)); body.appendChild(go);
+    if (all.length > todo.length) { const re = bkMake("button", "btn btn-ghost btn-sm btn-wide", "Also retry the books with no match"); re.type = "button"; re.style.marginTop = "6px"; re.addEventListener("click", () => { bkNoMatchSave({}); bkBulkOpen(); }); body.appendChild(re); }
+  }
+  ov.classList.add("open");
+}
+function bkBulkClose() { _bkB.cancel = true; const ov = document.getElementById("bkBulkModal"); if (ov) ov.classList.remove("open"); }
+async function bkBulkRun(todo) {
+  const body = document.getElementById("bkBulkBody"); if (!body || _bkB.running) return;
+  _bkB.running = true; _bkB.cancel = false; body.textContent = "";
+  const prog = bkMake("p", "bk-msg"); prog.setAttribute("aria-live", "polite"); body.appendChild(prog);
+  const stop = bkMake("button", "btn btn-ghost btn-sm btn-wide", "Stop and review what was found so far"); stop.type = "button"; stop.addEventListener("click", () => { _bkB.cancel = true; }); body.appendChild(stop);
+  const cache = {}, nm = bkNoMatchLoad(); let fails = 0, done = 0, aborted = "";
+  for (const c of todo) {
+    if (_bkB.cancel) break;
+    prog.textContent = "Looking up " + (done + 1) + " of " + todo.length + ": " + c.item.title;
+    const key = bkNorm(c.item.title) + "|" + bkNorm(c.item.author);
+    let r = cache[key];
+    if (!r) {
+      r = await bkLookup(null, c.item.title, c.item.author || "");
+      cache[key] = r;
+      if (!r.results.length && /could not be reached either/.test(r.note || "")) { fails++; if (fails >= 3) { aborted = "Open Library and Google Books could not be reached (3 times in a row). Check your connection and try again."; break; } } else fails = 0;
+      await bkSleep(1100);
+    }
+    done++;
+    const best = r.results.length ? bkPickBest(c.item, r.results) : null;
+    if (!best) { nm[c.item.id] = 1; _bkB.noMatch++; } else _bkB.rows.push({ c: c, pick: best.pick, conf: best.conf, on: best.conf === "good" });
+  }
+  bkNoMatchSave(nm); _bkB.running = false;
+  bkBulkReview(aborted);
+}
+function bkBulkReview(note) {
+  const body = document.getElementById("bkBulkBody"); if (!body) return;
+  body.textContent = "";
+  const rows = _bkB.rows.slice().sort((a, b) => (b.conf === "good") - (a.conf === "good"));
+  const goodN = rows.filter(r => r.conf === "good").length;
+  body.appendChild(bkMake("p", "bk-msg", (note ? note + " " : "") + rows.length + " suggestion" + (rows.length === 1 ? "" : "s") + " (" + goodN + " look right, ticked; " + (rows.length - goodN) + " to check, unticked)" + (_bkB.noMatch ? "; " + _bkB.noMatch + " with no match" : "") + ". Tick what is correct, then Apply."));
+  if (!rows.length) return;
+  const list = bkMake("div", "bk-results"); list.style.maxHeight = "46vh"; list.style.overflowY = "auto";
+  const apply = bkMake("button", "btn btn-primary btn-sm btn-wide"); apply.type = "button";
+  const upd = () => { const n = _bkB.rows.filter(r => r.on).length; apply.textContent = "Apply " + n + " selected"; };
+  rows.forEach(r => {
+    const lab = bkMake("label", "bk-res"); lab.style.cursor = "pointer";
+    const cb = bkMake("input"); cb.type = "checkbox"; cb.checked = r.on; cb.style.flex = "none"; cb.style.width = "20px"; cb.style.height = "20px";
+    cb.setAttribute("aria-label", "Use this match for " + r.c.item.title); cb.addEventListener("change", () => { r.on = cb.checked; upd(); });
+    lab.appendChild(cb);
+    const src = bkCoverSrc(r.pick, "S");
+    if (src) { const im = bkMake("img", "bk-cover"); im.src = src; im.alt = ""; im.loading = "lazy"; im.referrerPolicy = "no-referrer"; im.onerror = () => { im.style.visibility = "hidden"; }; lab.appendChild(im); }
+    else lab.appendChild(bkMake("span", "bk-cover bk-nocover", "📖"));
+    const tx = bkMake("span", "bk-tx");
+    tx.appendChild(bkMake("b", null, r.c.item.title + (r.c.item.author ? " — " + r.c.item.author : "")));
+    tx.appendChild(bkMake("small", null, "Found: " + [r.pick.title, r.pick.author, r.pick.publishYear, r.pick.publisher].filter(Boolean).join(" · ")));
+    tx.appendChild(bkMake("small", null, r.c.where + " · " + (r.conf === "good" ? "looks right" : (r.pick.coverId || r.pick.coverUrl ? "check this one" : "no cover found, check this one"))));
+    lab.appendChild(tx); list.appendChild(lab);
+  });
+  body.appendChild(list); upd();
+  apply.style.marginTop = "10px"; apply.addEventListener("click", bkBulkApply); body.appendChild(apply);
+}
+async function bkBulkApply() {
+  const chosen = _bkB.rows.filter(r => r.on); if (!chosen.length) { showToast("Nothing ticked"); return; }
+  const live = [];
+  chosen.forEach(r => {
+    const cur = bkResolve(r.c); if (!cur) return;   // deleted while the dialog was open: skip
+    const it = cur.item, m = r.pick; live.push({ c: { kind: r.c.kind, item: it, tracker: cur.tracker } });
+    if (m.coverId) { it.coverId = m.coverId; delete it.coverUrl; } else if (m.coverUrl) { it.coverUrl = m.coverUrl; delete it.coverId; }
+    if (m.publisher && !it.publisher) it.publisher = m.publisher;
+    if (m.publishYear && !it.publishYear) it.publishYear = m.publishYear;
+    if (m.isbn && !it.isbn) it.isbn = m.isbn;
+    if (m.pages && !it.pages) it.pages = m.pages;
+    it.metaSource = m.source;
+    touch(it);
+  });
+  save();
+  bkBulkClose();
+  try { if (document.getElementById("wishlistApp")?.classList.contains("active")) renderWishlistView(); updateWishlistCard(); render(); } catch (e) {}
+  showToast(live.length + " book" + (live.length === 1 ? "" : "s") + " updated ✓");
+  for (const r of live) {   // each record pushed on its own so the sync library carries the edit (see pushBookNow's comment); a book keeps ITS tracker's id
+    try {
+      if (!window.PalSync.hasSession()) break;
+      if (r.c.kind === "w") await pushWishlistItemNow(r.c.item);
+      else await _rtBooks.upsert(r.c.item.id, Object.assign({}, r.c.item, { trackerId: r.c.tracker.id }));
+    } catch (e) { logSyncDiag("Bulk cover push failed for \"" + r.c.item.title + "\": " + (e && e.message ? e.message : "error"), "err"); }
+  }
 }
 
 function addToWishlistFromView() {
