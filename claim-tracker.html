@@ -11,6 +11,10 @@
 <script>
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
+// v2.26 (CLA-023): launcher quick-add. New CT_ACTION messages from the launcher's own Claims card: ping (answers CT_PONG {ready}), quickAddExpense
+// {amount, category, reason, reqId} and quickAddMileage {tripId, reqId}. They build exactly the entries addExpense()/addMileage() build (today's date,
+// unclaimed, a standard trip uses the saved miles and deduction), save through mutateEntry(), and reply CT_QUICKADD_RESULT {reqId, ok, msg, summary}.
+// A repeated reqId replays the stored result and never saves twice. ready = first cloud pull settled. No change to data, storage or backup formats.
 // v2.25 (CLA-022): fixes the expected payment date (a claim is paid in the payroll of the month of the SUBMISSION that picks it up, not the month it
 // was marked claimed: marked 27 Oct -> submitted 6 Nov -> paid 27 Nov), adds a Submit Day setting (default 6) that drives "Next submission", shows the
 // expected payment date under it, and shows the app version in the Sync & Backup drawer and Settings (the header is hidden when nested in Fortnight).
@@ -23,7 +27,7 @@
 // v2.21: nested inside Fortnight Tracker's Claims tab (it loads this file with ?embedded=ft).
 (function(){try{if(/[?&]embedded=ft(&|$)/.test(location.search))document.documentElement.classList.add('embedded');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.25</title>
+<title>Claim Tracker v2.26</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -516,7 +520,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.25</div>
+        <div class="ver">v2.26</div>
       </div>
     </div>
     <div class="header-actions">
@@ -534,7 +538,7 @@
     <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11M12 20V5M19 20v-7"/></svg><span class="tab-lbl">Stats</span></button>
     <button class="tab-btn" onclick="switchTab('settings')" id="tab-settings"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span class="tab-lbl">Settings</span></button>
   </div>
-  <div class="rail-foot">Receipt &middot; v2.25</div>
+  <div class="rail-foot">Receipt &middot; v2.26</div>
 </div>
 
 <!-- Non-blocking sync banner (shown if no PAL_SESSION within 3s) -->
@@ -812,7 +816,7 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=2.25"></script>
+<script src="pal-shared.js?v=2.26"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1032,7 +1036,7 @@
 // uniform radius, shadow) and added click-outside-to-close, matching
 // the Sync & Backup drawer's existing behaviour. Sync & Backup drawer
 // itself is untouched — it's a deliberate bottom sheet, not a modal.
-const VERSION  = '2.25';
+const VERSION  = '2.26';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -1187,7 +1191,7 @@ window.PalSync.initSession({
     document.getElementById('syncBanner').classList.remove('visible');
     addLog('PAL_SESSION received — starting sync', 'info');
     setSyncState('connecting');
-    await syncPull();
+    try { await syncPull(); } finally { _ctReady = true; }   // v2.26: ready for launcher quick-add
     reportToLauncher();
     const trimResult = window.PalSync.trimIfLarge('claim_tracker_v1', 500);
     if (trimResult.trimmed) addLog('Local cache trimmed (' + trimResult.sizeKB.toFixed(0) + ' KB freed, re-synced from cloud)', 'info');
@@ -1205,7 +1209,51 @@ window.PalSync.initSession({
 window.addEventListener('message', function(e) {
   if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme); // v1.9
+  if (e.data && e.data.type === 'CT_ACTION') ctHandleAction(e);   // v2.26
 });
+
+// v2.26 (CLA-023): launcher quick-add (see the note at the top of this file).
+let _ctReady = false;            // set once the first cloud pull has settled (success or not)
+const _ctQuickResults = {};      // reqId -> reply, so a re-sent request never saves twice
+async function ctHandleAction(e) {
+  const d = e.data, to = e.source || window.parent;
+  const reply = m => { try { if (to && to !== window) to.postMessage(m, e.origin); } catch (x) {} };
+  if (d.action === 'ping') { reply({ type:'CT_PONG', reqId:d.reqId, ready:_ctReady, version:VERSION }); return; }
+  if (d.action !== 'quickAddExpense' && d.action !== 'quickAddMileage') return;
+  const reqId = d.reqId;
+  if (reqId && _ctQuickResults[reqId]) { reply(Object.assign({ type:'CT_QUICKADD_RESULT', reqId:reqId }, _ctQuickResults[reqId])); return; }
+  let res = { ok:false, msg:'Not saved' };
+  try {
+    const s = getSettings(), date = todayISO();
+    let entry = null;
+    if (d.action === 'quickAddExpense') {
+      const amount = Math.round(Number(d.amount) * 100) / 100, cat = String(d.category || ''), reason = String(d.reason == null ? '' : d.reason).trim().slice(0, 120);
+      if (!isFinite(amount) || amount <= 0 || amount > 100000) res.msg = 'Invalid amount';
+      else if (s.categories.indexOf(cat) < 0) res.msg = 'Unknown category';
+      else if (!reason) res.msg = 'Enter a reason';
+      else entry = { id:uid(), type:'expense', entry_date:date, category:cat, amount, reason, claimed:false, claimed_date:null, updated_at:new Date().toISOString() };
+    } else {
+      const trip = (s.stdTrips || []).find(t => t.id === d.tripId);
+      if (!trip) res.msg = 'Unknown standard trip';
+      else {
+        const miles = Number(trip.miles), mode = trip.deduct || 'full';
+        const c = calcMileage(miles, mode), paxRate = s.passengerRatePerMile ?? 0.05;
+        entry = { id:uid(), type:'mileage', entry_date:date, reason:trip.name, total_miles:miles, deduct_mode:mode, deduct_miles:c.deductMiles, claimable_miles:c.claimable,
+          rate_per_mile:s.ratePerMile, passengers:[], passenger_rate_per_mile:paxRate, passenger_miles:0, passenger_amount:0, amount:c.amount, claimed:false, claimed_date:null, updated_at:new Date().toISOString() };
+      }
+    }
+    if (entry) {
+      getEntries().unshift(entry);
+      await mutateEntry(entry);
+      renderAll();
+      const open = getEntries().filter(x => !x.claimed && !x._deleted && claimStatus(x) !== 'expired');
+      res = { ok:true, msg:'Added', kind:entry.type, amount:computeAmount(entry), label:entry.type === 'expense' ? entry.category : entry.reason,
+        toClaim:Math.round(open.reduce((t, x) => t + computeAmount(x), 0) * 100) / 100 };
+    }
+  } catch (err) { res = { ok:false, msg:'Error: ' + ((err && err.message) || 'unknown') }; }
+  if (reqId) _ctQuickResults[reqId] = res;
+  reply(Object.assign({ type:'CT_QUICKADD_RESULT', reqId:reqId }, res));
+}
 
 // v2.22 (CLA-019): launcher contract. Uses the app's own claimStatus()/daysToExpiry()/computeAmount()/nextSubmissionDate(),
 // so the launcher never re-derives claims rules. Attention = unclaimed entries inside the existing 30-day warning window
