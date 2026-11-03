@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.46</title>
+<title>P Apps v11.47</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1710,6 +1710,15 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-154, v11.47): Gym Tracker "one intake" and food & drink reminders (needs gym-tracker.html v2.134). (1) The Gym card's
+  calories / protein line and its water line now add up food AND drinks together (a protein shake logged as a drink counts toward
+  calories and protein; a soup logged as food counts toward water) - reads the new optional calories / protein / volumeMl fields on
+  nutritionEntries and waterEntries from gym_tracker_v1. (2) Needs attention shows the food & drink reminders set in the Gym
+  Tracker's settings: from a reminder's time until something of the right kind is logged (or up to 30 minutes before the time), as
+  an "Action required" item that opens Food & drink. Worked out here from the Gym Tracker's saved data, so it appears on time even
+  when the Gym Tracker is not open; re-checked every minute and whenever the Gym Tracker reports a change. Tomorrow / 7d / Ignore
+  apply to that day's reminder only (each day's reminder has its own id). (3) The quick-add confirmation also shows the calories /
+  protein a drink adds and the ml a food adds. The quick-add inputs themselves are unchanged. No new storage, message or sync.
   CHANGED (PET-153, v11.46): the Fantasy card's "Squad £x · Bank £y" and "Next: GW · cut-off" lines share one row (squad and bank left, next gameweek and deadline right; they wrap
   onto two lines only if the card is too narrow), saving a line of height. Display only.
   CHANGED (PET-149 to PET-152, v11.45): (1) the Fantasy card's locked-in pitch shows the score of a player's club match while it is on ("● 2-1 AVL" live,
@@ -2897,6 +2906,7 @@ window.addEventListener('message', function(e) {
   const DATA_UPDATE_TYPES = ['GYM_DATA_UPDATED','RT_DATA_UPDATED','FT_DATA_UPDATED','CLAIM_DATA_UPDATED','OB_DATA_UPDATED','FF_DATA_UPDATED','GAT_DATA_UPDATED'];
   if (e.data && DATA_UPDATE_TYPES.includes(e.data.type)) {
     refreshCardStats();
+    if (e.data.type === 'GYM_DATA_UPDATED') pxGymTick();   // PET-154 v11.47: a logged meal / drink may clear a reminder
   }
   // ── PAL_NAVIGATE (GYM-040, PET-051) ─────────────────────────────
   // Any embedded app can request the launcher switch to another app by
@@ -3241,7 +3251,7 @@ function pxAttentionItems(cmap) {
   const snz = pxSnoozeLoad().map, seen = {}, out = [];
   PX.ignoredN = 0;
   Object.keys(cmap).forEach(function (app) {
-    (cmap[app].attention || []).forEach(function (it) {
+    (cmap[app].attention || []).concat(app === 'gym' ? pxGymReminders() : []).forEach(function (it) {   // PET-154 v11.47: + food & drink reminders
       if (!it || !it.id || !it.title) return;
       const key = app + ':' + it.id;
       if (seen[key]) return; seen[key] = 1;
@@ -3253,6 +3263,53 @@ function pxAttentionItems(cmap) {
   out.sort(function (a, b) { return rank[a.level] - rank[b.level] || (a.due || '9').localeCompare(b.due || '9'); });
   return out;
 }
+// PET-154 v11.47: food & drink reminders. The Gym Tracker stores them on its water-target record (reminders: [{id, time:'HH:MM',
+// label, kind:'any'|'food'|'drink', on}]). A reminder is due from its time today until something of its kind has been logged at or
+// after (time - 30 minutes). Worked out here, from the Gym Tracker's saved data, so it needs no running app and no contract refresh.
+// The id carries today's date so Tomorrow / 7d / Ignore only ever hide that day's reminder.
+let _pxGymSig = '';
+function pxGymReminders() {
+  let items = [];
+  try {
+    const raw = localStorage.getItem('gym_tracker_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const d = (parsed && parsed.data && parsed.data.waterTargets != null) ? parsed.data : (parsed || {});
+      const rec = (d.waterTargets || []).find(function (t) { return t && !t._deleted; });
+      const list = rec && Array.isArray(rec.reminders) ? rec.reminders : [];
+      if (list.length) {
+        const now = new Date(), today = todayISO(), nowMin = now.getHours() * 60 + now.getMinutes();
+        const live = function (a) { return (a || []).filter(function (e) { return e && !e._deleted && e.date === today; }); };
+        const food = live(d.nutritionEntries), drink = live(d.waterEntries);
+        const stamp = function (e) { return Date.parse(e.updatedAt || e.createdAt || '') || 0; };
+        list.forEach(function (r) {
+          if (!r || !r.id || r.on === false || !/^\d{2}:\d{2}$/.test(r.time || '')) return;
+          const hh = Number(r.time.slice(0, 2)), mm = Number(r.time.slice(3));
+          if (hh * 60 + mm > nowMin) return;
+          const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm).getTime() - 30 * 60000;
+          const pool = r.kind === 'food' ? food : r.kind === 'drink' ? drink : food.concat(drink);
+          if (pool.some(function (e) { return stamp(e) >= from; })) return;
+          const what = r.label ? String(r.label) : (r.kind === 'food' ? 'food' : r.kind === 'drink' ? 'a drink' : 'food or drink');
+          items.push({ id: 'intake:' + r.id + ':' + today, level: 'action', title: 'Log ' + what, sub: 'Reminder for ' + r.time, due: '', open: { view: 'intake' } });
+        });
+      }
+    }
+  } catch (e) { items = []; }
+  _pxGymSig = items.map(function (i) { return i.id; }).join('|');
+  return items;
+}
+// Re-draw Needs attention only when the set of due reminders has changed (every minute, and when the Gym Tracker reports a change).
+function pxGymTick() {
+  try {
+    const before = _pxGymSig;
+    const now = pxGymReminders().map(function (i) { return i.id; }).join('|');
+    if (now === before) return;
+    const c = pxRead();
+    if (c.gym) pxRenderAttention(c);
+  } catch (e) {}
+}
+setInterval(function () { if (!document.hidden) pxGymTick(); }, 60000);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) pxGymTick(); });
 function pxStaleNote(cmap) {
   const old = [];
   pxLive(cmap).forEach(function (k) {
@@ -3543,7 +3600,7 @@ function navMenuFillAccount(m, b) {
   u.appendChild(av); u.appendChild(tx); m.appendChild(u);
   m.appendChild(row('nm-danger', '\u21B1', 'Sign out', function () { navMenuClose(); confirmSignOut(); }));
   m.appendChild(sep());
-  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.46'; m.appendChild(v);
+  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.47'; m.appendChild(v);
 }
 function navMenuOpen() {
   const m = document.getElementById('navMenu'), b = document.getElementById('navMenuBtn'), hb = document.getElementById('navHome');
@@ -5440,10 +5497,18 @@ function showGymQuickConfirm(kind, qty, label, res, protein) {
       const pg = Number(res.targetProtein) || 0;
       add('Protein', res.totalProtein + (pg ? ' / ' + pg : '') + ' g');
     }
+    if (res && Number(res.addMl) > 0) add('Also counts', res.addMl + ' ml toward water');   // PET-154 v11.47
   } else if (res && typeof res.totalMl === 'number') {
     const goal = Number(res.targetMl) || 0;
     add('Today', res.totalMl + (goal ? ' / ' + goal : '') + ' ml');
     if (goal) add(res.totalMl > goal ? 'Over target' : 'Left', Math.abs(Math.round((goal - res.totalMl) * 100) / 100) + ' ml');
+    // PET-154 v11.47: a drink with calories / protein (e.g. a protein shake) counts toward those targets too
+    if (res && (Number(res.addKcal) > 0 || Number(res.addProtein) > 0)) {
+      const parts = [];
+      if (Number(res.addKcal) > 0) parts.push(res.addKcal + ' kcal');
+      if (Number(res.addProtein) > 0) parts.push(res.addProtein + ' g protein');
+      add('Also counts', parts.join(' · '));
+    }
   }
   el.classList.add('show');
   if (_obConfirmTimer) clearTimeout(_obConfirmTimer);
@@ -6090,7 +6155,8 @@ function statGym() {
 
     // Intake: both blocks are rendered; CSS shows the one matching the quick-add mode
     // (card[data-gym-kind], set by gymQuickSetKind). Drink = water, Food = calories + protein.
-    const waterToday = round2(waterEntries.filter(e => e.date === todayStr).reduce((s, e) => s + (e.volumeMl || 0), 0));
+    // PET-154 v11.47 (Gym v2.134 "one intake"): water = drinks AND any ml carried by foods; calories / protein = foods AND drinks.
+    const waterToday = round2(waterEntries.filter(e => e.date === todayStr).concat(nutritionEntries.filter(e => e.date === todayStr)).reduce((s, e) => s + (Number(e.volumeMl) || 0), 0));
     const waterGoal  = round2(waterTarget.dailyMl);
     html += '<div class="gym-intake gym-intake-water">';
     if (waterToday || waterGoal) {
@@ -6104,11 +6170,12 @@ function statGym() {
     const isActiveToday = resolvePlansForDate(todayStr).length > 0 || sessionsOn(todayStr).length > 0 || ptOn(todayStr).length > 0;
     const calGoal = round2(isActiveToday ? (nutritionTargets.activeCalories || nutritionTargets.calories || 0) : (nutritionTargets.restCalories || nutritionTargets.calories || 0));
     const proGoal = round2(isActiveToday ? (nutritionTargets.activeProtein  || nutritionTargets.protein  || 0) : (nutritionTargets.restProtein  || nutritionTargets.protein  || 0));
-    const mealsToday = nutritionEntries.filter(e => e.date === todayStr);
+    const mealsToday = nutritionEntries.filter(e => e.date === todayStr).concat(waterEntries.filter(e => e.date === todayStr));
     html += '<div class="gym-intake gym-intake-food">';
-    if (mealsToday.length || calGoal || proGoal) {
-      const cal = round2(mealsToday.reduce((s, e) => s + (Number(e.calories) || 0), 0));
-      const pro = round2(mealsToday.reduce((s, e) => s + (Number(e.protein) || 0), 0));
+    const calToday = round2(mealsToday.reduce((s, e) => s + (Number(e.calories) || 0), 0)), proToday = round2(mealsToday.reduce((s, e) => s + (Number(e.protein) || 0), 0));
+    if (nutritionEntries.some(e => e.date === todayStr) || calToday > 0 || proToday > 0 || calGoal || proGoal) {
+      const cal = calToday;
+      const pro = proToday;
       const calPct = calGoal ? Math.min(100, Math.round(cal / calGoal * 100)) : 0;
       const proPct = proGoal ? Math.min(100, Math.round(pro / proGoal * 100)) : 0;
       const overCal = calGoal > 0 && cal > calGoal;
