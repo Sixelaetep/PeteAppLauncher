@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.56</title>
+<title>P Apps v11.57</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1299,7 +1299,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.56</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.57</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1774,6 +1774,15 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-164, v11.57): launcher feeds, Phase 4: the launcher pulls the other apps' cloud data without you opening them. The same quiet load the Gym frame already gets
+  once per session (PET-155), generalised and made safe to repeat: for Reading, On Budget, Claims (they answer a ready ping: RT / OB / CT _ACTION ping -> _PONG {ready}, meaning
+  boot finished and the first cloud pull settled) and for Fortnight, Gigs & Trips and Film & TV (no ping: the launcher watches the frame's own fetch calls pass through and
+  waits until they have been quiet for 2.5 s, 4 s minimum, 30 s cap). One app at a time, out of sight, never an app that is already loaded, never one the user has opened
+  meanwhile; afterwards the frame is released (about:blank, loaded[] and _frameDone[] reset, exactly the state of an app never opened) so nothing stays running; the
+  apps' own sync writes their saved copy and republishes their summary, then the cards and Needs attention redraw. Runs 9 s after sign-in, then at most every 30 minutes while
+  Home is showing and the page is visible, never on Data Saver or offline, and on Refresh all / pull-down (apps not refreshed in the last 5 minutes). A failure backs off 10 minutes.
+  Cards whose app was refreshed this way say "Synced from the cloud - 3 min ago". New switch "Refresh other apps from the cloud", status line in Alert settings.
+  The Gym frame keeps its existing once-per-session warm-up (PET-155) unchanged. pal_feeds_off = '1' stops this too.
   CHANGED (PET-163, v11.56): launcher feeds, Phase 3: every card is consistent about freshness and attention. Presentation and wiring only; no new data, storage, sync or
   network call (the only fetch is the existing Fantasy feed). (1) A small freshness line at the foot of each card that has a summary: "From the app - 3 h ago" (the last time the
   app ran on this device; amber after 2 days) or, for Fantasy, "Live from FPL - 3 min ago" (a button: tap to refresh the feed). It replaces the line PET-162 put inside the
@@ -2315,6 +2324,7 @@ function onSignedIn(userInfo, session) {
   feedPalSyncSession(); // PET-101 — must precede applyUserView() → loadLayoutConfig()
   setTimeout(function () { try { pxGymWarm(); } catch (e) {} }, 6000);   // PET-155 v11.48
   setTimeout(function () { try { pxFeedsTick(); } catch (e) {} }, 4000);   // PET-162 v11.55: first feed run
+  setTimeout(function () { try { pxWarmTick(); } catch (e) {} }, 9000);    // PET-164 v11.57: first cloud refresh of the other apps
 
   document.getElementById('lockScreen').classList.add('hidden');
   document.getElementById('loginEmail').value    = '';
@@ -3495,6 +3505,7 @@ const PX_KIND_GROUP = { deadline: 'deadline', bill: 'bill', payment: 'bill', gig
 const PX_GROUPS = [
   ['deadline', 'Deadlines and lock-in (Fantasy, Claims)'],
   ['fantasy', 'Fantasy live updates (fetches FPL data)'],
+  ['warm', 'Refresh other apps from the cloud (loads them out of sight)'],
   ['bill', 'Bills and payments'],
   ['event', 'Gigs and trips'],
   ['session', 'Planned gym sessions'],
@@ -3666,6 +3677,7 @@ function pxSettingsPanel() {
     lab.appendChild(cb); lab.appendChild(document.createTextNode(g[1])); p.appendChild(lab);
   });
   const fs = pxEl('div', 'na-stale', 'Fantasy: ' + pxFeedStatusText('fantasy')); fs.id = 'pxFeedStatus'; p.appendChild(fs);   // PET-162 v11.55
+  const ws = pxEl('div', 'na-stale', 'Other apps: ' + pxWarmStatusText()); ws.id = 'pxWarmStatus'; p.appendChild(ws);   // PET-164 v11.57
   const rb = pxEl('button', 'na-more', 'Refresh Fantasy now'); rb.type = 'button';
   rb.addEventListener('click', function () { rb.textContent = 'Refreshing…'; pxFeedRun('fantasy', true).then(function () { pxRenderAttention(pxRead()); }); });
   p.appendChild(rb);
@@ -3721,9 +3733,9 @@ function pxAgo(ms) {
   if (m < 1440) return Math.floor(m / 60) + ' h ago';
   return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
-function pxFreshText(at, live) { return (live ? 'Live from FPL' : 'From the app') + (at ? ' · ' + pxAgo(at) : ''); }
+function pxFreshText(at, mode) { return (mode === 2 ? 'Synced from the cloud' : mode ? 'Live from FPL' : 'From the app') + (at ? ' · ' + pxAgo(at) : ''); }   // PET-164: mode 0 app, 1 FPL, 2 cloud
 function pxFreshTick() {
-  try { document.querySelectorAll('.pxFresh').forEach(function (el) { el.textContent = pxFreshText(Number(el.getAttribute('data-at')), el.getAttribute('data-live') === '1'); }); } catch (e) {}
+  try { document.querySelectorAll('.pxFresh').forEach(function (el) { el.textContent = pxFreshText(Number(el.getAttribute('data-at')), Number(el.getAttribute('data-live'))); }); } catch (e) {}
 }
 function pxFeedStatusText(app) {
   const st = PX_FEED_ST[app], f = PX_FEEDS[app];
@@ -3867,9 +3879,12 @@ function pxRenderChips() {
   let cm = {}; try { cm = pxRead(); } catch (e) {}
   Object.keys(PX_APPS).forEach(function (app) {
     const card = document.querySelector('.app-card[data-app="' + app + '"]'); if (!card) return;
-    let at = 0, live = false, has = false;
-    if (app === 'fantasy') { const f = PX_FRESH.fantasy; if (f) { has = true; at = f.at || 0; live = !!f.live; } }
-    else if (cm[app] && cm[app].built) { at = Date.parse(cm[app].built) || 0; has = at > 0; }
+    let at = 0, mode = 0, has = false;
+    if (app === 'fantasy') { const f = PX_FRESH.fantasy; if (f) { has = true; at = f.at || 0; mode = f.live ? 1 : 0; } }
+    else if (cm[app] && cm[app].built) {
+      at = Date.parse(cm[app].built) || 0; has = at > 0;
+      const wt = pxWarmAt(app); if (has && wt > at) { at = wt; mode = 2; }   // PET-164 v11.57: refreshed from the cloud more recently than the app last published
+    }
     let chip = card.querySelector('.card-fresh');
     if (!has) { if (chip) chip.remove(); return; }
     if (!chip) {
@@ -3883,10 +3898,10 @@ function pxRenderChips() {
       chip.className = 'card-fresh pxFresh';
       card.appendChild(chip);
     }
-    chip.setAttribute('data-at', String(at)); chip.setAttribute('data-live', live ? '1' : '0');
-    chip.textContent = pxFreshText(at, live);
-    chip.classList.toggle('warn', !live && at > 0 && Date.now() - at > 2 * 86400000);
-    chip.title = app === 'fantasy' && live ? 'Read from FPL by the launcher. Tap to refresh now.' : app === 'fantasy' ? 'From the Fantasy Football Tracker. Tap to read FPL now.' : 'The last time this app ran on this device. Open it to refresh.';
+    chip.setAttribute('data-at', String(at)); chip.setAttribute('data-live', String(mode));
+    chip.textContent = pxFreshText(at, mode);
+    chip.classList.toggle('warn', mode === 0 && at > 0 && Date.now() - at > 2 * 86400000);
+    chip.title = mode === 2 ? 'The launcher loaded this app out of sight and let it sync from the cloud.' : app === 'fantasy' && mode === 1 ? 'Read from FPL by the launcher. Tap to refresh now.' : app === 'fantasy' ? 'From the Fantasy Football Tracker. Tap to read FPL now.' : 'The last time this app ran on this device. Open it to refresh.';
   });
 }
 function pxRenderBadges(items) {
@@ -3922,9 +3937,10 @@ async function pxRefreshAll() {
   const btn = document.getElementById('homeRefresh'); if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
   try {
     await Promise.all(Object.keys(PX_FEEDS).map(function (a) { return pxFeedRun(a, true); }));
+    const nWarm = await pxWarmRunDue(true);   // PET-164 v11.57: the other apps, one at a time, out of sight
     try { refreshCardStats(); } catch (e) {}
     const bad = Object.keys(PX_FEEDS).some(function (a) { return PX_FEED_ST[a] && PX_FEED_ST[a].last && !PX_FEED_ST[a].last.ok; });
-    toast(pxFeedsOff() ? 'Refreshed from the apps’ saved copies (live updates are off)' : bad ? 'Refreshed. A live update failed, see Alert settings' : 'Refreshed');
+    toast(pxFeedsOff() ? 'Refreshed from the apps’ saved copies (live updates are off)' : (bad ? 'Refreshed. A live update failed, see Alert settings' : 'Refreshed') + (nWarm ? ' · ' + nWarm + (nWarm === 1 ? ' app' : ' apps') + ' updated from the cloud' : ''));
   } catch (e) { toast('Could not refresh'); }
   finally { _pxRefreshing = false; if (btn) { btn.disabled = false; btn.textContent = '↻ Refresh all'; } }
 }
@@ -3961,6 +3977,139 @@ function pxEnsureRefreshBtn() {
   document.addEventListener('touchcancel', function () { y0 = null; dy = 0; hide(); }, { passive: true });
 })();
 // <<PET163-END>>
+
+// <<PET164-BEGIN>>
+// ══════════════════════════════════════════════════════════════════
+// PET-164 v11.57 — launcher feeds, Phase 4: pull the other apps' cloud data without opening them
+// ══════════════════════════════════════════════════════════════════
+// The launcher only sees this device's saved copy of each app, so a change made on another device reached it only when the app next ran
+// here. The Gym frame was already loaded quietly once per session (PET-155). This does the same for the other apps, safely and repeatably:
+// load one frame out of sight, let the app do its own normal sync (it writes its saved copy and republishes its summary itself), wait until it
+// is done, release the frame, redraw. The launcher never reads or writes an app's data here, and apps need no change.
+//   Done = the app's ready ping (Reading RT, On Budget OB, Claims CT: "boot finished and the first cloud pull settled"), or, for apps with no ping
+//   (Fortnight, Gigs & Trips, Film & TV), the frame's own fetch calls (watched as they pass through, unchanged) have been quiet for PX_WARM_T.quiet.
+// Safety: never an app that is already loaded or being opened; one frame at a time; if the user opens the app meanwhile it is left running as a
+// normal open; a released frame is in exactly the state of one never opened (loaded[] and _frameDone[] reset), so quick-add and switchTo load it afresh.
+const PX_WARM = { gigs: '', reading: 'RT', screen: '', budget: 'OB', fortnight: '', claims: 'CT' };   // app -> ready-ping prefix ('' = no ping)
+const PX_WARM_ORDER = ['gigs', 'reading', 'screen', 'budget', 'fortnight', 'claims'];
+const PX_WARM_KEY = 'pal_x_f_warm';
+const PX_WARM_T = { minLoad: 4000, quiet: 2500, none: 10000, cap: 30000, pingCap: 45000, settle: 1500, gap: 1500, dueMin: 30, forceMin: 5, failMin: 10 };
+const PX_WARM_ST = { busy: false, cur: '', conc: 0, maxConc: 0 };
+function pxWarmRead() {
+  const blank = { v: 1, userId: pxUserId(), at: {}, ok: {} };
+  try { const o = JSON.parse(localStorage.getItem(PX_WARM_KEY) || 'null'); return o && o.v === 1 && o.userId === pxUserId() && o.at && typeof o.at === 'object' ? o : blank; } catch (e) { return blank; }
+}
+function pxWarmAt(app) { const o = pxWarmRead(), t = o.at[app] && o.ok && o.ok[app] ? Date.parse(o.at[app]) : 0; return t || 0; }
+function pxWarmStamp(app, ok) { const o = pxWarmRead(); o.at[app] = new Date().toISOString(); o.ok = o.ok || {}; o.ok[app] = !!ok; try { localStorage.setItem(PX_WARM_KEY, JSON.stringify(o)); } catch (e) {} }
+function pxWarmAllowed(force) {
+  try {
+    if (pxFeedsOff() || !pxPromoOn('warm') || !sbSession || !pxUserId()) return false;
+    if (navigator.onLine === false) return false;
+    if (!force && navigator.connection && navigator.connection.saveData) return false;
+    return true;
+  } catch (e) { return false; }
+}
+function pxWarmEligible(app) {
+  if (!(app in PX_WARM) || !PX_APPS[app]) return false;
+  if (PX_APPS[app].peteOnly && !(currentUser && currentUser.isPete)) return false;
+  const frame = document.getElementById('frame-' + app);
+  if (!frame || !frame.dataset.src) return false;
+  return !loaded[app] && !frame.getAttribute('src');   // already running, or already opened: leave it alone
+}
+function pxWarmDue(app, force) {
+  const o = pxWarmRead(), t = o.at[app] ? Date.parse(o.at[app]) : 0;
+  if (!t) return true;
+  const age = Date.now() - t, min = o.ok && o.ok[app] === false ? PX_WARM_T.failMin : (force ? PX_WARM_T.forceMin : PX_WARM_T.dueMin);
+  return age > min * 60000;
+}
+function pxReleaseFrame(app, frame) {
+  loaded[app] = false;
+  frame.addEventListener('load', function () { _frameDone[app] = false; }, { once: true });   // runs after the shared load handler marked it done
+  frame.src = 'about:blank';
+}
+function pxWarmWait(app, frame, pfx, m) {
+  return new Promise(function (resolve, reject) {
+    const t0 = Date.now(), cap = pfx ? PX_WARM_T.pingCap : PX_WARM_T.cap, rid = 'wp' + t0 + Math.random().toString(36).slice(2, 6);
+    let timer = null, loadedAt = 0;
+    const done = function (fn, v) { clearInterval(timer); window.removeEventListener('message', onMsg); fn(v); };
+    const onMsg = function (ev) {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (pfx && d && d.type === pfx + '_PONG' && d.reqId === rid && d.ready) done(resolve);
+    };
+    window.addEventListener('message', onMsg);
+    timer = setInterval(function () {
+      const now = Date.now();
+      if (now - t0 > cap) return done(reject, new Error('timed out'));
+      if (!_frameDone[app]) return;
+      if (!loadedAt) loadedAt = now;
+      if (pfx) { try { frame.contentWindow.postMessage({ type: pfx + '_ACTION', action: 'ping', reqId: rid }, window.location.origin); } catch (e) {} return; }
+      if (now - loadedAt < PX_WARM_T.minLoad) return;
+      if (m.fetches > 0 && m.inflight === 0 && now - m.lastAct >= PX_WARM_T.quiet) return done(resolve);
+      if (m.fetches === 0 && now - loadedAt >= PX_WARM_T.none) return done(resolve);   // nothing to pull
+    }, 250);
+  });
+}
+async function pxWarmApp(app) {
+  const frame = document.getElementById('frame-' + app), pfx = PX_WARM[app], m = { inflight: 0, fetches: 0, lastAct: 0 };
+  PX_WARM_ST.cur = app; PX_WARM_ST.conc++; PX_WARM_ST.maxConc = Math.max(PX_WARM_ST.maxConc, PX_WARM_ST.conc);
+  let ok = false;
+  try {
+    if (!pfx) frame.addEventListener('load', function () {   // watch (never alter) the frame's fetch calls from the moment its document exists
+      try {
+        const cw = frame.contentWindow, orig = cw.fetch;
+        if (typeof orig !== 'function') return;
+        cw.fetch = function () {
+          m.inflight++; m.fetches++; m.lastAct = Date.now();
+          const pr = orig.apply(cw, arguments), end = function () { m.inflight--; m.lastAct = Date.now(); };
+          pr.then(end, end); return pr;
+        };
+      } catch (e) {}
+    }, { once: true });
+    perfMark('warm ' + app + ': src set');
+    frame.src = frame.dataset.src; loaded[app] = true;
+    await pxWarmWait(app, frame, pfx, m);
+    ok = true;
+  } catch (e) { ok = false; }
+  await new Promise(function (r) { setTimeout(r, PX_WARM_T.settle); });   // let a save / republish that follows the pull land
+  if (!frame.classList.contains('visible') && currentTab !== app) pxReleaseFrame(app, frame);   // else the user opened it meanwhile: it stays as a normal open
+  pxWarmStamp(app, ok);
+  PX_WARM_ST.conc--; PX_WARM_ST.cur = '';
+  try { refreshCardStats(); } catch (e) {}
+  return ok;
+}
+async function pxWarmRunDue(force) {
+  if (PX_WARM_ST.busy || !pxWarmAllowed(force)) return 0;
+  PX_WARM_ST.busy = true;
+  let n = 0;
+  try {
+    for (const app of PX_WARM_ORDER) {
+      if (!force && (document.hidden || !document.getElementById('home-screen').classList.contains('visible'))) break;   // went away: stop, resume later
+      if (!pxWarmEligible(app) || !pxWarmDue(app, force)) continue;
+      const b = document.getElementById('homeRefresh');
+      if (force && b && _pxRefreshing) b.textContent = 'Refreshing… ' + ((PX_APPS[app] && PX_APPS[app].label) || app);
+      if (await pxWarmApp(app)) n++;
+      await new Promise(function (r) { setTimeout(r, PX_WARM_T.gap); });
+      if (!pxWarmAllowed(force)) break;
+    }
+  } finally { PX_WARM_ST.busy = false; }
+  return n;
+}
+function pxWarmTick() { pxWarmRunDue(false).catch(function () {}); }
+function pxWarmStatusText() {
+  if (pxFeedsOff() || !pxPromoOn('warm')) return 'off';
+  if (PX_WARM_ST.busy) return 'updating ' + (((PX_APPS[PX_WARM_ST.cur] || {}).label) || '…');
+  const o = pxWarmRead(), parts = [];
+  PX_WARM_ORDER.forEach(function (a) {
+    if (!o.at[a]) return;
+    const lab = (PX_APPS[a] && PX_APPS[a].label) || a;
+    parts.push(lab + ' ' + (o.ok && o.ok[a] === false ? 'failed ' : '') + pxAgo(Date.parse(o.at[a])));
+  });
+  return parts.length ? parts.join(' · ') : 'not run yet';
+}
+setInterval(pxWarmTick, 60000);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) pxWarmTick(); });
+// <<PET164-END>>
 
 function pxStaleNote(cmap) {
   const old = [];
@@ -4266,7 +4415,7 @@ function navMenuFillAccount(m, b) {
   u.appendChild(av); u.appendChild(tx); m.appendChild(u);
   m.appendChild(row('nm-danger', '\u21B1', 'Sign out', function () { navMenuClose(); confirmSignOut(); }));
   m.appendChild(sep());
-  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.56'; m.appendChild(v);
+  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.57'; m.appendChild(v);
 }
 function navMenuOpen() {
   const m = document.getElementById('navMenu'), b = document.getElementById('navMenuBtn'), hb = document.getElementById('navHome');
