@@ -719,7 +719,7 @@ function uid(prefix) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 4 of 4 — pal-contract v1 (added with launcher v11.35)
+// SECTION 4 of 4 — pal-contract v1.1 (v1 added with launcher v11.35; v1.1 3 Nov 2026: optional `until` on attention items)
 // ══════════════════════════════════════════════════════════════════
 
 /**
@@ -729,7 +729,9 @@ function uid(prefix) {
  * loses nothing (the app republishes on its next save). Every field is optional:
  *   { v:1, appId, userId, built, summary:{}, upcoming:[], attention:[], search:[] }
  *   upcoming  [{ id, date:'YYYY-MM-DD', time?, title, sub?, kind?, open? }]            (max 30)
- *   attention [{ id, level:'action'|'soon'|'info', title, sub?, due?, open? }]          (max 10)
+ *   attention [{ id, level:'action'|'soon'|'info', title, sub?, due?, until?, open? }]  (max 10)
+ *     until   (v1.1) 'YYYY-MM-DD': the last day the alert still applies. The launcher hides it from the next day on without the app having to run again
+ *             (an alert computed at save time otherwise outlives the situation until the app is next opened). Optional; apps that do not send it behave as before.
  *   (search lists are NOT part of this key: since v11.38 they go through PalContract.publishSearch() into IndexedDB 'pal_x_db' so they
  *    cost nothing against the shared 5 MB localStorage quota; rows are { id, t: title, s: detail, k: kind, d: date, open })
  *   open      { view?, id? }  → the launcher sends the app { type:'PAL_OPEN', view, id }
@@ -768,7 +770,7 @@ window.PalContract = (function () {
       var o = { v: 1, appId: appId, userId: userId, built: new Date().toISOString() };
       if (payload.summary && typeof payload.summary === 'object') o.summary = payload.summary;
       var up = cleanList(payload.upcoming, CAPS.upcoming, { id: 120, date: 10, time: 5, title: 120, sub: 160, kind: 24, open: 'open' });
-      var at = cleanList(payload.attention, CAPS.attention, { id: 120, level: 8, title: 120, sub: 160, due: 10, open: 'open' });
+      var at = cleanList(payload.attention, CAPS.attention, { id: 120, level: 8, title: 120, sub: 160, due: 10, until: 10, open: 'open' });
       var se = cleanList(payload.search, CAPS.search, { id: 120, t: 120, s: 120, k: 24, d: 10, open: 'open' });
       if (up) o.upcoming = up; if (at) o.attention = at; if (se) o.search = se;
       var json = JSON.stringify(o);
