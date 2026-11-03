@@ -11,7 +11,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.135</title>
+<title>Gym Tracker v2.136</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230E0D12'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='800' font-size='15' fill='%23CBF55C' text-anchor='middle'>GY</text></svg>">
 <style>
   /* ═══════════════════════════════════════════════════════════════════
@@ -191,6 +191,7 @@
   .cal-day-card[data-state="done"]{--st:var(--ember)}
   .cal-day-card[data-state="planned"]{--st:var(--ink3)}
   .cal-day-card[data-state="ill"]{--st:var(--accent4)}
+  .cal-day-card[data-state="missed"]{--st:var(--accent4)}
   .cal-day-card.today{border-color:var(--accent);border-width:1.5px}
   .cal-day-card.flash{box-shadow:0 0 0 3px var(--accent)}
   .cal-day-card.done{opacity:.72}
@@ -206,6 +207,7 @@
   .cal-day-chip.st-done{background:var(--ember-dim);color:var(--ember)}
   .cal-day-chip.st-planned{background:var(--accent-dim);color:var(--ink)}
   .cal-day-chip.st-ill{background:var(--amber-dim);color:var(--accent4)}
+  .cal-day-chip.st-missed{background:var(--amber-dim);color:var(--accent4)}
   .cal-plan-name{font-family:var(--fd);font-size:16px;font-weight:700;color:var(--ink)}
   .cal-empty{font-size:13px;color:var(--ink3)}
   .cal-repeat-badge{font-size:11.5px;color:var(--ink3);margin-top:2px}
@@ -560,7 +562,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon" aria-hidden="true">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.135</div></span>
+      <span>Gym Tracker<div class="ver">v2.136</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1281,11 +1283,15 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.135"></script>
+<script src="pal-shared.js?v=2.136"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.136 (GYM-122): a plain "Missed" for one planned session on one day (the existing "Missed - ill" is for a whole day). Today's and past days' planned-session rows get a
+// Mark missed button; a marked session shows as Missed with Undo, is no longer offered as today's plan on Home, is left out of the launcher's planned sessions, and the launcher clears its
+// alert for it. Stored as a schedule record {kind:'missed', date, planId, _deleted} in scheduleEntries, so it syncs through the existing schedule table (no new table, no migration) and
+// older copies ignore it (every reader of schedule entries takes one-offs without a kind or kind === 'repeat'). Un-marking soft-deletes it. Nothing else changes.
 // v2.135 (GYM-121): (1) Saved items are grouped under Food and Drink headings. (2) New launcher action quickAddSaved { kind, name }: logs ONE
 // unit of an existing saved food or drink at its own saved numbers (the launcher's quick-add is now a single search box; a new name opens
 // this app's Food & drink dialog instead — PAL_OPEN { view:'intake', name } pre-fills the name). quickAddWater / quickAddMeal are kept.
@@ -1989,7 +1995,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.135';
+const VERSION = '2.136';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2261,7 +2267,7 @@ function publishContract() {
       const d = new Date(start); d.setDate(d.getDate() + i);
       const ds = isoOf(d);
       resolvePlansForDate(ds).forEach(r => {
-        if (!names[r.planId] || planDoneOnDate(r.planId, ds)) return;
+        if (!names[r.planId] || planDoneOnDate(r.planId, ds) || isMissedPlan(r.planId, ds)) return;
         upcoming.push({ id: 'gym-' + ds + '-' + r.planId, date: ds, title: names[r.planId], sub: 'Planned session', kind: 'session', open: { view: 'home' } });
       });
     }
@@ -2399,6 +2405,25 @@ function toggleIllDay(date) {
   sbUpsert('schedule', record, null);
   renderCalendar();
   toast(record._deleted ? 'No longer marked as ill' : '😷 Marked as missed — ill');
+}
+// GYM-122: plain "Missed" for ONE planned session on ONE day. Lives in scheduleEntries as kind:'missed' (like the ill flag), un-marking soft-deletes it.
+function getMissedPlans() { return _env.data.scheduleEntries.filter(e => e.kind === 'missed' && !e._deleted); }
+function isMissedPlan(planId, date) { return getMissedPlans().some(e => e.date === date && e.planId === planId); }
+function toggleMissedPlan(planId, date) {
+  const now = new Date().toISOString();
+  let record = _env.data.scheduleEntries.find(e => e.kind === 'missed' && e.date === date && e.planId === planId);
+  if (record) {
+    record._deleted = !record._deleted;
+    record.updatedAt = now;
+  } else {
+    record = { id: uid('mis'), kind: 'missed', date, planId, _deleted: false, createdAt: now, updatedAt: now };
+    _env.data.scheduleEntries.push(record);
+  }
+  save(_env);
+  sbUpsert('schedule', record, null);
+  renderCalendar();
+  try { renderHomeToday(); } catch (_) {}
+  toast(record._deleted ? 'No longer marked as missed' : 'Marked as missed');
 }
 function renderDayIllnessToggle(date) {
   const ill = isIllDay(date);
@@ -5057,7 +5082,10 @@ function renderCalendar() {
     // on this date — once every scheduled plan for the day is completed,
     // drop to the same freestyle/choose-another-plan options as an
     // unscheduled day, rather than repeating the finished plan's row.
-    const pendingPlans = dayPlans.filter(r => !planDoneOnDate(r.planId, date));
+    const allPending = dayPlans.filter(r => !planDoneOnDate(r.planId, date));
+    const missedPlans = allPending.filter(r => isMissedPlan(r.planId, date));   // GYM-122
+    const pendingPlans = allPending.filter(r => !isMissedPlan(r.planId, date));
+    const missedHtml = missedPlans.map(r => { const plan = planById(r.planId); return plan ? `<div class="cal-plan-row"><div class="cal-plan-name">✕ ${escHtml(plan.name)}</div><div class="cal-repeat-badge">Marked as missed</div><div class="li-actions"><button class="btn btn-secondary btn-sm" onclick="toggleMissedPlan('${plan.id}','${date}')">↩ Undo missed</button></div></div>` : ''; }).join('');
     if (pendingPlans.length) {
       body = pendingPlans.map(r => {
         const plan = planById(r.planId);
@@ -5082,16 +5110,24 @@ function renderCalendar() {
           ${previewOpen ? `<div style="margin-top:4px">${planPreviewRows(plan)}</div>` : ''}
           <div class="li-actions">
             ${isToday ? `<button class="btn btn-primary btn-sm" onclick="startSession('${plan.id}')">▶ Start</button>` : ''}
+            ${date <= today ? `<button class="btn btn-secondary btn-sm" onclick="toggleMissedPlan('${plan.id}','${date}')">✕ Mark missed</button>` : ''}
             <button class="btn btn-secondary btn-sm" onclick="editPlanThisDay('${r.type}','${itemId}','${date}')">✏️ This day only</button>
             ${plan.dayCopyOf && r.type === 'oneoff' ? `<button class="btn btn-secondary btn-sm" onclick="revertDayPlan('${r.entry.id}')">↩ Standard plan</button>` : ''}
             ${removeBtn}
           </div>
         </div>`;
       }).join('');
+      body += missedHtml;   // GYM-122
       body += `<div class="li-actions" style="margin-top:7px">
         ${isToday ? `<button class="btn btn-secondary btn-sm" onclick="startSession(null)">▶ Freestyle</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="openSchedulePicker('${date}')">+ Add plan</button>
       </div>`;
+    } else if (missedPlans.length) {   // GYM-122: everything left that day was marked missed
+      body = missedHtml + `<div class="li-actions" style="margin-top:6px">
+             ${isToday ? `<button class="btn btn-primary btn-sm" onclick="openStartPlanPicker()">▶ Start a plan</button>` : ''}
+             ${isToday ? `<button class="btn btn-secondary btn-sm" onclick="startSession(null)">▶ Freestyle</button>` : ''}
+             <button class="btn btn-secondary btn-sm" onclick="openSchedulePicker('${date}')">+ Add plan</button>
+           </div>`;
     } else if (dayPlans.length) {
       body = `<div class="cal-empty">✓ ${dayPlans.length>1?'All scheduled plans':'Scheduled plan'} completed</div>
            <div class="li-actions" style="margin-top:6px">
@@ -5120,8 +5156,8 @@ function renderCalendar() {
     const done = isCurrentWeek && date < today;
     // GYM-117: display-only state for the card's colour bar and status chip
     const ptDay = getPTSessions().some(p => p.date === date);
-    const stKey = (isIllDay(date) && !daySessions.length) ? 'ill' : (daySessions.length || ptDay || (dayPlans.length && !pendingPlans.length)) ? 'done' : pendingPlans.length ? 'planned' : 'rest';
-    const stTxt = { ill:'😷 Ill', done: daySessions.length ? 'Done' : 'PT', planned:'Planned', rest:'Rest' }[stKey];
+    const stKey = (isIllDay(date) && !daySessions.length) ? 'ill' : (daySessions.length || ptDay || (dayPlans.length && !allPending.length)) ? 'done' : (missedPlans.length && !pendingPlans.length) ? 'missed' : pendingPlans.length ? 'planned' : 'rest';   // GYM-122: 'missed'
+    const stTxt = { ill:'😷 Ill', done: daySessions.length ? 'Done' : 'PT', missed:'Missed', planned:'Planned', rest:'Rest' }[stKey];
     html += `<div class="cal-day-card ${isToday?'today':''} ${done?'done':''}" id="calDay-${date}" data-state="${stKey}">
       <div class="cal-day-head">
         <div class="cal-day-stub" aria-hidden="true"><b>${Number(date.slice(8))}</b><i>${DAY_NAMES[weekdayIdx(date)].slice(0,3)}</i></div>
@@ -9402,7 +9438,8 @@ function dayState(date) {
   if (getSessions().some(s => s.date === date)) return 'done';
   if (getPTSessions().some(p => p.date === date)) return 'pt';
   if (isIllDay(date)) return 'ill';
-  if (resolvePlansForDate(date).length) return date < todayISO() ? 'miss' : 'plan';
+  const pl = resolvePlansForDate(date);
+  if (pl.length) return (date < todayISO() || (pl.some(r => isMissedPlan(r.planId, date)) && pl.every(r => planDoneOnDate(r.planId, date) || isMissedPlan(r.planId, date)))) ? 'miss' : 'plan';   // GYM-122
   return 'rest';
 }
 
@@ -9431,11 +9468,13 @@ function renderWeekRing() {
 function homeTodayInfo() {
   const t = todayISO();
   const sess = getSessions().filter(s => s.date === t);
-  const pending = resolvePlansForDate(t).filter(r => !planDoneOnDate(r.planId, t));
+  const allPend = resolvePlansForDate(t).filter(r => !planDoneOnDate(r.planId, t));
+  const pending = allPend.filter(r => !isMissedPlan(r.planId, t));   // GYM-122: a session marked missed is not offered as today's plan
   if (isIllDay(t) && !sess.length) return { kind: 'ill' };
   if (pending.length) { const plan = planById(pending[0].planId); if (plan) return { kind: 'plan', plan, more: pending.length - 1 }; }
   if (sess.length) return { kind: 'done', names: sess.map(s => s.name) };
   if (getPTSessions().some(p => p.date === t)) return { kind: 'pt' };
+  if (allPend.length) return { kind: 'missed' };   // GYM-122
   return { kind: 'rest' };
 }
 function homeCtaAction() {
@@ -9456,6 +9495,8 @@ function renderHomeToday() {
     main = '✓ Done today'; small = info.names.map(escHtml).join(', '); cta = '▶ Another plan'; railTxt = '▶ Start another';
   } else if (info.kind === 'ill') {
     main = '😷 Missed — ill'; small = 'Rest up. Undo it from today\'s card.'; cta = '▶ Start workout';
+  } else if (info.kind === 'missed') {
+    main = '✕ Missed today'; small = 'Undo it from today\'s card.'; cta = '▶ Start workout';   // GYM-122
   } else if (info.kind === 'pt') {
     main = '🧑‍🏫 PT session logged'; small = 'Counts as an active day'; cta = '▶ Start workout';
   } else {

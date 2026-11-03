@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.60</title>
+<title>P Apps v11.61</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1334,7 +1334,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.60</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.61</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1809,6 +1809,12 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-168, v11.61): (1) Gym "Missed" (Gym Tracker v2.136): the planned-session alert is cleared for a session marked missed (schedule record {kind:'missed', date, planId}),
+  and the Gym card no longer lists that session as planned (a past or today session marked missed still shows the red cross, with the tip "Missed"). (2) Launcher feeds, last feed: Film & TV
+  new-episode dates. Film & TV v4.5 publishes the TV shows on your Want to Watch list and your favourite shows (TMDB id, title, title id; at most 30) in its summary; the launcher asks TMDB
+  (PAL_CONFIG.TMDB_READ_TOKEN, one /tv/<id> request per show, four at a time, about every 12 hours while the page is visible) for each show's next episode and keeps only the answer in
+  pal_x_f_screen. The next 30 days of episodes join the Film & TV items in the Timeline; an episode airing today is an Info line in Needs attention ("Show S2E5 - New episode today") under the
+  existing Film & TV releases switch. New switch "Film & TV episode dates (fetches TMDB)" and a status line in Alert settings; Refresh all / pull-down include it; pal_feeds_off stops it.
   CHANGED (PET-167, v11.60): an alert an app publishes with `until` ('YYYY-MM-DD', pal-contract v1.1) is hidden from the day after that date, without the app running again. Fortnight Tracker
   v3.86 sends it on "Hours target at risk" (the last day of its fortnight). Alerts already published by Fortnight v3.85 or earlier carry no `until`, so the launcher works it out from the
   alert's id (ft-target-<start Monday>): the fortnight ends 10 days after its start, the same rule the app uses for a bundle's endDate. Only well-formed dates are honoured. Nothing else changes.
@@ -3593,10 +3599,11 @@ window.addEventListener('storage', function (e) { if (e.key === 'reading-tracker
 // Needs attention as they come up, and works out the rest from data it already holds. Nothing is stored except the switches, no app is
 // loaded and nothing is fetched. Ids carry the phase / day so Tomorrow / 7d / Ignore only hide that day's reminder, and the day-before alert
 // does not hide the day-of alert. Promoted alerts rank below the apps' own at the same level; at most 3 per app.
-const PX_KIND_GROUP = { deadline: 'deadline', bill: 'bill', payment: 'bill', gig: 'event', trip: 'event', session: 'session', release: 'release', leave: 'leave' };
+const PX_KIND_GROUP = { deadline: 'deadline', bill: 'bill', payment: 'bill', gig: 'event', trip: 'event', session: 'session', release: 'release', episode: 'release', leave: 'leave' };
 const PX_GROUPS = [
   ['deadline', 'Deadlines and lock-in (Fantasy, Claims)'],
   ['fantasy', 'Fantasy live updates (fetches FPL data)'],
+  ['film', 'Film & TV episode dates (fetches TMDB)'],
   ['warm', 'Refresh other apps from the cloud (loads them out of sight)'],
   ['bill', 'Bills and payments'],
   ['event', 'Gigs and trips'],
@@ -3634,6 +3641,7 @@ function pxGymClosed(u) {
     if ((d.scheduleEntries || []).some(function (e) { return e && !e._deleted && e.kind === 'illness' && e.date === u.date; })) return true;
     const pre = 'gym-' + u.date + '-', id = String(u.id || '');
     const planId = id.indexOf(pre) === 0 ? id.slice(pre.length) : '';
+    if (planId && (d.scheduleEntries || []).some(function (e) { return e && !e._deleted && e.kind === 'missed' && e.date === u.date && e.planId === planId; })) return true;   // PET-168 v11.61: Gym v2.136 "Missed"
     return !!planId && (d.sessions || []).some(function (x) { return x && !x._deleted && x.date === u.date && x.planId === planId; });
   } catch (e) { return false; }
 }
@@ -3666,6 +3674,8 @@ function pxPromote(cmap, now) {
         else if (dd === 1) push('1', 'info', u.title, sub || (u.kind === 'trip' ? 'Trip starts tomorrow' : 'Tomorrow'));
       } else if (u.kind === 'session') {
         if (dd === 0 && !pxGymClosed(u)) push('0', nowMin >= 18 * 60 ? 'soon' : 'info', u.title, 'Planned session today');   // PET-161 v11.54
+      } else if (u.kind === 'episode') {   // PET-169 v11.61: Film & TV new-episode feed
+        if (dd === 0) push('0', 'info', u.title, 'New episode today' + (u.sub && u.sub !== 'New episode' ? ' \u00b7 ' + u.sub : ''));
       } else if (u.kind === 'release') {
         if (dd === 0) push('0', 'info', u.title, u.sub || 'Releases today');
       } else if (u.kind === 'leave') {
@@ -3770,7 +3780,7 @@ function pxSettingsPanel() {
     cb.addEventListener('change', function () { pxSetPromo(g[0], cb.checked); pxRenderAttention(pxRead()); });
     lab.appendChild(cb); lab.appendChild(document.createTextNode(g[1])); p.appendChild(lab);
   });
-  const fs = pxEl('div', 'na-stale', 'Fantasy: ' + pxFeedStatusText('fantasy')); fs.id = 'pxFeedStatus'; p.appendChild(fs);   // PET-162 v11.55
+  Object.keys(PX_FEEDS).forEach(function (a) { const fs = pxEl('div', 'na-stale', ((PX_FEEDS[a].label) || a) + ': ' + pxFeedStatusText(a)); fs.id = a === 'fantasy' ? 'pxFeedStatus' : 'pxFeedStatus_' + a; p.appendChild(fs); });   // PET-162 v11.55 (Fantasy), PET-169 v11.61 (each feed)
   const ws = pxEl('div', 'na-stale', 'Other apps: ' + pxWarmStatusText()); ws.id = 'pxWarmStatus'; p.appendChild(ws);   // PET-164 v11.57
   const sb = pxEl('button', 'na-more', PX.storOpen ? 'Hide storage details' : 'Storage details'); sb.type = 'button';   // PET-165 v11.58
   sb.addEventListener('click', function () { PX.storOpen = !PX.storOpen; pxRenderAttention(pxRead()); });
@@ -3803,7 +3813,13 @@ window.addEventListener('storage', function (e) { if (e.key && (e.key.indexOf('f
 // localStorage `pal_x_f_<app>` ({ v:1, userId, fetchedAt, ... }): never read back by an app, never merged into an app's data, removed at sign-out
 // with the other pal_x_ keys, ignored for any other user and after 7 days. Reads and writes nothing else. Kill switch: pal_feeds_off = '1'.
 const PX_FEEDS = {
+  screen: {   // PET-169 v11.61
+    ttlMin: 720, group: 'film', label: 'Film & TV',
+    visible: function () { const el = document.getElementById('stat-screen'), c = el && el.closest ? el.closest('.app-card') : null; return !!el && !(c && c.style.display === 'none'); },
+    run: function (ctx) { return pxFeedScreen(ctx); }
+  },
   fantasy: {
+    label: 'Fantasy',
     ttlMin: 15, group: 'fantasy',
     visible: function () { const el = document.getElementById('stat-fantasy'), c = el && el.closest ? el.closest('.app-card') : null; return !!el && !(c && c.style.display === 'none'); },
     run: function (ctx) { return pxFeedFantasy(ctx); }
@@ -3867,7 +3883,7 @@ async function pxFeedRun(app, force) {
     st.nextTry = Date.now() + Math.min(120, 5 * Math.pow(2, st.failures - 1)) * 60000;
     st.last = { at: Date.now(), ok: false, msg: String(e && e.message || e).slice(0, 60) };
   } finally { st.busy = false; }
-  const sEl = document.getElementById('pxFeedStatus'); if (sEl) sEl.textContent = 'Fantasy: ' + pxFeedStatusText(app);
+  const sEl = document.getElementById(app === 'fantasy' ? 'pxFeedStatus' : 'pxFeedStatus_' + app); if (sEl) sEl.textContent = ((f && f.label) || app) + ': ' + pxFeedStatusText(app);
 }
 function pxFeedsTick() { Object.keys(PX_FEEDS).forEach(function (a) { pxFeedRun(a, false); }); }
 setInterval(pxFeedsTick, 60000);
@@ -3927,7 +3943,7 @@ async function pxFeedFantasy(ctx) {
 
 // The next deadline FPL reports becomes the Fantasy deadline in the contract view, so the Timeline, the PET-160 deadline alert and the
 // "No locked-in squad" alert work even when the app has not run for weeks. Replaces only the app's own ff-gw-<n> deadline item.
-function pxMergeFeeds(out) {
+function pxMergeFantasy(out) {
   const o = pxFeedRead('fantasy'); if (!o || o.nextGw == null || !o.nextDeadline) return;
   const dl = new Date(o.nextDeadline); if (isNaN(dl.getTime()) || dl.getTime() <= Date.now()) return;
   const c0 = out.fantasy, ft = Date.parse(o.fetchedAt) || 0;
@@ -3938,6 +3954,56 @@ function pxMergeFeeds(out) {
   c.upcoming.push({ id: 'ff-gw-' + o.nextGw, date: dl.getFullYear() + '-' + p2(dl.getMonth() + 1) + '-' + p2(dl.getDate()), time: p2(dl.getHours()) + ':' + p2(dl.getMinutes()),
     title: 'GW ' + o.nextGw + ' deadline', sub: 'Fantasy Premier League', kind: 'deadline', open: { view: 'squad' } });
   out.fantasy = c;
+}
+
+// PET-169 v11.61: the next 30 days of new episodes (from the Film & TV feed) join the Film & TV items, so the Timeline and Needs attention see them even when the app has not run.
+// An episode the app already lists on the same day for the same title (a series premiere) is not added twice.
+function pxMergeScreen(out) {
+  const o = pxFeedRead('screen'); if (!o || !Array.isArray(o.eps) || !o.eps.length) return;
+  const today = pxIso(new Date()), lim = pxAddDays(today, 30), c0 = out.screen;
+  const c = c0 ? Object.assign({}, c0) : { v: 1, appId: 'screen', userId: o.userId, built: o.fetchedAt, upcoming: [], attention: [] };
+  const have = {}; (c.upcoming || []).forEach(function (u) { if (u && u.open && u.open.id) have[u.open.id + '|' + u.date] = 1; });
+  const add = [];
+  o.eps.forEach(function (ep) {
+    if (!ep || ep.d < today || ep.d > lim || have[ep.ti + '|' + ep.d]) return;
+    add.push({ id: 'tmdb-ep-' + ep.tm + '-s' + ep.s + 'e' + ep.e, date: ep.d, title: ep.n + ' S' + ep.s + 'E' + ep.e, sub: ep.en || 'New episode', kind: 'episode', open: { view: 'title', id: ep.ti } });
+  });
+  if (!add.length) return;
+  c.upcoming = (c.upcoming || []).concat(add).sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); }).slice(0, 30);
+  if ((Date.parse(o.fetchedAt) || 0) > (Date.parse(c.built) || 0)) c.built = o.fetchedAt;
+  out.screen = c;
+}
+function pxMergeFeeds(out) {
+  try { pxMergeFantasy(out); } catch (e) {}
+  try { pxMergeScreen(out); } catch (e) {}
+}
+async function pxFeedScreen(ctx) {
+  const cfg = window.PAL_CONFIG || {}, uid = pxUserId();
+  if (!cfg.TMDB_READ_TOKEN) return { skip: 'no TMDB key' };
+  let c = null; try { c = window.PalContract && window.PalContract.read('screen'); } catch (e) {}
+  const watch = c && c.userId === uid && c.summary && Array.isArray(c.summary.watch) ? c.summary.watch : null;
+  if (!watch) return { skip: 'open Film & TV once to share your shows' };
+  const list = watch.filter(function (w) { return w && Number(w.m) > 0 && w.i; }).slice(0, 30);
+  if (!list.length) return { skip: 'no TV shows on your list' };
+  const hdr = { 'Authorization': 'Bearer ' + cfg.TMDB_READ_TOKEN, 'Content-Type': 'application/json' };
+  const eps = []; let failed = 0, next = 0;
+  const worker = async function () {
+    while (next < list.length) {
+      const w = list[next++];
+      try {
+        ctx.reqs++;
+        const r = await fetch('https://api.themoviedb.org/3/tv/' + encodeURIComponent(w.m) + '?language=en-GB', { headers: hdr });
+        if (r.status === 401) { const err = new Error('TMDB key refused (401)'); err.fatal = true; throw err; }
+        if (!r.ok) { failed++; continue; }
+        const j = await r.json(), ne = j && j.next_episode_to_air;
+        if (ne && /^\d{4}-\d{2}-\d{2}$/.test(String(ne.air_date || ''))) eps.push({ ti: String(w.i), tm: Number(w.m), n: String(w.n || j.name || '').slice(0, 60), d: ne.air_date, s: ne.season_number, e: ne.episode_number, en: String(ne.name || '').slice(0, 60) });
+      } catch (e) { if (e && e.fatal) throw e; failed++; }
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  if (failed > list.length / 2) throw new Error('TMDB failed for ' + failed + ' of ' + list.length);
+  eps.sort(function (a, b) { return a.d.localeCompare(b.d); });
+  return { v: 1, userId: uid, fetchedAt: new Date().toISOString(), checked: list.length, failed: failed, eps: eps };
 }
 
 // Alerts from the feed: flagged players around the deadline, and the gameweek result.
@@ -4667,7 +4733,7 @@ function navMenuFillAccount(m, b) {
   u.appendChild(av); u.appendChild(tx); m.appendChild(u);
   m.appendChild(row('nm-danger', '\u21B1', 'Sign out', function () { navMenuClose(); confirmSignOut(); }));
   m.appendChild(sep());
-  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.60'; m.appendChild(v);
+  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.61'; m.appendChild(v);
 }
 function navMenuOpen() {
   const m = document.getElementById('navMenu'), b = document.getElementById('navMenuBtn'), hb = document.getElementById('navHome');
@@ -7317,6 +7383,7 @@ function statGym() {
     const allPlans = (data.plans           || []);
     const entries  = (data.scheduleEntries || []).filter(e => !e._deleted);
     const illDays  = new Set(entries.filter(e => e.kind === 'illness' && e.date).map(e => e.date)); // PET-131: 'missed - ill' days (Gym v2.130)
+    const missedSet = new Set(entries.filter(e => e.kind === 'missed' && e.date && e.planId).map(e => e.date + '|' + e.planId)); // PET-168 v11.61: Gym v2.136 'Missed' (one session, one day)
     const waterEntries = (data.waterEntries || []).filter(e => !e._deleted);
     const ptSessions = (data.ptSessions || []).filter(p => p && !p._deleted);
     const nutritionEntries = (data.nutritionEntries || []).filter(e => e && !e._deleted);
@@ -7361,7 +7428,8 @@ function statGym() {
     }
     const sessionsOn = ds => sessions.filter(s => (s.date || '').slice(0,10) === ds);
     const ptOn = ds => ptSessions.filter(p => (p.date || '').slice(0,10) === ds); // PET-119: PT session = a done day
-    const pendingOn  = ds => { const done = sessionsOn(ds); return resolvePlansForDate(ds).filter(id => !done.some(s => s.planId === id)); };
+    const pendingOn  = ds => { const done = sessionsOn(ds); return resolvePlansForDate(ds).filter(id => !done.some(s => s.planId === id) && !missedSet.has(ds + '|' + id)); };
+    const missedOn   = ds => { const done = sessionsOn(ds); return resolvePlansForDate(ds).filter(id => !done.some(s => s.planId === id) && missedSet.has(ds + '|' + id)); };   // PET-168
 
     // Mon-Sun strip for the current week
     const now = new Date(); now.setHours(0,0,0,0);
@@ -7386,6 +7454,8 @@ function statGym() {
         if (ds < todayStr) { state = 'missed'; sym = '✕'; tip = 'Not done: '; }
         else { state = 'planned'; sym = '●'; toGo++; tip = 'Planned: '; }
         tip += pending.map(planName).join(', ');
+      } else if (missedOn(ds).length) {   // PET-168 v11.61
+        state = 'missed'; sym = '✕'; tip = 'Missed: ' + missedOn(ds).map(planName).join(', ');
       }
       cells += '<div class="gym-day' + (ds === todayStr ? ' today' : '') + '" title="' + esc(tip) + '"><div>' + letters[i] + '</div><div class="gym-dot ' + state + extra + '">' + sym + '</div></div>';
     }
@@ -7394,6 +7464,7 @@ function statGym() {
     const todayDoneNames = sessionsOn(todayStr).map(s => s.name || 'Session').concat(ptOn(todayStr).map(() => 'PT session'));
     const todaySess = todayDoneNames; // length / list drive the "done today" state below
     const todayPending = pendingOn(todayStr);
+    const todayMissed = missedOn(todayStr);   // PET-168 v11.61
     const illToday = illDays.has(todayStr) && !todaySess.length; // PET-131
     let html = '';
     if (todaySess.length) {
@@ -7407,7 +7478,10 @@ function statGym() {
       html += '<div class="card-stat-row"' + (todaySess.length ? ' style="margin-top:3px"' : '') + '><span class="card-stat-dot" style="background:var(--accent)"></span>' +
         '<span>' + (todaySess.length ? 'Still planned: ' : 'Planned today: ') + '<span class="val" style="color:var(--accent)">' + todayPending.map(id => esc(planName(id))).join(', ') + '</span></span></div>';
     }
-    if (!todaySess.length && !todayPending.length && !illToday) {
+    if (todayMissed.length && !todaySess.length && !todayPending.length && !illToday) {
+      html += '<div class="card-stat-row"><span class="card-stat-dot" style="background:#d29922"></span><span>✕ <span class="val" style="color:#d29922">Missed today: ' + todayMissed.map(id => esc(planName(id))).join(', ') + '</span></span></div>';
+    }
+    if (!todaySess.length && !todayPending.length && !illToday && !todayMissed.length) {
       let nextTxt = 'Nothing planned';
       for (let i = 1; i <= 60; i++) {
         const dt = new Date(now.getTime() + i * 86400000);
