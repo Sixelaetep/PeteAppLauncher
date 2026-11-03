@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.53</title>
+<title>P Apps v11.54</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1286,7 +1286,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.53</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.54</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1761,6 +1761,11 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-161, v11.54): the planned-gym-session alert in Needs attention (PET-160) now goes away when the session is logged or the day is marked
+  "Missed - ill". It checks the Gym Tracker's own saved copy (gym_tracker_v1) each time Needs attention is drawn instead of trusting the last published summary:
+  a session on that date for that plan (the app's own "done" rule) or a "Missed - ill" day flag on that date removes it, including when it was logged on another
+  device and has since synced here, and an ill day was never excluded from the Gym summary. A copy that cannot be read keeps the alert. Launcher-only: no app,
+  pal-shared.js, storage or sync change. The Gym Tracker has no plain "Missed" mark; Ignore on the alert clears that one session for the day.
   CHANGED (PET-160, v11.53): Needs attention is now time-aware (Phase 1 of the feeds plan). Launcher-only: no app, pal-shared.js, storage-format or sync change, and no new
   network call. At draw time (and once a minute) the launcher lifts the apps' own `upcoming` items into Needs attention as they come up: deadlines (<=48h Coming up,
   <=24h Action required; Fantasy and Claims), bills due today (Action) or within 3 days (Coming up), gigs and trips on the day (Coming up) and the day before (Info),
@@ -3481,6 +3486,22 @@ function pxNames(list) { return list.slice(0, 3).map(function (u) { return u.tit
 function pxByDate(a, b) { return String(a.date).localeCompare(String(b.date)); }
 function pxSigOf(items) { return items.map(function (i) { return i.key + '|' + i.level + '|' + i.title; }).join('\n'); }
 
+// PET-161 v11.54: a planned session stops being an alert once it has been dealt with. Read straight from the Gym Tracker's saved copy each time
+// (like pxGymReminders / statGym), not from the summary the app last published: the summary is only refreshed when the app saves, and it never
+// excluded a "Missed - ill" day. Closed = a session exists on that date for that plan (the app's own planDoneOnDate rule, deleted ones ignored)
+// or the date has a live {kind:'illness'} schedule record (Gym v2.130). An unreadable or missing copy keeps the alert.
+function pxGymClosed(u) {
+  try {
+    const raw = localStorage.getItem('gym_tracker_v1');
+    if (!raw) return false;
+    const parsed = JSON.parse(raw), d = (parsed && parsed.data && parsed.data.sessions != null) ? parsed.data : (parsed || {});
+    if ((d.scheduleEntries || []).some(function (e) { return e && !e._deleted && e.kind === 'illness' && e.date === u.date; })) return true;
+    const pre = 'gym-' + u.date + '-', id = String(u.id || '');
+    const planId = id.indexOf(pre) === 0 ? id.slice(pre.length) : '';
+    return !!planId && (d.sessions || []).some(function (x) { return x && !x._deleted && x.date === u.date && x.planId === planId; });
+  } catch (e) { return false; }
+}
+
 function pxPromote(cmap, now) {
   const out = [], today = pxIso(now), nowMin = now.getHours() * 60 + now.getMinutes(), rank = { action: 0, soon: 1, info: 2 };
   Object.keys(cmap).forEach(function (app) {
@@ -3508,7 +3529,7 @@ function pxPromote(cmap, now) {
         if (dd === 0) push('0', 'soon', u.title, sub || (u.kind === 'trip' ? 'Trip starts today' : 'Today'));
         else if (dd === 1) push('1', 'info', u.title, sub || (u.kind === 'trip' ? 'Trip starts tomorrow' : 'Tomorrow'));
       } else if (u.kind === 'session') {
-        if (dd === 0) push('0', nowMin >= 18 * 60 ? 'soon' : 'info', u.title, 'Planned session today');
+        if (dd === 0 && !pxGymClosed(u)) push('0', nowMin >= 18 * 60 ? 'soon' : 'info', u.title, 'Planned session today');   // PET-161 v11.54
       } else if (u.kind === 'release') {
         if (dd === 0) push('0', 'info', u.title, u.sub || 'Releases today');
       } else if (u.kind === 'leave') {
@@ -3625,7 +3646,7 @@ function pxClockTick() {
 }
 setInterval(pxClockTick, 60000);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) pxClockTick(); });
-window.addEventListener('storage', function (e) { if (e.key && e.key.indexOf('ff_locked_card') === 0) pxClockTick(); });
+window.addEventListener('storage', function (e) { if (e.key && (e.key.indexOf('ff_locked_card') === 0 || e.key === 'gym_tracker_v1')) pxClockTick(); });   // PET-161: a session logged in another tab
 // <<PET160-END>>
 
 function pxStaleNote(cmap) {
@@ -3924,7 +3945,7 @@ function navMenuFillAccount(m, b) {
   u.appendChild(av); u.appendChild(tx); m.appendChild(u);
   m.appendChild(row('nm-danger', '\u21B1', 'Sign out', function () { navMenuClose(); confirmSignOut(); }));
   m.appendChild(sep());
-  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.53'; m.appendChild(v);
+  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.54'; m.appendChild(v);
 }
 function navMenuOpen() {
   const m = document.getElementById('navMenu'), b = document.getElementById('navMenuBtn'), hb = document.getElementById('navHome');
