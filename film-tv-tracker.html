@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v4.5</title>
+<title>Film &amp; TV Tracker v4.6</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -408,6 +408,14 @@
   .data-btn:hover { border-color:var(--film); color:var(--film); }
   .data-btn.pri { background:var(--film); color:var(--accTx); border-color:var(--film); }
   .data-btn.pri:hover { opacity:0.85; color:var(--accTx); }
+  .ne-row { display:flex; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--sep); }
+  .ne-row:first-of-type { border-top:0; }
+  .ne-row img, .ne-row .ne-fb { width:44px; height:66px; border-radius:6px; object-fit:cover; background:var(--surface2); flex:none; display:flex; align-items:center; justify-content:center; }
+  .ne-info { flex:1; min-width:0; }
+  .ne-info b { display:block; font-size:14.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ne-info span { display:block; font-size:12px; color:var(--ink3); margin-top:2px; }
+  .ne-btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
+  .ne-btns .small-btn.pri { background:var(--acc); color:var(--accTx); border-color:var(--acc); font-weight:600; }
   .small-btn { background:var(--surface2); border:1px solid var(--border); color:var(--ink2); padding:5px 10px; border-radius:7px; font-size:11.5px; cursor:pointer; }
   .service-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:12.5px; }
   .service-row:last-child { border-bottom:none; }
@@ -1087,7 +1095,7 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=4.5"></script>   <!-- v4.2: tag now follows the app version so the copy with PalContract is fetched -->
+<script src="pal-shared.js?v=4.6"></script>   <!-- v4.2: tag now follows the app version so the copy with PalContract is fetched -->
 <script>
 // ══════════════════════════════════════════════════════════════════
 // FILM & TV TRACKER v4.0 (FTT-001..FTT-050) — see film-tv-tracker.md.
@@ -1427,15 +1435,17 @@ function filmPublishContract() {
     const search = wl.concat(wd).map(t => ({ id: 'ftt-t-' + t.id, t: t.title,
       s: [t.type === 'tv' ? 'TV' : 'Film', t.year || '', t.status === 'watched' ? 'Watched' : 'Watchlist'].filter(Boolean).join(' · '),
       k: t.type === 'tv' ? 'tv' : 'film', open: { view: 'title', id: String(t.id) } }));
-    // v4.5 (FTT-055): the TV shows the launcher may check for new-episode dates (TMDB id + title + this app's title id): Want to Watch and favourite shows, at most 30.
-    // Nothing else about a title is shared; the launcher asks TMDB itself and keeps the answer in its own display cache.
+    // v4.6 (FTT-056): every TV show with a TMDB id (at most 60): TMDB id, title, this app's title id and the date up to which new episodes are already dealt with (s).
+    // The launcher asks TMDB itself and keeps the answer in its own display cache; nothing else about a title is shared.
     const watch = [];
     state.titles.forEach(t => {
       if (!t || t._deleted || t.type !== 'tv' || !t.title) return;
       const tm = t.externalIds ? Number(t.externalIds.tmdb) : 0;
-      if (tm > 0 && (t.status === 'watchlist' || t.favourite)) watch.push({ i: String(t.id), m: tm, n: String(t.title).slice(0, 60) });
+      if (tm > 0) watch.push({ i: String(t.id), m: tm, n: String(t.title).slice(0, 60), s: String(t.epSeen || ''), r: t.status === 'watchlist' || t.favourite ? 0 : 1 });
     });
-    window.PalContract.publish('screen', { upcoming: upcoming.slice(0, 30), summary: { watch: watch.slice(0, 30) } });
+    watch.sort((x, y) => x.r - y.r);
+    watch.forEach(w => { delete w.r; });
+    window.PalContract.publish('screen', { upcoming: upcoming.slice(0, 30), summary: { watch: watch.slice(0, 60) } });
     window.PalContract.publishSearch('screen', search, live.length);   // v4.3: IndexedDB, not localStorage
   } catch (e) {}
 }
@@ -1892,6 +1902,16 @@ function queueShelfHtml(x, nf) {
 }
 function sectionHtml(x, nf) {
   const n = x.items.length, head = `${esc(x.title)} · ${nf(n)}`;
+  if (x.key === 'newep') {   // v4.6 (FTT-056): shows with a new episode, to add to a list or dismiss
+    const rows = x.items.slice().sort((a, b) => String(b.newEpisode.d).localeCompare(String(a.newEpisode.d))).map(t => {
+      const ne = t.newEpisode, lab = 'S' + ne.s + 'E' + ne.e + (ne.n ? ' · ' + ne.n : '') + ' · aired ' + fmtDate(ne.d);
+      const img = t.posterUrl ? `<img src="${esc(t.posterUrl)}" loading="lazy" alt="">` : `<div class="ne-fb">📺</div>`;
+      const mv = t.status === 'watchlist' ? '' : `<button class="small-btn pri" onclick="epMove('${esc(t.id)}')">Move to Want to Watch</button>`;
+      return `<div class="ne-row">${img}<div class="ne-info"><b>${esc(t.title)}</b><span>${esc(lab)}</span><div class="ne-btns">${mv}<button class="small-btn" onclick="epDismiss('${esc(t.id)}')">Dismiss</button></div></div></div>`;
+    }).join('');
+    const tools = n > 1 ? `<button class="see-all" onclick="epMoveAll()">All to Want to Watch</button><button class="see-all" onclick="epDismissAll()">Dismiss all</button>` : '';
+    return `<div class="lib-sec" data-sec="newep"><div class="disc-head"><h2>${head}</h2><span class="disc-tools">${tools}</span></div>${rows}</div>`;
+  }
   if (x.shelf) {
     const reordering = !!favDraft && x.kind && favKind === x.kind && (x.kind === 'queue' || favScope === 'row');
     if (reordering) {          // the shelf is replaced, for now, by the dense reorder list
@@ -1986,8 +2006,10 @@ function renderLibrary() {
   const totalCount = structured ? (typeView ? uniq(allItems).length : base.length) : list.length;
   { const al = document.getElementById('libAlerts');
     const nsN = titles.filter(t => t.newSeasonsDetected).length, nrN = titles.filter(t => t.importPending && t.importSource === 'releases').length;
+    const neN = titles.filter(t => t && !t._deleted && t.newEpisode).length;
     al.innerHTML = (structured && !selectMode && !favDraft)
-      ? (nsN ? `<button class="alert-btn al-ns" onclick="openNewSeasons()"><span>🆕 New seasons</span><span class="ct">${nf(nsN)}</span></button>` : '')
+      ? (neN ? `<button class="alert-btn al-ns" onclick="openNewEpisodes()"><span>📺 New episodes</span><span class="ct">${nf(neN)}</span></button>` : '')
+      + (nsN ? `<button class="alert-btn al-ns" onclick="openNewSeasons()"><span>🆕 New seasons</span><span class="ct">${nf(nsN)}</span></button>` : '')
       + (nrN ? `<button class="alert-btn" onclick="openNewReleasesReview()"><span>🎬 New releases to review</span><span class="ct">${nf(nrN)}</span></button>` : '') : ''; }
   { const lt = document.getElementById('libTop');   // Reel: Up next + stat tiles (or the 12-month diary on Watched) — phone/tablet; the desktop pane shows the same as "Tonight"
     lt.innerHTML = (lib.filter === 'all' && !query && !svcOn && !selectMode && !favDraft) ? (lib.status === 'watched' ? diaryHtml() : heroHtml() + statTilesHtml()) : '';
@@ -2254,6 +2276,7 @@ function secWatched() { return liveTitles().filter(t => t.status === 'watched').
 function librarySections(pred) {
   const scope = lib.status, out = [], sub = !!pred, rel = lib.filter === 'newrelease' && sub;
   const f = a => sub ? a.filter(pred) : a;
+  out.push({ key: 'newep', title: 'New episodes', items: f(liveTitles().filter(t => t.type === 'tv' && t.newEpisode)), shelf: false, custom: true, showRelease: false });
   if (scope !== 'watched') {
     out.push({ key: 'fav', title: 'Favourites', items: f(secFavourites()), shelf: true, kind: sub ? null : 'fav', showRelease: rel });
     out.push({ key: 'queue', title: 'Available to watch', items: f(secQueue()), shelf: true, kind: sub ? null : 'queue', showRelease: rel });
@@ -4269,6 +4292,45 @@ async function checkForNewSeasons() {
   toast(msg);
 }
 // Library buttons (above the sections): the shows with a new season, and the New releases still waiting for review.
+// v4.6 (FTT-056): New episodes. The launcher tells the app which shows have an episode newer than epSeen (PAL_EPISODES / PAL_OPEN 'newepisodes');
+// the app flags them (t.newEpisode {d,s,e,n}) and the section offers Move to Want to Watch or Dismiss, both of which record epSeen = the episode date.
+async function applyEpisodes(eps) {
+  await _bootReady;
+  if (!Array.isArray(eps) || !state || !Array.isArray(state.titles)) return 0;
+  let changed = 0;
+  eps.forEach(ep => {
+    if (!ep || !/^\d{4}-\d{2}-\d{2}$/.test(String(ep.d || ''))) return;
+    const t = state.titles.find(x => String(x.id) === String(ep.ti) && !x._deleted && x.type === 'tv');
+    if (!t || (t.epSeen && ep.d <= t.epSeen) || (t.newEpisode && t.newEpisode.d >= ep.d)) return;
+    t.newEpisode = { d: ep.d, s: Number(ep.s) || 0, e: Number(ep.e) || 0, n: String(ep.en || '').slice(0, 60) };
+    changed++;
+    if (window.PalSync.hasSession()) { try { syncPushTitle(t); } catch (_) {} }
+  });
+  state.titles.forEach(t => { if (t && t.newEpisode && t.epSeen && t.epSeen >= t.newEpisode.d) { delete t.newEpisode; changed++; } });
+  if (changed) { saveState(); filmPublishContract(); }
+  return changed;
+}
+function epClose(t, move) {
+  const ne = t.newEpisode; if (!ne) return;
+  t.epSeen = ne.d; delete t.newEpisode;
+  if (move && t.status !== 'watchlist') {
+    if (t.status === 'watched' && t.seasons) { for (let k = 1; k <= t.seasons; k++) setSeasonWatched(t, k, true); t.returningShow = true; }
+    t.status = 'watchlist';
+  }
+  t.updatedAt = new Date().toISOString();
+  if (window.PalSync.hasSession()) { try { syncPushTitle(t); } catch (_) {} }
+}
+function epAfter(msg) { saveState(); filmPublishContract(); toast(msg); }
+function epMove(id) { const t = state.titles.find(x => String(x.id) === String(id)); if (!t) return; epClose(t, true); epAfter(t.title + ' is on Want to Watch'); }
+function epDismiss(id) { const t = state.titles.find(x => String(x.id) === String(id)); if (!t) return; epClose(t, false); epAfter('Dismissed'); }
+function epMoveAll() { const l = liveTitles().filter(t => t.newEpisode); l.forEach(t => epClose(t, true)); if (l.length) epAfter(l.length + ' shows on Want to Watch'); }
+function epDismissAll() { const l = liveTitles().filter(t => t.newEpisode); l.forEach(t => epClose(t, false)); if (l.length) epAfter('Dismissed ' + l.length); }
+function openNewEpisodes() { const si = document.getElementById('libSearch'); if (si) si.value = ''; try { switchTab('library'); } catch (_) {} setLib({ status: 'all', filter: 'all', search: '' }); window.scrollTo(0, 0); }
+window.addEventListener('message', (e) => {
+  if (e.origin !== window.location.origin || !e.data) return;
+  if (e.data.type === 'PAL_EPISODES') applyEpisodes(e.data.eps);
+  else if (e.data.type === 'PAL_OPEN' && e.data.view === 'newepisodes') applyEpisodes(e.data.eps).then(() => openNewEpisodes());
+});
 function openNewSeasons() { const si = document.getElementById('libSearch'); if (si) si.value = ''; setLib({ status: 'all', filter: 'newseason', search: '' }); window.scrollTo(0, 0); }
 function openNewReleasesReview() { openTagModal('releases'); }
 
