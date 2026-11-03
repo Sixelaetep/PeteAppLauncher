@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fantasy Football Tracker v1.64</title>
+<title>Fantasy Football Tracker v1.65</title>
 <meta name="theme-color" content="#0E0D12" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -646,6 +646,12 @@
   .pp.vt-split .plate .pv { color: var(--accent5); }
   .pp.vt-none { opacity: .7; }
   /* FF-033: always-visible opponent under captain / vice, source colours, overlay dots */
+  .pm { display: none; font-size: 10px; font-weight: 800; line-height: 15px; padding: 0 6px; border-radius: 7px; margin-top: 2px; white-space: nowrap; background: var(--surface2); color: var(--ink2); }
+  .pm.live, .pm.ft { display: inline-block; }
+  .pm.live { background: rgba(255,106,94,.18); color: var(--accent3); }
+  .pm.good { color: var(--accent2); }
+  .pm.bad { color: var(--accent3); }
+  .player-card .pm { margin: 0 6px 0 0; align-self: center; }
   .pl.pl-force, #tab-advice .pl-next { display: inline-flex; gap: 3px; flex-wrap: wrap; justify-content: center; }
   .src-app { --sc: var(--accent); } .src-claude { --sc: #E07A55; } .src-chatgpt { --sc: #2FA884; } .src-gemini { --sc: #5B8DEF; } .src-other { --sc: #9A7FE8; }
   .pdots { display: flex; gap: 3px; justify-content: center; margin-top: 2px; }
@@ -769,7 +775,7 @@
 </div>
 
 <nav>
-  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.64</span></div>
+  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.65</span></div>
   <div class="nav-actions"><span class="sync-chip"><i></i><span id="navSyncTxt">Not loaded</span></span>
     <button type="button" class="nav-refresh" aria-label="Refresh from FPL" onclick="loadSquad()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button></div>
 </nav>
@@ -950,12 +956,20 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.64"></script>
+<script src="pal-shared.js?v=1.65"></script>
 <script>
 /* Fantasy Football Tracker — fantasy-football-tracker.html
  * ─────────────────────────────────────────────────────────────
  * Changelog (newest first):
  *
+ * v1.65 [FF-039] — Live match scores next to each player. While a match is on (and for a few hours after full time on the locked-in
+ *   view; all week on the Squad view) each pitch plate on the Squad tab and the Next Week (locked-in) tab, and each Next Week list card,
+ *   shows a small chip with the score of that player's club match: "● 2-1 AVL" live, "FT 2-1 AVL" finished, tinted for the player's
+ *   position as in the This week box. While any match is live the app re-reads the fixtures once a minute (forced fresh, only while the
+ *   page is visible) and updates the chips in place. The launcher summary (ff_locked_card) gains an additive `m` per player (fixture id,
+ *   opponent, home / away, score, state, minutes, kick-off) so the launcher card can show the same score. buildMatchStateByTeam now also
+ *   records the fixture id and, in a double gameweek, prefers the live match, else the latest started, else the first. No stored-data
+ *   change; the proxy is unchanged.
  * v1.64 [FF-038] — The launcher's locked-in squad summary (ff_locked_card) also carries each player's next opponent(s) from the squad's
  *   existing nextFixtureByTeam (opponent code, H/A, difficulty; two entries in a double gameweek). Same key, additive fields, no other change.
  *
@@ -2247,7 +2261,7 @@
 // of requiring the user to remember to hit Load Squad after every fix.
 // Bump this alongside the other four version locations on every
 // release from v1.15 onward.
-const FF_VERSION = '1.64';
+const FF_VERSION = '1.65';
 
 // v1.57 (FF-031): launcher contract (PalContract, key pal_x_fantasy). Uses the next-gameweek deadline already held in the squad cache
 // (nextGwDeadline): Needs attention (level action) when it is within 24 hours, and an upcoming item for the deadline. Nothing is
@@ -2452,6 +2466,7 @@ function ppPlateHtml(it, ctx) {
   const nextTxt = fx ? fxChip1(fx) + (fx.also || []).map(fxChip1).join('')
     : (ctx.kind === 'adv' && ctx.nextFx ? '<span class="sub" style="font-size:11px">No fixture</span>' : '—');
   return '<span class="plate"><span class="pn">' + safeEsc(el.web_name) + '</span>' +
+    (ctx.match ? ffMatchChipHtml(el, ctx.match[el.team], ctx.matchWindow) : '') +
     (it.vote ? '<span class="pv">' + safeEsc(it.vote) + '</span>' : '') + (it.extra || '') +
     '<span class="pl pl-pts">' + ptsTxt + '</span><span class="pl pl-next' + (it.showNext ? ' pl-force' : '') + '">' + nextTxt + '</span><span class="pl pl-price">' + formatPrice(el.now_cost) + '</span></span>';
 }
@@ -3352,7 +3367,7 @@ function renderSquad(elements, teams, picksData, gwId, nextFixtureByTeam, maxPoi
   html += '<div class="sub" style="padding:0 16px 8px">⚽ Fixtures and scores below are for Gameweek ' + gwId + ' — this squad\'s own gameweek, not the one being planned next.</div>';
 
   html += '<div class="view-pitch">' + pitchBoardHtml(pi.starters, pi.bench, {
-    kind: 'live', gw: gwId, nextFx: nextFixtureByTeam, provisional: !!(_lastLiveSquadCache && _lastLiveSquadCache.gwFinished === false)
+    kind: 'live', gw: gwId, nextFx: nextFixtureByTeam, match: matchStateByTeam, provisional: !!(_lastLiveSquadCache && _lastLiveSquadCache.gwFinished === false)
   });
   if (_showPositionBest && topPlayerIdByPos) {
     html += '<div class="position-label">Top scorers by position</div>';
@@ -3823,6 +3838,7 @@ function interactiveLockedInCardHtml(el, team, pick, isBench, nextFixtureByTeam,
         <div class="player-sub">${safeEsc(team ? team.short_name : '?')}</div>
         ${pointsLineHtml(el, maxPointsByPos)}
       </div>
+      ${ffMatchChipHtml(el, _lastLiveSquadCache && _lastLiveSquadCache.matchStateByTeam ? _lastLiveSquadCache.matchStateByTeam[el.team] : null, true)}
       ${fdrChipHtml(el, nextFixtureByTeam)}
       <div class="player-price">${formatPrice(el.now_cost)}</div>
       ${controls}
@@ -3856,7 +3872,7 @@ function renderInteractiveLockedInSquad(elements, teams, picksData, gwId, nextFi
   // Pitch view: tap a player, then use the tray (swap / captain / vice). Same functions as the list buttons.
   const pi = pitchItemsFromPicks(picksData.picks, elementsById);
   const selId = _pendingSwapOutId != null ? _pendingSwapOutId : _nwSelectedId;
-  html += '<div class="view-pitch">' + pitchBoardHtml(pi.starters, pi.bench, { kind: 'nw', gw: gwId, nextFx: nextFixtureByTeam, selId }) + nwTrayHtml(gwId, elementsById) + '</div>';
+  html += '<div class="view-pitch">' + pitchBoardHtml(pi.starters, pi.bench, { kind: 'nw', gw: gwId, nextFx: nextFixtureByTeam, selId, match: (_lastLiveSquadCache && _lastLiveSquadCache.matchStateByTeam) || null, matchWindow: true }) + nwTrayHtml(gwId, elementsById) + '</div>';
 
   html += '<div class="view-list">';
   html += '<div class="sub" style="padding:0 16px 8px">Tap ⇄ on a starter, then ⇄ on a bench player to bring them on. C/V set captaincy.' +
@@ -3992,8 +4008,67 @@ function refreshNextWeekView() { renderPlannedSquadView(); }
 // v1.63 (FF-037): display summary of the LOCKED-IN lineup for the launcher's Fantasy card (read straight off localStorage, same
 // pattern as ff_squad_cache). Only the locked snapshot is published (not an unsaved draft); nothing is stored if it cannot be resolved
 // to 11 starters + 4 bench players, and the key is removed when nothing is locked in. The launcher is only told when the content changed.
+// ── FF-039: live match score next to each player ───────────────────────────
+// `windowMode` (locked-in views, which show NEXT gameweek's squad) only shows a finished match for six hours after kick-off, so old results
+// do not linger all week; the Squad view (that gameweek's own squad) keeps showing the score.
+function ffMatchOn(m, windowMode) {
+  if (!m || !m.started || m.ownScore == null || m.oppScore == null) return false;
+  if (!isMatchFullTime(m) || !windowMode) return true;
+  const k = Date.parse(m.kickoffTime);
+  return isFinite(k) && Date.now() < k + 6 * 3600000;
+}
+function ffMatchChipHtml(el, m, windowMode) {
+  const on = ffMatchOn(m, windowMode);
+  const live = on && !isMatchFullTime(m);
+  const sent = on ? (matchOutcomeSentiment(el, m) || 'neutral') : '';
+  const text = on ? (live ? '● ' : 'FT ') + m.ownScore + '-' + m.oppScore + ' ' + m.opponentName : '';
+  const title = on ? (live ? 'Live' : 'Full time') + ': ' + (m.isHome ? 'home' : 'away') + ' v ' + m.opponentName + ' ' + m.ownScore + '-' + m.oppScore + (live ? ' (' + m.minutes + "')" : '') : '';
+  return '<span class="pm' + (on ? (live ? ' live' : ' ft') + (sent !== 'neutral' ? ' ' + sent : '') : '') + '" data-team="' + el.team + '" data-t="' + el.element_type + '" data-w="' + (windowMode ? 1 : 0) + '"' +
+    (title ? ' title="' + safeEsc(title) + '"' : '') + '>' + safeEsc(text) + '</span>';
+}
+// Redraws every chip in place from the current match state (no re-render, so scroll, selection and open sheets are untouched).
+function ffRefreshMatchChips() {
+  const st = _lastLiveSquadCache && _lastLiveSquadCache.matchStateByTeam;
+  if (!st) return;
+  document.querySelectorAll('.pm[data-team]').forEach(span => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = ffMatchChipHtml({ team: Number(span.dataset.team), element_type: Number(span.dataset.t) }, st[span.dataset.team], span.dataset.w === '1');
+    const n = tmp.firstChild;
+    span.className = n.className; span.textContent = n.textContent;
+    if (n.title) span.title = n.title; else span.removeAttribute('title');
+  });
+}
+// Once a minute, only while a match is live (or about to start / just started) and the page is visible: re-read the fixtures, forced fresh.
+async function ffLiveTick() {
+  try {
+    const c = _lastLiveSquadCache;
+    if (!c || !c.matchStateByTeam || document.hidden || _squadLoading) return;
+    if (!FF_PROXY_URL || !FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') return;
+    const now = Date.now();
+    const livish = Object.keys(c.matchStateByTeam).some(t => {
+      const m = c.matchStateByTeam[t]; if (!m) return false;
+      if (m.started) return !isMatchFullTime(m);
+      const k = Date.parse(m.kickoffTime);
+      return isFinite(k) && k - now < 10 * 60000 && now - k < 3 * 3600000;
+    });
+    if (!livish) return;
+    const res = await fetch(FF_PROXY_URL + '/fixtures', { headers: proxyHeaders(true) });
+    if (!res.ok) return;
+    const fixtures = await res.json();
+    const teamsById = {}; (c.teams || []).forEach(t => { teamsById[t.id] = t; });
+    const next = buildMatchStateByTeam(fixtures, teamsById, c.gwId);
+    if (JSON.stringify(next) === JSON.stringify(c.matchStateByTeam)) return;
+    c.matchStateByTeam = next;
+    ffRefreshMatchChips();
+    if (_lastCardProjected) ffPublishLockedCard(_lastCardProjected);   // the launcher card follows
+  } catch (e) { /* a missed tick is harmless; the next one retries */ }
+}
+setInterval(ffLiveTick, 60000);
+let _lastCardProjected = null;
+
 function ffPublishLockedCard(projected) {
   try {
+    _lastCardProjected = projected;
     const key = scopedKey('ff_locked_card');
     const lineup = _manualLineup[projected.gwId], lk = lineup && lineup.locked;
     let out = null;
@@ -4005,7 +4080,12 @@ function ffPublishLockedCard(projected) {
         const tm = teamsById[el.team], kit = tm ? TEAM_KITS[tm.short_name] : null;
         const fx = projected.nextFixtureByTeam ? projected.nextFixtureByTeam[el.team] : null;
         const o = fx ? [fx].concat(fx.also || []).map(f => ({ n: f.opponentName, h: f.isHome ? 1 : 0, d: f.difficulty || 0 })) : [];
-        return { id: id, n: el.web_name, t: el.element_type, tm: tm ? tm.short_name : '', b: kit ? kit.b : '', c: kit ? kit.c : '', o: o, cap: id === lk.captainId ? 1 : (id === lk.viceCaptainId ? 2 : 0) };
+        // FF-039: this gameweek's match for his club (fixture id, opponent, side, score, state 0 / 1 live / 2 full time, minutes, kick-off) for the launcher card
+        const ms = _lastLiveSquadCache && _lastLiveSquadCache.matchStateByTeam ? _lastLiveSquadCache.matchStateByTeam[el.team] : null;
+        const mm = ms && ms.fid != null ? { f: ms.fid, n: ms.opponentName, h: ms.isHome ? 1 : 0, s: ms.ownScore, o: ms.oppScore, st: isMatchFullTime(ms) ? 2 : (ms.started ? 1 : 0), mn: ms.minutes || 0, k: ms.kickoffTime || '' } : null;
+        const out1 = { id: id, n: el.web_name, t: el.element_type, tm: tm ? tm.short_name : '', b: kit ? kit.b : '', c: kit ? kit.c : '', o: o, cap: id === lk.captainId ? 1 : (id === lk.viceCaptainId ? 2 : 0) };
+        if (mm) out1.m = mm;
+        return out1;
       };
       const starters = lk.starterIds.map(one), bench = lk.benchOrder.map(one);
       if (starters.every(Boolean) && bench.every(Boolean)) out = { v: 1, gw: projected.gwId, lockedAt: lineup.lockedAt || null, starters: starters, bench: bench };
@@ -6788,21 +6868,18 @@ function isMatchFullTime(m) {
 }
 
 function buildMatchStateByTeam(fixtures, teamsById, targetGw) {
-  const byTeam = {};
+  const all = {};
   (fixtures || []).filter(f => f.event === targetGw).forEach(f => {
     const homeTeam = teamsById[f.team_h], awayTeam = teamsById[f.team_a];
-    byTeam[f.team_h] = {
-      opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true,
-      started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0,
-      isFull: isFixtureFullTime(f),
-      ownScore: f.team_h_score, oppScore: f.team_a_score, kickoffTime: f.kickoff_time
-    };
-    byTeam[f.team_a] = {
-      opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false,
-      started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0,
-      isFull: isFixtureFullTime(f),
-      ownScore: f.team_a_score, oppScore: f.team_h_score, kickoffTime: f.kickoff_time
-    };
+    const base = { fid: f.id, started: !!f.started, finished: !!f.finished, minutes: f.minutes || 0, isFull: isFixtureFullTime(f), kickoffTime: f.kickoff_time };
+    (all[f.team_h] = all[f.team_h] || []).push(Object.assign({ opponentName: awayTeam ? awayTeam.short_name : '?', isHome: true, ownScore: f.team_h_score, oppScore: f.team_a_score }, base));
+    (all[f.team_a] = all[f.team_a] || []).push(Object.assign({ opponentName: homeTeam ? homeTeam.short_name : '?', isHome: false, ownScore: f.team_a_score, oppScore: f.team_h_score }, base));
+  });
+  // FF-039: one entry per team (as before). In a double gameweek: the live match, else the latest started, else the first.
+  const byTeam = {};
+  Object.keys(all).forEach(t => {
+    const list = all[t];
+    byTeam[t] = list.find(m => m.started && !m.isFull) || list.slice().reverse().find(m => m.started) || list[0];
   });
   return byTeam;
 }
