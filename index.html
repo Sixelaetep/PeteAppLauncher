@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.54</title>
+<title>P Apps v11.55</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1286,7 +1286,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.54</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.55</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1761,6 +1761,16 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-162, v11.55): launcher feeds, Phase 2: the Fantasy card and Needs attention are refreshed from FPL by the launcher itself, without opening the app. A small
+  feed registry (PX_FEEDS) runs a feed at sign-in, on return to the tab and about every 15 minutes while the page is visible; it backs off after a failure (5 min,
+  doubling to 2 h) and skips quietly when anything is missing. The Fantasy feed reads /bootstrap and /entry/<id>/picks/<gw> through pal-fpl-proxy (normal proxy cache,
+  header x-pal-key from PAL_CONFIG.FF_PROXY_KEY; the entry id comes from ff_settings_local_u_<uid>), 2 requests per run, and stores a small display-only overlay in
+  pal_x_f_fantasy (cleared at sign-out with the other pal_x_ keys; never written to the app's own data). Used for: the card's points / gameweek / squad value / bank / next
+  deadline (when newer than the app's squad cache; a "Live from FPL - 3 min ago" or "From the app - 3 Nov" line shows which); the next-deadline item in Needs attention
+  and the Timeline even if the app has not run for weeks, which also feeds the PET-160 deadline and "No locked-in squad" alerts; "n flagged in your squad for GW n" (injured /
+  suspended / unavailable / doubtful, from the locked-in squad when it is for the next gameweek, else the current picks; only within 72 h of the deadline; Action inside
+  24 h if a starter is out); and "GW n: points (average)" for 48 h after a gameweek finishes. New "Fantasy live updates" switch, a status line and a Refresh Fantasy now
+  button in Alert settings. The live match poll (ffpLiveTick) and every app file are untouched. pal_feeds_off = '1' stops all feeds.
   CHANGED (PET-161, v11.54): the planned-gym-session alert in Needs attention (PET-160) now goes away when the session is logged or the day is marked
   "Missed - ill". It checks the Gym Tracker's own saved copy (gym_tracker_v1) each time Needs attention is drawn instead of trusting the last published summary:
   a session on that date for that plan (the app's own "done" rule) or a "Missed - ill" day flag on that date removes it, including when it was logged on another
@@ -2284,6 +2294,7 @@ function onSignedIn(userInfo, session) {
   sbSession   = session;
   feedPalSyncSession(); // PET-101 — must precede applyUserView() → loadLayoutConfig()
   setTimeout(function () { try { pxGymWarm(); } catch (e) {} }, 6000);   // PET-155 v11.48
+  setTimeout(function () { try { pxFeedsTick(); } catch (e) {} }, 4000);   // PET-162 v11.55: first feed run
 
   document.getElementById('lockScreen').classList.add('hidden');
   document.getElementById('loginEmail').value    = '';
@@ -3232,6 +3243,7 @@ function pxRead() {
     const c = window.PalContract.read(k);
     if (c && c.userId === uid) out[k] = c;
   });
+  try { pxMergeFeeds(out); } catch (e) {}   // PET-162 v11.55
   return out;
 }
 // v11.38: apps that publish only a search list (Reading) must not make the Needs attention box or the time tabs appear.
@@ -3462,6 +3474,7 @@ window.addEventListener('storage', function (e) { if (e.key === 'reading-tracker
 const PX_KIND_GROUP = { deadline: 'deadline', bill: 'bill', payment: 'bill', gig: 'event', trip: 'event', session: 'session', release: 'release', leave: 'leave' };
 const PX_GROUPS = [
   ['deadline', 'Deadlines and lock-in (Fantasy, Claims)'],
+  ['fantasy', 'Fantasy live updates (fetches FPL data)'],
   ['bill', 'Bills and payments'],
   ['event', 'Gigs and trips'],
   ['session', 'Planned gym sessions'],
@@ -3618,7 +3631,7 @@ function pxHealthItems(now) {
 function pxDerived(cmap, now) {
   if (pxFeedsOff()) return [];
   let out = [];
-  [pxPromote, pxElapsed, pxFantasyLock].forEach(function (f) { try { out = out.concat(f(cmap, now)); } catch (e) {} });
+  [pxPromote, pxElapsed, pxFantasyLock, pxFeedAttention].forEach(function (f) { try { out = out.concat(f(cmap, now)); } catch (e) {} });
   try { out = out.concat(pxHealthItems(now)); } catch (e) {}
   return out;
 }
@@ -3632,6 +3645,10 @@ function pxSettingsPanel() {
     cb.addEventListener('change', function () { pxSetPromo(g[0], cb.checked); pxRenderAttention(pxRead()); });
     lab.appendChild(cb); lab.appendChild(document.createTextNode(g[1])); p.appendChild(lab);
   });
+  const fs = pxEl('div', 'na-stale', 'Fantasy: ' + pxFeedStatusText('fantasy')); fs.id = 'pxFeedStatus'; p.appendChild(fs);   // PET-162 v11.55
+  const rb = pxEl('button', 'na-more', 'Refresh Fantasy now'); rb.type = 'button';
+  rb.addEventListener('click', function () { rb.textContent = 'Refreshing…'; pxFeedRun('fantasy', true).then(function () { pxRenderAttention(pxRead()); }); });
+  p.appendChild(rb);
   return p;
 }
 
@@ -3639,6 +3656,7 @@ function pxSettingsPanel() {
 // next phase, a day rolled over, a warning appeared. Same pattern as pxGymTick / pxReadTick.
 function pxClockTick() {
   try {
+    pxFreshTick();   // PET-162 v11.55
     if (document.hidden || !pxUserId()) return;
     const cm = pxRead(), sig = pxSigOf(pxAttentionItems(cm));
     if (sig !== _pxClockSig) pxRenderAttention(cm);
@@ -3648,6 +3666,174 @@ setInterval(pxClockTick, 60000);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) pxClockTick(); });
 window.addEventListener('storage', function (e) { if (e.key && (e.key.indexOf('ff_locked_card') === 0 || e.key === 'gym_tracker_v1')) pxClockTick(); });   // PET-161: a session logged in another tab
 // <<PET160-END>>
+
+
+// <<PET162-BEGIN>>
+// ══════════════════════════════════════════════════════════════════
+// PET-162 v11.55 — launcher feeds, Phase 2: the Fantasy feed (the launcher reads FPL itself)
+// ══════════════════════════════════════════════════════════════════
+// A feed is { ttlMin, group, visible(), run(ctx) -> overlay | {skip} }. The scheduler runs a feed when its overlay is older than ttlMin, only while the
+// page is visible and the feed's switch is on, one at a time, with backoff after a failure. A feed writes ONE small display-only overlay to
+// localStorage `pal_x_f_<app>` ({ v:1, userId, fetchedAt, ... }): never read back by an app, never merged into an app's data, removed at sign-out
+// with the other pal_x_ keys, ignored for any other user and after 7 days. Reads and writes nothing else. Kill switch: pal_feeds_off = '1'.
+const PX_FEEDS = {
+  fantasy: {
+    ttlMin: 15, group: 'fantasy',
+    visible: function () { const el = document.getElementById('stat-fantasy'), c = el && el.closest ? el.closest('.app-card') : null; return !!el && !(c && c.style.display === 'none'); },
+    run: function (ctx) { return pxFeedFantasy(ctx); }
+  }
+};
+const PX_FEED_ST = {};
+function pxFeedRead(app) {
+  try {
+    const f = PX_FEEDS[app]; if (!f || !pxPromoOn(f.group)) return null;
+    const o = JSON.parse(localStorage.getItem('pal_x_f_' + app) || 'null');
+    if (!o || o.v !== 1 || o.userId !== pxUserId()) return null;
+    const t = Date.parse(o.fetchedAt); if (!t || Date.now() - t > 7 * 86400000) return null;
+    return o;
+  } catch (e) { return null; }
+}
+function pxAgo(ms) {
+  if (!ms) return '';
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  if (m < 1440) return Math.floor(m / 60) + ' h ago';
+  return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+function pxFreshText(at, live) { return (live ? 'Live from FPL' : 'From the app') + (at ? ' · ' + pxAgo(at) : ''); }
+function pxFreshTick() {
+  try { document.querySelectorAll('.pxFresh').forEach(function (el) { el.textContent = pxFreshText(Number(el.getAttribute('data-at')), el.getAttribute('data-live') === '1'); }); } catch (e) {}
+}
+function pxFeedStatusText(app) {
+  const st = PX_FEED_ST[app], f = PX_FEEDS[app];
+  if (pxFeedsOff() || !f || !pxPromoOn(f.group)) return 'off';
+  if (st && st.busy) return 'updating…';
+  const o = pxFeedRead(app);
+  if (st && st.last && !st.last.ok) return (o ? 'last good ' + pxAgo(Date.parse(o.fetchedAt)) + ' · ' : '') + 'last try failed (' + st.last.msg + ')';
+  if (o) return 'updated ' + pxAgo(Date.parse(o.fetchedAt)) + (st && st.reqs ? ' · ' + st.reqs + ' requests this session' : '');
+  return st && st.last ? st.last.msg : 'not run yet';
+}
+async function pxFeedRun(app, force) {
+  const f = PX_FEEDS[app], st = PX_FEED_ST[app] = PX_FEED_ST[app] || { failures: 0, nextTry: 0, reqs: 0, busy: false, last: null };
+  if (!f || st.busy || pxFeedsOff() || !pxUserId() || !pxPromoOn(f.group)) return;
+  if (!force) {
+    if (document.hidden || Date.now() < st.nextTry) return;
+    if (f.visible && !f.visible()) return;
+    const o = pxFeedRead(app);
+    if (o && Date.now() - Date.parse(o.fetchedAt) < f.ttlMin * 60000) return;
+  }
+  st.busy = true;
+  const ctx = { reqs: 0 };
+  try {
+    const out = await f.run(ctx);
+    st.reqs += ctx.reqs;
+    if (out && out.skip) { st.last = { at: Date.now(), ok: true, msg: 'skipped: ' + out.skip }; st.nextTry = Date.now() + 10 * 60000; }
+    else {
+      localStorage.setItem('pal_x_f_' + app, JSON.stringify(out));
+      st.failures = 0; st.nextTry = 0; st.last = { at: Date.now(), ok: true, msg: 'ok', reqs: ctx.reqs };
+      try { statFantasy(); } catch (e) {}
+      try { pxRenderAttention(pxRead()); } catch (e) {}
+    }
+  } catch (e) {
+    st.reqs += ctx.reqs; st.failures++;
+    st.nextTry = Date.now() + Math.min(120, 5 * Math.pow(2, st.failures - 1)) * 60000;
+    st.last = { at: Date.now(), ok: false, msg: String(e && e.message || e).slice(0, 60) };
+  } finally { st.busy = false; }
+  const sEl = document.getElementById('pxFeedStatus'); if (sEl) sEl.textContent = 'Fantasy: ' + pxFeedStatusText(app);
+}
+function pxFeedsTick() { Object.keys(PX_FEEDS).forEach(function (a) { pxFeedRun(a, false); }); }
+setInterval(pxFeedsTick, 60000);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) pxFeedsTick(); });
+
+function pxFplWord(el) {
+  const s = el.status, c = el.chance_of_playing_next_round;
+  return s === 'i' ? 'Injured' : s === 's' ? 'Suspended' : (s === 'u' || s === 'n') ? 'Out' : (c != null ? c + '%' : 'Doubtful');
+}
+// Same rule as the Fantasy Tracker's isEffectivelyUnavailable / ffAvail.
+function pxFplFlag(el) {
+  if (!el || !el.status || el.status === 'a') return null;
+  const out = el.status === 'i' || el.status === 's' || el.status === 'u' || el.status === 'n' || (el.status === 'd' && el.chance_of_playing_next_round != null && el.chance_of_playing_next_round <= 25);
+  return { lv: out ? 'out' : 'doubt', w: pxFplWord(el), c: el.chance_of_playing_next_round == null ? null : el.chance_of_playing_next_round };
+}
+async function pxFeedFantasy(ctx) {
+  const cfg = window.PAL_CONFIG || {}, uid = pxUserId();
+  if (!cfg.SB_URL || !cfg.FF_PROXY_KEY || cfg.FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') return { skip: 'no proxy key' };
+  let entryId = '';
+  try { entryId = String((JSON.parse(localStorage.getItem('ff_settings_local_u_' + uid) || 'null') || {}).entryId || '').trim(); } catch (e) {}
+  if (!/^\d+$/.test(entryId)) return { skip: 'no FPL entry id yet (set it in the app)' };
+  const base = cfg.SB_URL + '/functions/v1/pal-fpl-proxy', hdr = { 'x-pal-key': cfg.FF_PROXY_KEY };
+  const get = async function (path) {
+    ctx.reqs++;
+    const r = await fetch(base + path, { headers: hdr });
+    if (!r.ok) throw new Error(path.split('/')[1] + ' HTTP ' + r.status);
+    return r.json();
+  };
+  const bs = await get('/bootstrap'), evs = Array.isArray(bs.events) ? bs.events : [];
+  const cur = evs.find(function (e) { return e.is_current; }) || evs.slice().reverse().find(function (e) { return e.finished; });
+  if (!cur) throw new Error('no current gameweek');
+  const nxt = evs.find(function (e) { return e.is_next; }) || evs.find(function (e) { return e.is_current; }) || evs.filter(function (e) { return !e.finished; }).sort(function (a, b) { return a.id - b.id; })[0] || null;
+  const pk = await get('/entry/' + entryId + '/picks/' + cur.id), h = pk.entry_history || {};
+  // who to watch: the locked-in squad if it is for the next gameweek (that is the plan), else this gameweek's picks
+  let watch = [];
+  try {
+    const lc = JSON.parse(localStorage.getItem('ff_locked_card_u_' + uid) || 'null');
+    if (lc && nxt && Number(lc.gw) === nxt.id && Array.isArray(lc.starters)) {
+      lc.starters.forEach(function (p) { if (p && p.id != null) watch.push({ id: p.id, st: 1, cap: p.cap === 1 }); });
+      (lc.bench || []).forEach(function (p) { if (p && p.id != null) watch.push({ id: p.id, st: 0, cap: false }); });
+    }
+  } catch (e) {}
+  if (!watch.length) (pk.picks || []).forEach(function (p) { watch.push({ id: p.element, st: p.position <= 11 ? 1 : 0, cap: !!p.is_captain }); });
+  const byId = {}; (bs.elements || []).forEach(function (el) { byId[el.id] = el; });
+  const flags = [];
+  watch.forEach(function (w) {
+    const el = byId[w.id], fl = pxFplFlag(el); if (!fl) return;
+    flags.push({ id: w.id, n: String(el.web_name || '').slice(0, 24), lv: fl.lv, w: fl.w, c: fl.c, st: w.st, cap: w.cap ? 1 : 0 });
+  });
+  let prev = null; try { prev = JSON.parse(localStorage.getItem('pal_x_f_fantasy') || 'null'); } catch (e) {}
+  const nowIso = new Date().toISOString();
+  const res = cur.finished ? { gw: cur.id, at: (prev && prev.res && prev.res.gw === cur.id && prev.userId === uid) ? prev.res.at : nowIso } : null;
+  return { v: 1, userId: uid, fetchedAt: nowIso, gw: cur.id, points: h.points == null ? null : h.points, value: h.value == null ? null : h.value, bank: h.bank == null ? null : h.bank,
+    rank: h.overall_rank == null ? null : h.overall_rank, fin: !!cur.finished, avg: cur.average_entry_score == null ? null : cur.average_entry_score,
+    nextGw: nxt ? nxt.id : null, nextDeadline: nxt ? nxt.deadline_time : null, flags: flags, res: res };
+}
+
+// The next deadline FPL reports becomes the Fantasy deadline in the contract view, so the Timeline, the PET-160 deadline alert and the
+// "No locked-in squad" alert work even when the app has not run for weeks. Replaces only the app's own ff-gw-<n> deadline item.
+function pxMergeFeeds(out) {
+  const o = pxFeedRead('fantasy'); if (!o || o.nextGw == null || !o.nextDeadline) return;
+  const dl = new Date(o.nextDeadline); if (isNaN(dl.getTime()) || dl.getTime() <= Date.now()) return;
+  const c0 = out.fantasy, ft = Date.parse(o.fetchedAt) || 0;
+  const c = c0 ? Object.assign({}, c0) : { v: 1, appId: 'fantasy', userId: o.userId, built: o.fetchedAt, upcoming: [], attention: [] };
+  if (ft > (Date.parse(c.built) || 0)) c.built = o.fetchedAt;
+  c.upcoming = (c.upcoming || []).filter(function (u) { return !(u && u.kind === 'deadline' && /^ff-gw-\d+$/.test(u.id || '')); });
+  const p2 = function (n) { return String(n).padStart(2, '0'); };
+  c.upcoming.push({ id: 'ff-gw-' + o.nextGw, date: dl.getFullYear() + '-' + p2(dl.getMonth() + 1) + '-' + p2(dl.getDate()), time: p2(dl.getHours()) + ':' + p2(dl.getMinutes()),
+    title: 'GW ' + o.nextGw + ' deadline', sub: 'Fantasy Premier League', kind: 'deadline', open: { view: 'squad' } });
+  out.fantasy = c;
+}
+
+// Alerts from the feed: flagged players around the deadline, and the gameweek result.
+function pxFeedAttention(cmap, now) {
+  const o = pxFeedRead('fantasy'); if (!o) return [];
+  const out = [], dlMs = o.nextDeadline ? Date.parse(o.nextDeadline) : 0, hrs = dlMs ? (dlMs - now.getTime()) / 3600000 : null;
+  const fl = (o.flags || []).filter(function (f) { return f && f.lv; });
+  if (fl.length && hrs != null && hrs > 0 && hrs <= 72) {
+    fl.sort(function (a, b) { return (a.lv === 'out' ? 0 : 1) - (b.lv === 'out' ? 0 : 1) || b.st - a.st; });
+    const startersOut = fl.some(function (f) { return f.st && f.lv === 'out'; }), anyStarter = fl.some(function (f) { return f.st; });
+    const level = startersOut && hrs <= 24 ? 'action' : anyStarter ? 'soon' : 'info';
+    const names = fl.slice(0, 4).map(function (f) { return f.n + ' (' + f.w + ')'; }).join(', ') + (fl.length > 4 ? ' +' + (fl.length - 4) + ' more' : '');
+    out.push({ app: 'fantasy', id: 'f:flag:' + o.nextGw + ':' + level + ':' + fl.map(function (f) { return f.id; }).sort().join('-'), level: level,
+      title: fl.length + (fl.length === 1 ? ' player' : ' players') + ' flagged for GW ' + o.nextGw, sub: names,
+      due: pxIso(new Date(dlMs)), open: { view: 'nextweek' }, p: 1 });
+  }
+  if (o.fin && o.res && o.res.gw === o.gw && o.points != null && now.getTime() - Date.parse(o.res.at) < 48 * 3600000) {
+    out.push({ app: 'fantasy', id: 'f:res:' + o.gw, level: 'info', title: 'GW ' + o.gw + ': ' + o.points + ' pts' + (o.avg != null ? ' (average ' + o.avg + ')' : ''),
+      sub: o.rank != null ? 'Overall rank ' + Number(o.rank).toLocaleString('en-GB') : '', due: '', open: { view: 'squad' }, p: 1 });
+  }
+  return out;
+}
+// <<PET162-END>>
 
 function pxStaleNote(cmap) {
   const old = [];
@@ -3945,7 +4131,7 @@ function navMenuFillAccount(m, b) {
   u.appendChild(av); u.appendChild(tx); m.appendChild(u);
   m.appendChild(row('nm-danger', '\u21B1', 'Sign out', function () { navMenuClose(); confirmSignOut(); }));
   m.appendChild(sep());
-  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.54'; m.appendChild(v);
+  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.55'; m.appendChild(v);
 }
 function navMenuOpen() {
   const m = document.getElementById('navMenu'), b = document.getElementById('navMenuBtn'), hb = document.getElementById('navHome');
@@ -4836,30 +5022,37 @@ function statFantasy() {
     const cache = JSON.parse(raw);
     const hist = cache.picksData && cache.picksData.entry_history;
     if (!hist || cache.gwId == null) { setCardStat('stat-fantasy', 'Open app to load your squad', 'muted'); return; }
+    // PET-162 v11.55: figures read from FPL by the launcher's own feed, used only when newer than the app's squad cache
+    const ov = pxFeedRead('fantasy');
+    const ovOk = !!(ov && ov.gw != null && ov.points != null && ov.value != null && ov.bank != null && ov.gw >= cache.gwId && Date.parse(ov.fetchedAt) > (cache.cachedAt || 0));
+    const pts = ovOk ? ov.points : hist.points, gwNum = ovOk ? ov.gw : cache.gwId, val = ovOk ? ov.value : hist.value, bnk = ovOk ? ov.bank : hist.bank;
+    const nextId = ovOk && ov.nextGw != null ? ov.nextGw : cache.nextGwId, nextDl = ovOk && ov.nextGw != null ? ov.nextDeadline : cache.nextGwDeadline;
+    const freshAt = ovOk ? Date.parse(ov.fetchedAt) : (cache.cachedAt || 0);
+    const freshLine = '<div class="ff-meta pxFresh" data-at="' + freshAt + '" data-live="' + (ovOk ? 1 : 0) + '" style="font-size:10px;color:var(--ink3);margin-top:2px">' + pxFreshText(freshAt, ovOk) + '</div>';
 
     // PET-132 v11.28: the points are the figure (same two numbers as before: gameweek and points).
-    const primaryLine = '<div class="ff-big">' + hist.points + '<small>pts · Gameweek ' + cache.gwId + '</small></div>';
+    const primaryLine = '<div class="ff-big">' + pts + '<small>pts · Gameweek ' + gwNum + '</small></div>';
     // PET-153 v11.46: squad value and bank (left) and the next gameweek with its cut-off (right) share one row; the row wraps only if the card is too narrow
     let nextText = '';
-    if (cache.nextGwId != null) {
+    if (nextId != null) {
       let deadlineText = '';
-      if (cache.nextGwDeadline) {
+      if (nextDl) {
         try {
-          const dl = new Date(cache.nextGwDeadline);
+          const dl = new Date(nextDl);
           deadlineText = ' · ' + dl.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + dl.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
         } catch (e) {}
       }
-      nextText = 'Next GW' + cache.nextGwId + deadlineText;
+      nextText = 'Next GW' + nextId + deadlineText;
     }
     const subLine = '<div class="ff-meta" style="font-size:10px;color:var(--ink2);margin-top:4px"><span>' +
-      'Squad £' + (hist.value / 10).toFixed(1) + 'm · Bank £' + (hist.bank / 10).toFixed(1) + 'm</span>' +
+      'Squad £' + (val / 10).toFixed(1) + 'm · Bank £' + (bnk / 10).toFixed(1) + 'm</span>' +
       (nextText ? '<span>' + nextText + '</span>' : '') + '</div>';
     const nextLine = '';
 
     const statEl = document.getElementById('stat-fantasy');
     if (statEl) {
       statEl.className = 'card-stat';
-      statEl.innerHTML = primaryLine + subLine + nextLine + ffLockedPitchHtml(uid);
+      statEl.innerHTML = primaryLine + subLine + freshLine + nextLine + ffLockedPitchHtml(uid);
       ffpLiveStart();
     }
   } catch (e) {
