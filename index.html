@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.52</title>
+<title>P Apps v11.53</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1026,6 +1026,10 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   .na-more, .na-empty { display:block; width:100%; padding:10px; background:none; border:0; color:var(--ink3); font:500 12.5px var(--f); text-align:left; cursor:pointer; }
   .na-empty { cursor:default; }
   .na-stale { padding:4px 10px 8px; font:400 11.5px var(--f); color:var(--ink3); }
+  /* PET-160 v11.53: alert settings (one switch per group of promoted alerts) */
+  .na-set { padding:0 10px 8px; }
+  .na-opt { display:flex; align-items:center; gap:10px; min-height:44px; font:500 13px var(--f); color:var(--ink); cursor:pointer; }
+  .na-opt input { width:20px; height:20px; flex:none; }
   .tb-tabs { display:flex; gap:4px; background:var(--surface); border:1px solid var(--sep); border-radius:14px; padding:3px; margin-bottom:6px; }
   .tb-tabs[hidden] { display:none; }
   .tb-tab { flex:1; min-height:36px; background:none; border:0; border-radius:11px; color:var(--ink3); font:600 13px var(--f); cursor:pointer; }
@@ -1282,7 +1286,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.52</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.53</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1757,6 +1761,15 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (PET-160, v11.53): Needs attention is now time-aware (Phase 1 of the feeds plan). Launcher-only: no app, pal-shared.js, storage-format or sync change, and no new
+  network call. At draw time (and once a minute) the launcher lifts the apps' own `upcoming` items into Needs attention as they come up: deadlines (<=48h Coming up,
+  <=24h Action required; Fantasy and Claims), bills due today (Action) or within 3 days (Coming up), gigs and trips on the day (Coming up) and the day before (Info),
+  a planned gym session today (Info, Coming up after 18:00), films released today, holidays today / tomorrow, claim payments expected today. Also: "No locked-in
+  squad for GW N" from the day before the Fantasy deadline (Coming up; Action on deadline day); "N dates passed since <app> last ran" for bills / payments / Claims
+  dates that fell due after the app last published (Info); and platform warnings for changes waiting to sync (after 3 minutes) and browser storage over 4 MB (of ~5 MB).
+  The apps' own frozen versions of two alerts (Fantasy "GW n deadline in n h", On Budget "bills due in the next 3 days") are replaced by the live ones while the matching
+  switch is on. New "Alert settings" switches per group (this device only); `localStorage pal_feeds_off = '1'` turns every new alert off. Ids carry the day / phase so
+  Tomorrow / 7d / Ignore only hide that day's reminder. The backup-age alert is deliberately NOT included (the staleness layer was removed at PET-092).
   CHANGED (PET-159, v11.52): the Fantasy card's locked-in pitch marks players who are not fully fit: a red + (injured, suspended, unavailable, doubtful with 25% or
   less) or amber ! (other doubtful) badge on the shirt and a short chip under the name ("Injured", "Susp.", "Out", "75%"; full FPL news in the tooltip). Read from the
   additive `a` per player that fantasy-football-tracker.html v1.66 writes into ff_locked_card; an older summary has no `a`, so no markers appear until the app has
@@ -3324,14 +3337,16 @@ function pxAttentionItems(cmap) {
     const key = app + ':' + it.id;
     if (seen[key]) return; seen[key] = 1;
     if (snz[key]) { if (snz[key] === PX_IGNORE) PX.ignoredN++; return; }
-    out.push({ app: app, key: key, level: it.level === 'action' || it.level === 'info' ? it.level : 'soon', title: it.title, sub: it.sub || '', due: it.due || '', open: it.open });
+    out.push({ app: app, key: key, level: it.level === 'action' || it.level === 'info' ? it.level : 'soon', title: it.title, sub: it.sub || '', due: it.due || '', open: it.open, p: it.p ? 1 : 0 });
   };
   Object.keys(cmap).forEach(function (app) {
-    (cmap[app].attention || []).concat(app === 'gym' ? pxGymReminders() : []).forEach(function (it) { add(app, it); });   // PET-154 v11.47: + food & drink reminders
+    const sup = PX_SUPERSEDED[app], supOn = !!(sup && pxPromoOn(sup.group));   // PET-160 v11.53: the live version below replaces the app's frozen one
+    (cmap[app].attention || []).concat(app === 'gym' ? pxGymReminders() : []).forEach(function (it) { if (supOn && it && sup.re.test(String(it.id || ''))) return; add(app, it); });   // PET-154 v11.47: + food & drink reminders
   });
   pxReadingReminders().forEach(function (it) { add('reading', it); });   // PET-157 v11.50: daily "Read today" (needs no contract)
+  pxDerived(cmap, new Date()).forEach(function (it) { add(it.app, it); });   // PET-160 v11.53: time-aware alerts
   const rank = { action: 0, soon: 1, info: 2 };
-  out.sort(function (a, b) { return rank[a.level] - rank[b.level] || (a.due || '9').localeCompare(b.due || '9'); });
+  out.sort(function (a, b) { return rank[a.level] - rank[b.level] || a.p - b.p || (a.due || '9').localeCompare(b.due || '9'); });
   return out;
 }
 // PET-154 v11.47: food & drink reminders. The Gym Tracker stores them on its water-target record (reminders: [{id, time:'HH:MM',
@@ -3430,6 +3445,189 @@ function pxReadTick() {
 setInterval(function () { if (!document.hidden) pxReadTick(); }, 60000);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) pxReadTick(); });
 window.addEventListener('storage', function (e) { if (e.key === 'reading-tracker-v6') pxReadTick(); });
+// <<PET160-BEGIN>>
+// ══════════════════════════════════════════════════════════════════
+// PET-160 v11.53 — time-aware Needs attention (Phase 1 of the launcher feeds plan; launcher-only)
+// ══════════════════════════════════════════════════════════════════
+// Apps decide urgency when they SAVE, so an alert was only as current as the app's last run (Fantasy raised a deadline alert only if the app
+// ran in the 24 hours before it). Here the launcher lifts the `upcoming` items the apps already publish (the dates are clock-safe) into
+// Needs attention as they come up, and works out the rest from data it already holds. Nothing is stored except the switches, no app is
+// loaded and nothing is fetched. Ids carry the phase / day so Tomorrow / 7d / Ignore only hide that day's reminder, and the day-before alert
+// does not hide the day-of alert. Promoted alerts rank below the apps' own at the same level; at most 3 per app.
+const PX_KIND_GROUP = { deadline: 'deadline', bill: 'bill', payment: 'bill', gig: 'event', trip: 'event', session: 'session', release: 'release', leave: 'leave' };
+const PX_GROUPS = [
+  ['deadline', 'Deadlines and lock-in (Fantasy, Claims)'],
+  ['bill', 'Bills and payments'],
+  ['event', 'Gigs and trips'],
+  ['session', 'Planned gym sessions'],
+  ['release', 'Film & TV releases'],
+  ['leave', 'Holidays'],
+  ['platform', 'Sync and storage warnings']
+];
+// The apps' own frozen versions of alerts the launcher can now work out live from `upcoming` (replaced only while that group's switch is on).
+const PX_SUPERSEDED = { fantasy: { re: /^ff-deadline-/, group: 'deadline' }, budget: { re: /^ob-due-soon$/, group: 'bill' } };
+const PX_PLAT = { label: 'P Apps', icon: '🛠️', color: '#8A94A6' };
+const PX_PREF_KEY = 'pal_promote_prefs';   // { off: { <group>: true } } - this device only
+const PX_HEALTH = { queueSince: 0, storAt: 0, stor: null };
+let _pxClockSig = '';
+function pxFeedsOff() { try { return localStorage.getItem('pal_feeds_off') === '1' || !!(window.PAL_CONFIG && window.PAL_CONFIG.PX_PROMOTE_OFF); } catch (e) { return false; } }
+function pxPrefs() { try { const o = JSON.parse(localStorage.getItem(PX_PREF_KEY) || 'null'); return o && o.off && typeof o.off === 'object' ? o : { off: {} }; } catch (e) { return { off: {} }; } }
+function pxPromoOn(g) { return !pxFeedsOff() && !pxPrefs().off[g]; }
+function pxSetPromo(g, on) { const o = pxPrefs(); if (on) delete o.off[g]; else o.off[g] = true; try { localStorage.setItem(PX_PREF_KEY, JSON.stringify(o)); } catch (e) {} }
+function pxDaysBetween(a, b) { return Math.round((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000); }
+function pxClockTime(date, time, fallback) { return new Date(date + 'T' + (/^\d{2}:\d{2}$/.test(time || '') ? time : fallback) + ':00'); }
+function pxHoursLabel(h) { return h < 1 ? 'in under an hour' : 'in ' + Math.round(h) + ' h'; }
+function pxNames(list) { return list.slice(0, 3).map(function (u) { return u.title + (u.sub ? ' ' + u.sub : ''); }).join(', ') + (list.length > 3 ? ' +' + (list.length - 3) + ' more' : ''); }
+function pxByDate(a, b) { return String(a.date).localeCompare(String(b.date)); }
+function pxSigOf(items) { return items.map(function (i) { return i.key + '|' + i.level + '|' + i.title; }).join('\n'); }
+
+function pxPromote(cmap, now) {
+  const out = [], today = pxIso(now), nowMin = now.getHours() * 60 + now.getMinutes(), rank = { action: 0, soon: 1, info: 2 };
+  Object.keys(cmap).forEach(function (app) {
+    const mine = [], bills = { zero: [], soon: [] };
+    (cmap[app].upcoming || []).forEach(function (u) {
+      if (!u || !u.id || !u.date || u.date < today) return;
+      const g = PX_KIND_GROUP[u.kind]; if (!g || !pxPromoOn(g)) return;
+      const dd = pxDaysBetween(u.date, today);
+      const push = function (phase, level, title, sub) { mine.push({ app: app, id: 'p:' + u.id + ':' + phase, level: level, title: title, sub: sub || '', due: u.date, open: u.open, p: 1 }); };
+      if (u.kind === 'deadline') {
+        let phase = '', level = '', hrs = '';
+        if (/^\d{2}:\d{2}$/.test(u.time || '')) {
+          const h = (pxClockTime(u.date, u.time, '23:59') - now) / 3600000;
+          if (h <= 0) return;
+          if (h <= 24) { phase = '24'; level = 'action'; hrs = ' ' + pxHoursLabel(h); } else if (h <= 48) { phase = '48'; level = 'soon'; }
+        } else if (dd === 0) { phase = '24'; level = 'action'; } else if (dd === 1) { phase = '48'; level = 'soon'; }
+        if (!phase) return;
+        push(phase, level, u.title + hrs, [pxDayLabel(u.date) + (u.time ? ' ' + u.time : ''), u.sub].filter(Boolean).join(' · '));
+      } else if (u.kind === 'bill') {
+        if (dd === 0) bills.zero.push(u); else if (dd <= 3) bills.soon.push(u);
+      } else if (u.kind === 'payment') {
+        if (dd === 0) push('0', 'info', u.title, u.sub);
+      } else if (u.kind === 'gig' || u.kind === 'trip') {
+        const sub = [u.time, u.sub].filter(Boolean).join(' · ');
+        if (dd === 0) push('0', 'soon', u.title, sub || (u.kind === 'trip' ? 'Trip starts today' : 'Today'));
+        else if (dd === 1) push('1', 'info', u.title, sub || (u.kind === 'trip' ? 'Trip starts tomorrow' : 'Tomorrow'));
+      } else if (u.kind === 'session') {
+        if (dd === 0) push('0', nowMin >= 18 * 60 ? 'soon' : 'info', u.title, 'Planned session today');
+      } else if (u.kind === 'release') {
+        if (dd === 0) push('0', 'info', u.title, u.sub || 'Releases today');
+      } else if (u.kind === 'leave') {
+        if (dd <= 1) push(String(dd), 'info', 'Holiday ' + (dd === 0 ? 'today' : 'tomorrow'), u.sub);
+      }
+    });
+    if (bills.zero.length) mine.push({ app: app, id: 'p:' + app + ':bill:0:' + today, level: 'action', title: bills.zero.length + (bills.zero.length === 1 ? ' bill' : ' bills') + ' due today', sub: pxNames(bills.zero), due: today, open: bills.zero[0].open, p: 1 });
+    if (bills.soon.length) {
+      const l = bills.soon.slice().sort(pxByDate);
+      mine.push({ app: app, id: 'p:' + app + ':bill:soon:' + l[0].date, level: 'soon', title: l.length + (l.length === 1 ? ' bill' : ' bills') + ' due in the next 3 days', sub: pxNames(l), due: l[0].date, open: l[0].open, p: 1 });
+    }
+    mine.sort(function (a, b) { return rank[a.level] - rank[b.level] || a.due.localeCompare(b.due); });
+    mine.slice(0, 3).forEach(function (it) { out.push(it); });
+  });
+  return out;
+}
+
+// A bill / payment / Claims date that fell due AFTER the app last published (so it was still ahead of it then). The app may already know it
+// was cleared on another device, so this is Info only: "check in the app".
+function pxElapsed(cmap, now) {
+  const out = [], today = pxIso(now), floor = pxAddDays(today, -7);
+  Object.keys(cmap).forEach(function (app) {
+    const c = cmap[app], bt = Date.parse(c.built); if (!bt) return;
+    const built = pxIso(new Date(bt)), groups = {};
+    (c.upcoming || []).forEach(function (u) {
+      if (!u || !u.date || u.date >= today || u.date < built || u.date < floor) return;
+      const grp = (u.kind === 'bill' || u.kind === 'payment') ? 'bill' : (u.kind === 'deadline' && app === 'claims') ? 'deadline' : '';
+      if (!grp || !pxPromoOn(grp)) return;
+      (groups[grp] = groups[grp] || []).push(u);
+    });
+    Object.keys(groups).forEach(function (grp) {
+      const l = groups[grp].sort(pxByDate), n = l.length, label = (PX_APPS[app] && PX_APPS[app].label) || app;
+      out.push({ app: app, id: 'e:' + app + ':' + grp + ':' + l[n - 1].date + ':' + n, level: 'info',
+        title: (n === 1 ? l[0].title + ' date' : n + ' dates') + ' passed since ' + label + ' last ran',
+        sub: pxNames(l) + ' · check in the app', due: l[0].date, open: l[0].open, p: 1 });
+    });
+  });
+  return out;
+}
+
+// "No locked-in squad" from the day before the Fantasy deadline. The deadline is the app's published `ff-gw-<n>` item; locked-in state is
+// the ff_locked_card summary the app writes (its gw is the gameweek being planned = the next one) and removes when nothing is locked.
+function pxFantasyLock(cmap, now) {
+  const c = cmap.fantasy; if (!c || !pxPromoOn('deadline')) return [];
+  let u = null;
+  (c.upcoming || []).forEach(function (x) { if (!u && x && x.kind === 'deadline' && /^ff-gw-\d+$/.test(x.id || '') && x.date) u = x; });
+  if (!u) return [];
+  const gw = Number(u.id.slice(6)), today = pxIso(now);
+  if (now >= pxClockTime(u.date, u.time, '23:59') || today < pxAddDays(u.date, -1)) return [];
+  const uid = pxUserId(); let locked = false;
+  try { const d = JSON.parse(localStorage.getItem(uid ? 'ff_locked_card_u_' + uid : 'ff_locked_card') || 'null'); locked = !!(d && Number(d.gw) === gw && Array.isArray(d.starters) && d.starters.length === 11); } catch (e) {}
+  if (locked) return [];
+  const level = today === u.date ? 'action' : 'soon';
+  return [{ app: 'fantasy', id: 'p:fflock:' + gw + ':' + level, level: level, title: 'No locked-in squad for GW ' + gw,
+    sub: 'Deadline ' + pxDayLabel(u.date) + (u.time ? ' ' + u.time : '') + ' · lock in your squad in Next Week', due: u.date, open: { view: 'nextweek' }, p: 1 }];
+}
+
+// Platform warnings: changes still waiting to sync (the persisted retry queue, only once it has been there 3 minutes) and browser storage.
+function pxHealthItems(now) {
+  const out = [];
+  if (!pxPromoOn('platform')) { PX_HEALTH.queueSince = 0; return out; }
+  const today = pxIso(now);
+  try {
+    let n = 0;
+    try { const q = JSON.parse(localStorage.getItem('pal_retry_queue_v1') || '[]'); n = Array.isArray(q) ? q.length : 0; } catch (e) {}
+    if (n > 0) { if (!PX_HEALTH.queueSince) PX_HEALTH.queueSince = now.getTime(); } else PX_HEALTH.queueSince = 0;
+    if (n > 0 && now.getTime() - PX_HEALTH.queueSince >= 180000)
+      out.push({ app: 'platform', id: 'p:sync:' + today, level: 'soon', title: n + (n === 1 ? ' change' : ' changes') + ' not yet synced',
+        sub: 'Saved on this device only. Open the app from here, or sign in again, to send ' + (n === 1 ? 'it' : 'them') + '.', due: '', p: 1 });
+  } catch (e) {}
+  try {
+    if (!PX_HEALTH.storAt || now.getTime() - PX_HEALTH.storAt > 600000) {   // reading every key is not free: at most every 10 minutes
+      PX_HEALTH.storAt = now.getTime();
+      PX_HEALTH.stor = window.PalSync && window.PalSync.storageUsage ? window.PalSync.storageUsage() : null;
+    }
+    const su = PX_HEALTH.stor;
+    if (su && su.totalKB >= 4096) {
+      const big = su.keys && su.keys[0], act = su.totalKB >= 4700, pct = Math.min(99, Math.round(su.totalKB / 5120 * 100));
+      out.push({ app: 'platform', id: 'p:storage:' + (act ? 'high' : 'warn'), level: act ? 'action' : 'soon', title: 'Browser storage is ' + pct + '% full',
+        sub: big ? 'Largest: ' + big.key + ' (' + (big.kb / 1024).toFixed(1) + ' MB)' : '', due: '', p: 1 });
+    }
+  } catch (e) {}
+  return out;
+}
+
+function pxDerived(cmap, now) {
+  if (pxFeedsOff()) return [];
+  let out = [];
+  [pxPromote, pxElapsed, pxFantasyLock].forEach(function (f) { try { out = out.concat(f(cmap, now)); } catch (e) {} });
+  try { out = out.concat(pxHealthItems(now)); } catch (e) {}
+  return out;
+}
+
+function pxSettingsPanel() {
+  const p = pxEl('div', 'na-set'), off = pxFeedsOff();
+  p.appendChild(pxEl('div', 'na-stale', off ? 'All of these alerts are switched off (pal_feeds_off).' : 'Lift these into Needs attention as they come up. Applies to this device only.'));
+  PX_GROUPS.forEach(function (g) {
+    const lab = pxEl('label', 'na-opt'), cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !off && !pxPrefs().off[g[0]]; cb.disabled = off;
+    cb.addEventListener('change', function () { pxSetPromo(g[0], cb.checked); pxRenderAttention(pxRead()); });
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(g[1])); p.appendChild(lab);
+  });
+  return p;
+}
+
+// Once a minute (and on return to the tab) redraw Needs attention only if the set of alerts has changed: the clock moved a deadline into its
+// next phase, a day rolled over, a warning appeared. Same pattern as pxGymTick / pxReadTick.
+function pxClockTick() {
+  try {
+    if (document.hidden || !pxUserId()) return;
+    const cm = pxRead(), sig = pxSigOf(pxAttentionItems(cm));
+    if (sig !== _pxClockSig) pxRenderAttention(cm);
+  } catch (e) {}
+}
+setInterval(pxClockTick, 60000);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) pxClockTick(); });
+window.addEventListener('storage', function (e) { if (e.key && e.key.indexOf('ff_locked_card') === 0) pxClockTick(); });
+// <<PET160-END>>
+
 function pxStaleNote(cmap) {
   const old = [];
   pxLive(cmap).forEach(function (k) {
@@ -3439,14 +3637,15 @@ function pxStaleNote(cmap) {
   return old.length ? 'Last updated on this device: ' + old.join(' · ') + ' — open the app to refresh.' : '';
 }
 function pxEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
-function pxIcon(app) { const ic = pxEl('span', 'tb-ic', PX_APPS[app].icon); ic.style.setProperty('--c', PX_APPS[app].color); ic.setAttribute('aria-hidden', 'true'); return ic; }
+function pxIcon(app) { const am = PX_APPS[app] || PX_PLAT; const ic = pxEl('span', 'tb-ic', am.icon); ic.style.setProperty('--c', am.color); ic.setAttribute('aria-hidden', 'true'); return ic; }
 
 function pxRenderAttention(cmap) {
   const box = document.getElementById('attnBox');
   if (!box) return;
   box.textContent = '';
-  if (!pxLive(cmap).length && !pxReadingReminders().length) { box.hidden = true; return; }   // PET-157 v11.50: the Reading reminder alone is enough to show the box
+  if (!pxLive(cmap).length && !pxReadingReminders().length && !pxHealthItems(new Date()).length) { _pxClockSig = ''; box.hidden = true; return; }   // PET-157 v11.50: the Reading reminder alone is enough to show the box
   const items = pxAttentionItems(cmap);
+  _pxClockSig = pxSigOf(items);
   const head = pxEl('div', 'na-head'); head.appendChild(pxEl('b', null, 'Needs attention'));
   head.appendChild(pxEl('span', null, items.length ? String(items.length) : ''));
   box.appendChild(head);
@@ -3464,7 +3663,7 @@ function pxRenderAttention(cmap) {
       const tx = pxEl('span', 'tb-tx'); tx.appendChild(pxEl('span', 'tb-t', it.title)); if (it.sub) tx.appendChild(pxEl('span', 'tb-m', it.sub));
       main.appendChild(tx);
       const due = pxDueLabel(it.due); if (due) main.appendChild(pxEl('span', 'tb-r', due));
-      main.addEventListener('click', function () { pxOpen(it.app, it.open); });
+      main.addEventListener('click', function () { if (it.app === 'platform') toast(it.sub || it.title); else pxOpen(it.app, it.open); });   // PET-160: platform warnings have no app to open
       row.appendChild(main);
       [['Tomorrow', 1, 'Remind me tomorrow about'], ['7d', 7, 'Hide for 7 days'], ['Ignore', 0, 'Ignore']].forEach(function (s) {
         const b = pxEl('button', 'na-snz' + (s[1] === 0 ? ' na-ign' : ''), s[0]); b.type = 'button';
@@ -3485,6 +3684,11 @@ function pxRenderAttention(cmap) {
     ign.addEventListener('click', pxUnignoreAll);
     box.appendChild(ign);
   }
+  const setBtn = pxEl('button', 'na-more', PX.setOpen ? 'Hide alert settings' : 'Alert settings'); setBtn.type = 'button';
+  setBtn.setAttribute('aria-expanded', PX.setOpen ? 'true' : 'false');
+  setBtn.addEventListener('click', function () { PX.setOpen = !PX.setOpen; pxRenderAttention(pxRead()); });
+  box.appendChild(setBtn);
+  if (PX.setOpen) box.appendChild(pxSettingsPanel());
   const stale = pxStaleNote(cmap);
   if (stale) box.appendChild(pxEl('div', 'na-stale', stale));
   box.hidden = false;
@@ -3720,7 +3924,7 @@ function navMenuFillAccount(m, b) {
   u.appendChild(av); u.appendChild(tx); m.appendChild(u);
   m.appendChild(row('nm-danger', '\u21B1', 'Sign out', function () { navMenuClose(); confirmSignOut(); }));
   m.appendChild(sep());
-  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.52'; m.appendChild(v);
+  const v = document.createElement('div'); v.className = 'nm-ver nav-version'; v.textContent = 'P Apps v11.53'; m.appendChild(v);
 }
 function navMenuOpen() {
   const m = document.getElementById('navMenu'), b = document.getElementById('navMenuBtn'), hb = document.getElementById('navHome');
