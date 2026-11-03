@@ -11,7 +11,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.134</title>
+<title>Gym Tracker v2.135</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230E0D12'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='800' font-size='15' fill='%23CBF55C' text-anchor='middle'>GY</text></svg>">
 <style>
   /* ═══════════════════════════════════════════════════════════════════
@@ -560,7 +560,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon" aria-hidden="true">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.134</div></span>
+      <span>Gym Tracker<div class="ver">v2.135</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1281,11 +1281,14 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.134"></script>
+<script src="pal-shared.js?v=2.135"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
+// v2.135 (GYM-121): (1) Saved items are grouped under Food and Drink headings. (2) New launcher action quickAddSaved { kind, name }: logs ONE
+// unit of an existing saved food or drink at its own saved numbers (the launcher's quick-add is now a single search box; a new name opens
+// this app's Food & drink dialog instead — PAL_OPEN { view:'intake', name } pre-fills the name). quickAddWater / quickAddMeal are kept.
 // v2.134 (GYM-120): ONE INTAKE + food & drink reminders. (1) Food and drink are one thing: every item can carry calories, protein and
 // ml (any or all), Food / Drink is only a category (it decides which list the record is filed in and which day-card section shows
 // it), and every total — day cards, Fuel rings, target bars, averages, PDF — adds up BOTH, so a protein shake logged as a drink
@@ -1986,7 +1989,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.134';
+const VERSION = '2.135';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -3238,12 +3241,13 @@ window.addEventListener('message', function(e) {
   if (!e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) applyTheme(e.data.theme);
   if (e.data.type === 'PAL_OPEN' && e.data.view === 'exercise' && e.data.id) { try { openExerciseEditor(e.data.id); } catch (_) {} }   // v2.133 (GYM-119)
-  if (e.data.type === 'PAL_OPEN' && e.data.view === 'intake') openIntakeFromLauncher(0);   // v2.134 (GYM-120): from a launcher reminder
+  if (e.data.type === 'PAL_OPEN' && e.data.view === 'intake') openIntakeFromLauncher(0, e.data.name);   // v2.134 (GYM-120): from a launcher reminder; v2.135: optional name to pre-fill
   if (e.data.type === 'GYM_ACTION' && e.data.action === 'ping') {
     try { (e.source || window.parent).postMessage({ type: 'GYM_PONG', reqId: e.data.reqId, ready: gymQuickReady(), version: VERSION }, window.location.origin); } catch (_) {}
   }
   if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddWater') handleQuickAddWater(e);
   if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddMeal') handleQuickAddMeal(e);
+  if (e.data.type === 'GYM_ACTION' && e.data.action === 'quickAddSaved') handleQuickAddSaved(e);   // v2.135 (GYM-121)
 });
 // GYM-098: launcher drink quick-add (see v2.112 note in the constants block).
 const _gymQuickSeen = new Map();   // reqId -> stored result (re-sent on duplicates)
@@ -3296,6 +3300,28 @@ function quickIntakeAfter(date, r, kind) {
   const t = getNutritionTargets();
   return { ok: true, msg: 'Added', totalKcal: tot.cal, targetKcal: t.calories || 0, totalProtein: tot.pro, targetProtein: t.protein || 0,
            totalMl: tot.ml, targetMl: getWaterTarget().dailyMl, addKcal: r.unit.cal, addProtein: r.unit.pro, addMl: r.unit.ml };
+}
+// v2.135 (GYM-121): the launcher's single search box. Logs ONE unit of an existing saved food or drink at its own saved numbers.
+function handleQuickAddSaved(e) {
+  const d = e.data || {};
+  const reply = (r) => { try { (e.source || window.parent).postMessage(Object.assign({ type: 'GYM_QUICKADD_RESULT', reqId: d.reqId }, r), window.location.origin); } catch (_) {} };
+  if (d.reqId && _gymQuickSeen.has(d.reqId)) { const prev = _gymQuickSeen.get(d.reqId); if (prev) reply(prev); return; }
+  if (d.reqId) _gymQuickSeen.set(d.reqId, null);
+  let r;
+  try { r = quickAddSavedEntry(d.kind, d.name); }
+  catch (err) { r = { ok: false, msg: 'Could not save' }; }
+  if (d.reqId) _gymQuickSeen.set(d.reqId, r);
+  reply(r);
+}
+function quickAddSavedEntry(kind, name) {
+  kind = kind === 'drink' ? 'drink' : 'food';
+  const nm = String(name || '').trim().toLowerCase();
+  const item = getSavedItems(kind).find(i => i.name.toLowerCase() === nm);
+  if (!item) return { ok: false, msg: 'Not a saved item — open the app to add it' };
+  const date = todayISO();
+  const r = logIntake(kind, item.name, { cal: null, pro: null, ml: null }, { date });
+  if (!r.ok) return { ok: false, msg: 'That saved item has no numbers yet — open the app to fix it' };
+  return quickIntakeAfter(date, r, kind);
 }
 function quickAddMealEntry(calories, protein, label) {
   const mealName = String(label || '').trim().slice(0, 80);
@@ -7807,9 +7833,15 @@ function openIntakeModal(date) {
 function openMealsModal(date) { openIntakeModal(date); }
 function openWaterModal(date) { openIntakeModal(date); }
 // Launcher "Needs attention" reminder → PAL_OPEN { view:'intake' }. The app may still be starting, so retry for ~15 s.
-function openIntakeFromLauncher(tries) {
-  try { if (_env && _env.data && _gymInitDone) { openIntakeModal(todayISO()); return; } } catch (_) {}
-  if ((tries || 0) < 30) setTimeout(() => openIntakeFromLauncher((tries || 0) + 1), 500);
+function openIntakeFromLauncher(tries, name) {
+  try {
+    if (_env && _env.data && _gymInitDone) {
+      openIntakeModal(todayISO());
+      if (name) { document.getElementById('intakeNameInput').value = String(name).slice(0, 80); onIntakeNameInput(); }   // v2.135 (GYM-121)
+      return;
+    }
+  } catch (_) {}
+  if ((tries || 0) < 30) setTimeout(() => openIntakeFromLauncher((tries || 0) + 1, name), 500);
 }
 // Category: decides which list a NEW item is filed in (and which day-card section shows it). Nothing else.
 function setIntakeKind(kind) {
@@ -8102,13 +8134,10 @@ function openManageSavedItems() {
 }
 function renderSavedItemsList() {
   const el = document.getElementById('savedItemsList');
-  const all = [];
-  ['food', 'drink'].forEach(kind => getSavedItems(kind).forEach(item => all.push({ kind, item })));
-  all.sort((a, b) => a.item.name.localeCompare(b.item.name));
-  el.innerHTML = all.length ? all.map(({ kind, item }) => `
+  const row = (kind, item) => `
     <div class="list-item">
       <div class="li-top"><div>
-        <div class="li-name">${INTAKE[kind].icon} ${item.quickAdd ? '⚡ ' : ''}${escHtml(item.name)}</div>
+        <div class="li-name">${item.quickAdd ? '⚡ ' : ''}${escHtml(item.name)}</div>
         <div class="li-meta">${escHtml(intakeNumsText(item))}</div>
       </div></div>
       <div class="li-actions">
@@ -8116,7 +8145,13 @@ function renderSavedItemsList() {
         <button class="btn btn-secondary btn-sm" onclick="openEditIntake('saved','${kind}','${item.id}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="deleteSavedItem('${kind}','${item.id}')">Delete</button>
       </div>
-    </div>`).join('') : '<div class="empty-state">Nothing saved yet — items appear here as you log them</div>';
+    </div>`;
+  // v2.135 (GYM-121): grouped — Food, then Drink (each already sorted by name)
+  const groups = ['food', 'drink'].map(kind => {
+    const items = getSavedItems(kind);
+    return items.length ? `<div class="section-title" style="margin-top:10px">${INTAKE[kind].icon} ${INTAKE[kind].label}</div>` + items.map(i => row(kind, i)).join('') : '';
+  }).join('');
+  el.innerHTML = groups || '<div class="empty-state">Nothing saved yet — items appear here as you log them</div>';
 }
 // GYM-073: flags a saved item to sit at the top of the Food & drink screen as a one-tap card.
 function toggleSavedFav(kind, id) {
