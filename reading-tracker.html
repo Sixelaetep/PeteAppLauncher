@@ -16,7 +16,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.89</title>
+<title>Reading Tracker v3.90</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1240,6 +1240,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 @media (min-width: 700px) { .bk-key .kgrid { grid-template-columns: 1fr 1fr; } }
 .sp-spine.audio, .sp-spine.audio.todo, .sp-spine.audio.cur, .sp-spine.audio.done { border-top: 5px solid var(--au); }
 
+/* v3.90 (MR-075): the launcher Reading card shows the Home "this month" shelf and logs to the book you pick on it: quickLogProgress takes an optional itemId (RT_PONG now reports features:["itemId"] so an older Reading Tracker is never asked to guess). No data-model or sync change. */
 /* v3.83 (MR-068): Book List › Covers: looks up every existing book without a cover, shows a review list, and adds only the details you tick (cover, publisher, year, ISBN, pages if empty). Also: Find details now works with an author alone. */
 /* v3.82 (MR-067): Book List add form and edit panel can fetch book details by ISBN or title (Open Library, then Google Books): title, author, pages, publisher, year, genre and a cover, shown as a small cover and detail line on the Book List. New optional item fields isbn, coverId, coverUrl, publisher, publishYear, metaSource; manual entry unchanged. */
 /* v3.81 (MR-066): publishes a search list for the launcher's Universal Search (PalContract, key pal_x_reading): books from every tracker and the wishlist (title, author, genre, pages), stored in IndexedDB. Derived cache only; no data, storage, sync or backup change. */
@@ -1267,7 +1268,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.89</span></div>
+    <div class="rt-logo">My Reading <span>v3.90</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -8631,7 +8632,7 @@ function rtHandleAction(e) {
   const d = e.data || {};
   const reply = function(msg) { try { e.source && e.source.postMessage(msg, window.location.origin); } catch (err) {} };
   if (d.action === 'ping') {
-    reply({ type: 'RT_PONG', reqId: d.reqId, ready: !!(_rtFirstPullSettled && _currentUser) });
+    reply({ type: 'RT_PONG', reqId: d.reqId, ready: !!(_rtFirstPullSettled && _currentUser), features: ['itemId'] });   // v3.90 (MR-075)
     return;
   }
   if (d.action === 'quickLogProgress') {
@@ -8639,17 +8640,26 @@ function rtHandleAction(e) {
     if (_rtQuickResults.has(d.reqId)) { reply(_rtQuickResults.get(d.reqId)); return; }
     if (!(_rtFirstPullSettled && _currentUser)) return; // not ready - launcher keeps re-sending
     let res;
-    try { res = quickLogBookListProgress(d.kind === 'audiobook' ? 'audiobook' : 'book', d.value, d.reqId); }
+    try { res = quickLogBookListProgress(d.kind === 'audiobook' ? 'audiobook' : 'book', d.value, d.reqId, d.itemId); }
     catch (err) { res = { type: 'RT_QUICKLOG_RESULT', reqId: d.reqId, ok: false, error: 'Unexpected error' }; }
     _rtQuickResults.set(d.reqId, res);
     reply(res);
   }
 }
-function quickLogBookListProgress(type, rawVal, reqId) {
+function quickLogBookListProgress(type, rawVal, reqId, itemId) {
   const fail = function(error) { return { type: 'RT_QUICKLOG_RESULT', reqId: reqId, ok: false, error: error }; };
+  // v3.90 (MR-075): the launcher can name the book it picked on its shelf. Without an itemId the behaviour is unchanged (current active book of that type).
+  let item;
+  if (itemId) {
+    item = (appState.wishlist || []).find(w => w && w.id === itemId && !w._deleted);
+    if (!item) return fail('That book is no longer on your Book List');
+    type = (item.type || 'book') === 'audiobook' ? 'audiobook' : 'book';
+    if (isBookListItemDone(item)) return fail('"' + item.title + '" is already finished');
+  } else {
+    item = bookListQueue(type)[0];
+  }
   const unitS = type === 'audiobook' ? 'chapter' : 'page';
   const unitP = type === 'audiobook' ? 'chapters' : 'pages';
-  const item = bookListQueue(type)[0];
   if (!item) return fail('No current ' + (type === 'audiobook' ? 'audiobook' : 'book') + ' on your Book List');
   const raw = parseInt(rawVal, 10);
   if (isNaN(raw) || raw <= 0) return fail('Enter a valid ' + unitS + ' number');
@@ -8669,7 +8679,7 @@ function quickLogBookListProgress(type, rawVal, reqId) {
   try { renderMonthlyWidgets(); renderCollectionCards(); } catch (err) {}
   try { if (document.getElementById('wishlistApp')?.classList.contains('active')) renderWishlistView(); } catch (err) {}
   return { type: 'RT_QUICKLOG_RESULT', reqId: reqId, ok: true, kind: type, title: item.title,
-           value: raw, added: raw - current, total: item.pages, finished: nowComplete };
+           value: raw, added: raw - current, total: item.pages, finished: nowComplete, itemId: item.id };
 }
 // Called right after a pull replaces appState.wishlist: if the merge
 // dropped a quick-logged entry (pull can carry an older cloud copy),
