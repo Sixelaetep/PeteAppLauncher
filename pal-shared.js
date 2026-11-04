@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.2.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.3.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -864,13 +864,13 @@ window.PalContract = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.2.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
+// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.3.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
 
 /**
  * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
  *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
- *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 (this release) ukDateInputs.
+ *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 (this release) ukDateInputs gains a calendar button.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -1000,6 +1000,39 @@ window.PalShared = (function () {
       mark();
     });
     el.value = start;
+    ukCalendar(el, raw);
+  }
+  // Calendar button: an icon inside the right edge of the box (no extra DOM, so layouts are untouched). Tapping it opens the
+  // device's native date picker; the chosen day lands in the box as dd/mm/yy and the app's input/change handlers fire.
+  var ukIcon = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cpath d='M16 3v4M8 3v4M3 10h18'/%3E%3C/svg%3E\")";
+  function ukCalendar(el, raw) {
+    var st = el.style;
+    st.paddingRight = '40px';
+    st.backgroundImage = ukIcon; st.backgroundRepeat = 'no-repeat'; st.backgroundPosition = 'right 10px center'; st.backgroundSize = '20px 20px';
+    function inIcon(e) { var r = el.getBoundingClientRect(); return e.clientX >= r.right - 42; }
+    el.addEventListener('mousemove', function (e) { el.style.cursor = inIcon(e) ? 'pointer' : ''; });
+    el.addEventListener('click', function (e) {
+      if (!inIcon(e)) return;
+      e.preventDefault();
+      var r = el.getBoundingClientRect();
+      var h = document.createElement('input');
+      h.__ukd = 1; h.type = 'date';
+      h.tabIndex = -1; h.setAttribute('aria-hidden', 'true');
+      h.style.cssText = 'position:fixed;opacity:0;pointer-events:none;border:0;padding:0;margin:0;left:' + r.left + 'px;top:' + r.top + 'px;width:' + Math.max(r.width, 60) + 'px;height:' + r.height + 'px';
+      h.value = el.value || localISO(new Date());
+      function done() { if (h.parentNode) h.parentNode.removeChild(h); }
+      h.addEventListener('change', function () {
+        if (h.value) {
+          el.value = h.value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        done();
+      });
+      h.addEventListener('blur', function () { setTimeout(done, 300); });
+      document.body.appendChild(h);
+      try { h.showPicker(); } catch (x) { try { h.focus(); h.click(); } catch (y) {} }
+    });
   }
   function ukScan(root) {
     try {
@@ -1023,7 +1056,7 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.2.0';
+  api.VERSION = '1.3.0';
   api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
