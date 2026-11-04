@@ -1,0 +1,280 @@
+/* pal-diag.js - P Apps Device check (Suite Programme, WP0.2)
+ * Loaded on demand by the launcher (Pete only). Read-only apart from one bounded
+ * storage-headroom probe that writes a scratch key and ALWAYS removes it again.
+ * Produces a copyable plain-text report, format "device-check/1".
+ * No network calls except a same-origin fetch of manifest.json. No secrets are
+ * reported: no tokens, no keys, no email, no record contents.
+ */
+(function () {
+  'use strict';
+  if (window.PalDiag) return;
+
+  var VERSION = '1.0.0';
+  var PROBE_KEY = '__pal_diag_probe';
+  var PROBE_CAP = 2500000;     // characters; never write more than this
+  var COARSE = 250000, FINE = 10000;
+
+  function safe(fn, fallback) { try { var v = fn(); return v === undefined ? fallback : v; } catch (e) { return fallback; } }
+  function kb(n) { return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB'; }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function localISO(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+
+  /* -- probe: how much more localStorage can this origin write? -- */
+  function probeHeadroom() {
+    var out = { ok: false, headroomChars: 0, capped: false, note: '' };
+    var ls;
+    try { ls = window.localStorage; } catch (e) { out.note = 'localStorage unavailable'; return out; }
+    try { ls.removeItem(PROBE_KEY); } catch (e) {}       // stale probe from an interrupted run
+    var written = 0, chunk = 'x'.repeat(COARSE);
+    try {
+      var acc = '';
+      // coarse phase
+      while (written + COARSE <= PROBE_CAP) {
+        try { ls.setItem(PROBE_KEY, acc + chunk); acc += chunk; written += COARSE; }
+        catch (e) { break; }
+      }
+      // fine phase
+      if (written + COARSE <= PROBE_CAP || written === 0) {
+        var small = 'x'.repeat(FINE);
+        while (written + FINE <= PROBE_CAP) {
+          try { ls.setItem(PROBE_KEY, acc + small); acc += small; written += FINE; }
+          catch (e) { break; }
+        }
+      }
+      out.capped = written + FINE > PROBE_CAP && written >= PROBE_CAP - COARSE;
+      out.headroomChars = written;
+      out.ok = true;
+    } finally {
+      try { ls.removeItem(PROBE_KEY); } catch (e) {}
+    }
+    out.cleaned = safe(function () { return ls.getItem(PROBE_KEY) === null; }, false);
+    return out;
+  }
+
+  function storageInventory() {
+    var ls = window.localStorage, groups = {}, rows = [], total = 0, n = 0;
+    for (var i = 0; i < ls.length; i++) {
+      var k = ls.key(i); if (k === PROBE_KEY) continue;
+      var v = ls.getItem(k) || '', size = (k.length + v.length);   // characters, key + value
+      total += size; n++;
+      rows.push([k, size]);
+      var g = k.indexOf('pal_x_') === 0 ? 'pal_x_*' : (/^sb-|supabase/i.test(k) ? 'auth' : (k.split(/[_:-]/)[0] || k));
+      groups[g] = (groups[g] || 0) + size;
+    }
+    rows.sort(function (a, b) { return b[1] - a[1]; });
+    return { keys: n, chars: total, top: rows.slice(0, 8), groups: groups };
+  }
+
+  function contracts() {
+    var ls = window.localStorage, out = [];
+    for (var i = 0; i < ls.length; i++) {
+      var k = ls.key(i); if (k.indexOf('pal_x_') !== 0) continue;
+      var raw = ls.getItem(k) || '', o = safe(function () { return JSON.parse(raw); }, null);
+      out.push({
+        key: k, bytes: raw.length,
+        v: o && (o.v || o.version || o.schema) || '?',
+        uid: o && o.userId ? String(o.userId).slice(0, 8) : '-',
+        age: o && o.updatedAt ? Math.round((Date.now() - new Date(o.updatedAt).getTime()) / 60000) + ' min' : '-'
+      });
+    }
+    return out;
+  }
+
+  function frameVersions() {
+    var out = [];
+    var frames = document.querySelectorAll('iframe.app-frame');
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], name = (f.id || '').replace('frame-', '') || ('frame' + i);
+      var row = { app: name, state: 'not loaded', title: '', lib: '' };
+      var d = safe(function () { return f.contentDocument; }, null);
+      if (d && d.body && f.getAttribute('src') && safe(function () { return f.contentWindow.location.href; }, '') !== 'about:blank') {
+        row.state = 'loaded';
+        row.title = safe(function () { return d.title; }, '');
+        var s = safe(function () { return d.querySelector('script[src*="pal-shared.js"]'); }, null);
+        row.lib = s ? (s.getAttribute('src').split('?v=')[1] || 'untagged') : 'none';
+        row.has_PalSync = !!safe(function () { return f.contentWindow.PalSync; }, null);
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
+  function fetchManifest() {
+    return fetch('manifest.json', { cache: 'no-cache' }).then(function (r) {
+      if (!r.ok) return { error: 'HTTP ' + r.status };
+      return r.json();
+    }).catch(function (e) { return { error: String(e && e.message || e) }; });
+  }
+
+  function collect(ctx) {
+    ctx = ctx || {};
+    var R = [];   // [section, [lines]]
+    function sec(name, lines) { R.push([name, lines]); }
+    var now = new Date();
+
+    sec('Report', [
+      'format: device-check/1',
+      'diag: pal-diag.js ' + VERSION,
+      'launcher: ' + (ctx.launcherVersion || '?'),
+      'user: ' + (ctx.userName || '?') + (ctx.isPete ? ' (Pete)' : ''),
+      'generated: ' + now.toISOString()
+    ]);
+
+    var standalone = safe(function () { return navigator.standalone === true || matchMedia('(display-mode: standalone)').matches; }, false);
+    var probeEl = document.createElement('div');
+    probeEl.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)';
+    document.body.appendChild(probeEl);
+    var cs = getComputedStyle(probeEl);
+    var safeArea = cs.paddingTop + ' / ' + cs.paddingRight + ' / ' + cs.paddingBottom + ' / ' + cs.paddingLeft;
+    probeEl.remove();
+    var vp = document.querySelector('meta[name="viewport"]');
+    sec('Device', [
+      'userAgent: ' + navigator.userAgent,
+      'standalone (home-screen): ' + standalone,
+      'viewport: ' + innerWidth + 'x' + innerHeight + ' @' + (window.devicePixelRatio || 1) + 'x, ' + safe(function () { return screen.orientation.type; }, 'orientation ?'),
+      'safe-area top/right/bottom/left: ' + safeArea,
+      'viewport meta: ' + (vp ? vp.getAttribute('content') : 'none'),
+      'online: ' + navigator.onLine + ', connection: ' + safe(function () { return navigator.connection.effectiveType; }, 'n/a'),
+      'visibility: ' + document.visibilityState,
+      'language: ' + navigator.language
+    ]);
+
+    var tz = safe(function () { return Intl.DateTimeFormat().resolvedOptions().timeZone; }, '?');
+    var utcISO = now.toISOString().slice(0, 10), locISO = localISO(now);
+    sec('Time and date', [
+      'timezone: ' + tz + ', UTC offset now: ' + (-now.getTimezoneOffset()) + ' min',
+      'local date: ' + locISO + ', UTC date: ' + utcISO + (locISO !== utcISO ? '   << DIFFER (UTC-date defects would show now)' : '   (same)')
+    ]);
+
+    var inv = safe(function () { return storageInventory(); }, null);
+    var lines = [];
+    if (inv) {
+      lines.push('localStorage: ' + inv.keys + ' keys, ' + kb(inv.chars) + ' chars (key+value)');
+      lines.push('by group: ' + Object.keys(inv.groups).sort(function (a, b) { return inv.groups[b] - inv.groups[a]; })
+        .slice(0, 8).map(function (g) { return g + ' ' + kb(inv.groups[g]); }).join(', '));
+      lines.push('largest keys: ' + inv.top.map(function (r) { return r[0] + ' ' + kb(r[1]); }).join(', '));
+    } else lines.push('localStorage: unavailable');
+    var pr = probeHeadroom();
+    if (pr.ok) {
+      lines.push('write headroom: >= ' + kb(pr.headroomChars) + ' chars' + (pr.capped ? ' (probe cap reached; real headroom is at least this)' : ' (writes failed beyond this)'));
+      lines.push('probe key removed: ' + pr.cleaned);
+      if (inv && !pr.capped) lines.push('estimated quota: ~' + kb(inv.chars + pr.headroomChars) + ' chars; headroom ' + Math.round(100 * pr.headroomChars / (inv.chars + pr.headroomChars)) + '%   (gate: < 30% pulls a fix into Phase 1)');
+    } else lines.push('write headroom: not measured (' + pr.note + ')');
+    sec('localStorage', lines);
+
+    var ct = safe(contracts, []);
+    sec('Contracts (pal_x_*)', ct.length ? ct.map(function (c) {
+      return c.key + ': ' + kb(c.bytes) + ', v' + c.v + ', user ' + c.uid + ', age ' + c.age;
+    }) : ['none stored']);
+
+    var fv = safe(frameVersions, []);
+    sec('App frames', fv.map(function (f) {
+      return f.app + ': ' + f.state + (f.state === 'loaded' ? ' | "' + f.title + '" | pal-shared tag ?v=' + f.lib + ' | PalSync ' + f.has_PalSync : '');
+    }));
+
+    return { R: R, standalone: standalone };
+  }
+
+  function asyncSections(R) {
+    var jobs = [];
+    // storage manager + IndexedDB
+    jobs.push(Promise.resolve().then(function () {
+      var L = [];
+      var p = [];
+      if (navigator.storage && navigator.storage.estimate) p.push(navigator.storage.estimate().then(function (e) { L.push('origin usage: ' + kb(e.usage || 0) + ' of quota ' + kb(e.quota || 0)); }).catch(function () { L.push('storage.estimate failed'); }));
+      else L.push('storage.estimate: n/a');
+      if (navigator.storage && navigator.storage.persisted) p.push(navigator.storage.persisted().then(function (b) { L.push('persistent storage granted: ' + b); }).catch(function () {}));
+      if (indexedDB && indexedDB.databases) p.push(indexedDB.databases().then(function (d) { L.push('IndexedDB: ' + (d.length ? d.map(function (x) { return x.name + ' v' + x.version; }).join(', ') : 'none')); }).catch(function () { L.push('IndexedDB list failed'); }));
+      else L.push('IndexedDB list: n/a');
+      return Promise.all(p).then(function () { R.push(['Origin storage', L]); });
+    }));
+    // service workers
+    jobs.push(Promise.resolve().then(function () {
+      if (!(navigator.serviceWorker && navigator.serviceWorker.getRegistrations)) { R.push(['Service workers', ['n/a']]); return; }
+      return navigator.serviceWorker.getRegistrations().then(function (r) {
+        R.push(['Service workers', [r.length ? r.map(function (g) { return g.scope; }).join(', ') : 'none (expected)', 'controller: ' + (navigator.serviceWorker.controller ? navigator.serviceWorker.controller.scriptURL : 'none')]]);
+      }).catch(function () { R.push(['Service workers', ['query failed']]); });
+    }));
+    // manifest
+    jobs.push(fetchManifest().then(function (m) {
+      var L = [];
+      if (m.error) L.push('manifest.json: ' + m.error);
+      else {
+        L.push('name/short_name: ' + m.name + ' / ' + m.short_name);
+        L.push('start_url: ' + m.start_url + ', scope: ' + (m.scope || 'none') + ', id: ' + (m.id || 'none'));
+        L.push('display: ' + m.display + ', orientation: ' + (m.orientation || 'none'));
+        L.push('background/theme: ' + m.background_color + ' / ' + m.theme_color);
+        L.push('icons: ' + (m.icons || []).map(function (i) { return i.sizes + ' ' + (i.purpose || 'any'); }).join('; '));
+      }
+      var link = document.querySelector('link[rel="manifest"]');
+      L.push('<link rel=manifest>: ' + (link ? link.getAttribute('href') : 'MISSING'));
+      L.push('apple-touch-icon: ' + (document.querySelector('link[rel="apple-touch-icon"]') ? 'present' : 'absent'));
+      var tc = document.querySelector('meta[name="theme-color"]');
+      L.push('meta theme-color: ' + (tc ? tc.getAttribute('content') : 'absent'));
+      R.push(['Manifest and install', L]);
+    }));
+    return Promise.all(jobs);
+  }
+
+  function toText(R) {
+    return R.map(function (s) { return '## ' + s[0] + '\n' + s[1].join('\n'); }).join('\n\n') + '\n';
+  }
+
+  /* -- UI: one modal sheet, nothing persists -- */
+  function show(text) {
+    var old = document.getElementById('palDiagSheet'); if (old) old.remove();
+    var wrap = document.createElement('div'); wrap.id = 'palDiagSheet';
+    wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true'); wrap.setAttribute('aria-label', 'Device check');
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:20001;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;font-family:var(--f,system-ui,sans-serif)';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:var(--surface,#1b1a22);color:var(--ink,#f5f2ea);width:100%;max-width:720px;max-height:88vh;border-radius:22px 22px 0 0;display:flex;flex-direction:column;padding:16px 16px calc(16px + env(safe-area-inset-bottom));box-sizing:border-box';
+    var h = document.createElement('div'); h.style.cssText = 'font:700 16px var(--fd,inherit);margin-bottom:8px'; h.textContent = 'Device check';
+    var pre = document.createElement('pre');
+    pre.style.cssText = 'flex:1;overflow:auto;margin:0 0 12px;font:12px/1.45 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.12);border-radius:12px;padding:10px;-webkit-user-select:text;user-select:text';
+    pre.textContent = text;
+    var bar = document.createElement('div'); bar.style.cssText = 'display:flex;gap:8px';
+    function btn(label, primary, fn) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.style.cssText = 'flex:1;min-height:44px;border-radius:12px;border:1px solid var(--sep,#444);font:700 14px var(--f,inherit);cursor:pointer;' +
+        (primary ? 'background:var(--acc,#CBF55C);color:var(--accTx,#14130A);border-color:transparent' : 'background:transparent;color:inherit');
+      b.addEventListener('click', fn); return b;
+    }
+    var copy = btn('Copy report', true, function () {
+      function done(ok) { copy.textContent = ok ? 'Copied \u2713' : 'Select the text and copy'; }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallback(); });
+      else fallback();
+      function fallback() {
+        var r = document.createRange(); r.selectNodeContents(pre);
+        var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+        var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+        done(ok);
+      }
+    });
+    var close = btn('Close', false, function () { wrap.remove(); document.removeEventListener('keydown', onKey); });
+    function onKey(e) { if (e.key === 'Escape') close.click(); }
+    document.addEventListener('keydown', onKey);
+    wrap.addEventListener('click', function (e) { if (e.target === wrap) close.click(); });
+    bar.appendChild(copy); bar.appendChild(close);
+    box.appendChild(h); box.appendChild(pre); box.appendChild(bar); wrap.appendChild(box);
+    document.body.appendChild(wrap);
+    close.focus();
+  }
+
+  var running = false;
+  function run(ctx) {
+    if (running) return Promise.resolve();
+    running = true;
+    show('Running device check...');
+    var c;
+    try { c = collect(ctx); } catch (e) { running = false; show('Device check failed: ' + (e && e.message || e)); return Promise.resolve(); }
+    return asyncSections(c.R).then(function () {
+      // keep section order stable regardless of async completion order
+      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'App frames', 'Service workers', 'Manifest and install'];
+      c.R.sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
+      show(toText(c.R));
+    }).catch(function (e) { show('Device check failed: ' + (e && e.message || e)); })
+      .then(function () { running = false; });
+  }
+
+  window.PalDiag = { VERSION: VERSION, run: run, _collect: collect, _probe: probeHeadroom, _text: toText };
+})();
