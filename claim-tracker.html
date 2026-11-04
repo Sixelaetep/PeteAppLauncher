@@ -11,6 +11,7 @@
 <script>
 // Apply any explicit global theme preference before first paint. v1.9
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
+// v2.27 (Suite WP1.4 / WP1.2): save() writes through PalShared.safeSet (pal-shared 1.1.0) so a refused write is reported once instead of throwing silently; dates with a year are shown dd/mm/yy and the expected-payment-date prompt accepts dd/mm/yy (D10). Storage format and sync unchanged.
 // v2.26 (CLA-023): launcher quick-add. New CT_ACTION messages from the launcher's own Claims card: ping (answers CT_PONG {ready}), quickAddExpense
 // {amount, category, reason, reqId} and quickAddMileage {tripId, reqId}. They build exactly the entries addExpense()/addMileage() build (today's date,
 // unclaimed, a standard trip uses the saved miles and deduction), save through mutateEntry(), and reply CT_QUICKADD_RESULT {reqId, ok, msg, summary}.
@@ -27,7 +28,7 @@
 // v2.21: nested inside Fortnight Tracker's Claims tab (it loads this file with ?embedded=ft).
 (function(){try{if(/[?&]embedded=ft(&|$)/.test(location.search))document.documentElement.classList.add('embedded');}catch(e){}})();
 </script>
-<title>Claim Tracker v2.26</title>
+<title>Claim Tracker v2.27</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23f78166' text-anchor='middle'>%C2%A3</text></svg>">
 <style>
   :root {
@@ -520,7 +521,7 @@
       <span class="pound">&#163;</span>
       <div>
         <div>Claim Tracker</div>
-        <div class="ver">v2.26</div>
+        <div class="ver">v2.27</div>
       </div>
     </div>
     <div class="header-actions">
@@ -538,7 +539,7 @@
     <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11M12 20V5M19 20v-7"/></svg><span class="tab-lbl">Stats</span></button>
     <button class="tab-btn" onclick="switchTab('settings')" id="tab-settings"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span class="tab-lbl">Settings</span></button>
   </div>
-  <div class="rail-foot">Receipt &middot; v2.26</div>
+  <div class="rail-foot">Receipt &middot; v2.27</div>
 </div>
 
 <!-- Non-blocking sync banner (shown if no PAL_SESSION within 3s) -->
@@ -816,7 +817,7 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=2.26"></script>
+<script src="pal-shared.js?v=2.27"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -1036,7 +1037,7 @@
 // uniform radius, shadow) and added click-outside-to-close, matching
 // the Sync & Backup drawer's existing behaviour. Sync & Backup drawer
 // itself is untouched — it's a deliberate bottom sheet, not a modal.
-const VERSION  = '2.26';
+const VERSION  = '2.27';
 const LS_KEY   = 'claim_tracker_v1'; // unchanged — launcher compatible
 // v2.4: SB_URL/SB_ANON were hardcoded here, duplicating pal-config.js
 // (which every app is supposed to load per its own header comment, but
@@ -1132,7 +1133,10 @@ function load() {
 
 function save(envelope) {
   envelope.lastUpdated = new Date().toISOString();
-  localStorage.setItem(LS_KEY, JSON.stringify(envelope));
+  // v2.27 (Suite WP1.4): a refused write used to throw out of every handler with no message; safeSet reports it once and carries on.
+  const _s = JSON.stringify(envelope);
+  if (window.PalShared && PalShared.safeSet) PalShared.safeSet(LS_KEY, _s, 'Claim Tracker');
+  else { try { localStorage.setItem(LS_KEY, _s); } catch (e) {} }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1495,13 +1499,13 @@ async function deleteEntryFromCloud(id, entrySnapshot) {
 function fmtDate(iso) {
   if (!iso) return '\u2014';
   const [y,m,d] = iso.split('-').map(Number);
-  return new Date(y,m-1,d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+  return (window.PalShared && PalShared.fmtDate) ? PalShared.fmtDate(iso) : new Date(y,m-1,d).toLocaleDateString('en-GB');   // v2.27: dd/mm/yy (D10)
 }
 
 function fmtDateTime(iso) {
   if (!iso) return 'Never';
   const d = new Date(iso);
-  return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  return (window.PalShared && PalShared.fmtDateTime) ? PalShared.fmtDateTime(iso) : d.toLocaleDateString('en-GB')+' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});   // v2.27: dd/mm/yy hh:mm (D10)
 }
 
 function fmtGBP(n) { return '\u00a3'+Number(n||0).toFixed(2); }
@@ -1978,10 +1982,13 @@ function unmarkBatchPaid(date) { const l = batchEntries(date); l.forEach(e => { 
 function editBatchPayDate(date) {
   const l = batchEntries(date); if (!l.length) return;
   const cur = batchExpected(l, date) || '';
-  const v = prompt('Expected payment date (YYYY-MM-DD). Leave empty to use the default.', cur);
+  const _fmt = iso => (iso && window.PalShared && PalShared.fmtDate) ? PalShared.fmtDate(iso) : (iso || '');
+  const v = prompt('Expected payment date (dd/mm/yy). Leave empty to use the default.', _fmt(cur));
   if (v === null) return;
-  const t = v.trim();
-  if (t && (!/^\d{4}-\d{2}-\d{2}$/.test(t) || isNaN(new Date(t+'T00:00:00').getTime()))) { toast('Enter a date like 2026-11-27'); return; }
+  // v2.27 (D10): typed as dd/mm/yy or dd/mm/yyyy (ISO still accepted); stored as ISO, unchanged.
+  const t0 = v.trim();
+  const t = t0 && window.PalShared && PalShared.parseDate ? PalShared.parseDate(t0) : t0;
+  if (t0 && (!t || !/^\d{4}-\d{2}-\d{2}$/.test(t) || isNaN(new Date(t+'T00:00:00').getTime()))) { toast('Enter a date like 27/11/26'); return; }
   l.forEach(e => { e.expected_pay_date = t || null; }); saveBatch(l, 'Expected date'); toast(t ? 'Expected date saved \u2713' : 'Using the default date');
 }
 

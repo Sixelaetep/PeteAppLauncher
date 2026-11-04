@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.0.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.1.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -864,23 +864,102 @@ window.PalContract = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 5 of 5 — PalShared: bundle identity and date helper (bundle 1.0.0, 4 Nov 2026, Suite WP0.2b)
+// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.1.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
 
 /**
  * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
- *   VERSION   bundle version of pal-shared.js (semver). Bump rules are defined in Phase 1; until then:
- *             patch = comment/fix with no API change, minor = new function, major = removed/changed function.
+ *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
+ *             1.0.0 localISO. 1.1.0 (this release) safeSet, writeFailure, fmtDate, fmtDateTime, parseDate.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
- *   localISO(d)  the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date.
- *             Use this instead of d.toISOString().slice(0, 10), which is the UTC date and is a day early for local-midnight
- *             dates during British Summer Time. todayISO() above already returns the local date and is unchanged.
+ *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
+ *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
+ *   safeSet(key, value, label)   localStorage.setItem that never throws. Returns true when stored, false when the browser refused
+ *                 (storage full or blocked). On failure it tells the user once (a red bar, at most once every 30 seconds) and records
+ *                 the failure in PalShared.lastWriteFailure. The caller carries on, so the rest of its save still runs.
+ *   writeFailure(label, err)     the reporting half of safeSet, for apps that already have their own try/catch.
+ *   fmtDate(v)    UK display date 'dd/mm/yy' (Suite decision D10). v is 'YYYY-MM-DD', a longer ISO timestamp, or a Date. Timestamps and
+ *                 Dates are shown in the viewer's local time. '' when invalid.
+ *   fmtDateTime(v) 'dd/mm/yy hh:mm' (24 hour, local time). '' when invalid.
+ *   parseDate(str) typed date -> 'YYYY-MM-DD'. Accepts d/m/yy, d/m/yyyy (separators / . - or space) and ISO. A two-digit year means 20yy.
+ *                 Returns '' when it is not a real calendar date. Stored dates stay ISO; only display and typing are UK.
  */
 window.PalShared = (function () {
+  function pad2(n) { return String(n).padStart(2, '0'); }
   function localISO(d) {
     d = d || new Date();
     if (!(d instanceof Date) || isNaN(d.getTime())) return '';
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
-  return { VERSION: '1.0.0', SECTIONS: { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' }, localISO: localISO };
+  function toDate(v) {
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+    if (typeof v === 'number') { var n = new Date(v); return isNaN(n.getTime()) ? null : n; }
+    var s = String(v == null ? '' : v).trim();
+    if (!s) return null;
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (m) { var d0 = new Date(+m[1], +m[2] - 1, +m[3]); return (d0.getFullYear() === +m[1] && d0.getMonth() === +m[2] - 1 && d0.getDate() === +m[3]) ? d0 : null; }
+    var d1 = new Date(s);
+    return isNaN(d1.getTime()) ? null : d1;
+  }
+  function fmtDate(v) {
+    var d = toDate(v);
+    return d ? pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + '/' + pad2(d.getFullYear() % 100) : '';
+  }
+  function fmtDateTime(v) {
+    var d = toDate(v);
+    return d ? fmtDate(d) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) : '';
+  }
+  function parseDate(str) {
+    var s = String(str == null ? '' : str).trim();
+    if (!s) return '';
+    var y, mo, da, m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+    if (m) { y = +m[1]; mo = +m[2]; da = +m[3]; }
+    else {
+      m = /^(\d{1,2})[\/.\-\s](\d{1,2})[\/.\-\s](\d{2}|\d{4})$/.exec(s);
+      if (!m) return '';
+      da = +m[1]; mo = +m[2]; y = +m[3];
+      if (m[3].length === 2) y += 2000;
+    }
+    var d = new Date(y, mo - 1, da);
+    if (d.getFullYear() !== y || d.getMonth() !== mo - 1 || d.getDate() !== da) return '';
+    return y + '-' + pad2(mo) + '-' + pad2(da);
+  }
+
+  var lastWarn = 0;
+  var api = { lastWriteFailure: null, writeFailures: 0 };
+  function showBar(text) {
+    try {
+      if (!document.body) return;
+      var el = document.getElementById('pal-write-warn');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'pal-write-warn';
+        el.setAttribute('role', 'alert');
+        el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;background:#b3261e;color:#fff;font:600 13px/1.4 -apple-system,system-ui,sans-serif;padding:10px 14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.35)';
+        el.onclick = function () { el.style.display = 'none'; };
+        document.body.appendChild(el);
+      }
+      el.textContent = text;
+      el.style.display = 'block';
+      setTimeout(function () { try { el.style.display = 'none'; } catch (e) {} }, 12000);
+    } catch (e) {}
+  }
+  function writeFailure(label, err) {
+    api.writeFailures++;
+    api.lastWriteFailure = { label: label || '', at: new Date().toISOString(), error: String((err && (err.name || err.message)) || err || '') };
+    var now = Date.now();
+    if (now - lastWarn < 30000) return;
+    lastWarn = now;
+    showBar('Could not save your latest change on this device (storage is full or blocked). Take a backup now - changes may be lost if you close the app. Tap to dismiss.');
+  }
+  function safeSet(key, value, label) {
+    try { localStorage.setItem(key, value); return true; }
+    catch (e) { writeFailure(label || key, e); return false; }
+  }
+
+  api.VERSION = '1.1.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' };
+  api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
+  api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate;
+  return api;
 })();
