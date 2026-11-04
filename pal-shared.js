@@ -1,5 +1,5 @@
 /**
- * pal-shared.js — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.0.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -861,4 +861,26 @@ window.PalContract = (function () {
     }
   } catch (e) {}
   return { publish: publish, read: read, clearAll: clearAll, publishSearch: publishSearch, readSearchAll: readSearchAll, clearSearch: clearSearch, PREFIX: PREFIX, VERSION: 1 };
+})();
+
+// ══════════════════════════════════════════════════════════════════
+// SECTION 5 of 5 — PalShared: bundle identity and date helper (bundle 1.0.0, 4 Nov 2026, Suite WP0.2b)
+// ══════════════════════════════════════════════════════════════════
+
+/**
+ * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
+ *   VERSION   bundle version of pal-shared.js (semver). Bump rules are defined in Phase 1; until then:
+ *             patch = comment/fix with no API change, minor = new function, major = removed/changed function.
+ *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
+ *   localISO(d)  the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date.
+ *             Use this instead of d.toISOString().slice(0, 10), which is the UTC date and is a day early for local-midnight
+ *             dates during British Summer Time. todayISO() above already returns the local date and is unchanged.
+ */
+window.PalShared = (function () {
+  function localISO(d) {
+    d = d || new Date();
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  return { VERSION: '1.0.0', SECTIONS: { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' }, localISO: localISO };
 })();
