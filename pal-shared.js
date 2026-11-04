@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.3.1, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.4.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -864,13 +864,13 @@ window.PalContract = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.3.1, 4 Nov 2026, Suite WP1.2 / WP1.4)
+// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.4.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
 
 /**
  * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
  *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
- *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 (this release) calendar button fixes (!important styles, keyboard no longer opens).
+ *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -1002,9 +1002,30 @@ window.PalShared = (function () {
     el.value = start;
     ukCalendar(el, raw);
   }
-  // Calendar button: an icon inside the right edge of the box (no extra DOM, so layouts are untouched). Tapping it opens the
-  // device's native date picker; the chosen day lands in the box as dd/mm/yy and the app's input/change handlers fire.
+  // Calendar button: the icon is a background image inside the right edge of the box, and a transparent NATIVE date input
+  // sits exactly over it, so a tap or click lands on a real date control and the device opens its own picker (script-opened
+  // pickers on hidden elements are refused by iOS Safari and others). The overlay is positioned from the box's real rectangle
+  // and re-checked on resize/scroll/touch and every 150 ms, so layout changes do not leave it behind.
   var ukIcon = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cpath d='M16 3v4M8 3v4M3 10h18'/%3E%3C/svg%3E\")";
+  var ukPairs = [], ukTimer = 0, ukStyled = false;
+  var ukIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function ukPlace() {
+    for (var i = ukPairs.length - 1; i >= 0; i--) {
+      var el = ukPairs[i].el, ov = ukPairs[i].ov;
+      if (!el.isConnected) { if (ov.parentNode) ov.parentNode.removeChild(ov); ukPairs.splice(i, 1); continue; }
+      var r = el.getBoundingClientRect();
+      if (!r.width || !r.height || el.disabled || el.readOnly) { ov.style.display = 'none'; continue; }
+      ov.style.display = 'block';
+      var w = 42, h = r.height, want = r.right - w;
+      if (!ov.__w || ov.__w !== w || ov.__h !== h) { ov.style.width = w + 'px'; ov.style.height = h + 'px'; ov.__w = w; ov.__h = h; }
+      var o = ov.getBoundingClientRect();
+      var dx = want - o.left, dy = r.top - o.top;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        ov.style.left = ((parseFloat(ov.style.left) || 0) + dx) + 'px';
+        ov.style.top = ((parseFloat(ov.style.top) || 0) + dy) + 'px';
+      }
+    }
+  }
   function ukCalendar(el, raw) {
     var st = el.style;
     // important: some app stylesheets set padding/background with !important (e.g. Gym's session date box)
@@ -1017,50 +1038,39 @@ window.PalShared = (function () {
       var mw = parseFloat(getComputedStyle(el).maxWidth);
       if (mw && mw < 150) st.setProperty('max-width', '150px', 'important');
     } catch (x) {}
-    function inIcon(e) {
-      var r = el.getBoundingClientRect();
-      var pt = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]) || e;
-      return pt.clientX >= r.right - 42;
+    if (!ukStyled && document.head) {
+      ukStyled = true;
+      var css = document.createElement('style');
+      css.textContent = 'input.pal-ukd-pick{position:absolute;opacity:0;margin:0;padding:0;border:0;min-width:0;min-height:0;box-sizing:border-box;max-width:none;z-index:5;cursor:pointer;background:transparent;font-size:16px;-webkit-appearance:none}' +
+        'input.pal-ukd-pick::-webkit-calendar-picker-indicator{position:absolute;left:0;top:0;width:100%;height:100%;margin:0;padding:0;cursor:pointer}';
+      document.head.appendChild(css);
     }
-    var openedAt = 0;
-    function open() {
-      openedAt = Date.now();
-      var old = document.querySelectorAll('input[data-ukd-helper]');
-      for (var i = 0; i < old.length; i++) if (old[i].parentNode) old[i].parentNode.removeChild(old[i]);
-      try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (x) {}
-      var r = el.getBoundingClientRect();
-      var h = document.createElement('input');
-      h.__ukd = 1; h.type = 'date'; h.setAttribute('data-ukd-helper', '1');
-      h.tabIndex = -1;
-      h.style.cssText = 'position:fixed;opacity:0;pointer-events:none;border:0;padding:0;margin:0;left:' + r.left + 'px;top:' + r.top + 'px;width:' + Math.max(r.width, 60) + 'px;height:' + Math.max(r.height, 30) + 'px';
-      h.value = el.value || localISO(new Date());
-      h.addEventListener('change', function () {
-        if (h.value) {
-          el.value = h.value;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        if (h.parentNode) h.parentNode.removeChild(h);
-      });
-      document.body.appendChild(h);
-      try { h.showPicker(); } catch (x) { try { h.focus(); h.click(); } catch (y) {} }
-    }
-    // Stop the tap reaching the text box (it would focus it and raise the keyboard), then open the picker.
-    function block(e) { if (inIcon(e)) { e.preventDefault(); } }
-    el.addEventListener('mousedown', block);
-    el.addEventListener('pointerdown', function (e) { if (e.pointerType === 'mouse') block(e); });
-    el.addEventListener('touchstart', block, { passive: false });
-    el.addEventListener('touchend', function (e) {
-      if (!inIcon(e)) return;
-      e.preventDefault(); open();
-    }, { passive: false });
-    el.addEventListener('click', function (e) {
-      if (!inIcon(e)) return;
-      e.preventDefault();
-      if (Date.now() - openedAt < 600) return;
-      open();
+    var ov = document.createElement('input');
+    ov.__ukd = 1; ov.type = 'date'; ov.className = 'pal-ukd-pick';
+    ov.tabIndex = -1; ov.setAttribute('aria-label', 'Pick date from calendar');
+    ov.style.left = '0px'; ov.style.top = '0px';
+    function sync() { ov.value = el.value || localISO(new Date()); }
+    ['pointerdown', 'touchstart', 'mousedown', 'focus'].forEach(function (t) { ov.addEventListener(t, sync, { passive: true }); });
+    ov.addEventListener('click', function () {
+      sync();
+      if (!ukIOS) { try { ov.showPicker(); } catch (x) {} }
     });
-    el.addEventListener('mousemove', function (e) { el.style.cursor = inIcon(e) ? 'pointer' : ''; });
+    ov.addEventListener('change', function () {
+      if (!ov.value) return;
+      el.value = ov.value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    if (el.parentNode) el.parentNode.insertBefore(ov, el.nextSibling);
+    ukPairs.push({ el: el, ov: ov });
+    ukPlace();
+    if (!ukTimer) {
+      ukTimer = setInterval(ukPlace, 150);
+      window.addEventListener('resize', ukPlace);
+      window.addEventListener('scroll', ukPlace, true);
+      document.addEventListener('touchstart', ukPlace, { capture: true, passive: true });
+      document.addEventListener('focusin', ukPlace, true);
+    }
   }
   function ukScan(root) {
     try {
@@ -1084,7 +1094,7 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.3.1';
+  api.VERSION = '1.4.0';
   api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
