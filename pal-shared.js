@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.3.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.3.1, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -864,13 +864,13 @@ window.PalContract = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.3.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
+// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.3.1, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
 
 /**
  * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
  *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
- *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 (this release) ukDateInputs gains a calendar button.
+ *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 (this release) calendar button fixes (!important styles, keyboard no longer opens).
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -1007,32 +1007,60 @@ window.PalShared = (function () {
   var ukIcon = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cpath d='M16 3v4M8 3v4M3 10h18'/%3E%3C/svg%3E\")";
   function ukCalendar(el, raw) {
     var st = el.style;
-    st.paddingRight = '40px';
-    st.backgroundImage = ukIcon; st.backgroundRepeat = 'no-repeat'; st.backgroundPosition = 'right 10px center'; st.backgroundSize = '20px 20px';
-    function inIcon(e) { var r = el.getBoundingClientRect(); return e.clientX >= r.right - 42; }
-    el.addEventListener('mousemove', function (e) { el.style.cursor = inIcon(e) ? 'pointer' : ''; });
-    el.addEventListener('click', function (e) {
-      if (!inIcon(e)) return;
-      e.preventDefault();
+    // important: some app stylesheets set padding/background with !important (e.g. Gym's session date box)
+    st.setProperty('padding-right', '40px', 'important');
+    st.setProperty('background-image', ukIcon, 'important');
+    st.setProperty('background-repeat', 'no-repeat', 'important');
+    st.setProperty('background-position', 'right 10px center', 'important');
+    st.setProperty('background-size', '20px 20px', 'important');
+    try {
+      var mw = parseFloat(getComputedStyle(el).maxWidth);
+      if (mw && mw < 150) st.setProperty('max-width', '150px', 'important');
+    } catch (x) {}
+    function inIcon(e) {
+      var r = el.getBoundingClientRect();
+      var pt = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]) || e;
+      return pt.clientX >= r.right - 42;
+    }
+    var openedAt = 0;
+    function open() {
+      openedAt = Date.now();
+      var old = document.querySelectorAll('input[data-ukd-helper]');
+      for (var i = 0; i < old.length; i++) if (old[i].parentNode) old[i].parentNode.removeChild(old[i]);
+      try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (x) {}
       var r = el.getBoundingClientRect();
       var h = document.createElement('input');
-      h.__ukd = 1; h.type = 'date';
-      h.tabIndex = -1; h.setAttribute('aria-hidden', 'true');
-      h.style.cssText = 'position:fixed;opacity:0;pointer-events:none;border:0;padding:0;margin:0;left:' + r.left + 'px;top:' + r.top + 'px;width:' + Math.max(r.width, 60) + 'px;height:' + r.height + 'px';
+      h.__ukd = 1; h.type = 'date'; h.setAttribute('data-ukd-helper', '1');
+      h.tabIndex = -1;
+      h.style.cssText = 'position:fixed;opacity:0;pointer-events:none;border:0;padding:0;margin:0;left:' + r.left + 'px;top:' + r.top + 'px;width:' + Math.max(r.width, 60) + 'px;height:' + Math.max(r.height, 30) + 'px';
       h.value = el.value || localISO(new Date());
-      function done() { if (h.parentNode) h.parentNode.removeChild(h); }
       h.addEventListener('change', function () {
         if (h.value) {
           el.value = h.value;
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
         }
-        done();
+        if (h.parentNode) h.parentNode.removeChild(h);
       });
-      h.addEventListener('blur', function () { setTimeout(done, 300); });
       document.body.appendChild(h);
       try { h.showPicker(); } catch (x) { try { h.focus(); h.click(); } catch (y) {} }
+    }
+    // Stop the tap reaching the text box (it would focus it and raise the keyboard), then open the picker.
+    function block(e) { if (inIcon(e)) { e.preventDefault(); } }
+    el.addEventListener('mousedown', block);
+    el.addEventListener('pointerdown', function (e) { if (e.pointerType === 'mouse') block(e); });
+    el.addEventListener('touchstart', block, { passive: false });
+    el.addEventListener('touchend', function (e) {
+      if (!inIcon(e)) return;
+      e.preventDefault(); open();
+    }, { passive: false });
+    el.addEventListener('click', function (e) {
+      if (!inIcon(e)) return;
+      e.preventDefault();
+      if (Date.now() - openedAt < 600) return;
+      open();
     });
+    el.addEventListener('mousemove', function (e) { el.style.cursor = inIcon(e) ? 'pointer' : ''; });
   }
   function ukScan(root) {
     try {
@@ -1056,7 +1084,7 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.3.0';
+  api.VERSION = '1.3.1';
   api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
