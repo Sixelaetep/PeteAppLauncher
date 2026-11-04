@@ -9,7 +9,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.1';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -65,6 +65,14 @@
     return { keys: n, chars: total, top: rows.slice(0, 8), groups: groups };
   }
 
+  // 1.0.1: contracts carry `built` (ISO string); 1.0.0 looked for `updatedAt`, which does not exist, so age always showed '-'
+  function ageOf(o) {
+    var b = o && (o.built || o.updatedAt), t = typeof b === 'number' ? b : Date.parse(b);
+    if (!b || isNaN(t)) return '-';
+    var m = Math.round((Date.now() - t) / 60000);
+    return m < 120 ? m + ' min' : (m < 2880 ? Math.round(m / 60) + ' h' : Math.round(m / 1440) + ' d');
+  }
+
   function contracts() {
     var ls = window.localStorage, out = [];
     for (var i = 0; i < ls.length; i++) {
@@ -74,28 +82,40 @@
         key: k, bytes: raw.length,
         v: o && (o.v || o.version || o.schema) || '?',
         uid: o && o.userId ? String(o.userId).slice(0, 8) : '-',
-        age: o && o.updatedAt ? Math.round((Date.now() - new Date(o.updatedAt).getTime()) / 60000) + ' min' : '-'
+        age: ageOf(o)
       });
     }
     return out;
   }
 
+  // 1.0.1: also looks one and two levels inside each app frame. Claims, Vault and Horizon are not top-level frames: they are
+  // nested lazy iframes inside Fortnight / On Budget, so 1.0.0 always reported them 'not loaded'. A nested frame appears as
+  // 'parent > child' once the parent app has opened it.
+  function describeFrame(f, name) {
+    var row = { app: name, state: 'not loaded', title: '', lib: '' };
+    var d = safe(function () { return f.contentDocument; }, null);
+    if (d && d.body && f.getAttribute('src') && safe(function () { return f.contentWindow.location.href; }, '') !== 'about:blank') {
+      row.state = 'loaded';
+      row.title = safe(function () { return d.title; }, '');
+      var s = safe(function () { return d.querySelector('script[src*="pal-shared.js"]'); }, null);
+      row.lib = s ? (s.getAttribute('src').split('?v=')[1] || 'untagged') : 'none';
+      row.has_PalSync = !!safe(function () { return f.contentWindow.PalSync; }, null);
+    }
+    return { row: row, doc: row.state === 'loaded' ? d : null };
+  }
+  function scanFrames(doc, prefix, depth, out) {
+    var frames = safe(function () { return doc.querySelectorAll(depth === 0 ? 'iframe.app-frame' : 'iframe'); }, []);
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i], id = (f.id || '').replace('frame-', '') || f.getAttribute('title') || (f.getAttribute('data-src') || f.getAttribute('src') || '').split('/').pop() || ('frame' + i);
+      var r = describeFrame(f, prefix ? prefix + ' > ' + id : id);
+      if (depth > 0 && r.row.state !== 'loaded') continue;   // unopened nested frames are not interesting
+      out.push(r.row);
+      if (r.doc && depth < 2) scanFrames(r.doc, r.row.app, depth + 1, out);
+    }
+  }
   function frameVersions() {
     var out = [];
-    var frames = document.querySelectorAll('iframe.app-frame');
-    for (var i = 0; i < frames.length; i++) {
-      var f = frames[i], name = (f.id || '').replace('frame-', '') || ('frame' + i);
-      var row = { app: name, state: 'not loaded', title: '', lib: '' };
-      var d = safe(function () { return f.contentDocument; }, null);
-      if (d && d.body && f.getAttribute('src') && safe(function () { return f.contentWindow.location.href; }, '') !== 'about:blank') {
-        row.state = 'loaded';
-        row.title = safe(function () { return d.title; }, '');
-        var s = safe(function () { return d.querySelector('script[src*="pal-shared.js"]'); }, null);
-        row.lib = s ? (s.getAttribute('src').split('?v=')[1] || 'untagged') : 'none';
-        row.has_PalSync = !!safe(function () { return f.contentWindow.PalSync; }, null);
-      }
-      out.push(row);
-    }
+    scanFrames(document, '', 0, out);
     return out;
   }
 
