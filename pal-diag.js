@@ -9,7 +9,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.0.1';
+  var VERSION = '1.1.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -100,6 +100,10 @@
       var s = safe(function () { return d.querySelector('script[src*="pal-shared.js"]'); }, null);
       row.lib = s ? (s.getAttribute('src').split('?v=')[1] || 'untagged') : 'none';
       row.has_PalSync = !!safe(function () { return f.contentWindow.PalSync; }, null);
+      // 1.1.0: what the frame actually loaded (PalShared.VERSION, bundle semver) and the app version found in its title
+      row.libVersion = safe(function () { return f.contentWindow.PalShared && f.contentWindow.PalShared.VERSION || ''; }, '');
+      var tm = /v?(\d+\.\d+(?:\.\d+)?)\s*$/.exec(row.title || '');
+      row.titleVersion = tm ? tm[1] : '';
     }
     return { row: row, doc: row.state === 'loaded' ? d : null };
   }
@@ -189,8 +193,20 @@
 
     var fv = safe(frameVersions, []);
     sec('App frames', fv.map(function (f) {
-      return f.app + ': ' + f.state + (f.state === 'loaded' ? ' | "' + f.title + '" | pal-shared tag ?v=' + f.lib + ' | PalSync ' + f.has_PalSync : '');
+      return f.app + ': ' + f.state + (f.state === 'loaded' ? ' | "' + f.title + '" | pal-shared tag ?v=' + f.lib + ' | PalShared ' + (f.libVersion || 'not loaded') + ' | PalSync ' + f.has_PalSync : '');
     }));
+
+    // 1.1.0: version verdict. Tag mismatch = the page asked for a different cache-bust tag than its own version (stale or hand-edited).
+    // Library skew = frames running different PalShared builds (a cached older pal-shared.js in one app).
+    var vl = [], loaded = fv.filter(function (f) { return f.state === 'loaded'; }), libs = {}, bad = 0;
+    loaded.forEach(function (f) {
+      if (f.titleVersion && f.lib && f.lib !== 'none' && f.lib !== 'untagged' && f.lib !== f.titleVersion) { bad++; vl.push('MISMATCH ' + f.app + ': title says ' + f.titleVersion + ' but pal-shared tag is ?v=' + f.lib); }
+      if (f.libVersion) (libs[f.libVersion] = libs[f.libVersion] || []).push(f.app);
+    });
+    var lk = Object.keys(libs);
+    if (lk.length > 1) { bad++; vl.push('LIBRARY SKEW: ' + lk.map(function (k) { return 'PalShared ' + k + ' in ' + libs[k].join(', '); }).join('; ')); }
+    vl.unshift(loaded.length ? (bad ? 'RESULT: ' + bad + ' issue(s) - ' : 'RESULT: OK - ') + loaded.length + ' frame(s) loaded' + (lk.length === 1 ? ', all on PalShared ' + lk[0] : '') + (loaded.length < 10 ? ' (frames that are not open yet are not checked)' : '') : 'RESULT: no app frames loaded yet - open apps, then run again');
+    sec('Version check', vl);
 
     return { R: R, standalone: standalone };
   }
@@ -289,7 +305,7 @@
     try { c = collect(ctx); } catch (e) { running = false; show('Device check failed: ' + (e && e.message || e)); return Promise.resolve(); }
     return asyncSections(c.R).then(function () {
       // keep section order stable regardless of async completion order
-      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'App frames', 'Service workers', 'Manifest and install'];
+      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'App frames', 'Version check', 'Service workers', 'Manifest and install'];
       c.R.sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
       show(toText(c.R));
     }).catch(function (e) { show('Device check failed: ' + (e && e.message || e)); })
