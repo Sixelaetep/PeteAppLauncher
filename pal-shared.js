@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.1.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.2.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -864,13 +864,13 @@ window.PalContract = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.1.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
+// SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.2.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
 
 /**
  * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
  *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
- *             1.0.0 localISO. 1.1.0 (this release) safeSet, writeFailure, fmtDate, fmtDateTime, parseDate.
+ *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 (this release) ukDateInputs.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -957,9 +957,75 @@ window.PalShared = (function () {
     catch (e) { writeFailure(label || key, e); return false; }
   }
 
-  api.VERSION = '1.1.0';
+  // ukDateInputs(): shows every <input type="date"> as a dd/mm/yy text box on every device. The native picker follows the
+  // device region (not the page language), so it cannot be forced to UK order from the page. The element keeps its id and its
+  // .value contract: reading .value returns ISO 'YYYY-MM-DD' (or '' while incomplete/invalid); setting .value takes ISO.
+  // Typing 041126 gives 04/11/26. Safe to call more than once; also covers inputs added later (modals).
+  var ukOn = false;
+  function ukEnhance(el) {
+    if (!el || el.__ukd || el.tagName !== 'INPUT' || String(el.type).toLowerCase() !== 'date') return;
+    el.__ukd = 1;
+    var raw = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    var start = raw.get.call(el);
+    el.type = 'text';
+    el.setAttribute('inputmode', 'numeric');
+    el.setAttribute('placeholder', 'dd/mm/yy');
+    el.setAttribute('autocomplete', 'off');
+    el.maxLength = 10;
+    function norm(t) {
+      t = String(t == null ? '' : t).trim();
+      var m = /^(\d{2})(\d{2})(\d{2}|\d{4})$/.exec(t);
+      return m ? m[1] + '/' + m[2] + '/' + m[3] : t;
+    }
+    Object.defineProperty(el, 'value', {
+      configurable: true,
+      get: function () { return parseDate(norm(raw.get.call(el))); },
+      set: function (v) { var p = parseDate(norm(v)); raw.set.call(el, p ? fmtDate(p) : ''); mark(); }
+    });
+    function mark() {
+      var t = raw.get.call(el).trim();
+      var bad = t && !parseDate(norm(t));
+      el.style.outline = bad ? '2px solid #d33' : '';
+      el.title = bad ? 'Enter a date like 27/11/26' : '';
+    }
+    el.addEventListener('input', function (e) {
+      var t = raw.get.call(el);
+      if (e && e.inputType && e.inputType.indexOf('delete') === 0) { mark(); return; }
+      if (/^\d{2}$/.test(t) || /^\d{2}\/\d{2}$/.test(t)) raw.set.call(el, t + '/');
+      mark();
+    });
+    el.addEventListener('blur', function () {
+      var p = parseDate(norm(raw.get.call(el)));
+      if (p) raw.set.call(el, fmtDate(p));
+      mark();
+    });
+    el.value = start;
+  }
+  function ukScan(root) {
+    try {
+      var list = (root || document).querySelectorAll ? (root || document).querySelectorAll('input[type="date"]') : [];
+      for (var i = 0; i < list.length; i++) ukEnhance(list[i]);
+      if (root && root.tagName === 'INPUT') ukEnhance(root);
+    } catch (e) {}
+  }
+  function ukDateInputs() {
+    if (ukOn) { ukScan(document); return; }
+    ukOn = true;
+    try {
+      ukScan(document);
+      document.addEventListener('DOMContentLoaded', function () { ukScan(document); });
+      new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          var a = muts[i].addedNodes;
+          for (var j = 0; j < a.length; j++) if (a[j].nodeType === 1) ukScan(a[j]);
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+  }
+
+  api.VERSION = '1.2.0';
   api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
-  api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate;
+  api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
   return api;
 })();
