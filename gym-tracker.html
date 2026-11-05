@@ -9,7 +9,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.148</title>
+<title>Gym Tracker v2.149</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230E0D12'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='800' font-size='15' fill='%23CBF55C' text-anchor='middle'>GY</text></svg>">
 <style>
   /* ═══════════════════════════════════════════════════════════════════
@@ -564,7 +564,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon" aria-hidden="true">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.148</div></span>
+      <span>Gym Tracker<div class="ver">v2.149</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1285,7 +1285,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.148"></script>
+<script src="pal-shared.js?v=2.149"></script>
+<!-- v2.149 (R30): the saved foods and drinks for the launcher's quick-add now travel in their own small contract (pal_x_gymlists) instead of inside the Gym card contract, which drops from about 85% to about 40% of its size limit and no longer grows with the number of saved foods. Derived cache only; no data, storage, sync or backup change. Needs launcher v11.85 to read the new contract (until then quick-add shows no saved items). -->
 <!-- v2.148 (fix R28-T2/T3): the launcher card data was close to the 48 KB contract limit (104 saved foods were half of it), so a slightly larger Gym left the old contract in place and the launcher showed stale data (a session you had marked ill, no saved items in quick-add). The saved foods and drinks now use short keys (n, c, p, v, q) and, if the contract is still too large to store, are cut back and published again. Derived cache only; no data, storage, sync or backup change. Needs launcher v11.83 to read the short keys. -->
 <!-- v2.146 (Suite Phase 2 / Batch D prep, R24): the launcher card data also carries what the launcher used to read from this app's saved copy: the food and drink reminders, the time each of today's meals and drinks was logged, and the saved foods and drinks for quick-add (marker ext:1). Derived cache only; no data, storage, sync or backup change. -->
 <!-- v2.145 (Suite Phase 2 / Batch C1): the launcher card data (this week and recent days only: sessions, plans, schedule, PT sessions, water and nutrition entries, targets) now also travels inside the launcher contract (summary.card), so a second device shows the card without opening this app. gym_tracker_v1 is untouched. No data, storage, sync or backup change. -->
@@ -2005,7 +2006,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.148';
+const VERSION = '2.149';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2270,7 +2271,27 @@ function save(envelope) {
 
 // v2.145 (Batch C1): what the launcher's Gym card needs, and nothing else: the last 21 days of sessions, PT sessions, water and nutrition
 // entries (the card shows today and this week), plus plans, schedule entries and targets. Same shape the launcher card reads (data.*).
-function gymCardState(lvl) {   // v2.148: lvl 1 / 2 = smaller saved-items lists, used only when the contract would be too large to store
+// v2.149: the saved foods and drinks for the launcher's quick-add are lookup data, not card data, so they travel in their own small contract ('gymlists', key pal_x_gymlists,
+// its own size limit) and the Gym card contract stays small however many foods are saved. Short keys: n name, c kcal, p protein, v ml, q quick-add. If it is still too large
+// the lists are cut back (quick-add items first) and published again, so the launcher never works from a stale copy. Derived cache only.
+function gymSavedLite(list, lvl) {
+  let a = (list || []).filter(x => x && !x._deleted && x.name).map(m => {
+    const n = v => (v == null || v === '') ? 0 : Number(v) || 0, o = { n: m.name }, c = n(m.calories), p = n(m.protein), v = n(m.volumeMl);
+    if (c) o.c = c; if (p) o.p = p; if (v) o.v = v; if (m.quickAdd) o.q = 1; return o;
+  });
+  if (lvl) a = a.filter(o => o.q).concat(a.filter(o => !o.q)).slice(0, lvl === 1 ? 150 : 50);
+  return a;
+}
+function gymPublishLists() {
+  try {
+    const d = (_env && _env.data) || {};
+    for (let lvl = 0; lvl <= 2; lvl++) {
+      const res = window.PalContract.publish('gymlists', { summary: { savedMeals: gymSavedLite(d.savedMeals, lvl), savedWaterItems: gymSavedLite(d.savedWaterItems, lvl), ext: 1 }, app: VERSION, schema: '1' });
+      if (!(res && res.stored === false && res.reason === 'too-large')) break;
+    }
+  } catch (e) {}
+}
+function gymCardState() {
   try {
     const d = _env.data || {}, live = x => x && !x._deleted;
     const lim = new Date(); lim.setHours(0, 0, 0, 0); lim.setDate(lim.getDate() - 21);
@@ -2281,12 +2302,6 @@ function gymCardState(lvl) {   // v2.148: lvl 1 / 2 = smaller saved-items lists,
     const wt = (d.waterTargets || []).find(live);
     // v2.146: when a meal or drink was logged (the launcher's reminders compare it with the reminder time); only today's entries need it
     const todayIso = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0');
-    // v2.148: short keys (n name, c kcal, p protein, v ml, q quick-add) and no empty fields: the 104 saved foods were half of the contract and pushed it to the size limit
-    const savedLite = list => {
-      let a = (list || []).filter(x => live(x) && x.name).map(m => { const o = { n: m.name }; const c = num(m.calories), p = num(m.protein), v = num(m.volumeMl); if (c) o.c = c; if (p) o.p = p; if (v) o.v = v; if (m.quickAdd) o.q = 1; return o; });
-      if (lvl) { a = a.filter(o => o.q).concat(a.filter(o => !o.q)).slice(0, lvl === 1 ? 60 : 20); }
-      return a;
-    };
     const atOf = x => String(x.date || '').slice(0, 10) === todayIso ? (x.updatedAt || x.createdAt || undefined) : undefined;
     return { data: {
       sessions: (d.sessions || []).filter(x => live(x) && recent(x)).map(x => ({ date: x.date, name: x.name, planId: x.planId })),
@@ -2300,8 +2315,6 @@ function gymCardState(lvl) {   // v2.148: lvl 1 / 2 = smaller saved-items lists,
         activeProtein: num(tg.activeProtein), restProtein: num(tg.restProtein) }],
       waterTargets: wt ? [{ dailyMl: num(wt.dailyMl), reminders: Array.isArray(wt.reminders) ? wt.reminders.map(r => ({ id: r.id, time: r.time, label: r.label, kind: r.kind, on: r.on })) : [] }] : [],
       // v2.146: saved foods and drinks for the launcher's quick-add (names and numbers only)
-      savedMeals: savedLite(d.savedMeals),
-      savedWaterItems: savedLite(d.savedWaterItems),
       ext: 1
     } };
   } catch (e) { return undefined; }
@@ -2330,11 +2343,9 @@ function publishContract() {
     (_env.data.plans || []).filter(p => !p._deleted && !p.archived).forEach(p => {
       search.push({ id: 'gym-plan-' + p.id, t: p.name, s: 'Plan', k: 'plan', open: { view: 'home' } });
     });
-    // v2.148: if the contract is too large to store (the library silently keeps the old one), retry with smaller saved-items lists so the launcher never works from a stale copy
-    for (let lvl = 0; lvl <= 2; lvl++) {
-      const res = window.PalContract.publish('gym', { upcoming: upcoming.slice(0, 30), summary: { card: gymCardState(lvl) }, app: VERSION, schema: '1' });
-      if (!(res && res.stored === false && res.reason === 'too-large')) break;
-    }
+    // v2.149: the card contract no longer carries the saved foods and drinks; they have their own contract (gymPublishLists)
+    window.PalContract.publish('gym', { upcoming: upcoming.slice(0, 30), summary: { card: gymCardState() }, app: VERSION, schema: '1' });
+    gymPublishLists();
     window.PalContract.publishSearch('gym', search, search.length);   // v2.133: IndexedDB, not localStorage
   } catch (e) {}
 }
