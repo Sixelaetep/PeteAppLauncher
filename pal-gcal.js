@@ -1,5 +1,5 @@
 /*
- * pal-gcal.js — PGC-002 (v2: updateEvent gains optional expectEtag, GIG-102;
+ * pal-gcal.js — PGC-002 (v4, R36: fewer sign-in prompts — the token is kept across reloads until it expires, automatic renewals use prompt 'none' so they never show a screen, a manual sign-in only shows the consent screen the first time, an expired token is renewed quietly before an API call and when the app comes back to the foreground, and a renewal that fails is reported through onAuthError; optional init option loginHint. All additive; v3 callers behave as before; v2: updateEvent gains optional expectEtag, GIG-102;
  * v3: listEvents gains singleEvents/showDeleted/updatedMin options and listInstances is added, GIG-115 —
  * all optional, defaults unchanged, so existing callers behave exactly as before)
  * ─────────────────────────────────────────────────────────────────────────
@@ -38,6 +38,12 @@ window.PalGCal = (function () {
   const API_BASE = 'https://www.googleapis.com/calendar/v3';
   const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
   const META_NAMESPACE = 'petegcal'; // extendedProperties.private key prefix
+  const TOK_KEY = 'palgcal_tok_v1';      // v4: { t: access token, e: expiry ms } — kept so a reload inside the hour needs no sign-in
+  const CONSENT_KEY = 'palgcal_consented_v1'; // v4: set after the first successful sign-in
+  const EXPIRY_MARGIN_MS = 2 * 60 * 1000;
+  let _loginHint = null;
+  let _pending = [];                     // v4: callers waiting on a quiet renewal
+  let _silentTimer = null;
 
   let _clientId = null;
   let _tokenClient = null;
@@ -67,17 +73,67 @@ window.PalGCal = (function () {
     // the retry loop below would wait forever in total silence.
     if (opts.onInitFailed) _onInitFailed = opts.onInitFailed;
 
+    if (opts.loginHint) _loginHint = opts.loginHint;
+    _restoreToken();
+    if (!_visBound) {
+      _visBound = true;
+      try { document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible' || !_tokenClient) return;
+        if (!_accessToken && !_hadToken()) return;     // never signed in on this device: nothing to renew
+        if (!hasToken() || (_tokenExpiresAt - Date.now()) < EXPIRY_MARGIN_MS) _renewQuietly();
+      }); } catch (e) {}
+    }
     _initAttempts = 0;
     _tryInit();
+  }
+  let _visBound = false;
+
+  function _hadToken() { try { return localStorage.getItem(CONSENT_KEY) === '1'; } catch (e) { return false; } }
+  function _saveToken() { try { localStorage.setItem(TOK_KEY, JSON.stringify({ t: _accessToken, e: _tokenExpiresAt })); localStorage.setItem(CONSENT_KEY, '1'); } catch (e) {} }
+  function _clearToken() { try { localStorage.removeItem(TOK_KEY); } catch (e) {} }
+  function _restoreToken() {
+    if (_accessToken) return;
+    try {
+      const o = JSON.parse(localStorage.getItem(TOK_KEY) || 'null');
+      if (o && o.t && o.e && o.e - Date.now() > 60 * 1000) {
+        _accessToken = o.t; _tokenExpiresAt = o.e;
+        _scheduleAutoRefresh(Math.floor((o.e - Date.now()) / 1000));
+        setTimeout(function () { _onAuthChange(true); }, 0);   // after init() returns, so the caller's callbacks are in place
+      } else if (o) { _clearToken(); }
+    } catch (e) {}
+  }
+
+  // v4: ask for a token without showing anything. prompt 'none' makes Google answer
+  // with an error instead of a sign-in or consent screen. Resolves true/false.
+  function _renewQuietly() {
+    return new Promise(function (resolve) {
+      if (!_tokenClient) { resolve(false); return; }
+      _pending.push(resolve);
+      if (_pending.length > 1) return;                 // a renewal is already in flight
+      clearTimeout(_silentTimer);
+      _silentTimer = setTimeout(function () { _settle(false); }, 8000);
+      try { _tokenClient.requestAccessToken({ prompt: 'none' }); } catch (e) { _settle(false); }
+    });
+  }
+  function _settle(ok) {
+    clearTimeout(_silentTimer);
+    const list = _pending; _pending = [];
+    list.forEach(function (f) { try { f(ok); } catch (e) {} });
   }
 
   function _tryInit() {
     if (window.google && window.google.accounts && window.google.accounts.oauth2) {
-      _tokenClient = google.accounts.oauth2.initTokenClient({
+      const cfg = {
         client_id: _clientId,
         scope: SCOPE,
-        callback: _onTokenResponse
-      });
+        callback: _onTokenResponse,
+        error_callback: function (err) {          // v4: popup blocked / closed — was silently ignored before
+          _settle(false);
+          _onAuthError((err && err.type) || 'popup-error');
+        }
+      };
+      if (_loginHint) cfg.hint = _loginHint;
+      _tokenClient = google.accounts.oauth2.initTokenClient(cfg);
       return;
     }
     _initAttempts++;
@@ -90,6 +146,7 @@ window.PalGCal = (function () {
 
   function _onTokenResponse(resp) {
     if (resp.error) {
+      _settle(false);
       _onAuthError(resp.error);
       return;
     }
@@ -97,6 +154,8 @@ window.PalGCal = (function () {
     const expiresIn = parseInt(resp.expires_in, 10) || 3600;
     _tokenExpiresAt = Date.now() + expiresIn * 1000;
     _scheduleAutoRefresh(expiresIn);
+    _saveToken();
+    _settle(true);
     _onAuthChange(true);
     _onTokenRefreshed(_tokenExpiresAt);
   }
@@ -109,7 +168,7 @@ window.PalGCal = (function () {
       // session is still valid. In Testing mode (Auth Platform), Google
       // caps this at ~7 days before a real re-login is required — that
       // surfaces here as _onAuthError if the silent attempt fails.
-      _tokenClient.requestAccessToken({ prompt: '' });
+      _renewQuietly();   // v4: prompt 'none' — never a screen from a timer
     }, refreshInMs);
   }
 
@@ -117,7 +176,8 @@ window.PalGCal = (function () {
 
   function signIn() {
     if (!_tokenClient) { _onAuthError('not-initialised'); return; }
-    _tokenClient.requestAccessToken({ prompt: 'consent' });
+    // v4: the consent screen is only needed the first time; after that Google can sign in without it.
+    _tokenClient.requestAccessToken({ prompt: _hadToken() ? '' : 'consent' });
   }
 
   function signOut() {
@@ -126,6 +186,8 @@ window.PalGCal = (function () {
     }
     _accessToken = null;
     _tokenExpiresAt = null;
+    _clearToken();
+    try { localStorage.removeItem(CONSENT_KEY); } catch (e) {}   // signing out fully: ask for consent again next time
     if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
     _onAuthChange(false);
   }
@@ -142,12 +204,13 @@ window.PalGCal = (function () {
   // browser session itself has gone). Exposed for a UI "Reconnect" button.
   function requestTokenRefresh() {
     if (!_tokenClient) { _onAuthError('not-initialised'); return; }
-    _tokenClient.requestAccessToken({ prompt: '' });
+    _renewQuietly();   // v4: prompt 'none' — quiet, no screen
   }
 
   // ── Low-level fetch wrapper ──────────────────────────────────────────
 
   async function _apiFetch(path, method, body) {
+    if (!hasToken() && _hadToken()) { await _renewQuietly(); }   // v4: one quiet attempt before giving up
     if (!hasToken()) {
       throw _err('no-token', 'No valid access token. Call signIn() first.');
     }
@@ -166,6 +229,7 @@ window.PalGCal = (function () {
       // rather than silently retry — avoids a loop against a dead token.
       _accessToken = null;
       _tokenExpiresAt = null;
+      _clearToken();
       _onAuthChange(false);
       throw _err('unauthorized', 'Google rejected the token — sign-in required again.');
     }
