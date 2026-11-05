@@ -9,7 +9,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -78,8 +78,20 @@
     for (var i = 0; i < ls.length; i++) {
       var k = ls.key(i); if (k.indexOf('pal_x_') !== 0) continue;
       var raw = ls.getItem(k) || '', o = safe(function () { return JSON.parse(raw); }, null);
+      var isFeed = k.indexOf('pal_x_f_') === 0, cid = isFeed ? '' : k.slice(6);
+      var meta = '', issues = [];
+      if (o && !isFeed) {   // 1.2.0: check the contract against its own rules (additive v1.2 fields are optional)
+        if (o.v !== 1) issues.push('v is not 1');
+        if (o.appId !== cid) issues.push('appId does not match the key');
+        if (!o.userId) issues.push('no userId');
+        var bt = Date.parse(o.built);
+        if (isNaN(bt)) issues.push('no valid built time'); else if (Date.now() - bt > 7 * 864e5) issues.push('STALE (over 7 days)');
+        if (raw.length * 2 / 1024 > 48) issues.push('over 48 KB');
+        meta = [o.app ? 'app ' + o.app : '', o.schema ? 'schema ' + o.schema : '', o.lib ? 'lib ' + o.lib : '',
+                o.caps ? 'caps ' + Object.keys(o.caps).length : ''].filter(Boolean).join(', ');
+      }
       out.push({
-        key: k, bytes: raw.length,
+        key: k, bytes: raw.length, feed: isFeed, meta: meta, issues: issues,
         v: o && (o.v || o.version || o.schema) || '?',
         uid: o && o.userId ? String(o.userId).slice(0, 8) : '-',
         age: ageOf(o)
@@ -188,8 +200,23 @@
 
     var ct = safe(contracts, []);
     sec('Contracts (pal_x_*)', ct.length ? ct.map(function (c) {
-      return c.key + ': ' + kb(c.bytes) + ', v' + c.v + ', user ' + c.uid + ', age ' + c.age;
+      return c.key + ': ' + kb(c.bytes) + ', v' + c.v + ', user ' + c.uid + ', age ' + c.age +
+        (c.meta ? ' | ' + c.meta : (c.feed ? '' : ' | no app/schema/lib yet')) + (c.issues && c.issues.length ? ' | ISSUE: ' + c.issues.join('; ') : '');
     }) : ['none stored']);
+
+    // 1.2.0: cloud copy of the contracts (pal-shared 1.5.0 / launcher v11.67)
+    var cl = safe(function () { return window.PalContract && window.PalContract.cloudStatus ? window.PalContract.cloudStatus() : null; }, null);
+    var cloudLines = [];
+    function tm(t) { return t ? new Date(t).toISOString().slice(11, 16) + ' UTC (' + Math.round((Date.now() - t) / 60000) + ' min ago)' : 'never'; }
+    if (!cl) cloudLines.push('this pal-shared.js has no cloud contracts (older than 1.5.0)');
+    else {
+      var pl = cl.pull, ph = cl.push, localN = ct.filter(function (c) { return !c.feed; }).length;
+      cloudLines.push('pull: ' + (pl.at ? (pl.ok ? 'ok' : 'FAILED (' + (pl.error || '?') + ')') + ' at ' + tm(pl.at) + ', cloud rows ' + pl.rows + ', applied ' + (pl.applied.length ? pl.applied.join(',') : 'none') + ', kept local ' + pl.kept + ', rejected ' + pl.rejected : 'not run yet in this window'));
+      cloudLines.push('push (from this window): sent ' + ph.pushed + ', skipped unchanged ' + ph.skipped + ', last ' + tm(ph.lastPushAt) + (ph.disabled ? ', DISABLED: ' + ph.disabled : '') + (ph.lastError ? ', last error: ' + ph.lastError : ''));
+      if (pl.ok) cloudLines.push('local contracts ' + localN + ' vs cloud rows ' + pl.rows + (pl.rows < localN ? '   << some apps have not reached the cloud yet (they publish on their next save)' : ''));
+      if (pl.error === 'table missing') cloudLines.push('the pal_contracts table does not exist yet: run the Batch A SQL in Supabase');
+    }
+    sec('Cloud contracts', cloudLines);
 
     var fv = safe(frameVersions, []);
     sec('App frames', fv.map(function (f) {
@@ -305,7 +332,7 @@
     try { c = collect(ctx); } catch (e) { running = false; show('Device check failed: ' + (e && e.message || e)); return Promise.resolve(); }
     return asyncSections(c.R).then(function () {
       // keep section order stable regardless of async completion order
-      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'App frames', 'Version check', 'Service workers', 'Manifest and install'];
+      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Service workers', 'Manifest and install'];
       c.R.sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
       show(toText(c.R));
     }).catch(function (e) { show('Device check failed: ' + (e && e.message || e)); })

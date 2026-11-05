@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.66</title>
+<title>P Apps v11.67</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1334,7 +1334,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.66</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.67</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1810,6 +1810,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  ADDED (Suite Phase 2 Batch A, v11.67): app summaries (contracts) are also kept in the cloud (table pal_contracts), so Today, Timeline and Needs attention can show current data even when the app has not run on this device. The launcher pulls them after sign-in and when it is shown again (at most once a minute), writes a cloud contract into the local pal_x_<app> key only if it is newer and belongs to the signed-in user, then redraws the board. bridgeCall() = the shared launcher side of PalBridge (nothing uses it yet). The backup-file check message shows its date as dd/mm/yy (D10). pal-shared.js tag moved from ?v=11.38 to ?v=11.67 (a launcher that kept an old cached copy would not have the new PalContract); pal-diag.js 1.2.0 adds a Contracts check. If the pal_contracts table does not exist the pull and the push quietly do nothing. No app change.
   CHANGED (Suite WP1.1, v11.66): backup manifest gains two additive fields per app, `appVersion` (version in the app's page title) and `library` (PalShared bundle the frame ran); existing `version` unchanged. Device check pal-diag.js 1.1.0 adds a Version check verdict. No other launcher behaviour changed.
   CHANGED (Suite WP0.2, v11.65): Device check pal-diag.js 1.0.1 — also reports apps nested inside other apps (Claims, Vault, Horizon) and shows a real contract age. No launcher behaviour changed; this release exists so the new pal-diag.js is fetched (its tag follows LAUNCHER_VERSION).
   ADDED (Suite WP0.2, v11.64): on-demand Device check (pal-diag.js, Pete only: P menu row + Home jump) — read-only report with a bounded, self-cleaning localStorage headroom probe; LAUNCHER_VERSION constant now drives the menu version and the backup manifest's `launcher` field (was stuck at 'v11.35').
@@ -2202,7 +2203,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=11.38"></script>
+<script src="pal-shared.js?v=11.67"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2213,7 +2214,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v11.66';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v11.67';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -2387,6 +2388,7 @@ function onSignedIn(userInfo, session) {
   sbSession   = session;
   feedPalSyncSession(); // PET-101 — must precede applyUserView() → loadLayoutConfig()
   setTimeout(function () { try { pxGymWarm(); } catch (e) {} }, 6000);   // PET-155 v11.48
+  setTimeout(function () { try { pxCloudPull(true); } catch (e) {} }, 2500);   // v11.67: cloud contracts
   setTimeout(function () { try { pxFeedsTick(); } catch (e) {} }, 4000);   // PET-162 v11.55: first feed run
   setTimeout(function () { try { pxWarmTick(); } catch (e) {} }, 9000);    // PET-164 v11.57: first cloud refresh of the other apps
 
@@ -3345,6 +3347,52 @@ function pxRead() {
   });
   try { pxMergeFeeds(out); } catch (e) {}   // PET-162 v11.55
   return out;
+}
+// v11.67 (Suite Phase 2 Batch A): cloud contracts. PalContract.pullCloud() fetches this user's own pal_contracts rows and writes a cloud
+// contract into the local pal_x_<app> key only when it is newer than the local one; the board is redrawn when anything was applied. The app list
+// is the launcher's own (PX_APPS), so an unknown app id in the cloud is ignored. Throttled to once a minute; quiet when offline, signed out or when
+// the table does not exist yet (status is shown in the Device check).
+const PX_CLOUD = { busy: false, last: 0 };
+async function pxCloudPull(force) {
+  try {
+    if (PX_CLOUD.busy || !window.PalContract || !window.PalContract.pullCloud || !sbSession || !pxUserId()) return;
+    if (navigator.onLine === false) return;
+    if (!force && Date.now() - PX_CLOUD.last < 60000) return;
+    PX_CLOUD.busy = true; PX_CLOUD.last = Date.now();
+    const r = await window.PalContract.pullCloud({ apps: Object.keys(PX_APPS) });
+    if (r && r.applied && r.applied.length) { try { renderTodayBoard(); } catch (e) {} }
+  } catch (e) {} finally { PX_CLOUD.busy = false; }
+}
+document.addEventListener('visibilitychange', function () { if (!document.hidden) pxCloudPull(false); });
+// v11.67: the shared launcher side of PalBridge (pal-shared.js). Waits for the app frame to answer a ping, sends one action, resolves with the
+// app's result. Rejects with Error('NOT_READY' | 'NO_FRAME' | 'TIMEOUT' | the app's error text). Same origin only. Nothing calls it yet; the four
+// existing handshakes (Claims, On Budget, Gym, Reading) are moved onto it one at a time in later batches.
+function bridgeCall(frame, prefix, action, payload, opts) {
+  opts = opts || {};
+  const readyMs = opts.readyMs || 8000, resultMs = opts.resultMs || 8000;
+  return new Promise(function (resolve, reject) {
+    if (!frame || !frame.contentWindow) return reject(new Error('NO_FRAME'));
+    const rid = 'br' + Date.now() + Math.random().toString(36).slice(2, 6);
+    let stage = 'ping', timer = null, poll = null, finished = false;
+    function finish(fn, v) { if (finished) return; finished = true; clearTimeout(timer); clearInterval(poll); window.removeEventListener('message', onMsg); fn(v); }
+    function post(m) { try { frame.contentWindow.postMessage(m, window.location.origin); } catch (e) {} }
+    function onMsg(ev) {
+      if (ev.origin !== window.location.origin || ev.source !== frame.contentWindow) return;
+      const d = ev.data;
+      if (!d || d.reqId !== rid) return;
+      if (stage === 'ping' && d.type === prefix + '_PONG' && d.ready) {
+        stage = 'result'; clearInterval(poll); clearTimeout(timer);
+        timer = setTimeout(function () { finish(reject, new Error('TIMEOUT')); }, resultMs);
+        post(Object.assign({}, payload || {}, { type: prefix + '_ACTION', action: action, reqId: rid }));
+      } else if (stage === 'result' && d.type === (opts.resultType || prefix + '_RESULT')) {
+        if (d.ok === false) finish(reject, new Error(d.error || 'FAILED')); else finish(resolve, d.result);
+      }
+    }
+    window.addEventListener('message', onMsg);
+    timer = setTimeout(function () { finish(reject, new Error('NOT_READY')); }, readyMs);
+    const ping = function () { post({ type: prefix + '_ACTION', action: 'ping', reqId: rid }); };
+    ping(); poll = setInterval(ping, 400);
+  });
 }
 // v11.38: apps that publish only a search list (Reading) must not make the Needs attention box or the time tabs appear.
 function pxLive(cmap) { return Object.keys(cmap).filter(function (k) { return Array.isArray(cmap[k].attention) || Array.isArray(cmap[k].upcoming); }); }
@@ -7239,7 +7287,7 @@ async function pxVerifyBackup(input) {
       const ver = String(o.appVersion || o.version || '?');
       const when = o.lastExported || o.exportedAt || o.lastUpdated || '';
       msg = '✓ ' + f.name + ': ' + meta.label + ' backup · ' + pxKB(f.size) + ' · version ' + ver + ' · ' + pxCounts(o, app) +
-            (when ? ' · ' + new Date(when).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '') +
+            (when ? ' · ' + ((window.PalShared && window.PalShared.fmtDateTime && window.PalShared.fmtDateTime(when)) || new Date(when).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })) : '') +
             '. Readable and complete in structure. Nothing was changed — restore it from inside ' + meta.label + '.';
     }
   } catch (e) { msg = '✗ ' + f.name + ': not valid JSON (' + (e && e.message ? e.message : 'unreadable') + '). Do not rely on this file.'; }

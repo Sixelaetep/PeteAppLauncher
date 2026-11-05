@@ -735,6 +735,12 @@ function uid(prefix) {
  *   (search lists are NOT part of this key: since v11.38 they go through PalContract.publishSearch() into IndexedDB 'pal_x_db' so they
  *    cost nothing against the shared 5 MB localStorage quota; rows are { id, t: title, s: detail, k: kind, d: date, open })
  *   open      { view?, id? }  → the launcher sends the app { type:'PAL_OPEN', view, id }
+ * v1.2 (pal-shared 1.5.0, Suite Phase 2 Batch A) adds OPTIONAL metadata fields: app (app version), schema (the app's data version), caps
+ *   ({ quickAdd:true, ping:true, ... } what the app can do), lib (set automatically: PalShared.VERSION). The payload shape stays v:1, additive.
+ * v1.2 also copies each published contract (without the search list) to the user's own row in the cloud table `pal_contracts`
+ *   (record_key = appId), debounced, so the launcher can show current data even when this app has not run on the device in front of it.
+ *   PalContract.pullCloud() is the launcher's side: it writes a cloud contract into the local pal_x_<app> key only when it is newer than
+ *   the local one and belongs to the signed-in user. If the table does not exist yet, both sides quietly do nothing.
  * userId is the publisher's Supabase user id; the launcher ignores a contract whose userId is not
  * the signed-in user and removes all pal_x_* keys on sign-out. publish() never throws, and does
  * nothing without a user id, so an app calling it keeps working if this section is absent
@@ -762,6 +768,74 @@ window.PalContract = (function () {
       return o;
     });
   }
+  function cleanCaps(c) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return undefined;
+    var r = {}, n = 0;
+    Object.keys(c).forEach(function (k) { if (n < 12 && /^[A-Za-z][A-Za-z0-9_]{0,23}$/.test(k)) { r[k] = !!c[k]; n++; } });
+    return n ? r : undefined;
+  }
+  // ── Cloud copy (v1.2) ─────────────────────────────────────────────────────
+  // Table pal_contracts has the same shape as every other PalSync table (user_id, record_key, data, updated_at), so PalSync does the work.
+  // Debounced per app (saves are frequent); an unchanged contract is not re-sent for 10 minutes. 'built' is ignored when comparing.
+  var CLOUD_TABLE = 'pal_contracts', CLOUD_DELAY = 4000, CLOUD_GAP = 600000;
+  var cloud = { enabled: true, pushed: 0, skipped: 0, lastPushAt: 0, lastError: '', disabled: '' };
+  var _pend = {}, _tm = {}, _sig = {}, _at = {};
+  function sigOf(c) { var x = {}; Object.keys(c).forEach(function (k) { if (k !== 'built') x[k] = c[k]; }); return JSON.stringify(x); }
+  function scheduleCloud(appId, c) {
+    if (!cloud.enabled || !(window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession())) return;
+    var copy = {}; Object.keys(c).forEach(function (k) { if (k !== 'search') copy[k] = c[k]; });
+    if (JSON.stringify(copy).length * 2 / 1024 > MAX_KB) return;
+    _pend[appId] = copy;
+    if (_tm[appId]) clearTimeout(_tm[appId]);
+    _tm[appId] = setTimeout(function () { flushCloud(appId); }, CLOUD_DELAY);
+  }
+  function flushCloud(appId) {
+    _tm[appId] = null;
+    var c = _pend[appId]; delete _pend[appId];
+    if (!c || !cloud.enabled) return;
+    var s = sigOf(c);
+    if (_sig[appId] === s && Date.now() - (_at[appId] || 0) < CLOUD_GAP) { cloud.skipped++; return; }
+    function ok() { _sig[appId] = s; _at[appId] = Date.now(); cloud.pushed++; cloud.lastPushAt = Date.now(); cloud.lastError = ''; }
+    function fail(err) {
+      cloud.lastError = clip(err && err.message || String(err), 160);
+      if ((err && err.status === 404) || /42P01|PGRST205|does not exist|schema cache/i.test(cloud.lastError)) { cloud.enabled = false; cloud.disabled = 'table missing'; }
+    }
+    try { Promise.resolve(window.PalSync.table(CLOUD_TABLE).upsert(appId, c)).then(ok, fail); } catch (e) { fail(e); }
+  }
+  try {   // leaving the page: send whatever is waiting now rather than losing it
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') Object.keys(_pend).forEach(function (a) { if (_tm[a]) clearTimeout(_tm[a]); flushCloud(a); });
+    });
+  } catch (e) {}
+  // Launcher side: copy newer cloud contracts into the local pal_x_<app> keys. Never overwrites a newer local one; ignores anything that is
+  // not v:1, not for this app id, not owned by the signed-in user, not in opts.apps (when given) or too large. Resolves with a status object.
+  var cloudPull = { at: 0, ok: null, rows: 0, applied: [], kept: 0, rejected: 0, error: '' };
+  function pullCloud(opts) {
+    opts = opts || {};
+    var res = { at: Date.now(), ok: false, rows: 0, applied: [], kept: 0, rejected: 0, error: '' };
+    function done() { cloudPull = res; return res; }
+    if (!(window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession())) { res.error = 'no session'; return Promise.resolve(done()); }
+    var uid = window.PalSync.getUserId();
+    var allow = Array.isArray(opts.apps) ? opts.apps : null;
+    return Promise.resolve(window.PalSync.fetchTableRows(CLOUD_TABLE)).then(function (rows) {
+      res.rows = rows.length;
+      rows.forEach(function (r) {
+        var id = r && r.record_key, c = r && r.data;
+        if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,24}$/.test(id) || !c || typeof c !== 'object' || c.v !== 1 || c.appId !== id || c.userId !== uid || (allow && allow.indexOf(id) < 0)) { res.rejected++; return; }
+        var cb = Date.parse(c.built); if (isNaN(cb)) { res.rejected++; return; }
+        var loc = read(id), lb = loc && loc.userId === uid ? Date.parse(loc.built) : 0;
+        if (lb && lb >= cb) { res.kept++; return; }
+        var json = JSON.stringify(c);
+        if (json.length * 2 / 1024 > MAX_KB) { res.rejected++; return; }
+        var w; try { w = window.PalSync.cacheSet ? window.PalSync.cacheSet(PREFIX + id, json) : (localStorage.setItem(PREFIX + id, json), { stored: true }); } catch (e) { w = null; }
+        if (w && w.stored) res.applied.push(id); else res.rejected++;
+      });
+      res.ok = true; return done();
+    }).catch(function (e) {
+      res.error = (e && e.status === 404) ? 'table missing' : clip(e && e.message || String(e), 160);
+      return done();
+    });
+  }
   function publish(appId, payload, opts) {
     try {
       var userId = (opts && opts.userId) || (window.PalSync && window.PalSync.getUserId && window.PalSync.getUserId());
@@ -773,6 +847,12 @@ window.PalContract = (function () {
       var at = cleanList(payload.attention, CAPS.attention, { id: 120, level: 8, title: 120, sub: 160, due: 10, until: 10, open: 'open' });
       var se = cleanList(payload.search, CAPS.search, { id: 120, t: 120, s: 120, k: 24, d: 10, open: 'open' });
       if (up) o.upcoming = up; if (at) o.attention = at; if (se) o.search = se;
+      // v1.2: optional metadata (all additive)
+      if (payload.app) o.app = clip(payload.app, 24);
+      if (payload.schema != null && payload.schema !== '') o.schema = clip(payload.schema, 24);
+      var cp = cleanCaps(payload.caps); if (cp) o.caps = cp;
+      try { if (window.PalShared && window.PalShared.VERSION) o.lib = String(window.PalShared.VERSION).slice(0, 12); } catch (x) {}
+      try { scheduleCloud(appId, o); } catch (x) {}   // v1.2: cloud copy, never blocks or throws
       var json = JSON.stringify(o);
       if (json.length * 2 / 1024 > MAX_KB && o.search) {   // trim the (reserved) search list first, then give up quietly
         while (o.search.length && JSON.stringify(o).length * 2 / 1024 > MAX_KB) o.search.length = Math.floor(o.search.length / 2);
@@ -845,6 +925,7 @@ window.PalContract = (function () {
       for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf(PREFIX) === 0) del.push(k); }
       del.forEach(function (k) { localStorage.removeItem(k); });
       clearSearch();   // v11.38
+      Object.keys(_tm).forEach(function (a) { if (_tm[a]) clearTimeout(_tm[a]); }); _pend = {}; _tm = {};   // v1.2: nothing waiting for the cloud outlives the user
       return del.length;
     } catch (e) { return 0; }
   }
@@ -860,7 +941,47 @@ window.PalContract = (function () {
       });
     }
   } catch (e) {}
-  return { publish: publish, read: read, clearAll: clearAll, publishSearch: publishSearch, readSearchAll: readSearchAll, clearSearch: clearSearch, PREFIX: PREFIX, VERSION: 1 };
+  return { publish: publish, read: read, clearAll: clearAll, publishSearch: publishSearch, readSearchAll: readSearchAll, clearSearch: clearSearch, PREFIX: PREFIX, VERSION: 1,
+           pullCloud: pullCloud, cloudStatus: function () { return { push: cloud, pull: cloudPull }; } };   // v1.2 (pal-shared 1.5.0)
+})();
+
+// ═════════════════════════════════════════════════════════════════�
+// PalBridge (bundle 1.5.0, Suite Phase 2 Batch A): one message envelope between the launcher and an app frame. ADDITIVE and OPT-IN: no app
+// calls it yet, and the existing per-app messages (OB_ACTION, GYM_ACTION, RT_ACTION, CT_ACTION and their replies) are untouched.
+//   App side:      PalBridge.listen('GYM', { quickAddWater: function (msg) { ...return a value or a Promise... } }, { app: '2.144' })
+//   Launcher side: bridgeCall(frame, 'GYM', 'quickAddWater', { ml: 250 })   (defined in index.html)
+// Protocol (same origin only; both sides check event.origin):
+//   launcher -> app  { type: '<PFX>_ACTION', action, reqId, ...payload }
+//   action 'ping'    -> app replies { type: '<PFX>_PONG', reqId, ready: true, app, lib }   (the shape the four existing handshakes already use)
+//   any other action -> app replies { type: '<PFX>_RESULT', reqId, action, ok: true|false, result | error }
+// An action with no handler replies ok:false, error:'unknown action', so the launcher never waits for a timeout to find that out.
+// ═════════════════════════════════════════════════════════════════�
+window.PalBridge = (function () {
+  var VERSION = 1;
+  function listen(prefix, handlers, info) {
+    if (!/^[A-Z][A-Z0-9]{1,5}$/.test(String(prefix))) return false;
+    handlers = handlers || {}; info = info || {};
+    window.addEventListener('message', function (ev) {
+      try {
+        if (ev.origin !== window.location.origin) return;
+        var d = ev.data;
+        if (!d || d.type !== prefix + '_ACTION' || !ev.source) return;
+        var reply = function (m) { try { ev.source.postMessage(m, window.location.origin); } catch (x) {} };
+        if (d.action === 'ping') {
+          reply({ type: prefix + '_PONG', reqId: d.reqId, ready: true, app: info.app || '', lib: (window.PalShared && window.PalShared.VERSION) || '' });
+          return;
+        }
+        var h = handlers[d.action];
+        if (typeof h !== 'function') { reply({ type: prefix + '_RESULT', reqId: d.reqId, action: d.action, ok: false, error: 'unknown action' }); return; }
+        Promise.resolve().then(function () { return h(d); }).then(
+          function (r) { reply({ type: prefix + '_RESULT', reqId: d.reqId, action: d.action, ok: true, result: r === undefined ? null : r }); },
+          function (e) { reply({ type: prefix + '_RESULT', reqId: d.reqId, action: d.action, ok: false, error: String(e && e.message || e).slice(0, 200) }); }
+        );
+      } catch (e) {}
+    });
+    return true;
+  }
+  return { listen: listen, VERSION: VERSION };
 })();
 
 // ══════════════════════════════════════════════════════════════════
@@ -871,6 +992,7 @@ window.PalContract = (function () {
  * PalShared — identifies this file and holds small shared helpers. Additive: nothing above is changed.
  *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
+ *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -1094,8 +1216,8 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.4.0';
-  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.1' };
+  api.VERSION = '1.5.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.2', bridge: '1.0' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
   return api;
