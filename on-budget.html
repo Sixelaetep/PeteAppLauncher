@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F4F0E6" id="metaThemeColor">
-<title>On Budget v3.127</title>
+<title>On Budget v3.128</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
@@ -768,7 +768,7 @@ input.amount-in:focus{border-color:transparent}
     <div class="header">
       <div class="logo">
         <span class="logo-icon" aria-hidden="true">£</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.127</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.128</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -1360,7 +1360,7 @@ input.amount-in:focus{border-color:transparent}
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.127"></script>
+<script src="pal-shared.js?v=3.128"></script>
 <!-- v3.126 (Suite Phase 2 / R25): the launcher contract also carries the quick-add suggestion lists (saved food labels and past bill names; summary.quick, marker summary.ext = 1) so the launcher no longer reads this app's saved copy. Derived cache only; no data, storage, sync or backup change. -->
 <!-- v3.125 (OPP-21): the Bills ledger has the same floating Add transaction button as the dashboard on phone and tablet (it replaces the inline button); no data, storage, sync or backup change. -->
 <!-- v3.124 (Suite Phase 2 / Batch C1): the launcher card figures (the same dashboardSummary the app already works out) now also travel inside the launcher contract (summary.card), so a second device shows them without opening this app. dashboardSummary in the stored data is still written exactly as before (launcher fallback). No data, storage, sync or backup change. -->
@@ -3115,7 +3115,7 @@ window.addEventListener('message', function(e) {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.127' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.128' }, e.origin);
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -3374,7 +3374,7 @@ function publishContract() {
     // v3.126 (R25): the launcher's quick-add suggestions: saved food labels and past bill names (same lists the launcher used to build from the saved copy)
     let quick; try { quick = obQuickLists(); } catch (e) {}
     const summary = Object.assign({}, card ? { card } : {}, quick ? { quick, ext: 1 } : {});
-    window.PalContract.publish('budget', { upcoming, attention, summary: Object.keys(summary).length ? summary : undefined, app: '3.127', schema: '1' });
+    window.PalContract.publish('budget', { upcoming, attention, summary: Object.keys(summary).length ? summary : undefined, app: '3.128', schema: '1' });
     window.PalContract.publishSearch('budget', search, search.length);   // v3.116: IndexedDB, not localStorage
   } catch (e) {}
 }
@@ -3478,7 +3478,7 @@ function save(trackChange) {
   // v3.118 (Suite WP1.4): a refused write (storage full or blocked) used to throw out of this function and skip the launcher
   // notification and contract publish below, with no message. safeSet reports it once and lets the rest of the save carry on.
   const _obPayload = JSON.stringify({
-    version:'3.127', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.128', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   });
@@ -3490,7 +3490,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.127', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.128', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -3505,9 +3505,33 @@ function exportJSON() {
 function importJSON(e) {
   const file = e.target.files[0]; if (!file) return;
   const r = new FileReader();
-  r.onload = ev => {
+  r.onload = async ev => {
     try {
       const d = (JSON.parse(ev.target.result).data) || JSON.parse(ev.target.result);
+      // v3.128 (R35): say what the restore will do to the cloud copy BEFORE anything changes. The sync after the restore keeps
+      // whichever copy is newer, and anything deleted in the cloud stays deleted.
+      let guardPrev = null;
+      {
+        let rows;
+        try { if (window.PalSync.hasSession()) rows = await window.PalSync.fetchTableRows(SB_TABLE); } catch (x) { rows = undefined; }
+        const bk = d.bills || {};
+        const flatTxB = [];
+        Object.keys(d.months || {}).forEach(mk => ((d.months[mk] || {}).transactions || []).forEach(t => flatTxB.push({ ...t, monthKey: t.monthKey || mk, _sk: (t.monthKey || mk) + '_' + t.id })));
+        const flatMonthsB = Object.keys(d.months || {}).map(mk => { const m = d.months[mk] || {}; return { monthKey: mk, startBalance: m.startBalance, weeklyFoodBudget: m.weeklyFoodBudget ?? null, weeklyFoodAdjustment: m.weeklyFoodAdjustment ?? null, travelBudget: m.travelBudget ?? null, cardAdjust: m.cardAdjust ?? null, updated_at: m.updated_at }; });
+        const txRows = rows ? rows.filter(x => String(x.record_key).indexOf('tx_') === 0 && x.data).map(x => ({ ...x, data: { ...x.data, _sk: x.data._sk || String(x.record_key).slice(3) } })) : undefined;
+        const mk = (prefix, records, idField, label, useRows) => ({ table: SB_TABLE, records, opts: { idField, updatedAtField: 'updated_at', prefix, rows: useRows === undefined ? rows : useRows, label } });
+        const g = await PalUI.guardRestore({ app: 'On Budget', noun: 'records', collections: [
+          mk('month_', flatMonthsB, 'monthKey', m => m.monthKey),
+          mk('tx_', flatTxB, '_sk', t => t.description || t.desc || t.name || t.id, txRows),
+          mk('billsrecur_', bk.recurring || [], 'id', r => r.name || r.description || r.id),
+          mk('billstx_', bk.tx || [], 'id', t => t.name || t.description || t.id),
+          mk('billsoverride_', bk.overrides || [], 'id', o => o.id),
+          mk('ftlabel_', (d.ftLabels && d.ftLabels.items) || [], 'id', l => l.name || l.label || l.id),
+          mk('billsscenario_', bk.scenarios || [], 'id', sc => sc.name || sc.id)
+        ].filter(c => c.records.length) });
+        if (!g.proceed) { toast('Restore cancelled'); return; }
+        guardPrev = g.preview;
+      }
       if (d.settings) settings = { ...DEFAULT_SETTINGS, ...d.settings };
       if (d.months)   months   = d.months;
       bills = d.bills
@@ -3558,6 +3582,7 @@ function importJSON(e) {
       // Meal Planner (MP-045) and Reading Tracker (MR-011).
       if (window.PalSync.hasSession()) { addSyncLog('Import complete — syncing with cloud','info'); syncPull(); }
       toast('Import successful ✓');
+      PalUI.finishRestore({ preview: guardPrev, noun: 'records' });
     } catch(err) { toast('Import failed — invalid file'); }
   };
   r.readAsText(file);

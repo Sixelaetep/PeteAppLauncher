@@ -14,7 +14,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.108</title>
+<title>Reading Tracker v3.109</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1289,6 +1289,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 /* v3.83 (MR-068): Book List › Covers: looks up every existing book without a cover, shows a review list, and adds only the details you tick (cover, publisher, year, ISBN, pages if empty). Also: Find details now works with an author alone. */
 /* v3.82 (MR-067): Book List add form and edit panel can fetch book details by ISBN or title (Open Library, then Google Books): title, author, pages, publisher, year, genre and a cover, shown as a small cover and detail line on the Book List. New optional item fields isbn, coverId, coverUrl, publisher, publishYear, metaSource; manual entry unchanged. */
 /* v3.81 (MR-066): publishes a search list for the launcher's Universal Search (PalContract, key pal_x_reading): books from every tracker and the wishlist (title, author, genre, pages), stored in IndexedDB. Derived cache only; no data, storage, sync or backup change. */
+/* v3.109 (R35): restoring a backup now shows what changes in the cloud copy first (PalUI.guardRestore) and a summary afterwards; Cancel changes nothing. */
 /* v3.108 (R31): the Reading contract no longer carries the whole wishlist. Finished books older than last month send only their reading days, unstarted inactive books are left out; the launcher shelf, week view, streak and reminder read the same result. Derived cache only; no data, storage, sync or backup change. */
 /* ═══ v3.80 (MR-065) — spine colour and icon ═══ */
 .sp-spine .ic { position: absolute; left: 50%; margin-left: -6px; width: 12px; height: 12px; color: var(--st); }
@@ -1314,7 +1315,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.108</span></div>
+    <div class="rt-logo">My Reading <span>v3.109</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2199,7 +2200,7 @@ body.wl-add-open #wlAddToggle { display: none; }
      getDateRange, getPeriodLabel) gave the PREVIOUS day for the whole of British Summer Time, because toISOString() converts to UTC. They now
      use localISODate() (PalShared.localISO from pal-shared.js 1.0.0, with an identical inline fallback). The pal-shared.js tag is moved from
      ?v=3.89 to ?v=3.100 so this file loads the 1.0.0 copy. -->
-<script src="pal-shared.js?v=3.108"></script>
+<script src="pal-shared.js?v=3.109"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v3.106 (Suite Phase 2 / Batch C1): the launcher card data (the Book List with its reading entries reduced to date and page, the tracker reading days, the cycle start date) now also travels inside the launcher contract (summary.card), so a second device shows the card, shelf and week view without opening this app. The stored data (reading-tracker-v6) is untouched. No data, storage, sync or backup change. -->
 <!-- v3.105 (D10): date inputs show dd/mm/yy via PalShared.ukDateInputs (pal-shared 1.4.0); the calendar button is a transparent native date input laid over the icon. -->
 <script>
@@ -3826,7 +3827,7 @@ function publishContract() {
       const last = new Date(n.getFullYear(), n.getMonth() + 1, 0), iso = mk + '-' + String(last.getDate()).padStart(2, '0');
       const cur = wl.filter(w => !w.completedDate && typeof window.rtIsActive === 'function' && window.rtIsActive(w)).sort((a, b) => (Number(a.manualOrder) || 0) - (Number(b.manualOrder) || 0))[0];
       const upcoming = finished ? [] : [{ id: 'reading-month-' + mk, date: iso, title: 'Month ends: aim is one full book', sub: 'No book finished yet' + (cur ? ' \u00b7 reading ' + cur.title : ''), kind: 'target', open: { view: 'books' } }];
-      window.PalContract.publish('reading', { upcoming: upcoming.length ? upcoming : undefined, summary: { card: rtCardState() }, app: '3.108', schema: '6' });   // v3.106 (Batch C1)
+      window.PalContract.publish('reading', { upcoming: upcoming.length ? upcoming : undefined, summary: { card: rtCardState() }, app: '3.109', schema: '6' });   // v3.106 (Batch C1)
     } catch (e) {}
   } catch (e) {}
 }
@@ -6095,7 +6096,21 @@ function showRestoreResult(ok, html) {
   el.innerHTML = html;
 }
 
-function doRestore() {
+// v3.109 (R35): before a restore changes anything, say what it will do to the cloud copy. Reading restores are authoritative
+// (stampImportedTimestamps below makes the backup win), so the dialog says the cloud copy is replaced.
+async function restoreGuard(trackers, wishlist) {
+  const flat = { trackers: [], books: [], entries: [] };
+  (trackers || []).forEach(t => { flat.trackers.push(t); (t.books || []).forEach(b => flat.books.push(b)); (t.entries || []).forEach(e => flat.entries.push(e)); });
+  let rows;
+  try { if (window.PalSync.hasSession()) rows = await window.PalSync.fetchTableRows('reading_records'); } catch (e) { rows = undefined; }
+  const mk = (prefix, records, label) => ({ table: 'reading_records', records, opts: { idField: 'id', updatedAtField: 'updatedAt', prefix, authoritative: true, rows, label } });
+  const g = await PalUI.guardRestore({ app: 'Reading Tracker', noun: 'items', collections: [
+    mk('tracker_', flat.trackers, t => t.trackerName), mk('book_', flat.books, b => b.title), mk('entry_', flat.entries, e => e.date || e.id), mk('wishlist_', wishlist || [], w => w.title) ] });
+  if (!g.proceed) { clearRestoreState(); showRestoreResult(false, 'Restore cancelled \u2014 nothing was changed.'); }
+  return g;
+}
+
+async function doRestore() {
   if (!_restoreJSON) { showRestoreResult(false, "No file loaded — choose a file first."); return; }
   let d;
   try { d = JSON.parse(_restoreJSON); } catch(e) {
@@ -6105,6 +6120,8 @@ function doRestore() {
 
   // v6 multi-tracker
   if (d && d.trackers && Array.isArray(d.trackers)) {
+    const g6 = await restoreGuard(d.trackers, d.wishlist);
+    if (!g6.proceed) return;
     appState.trackers        = d.trackers;
     appState.wishlist        = d.wishlist || [];
     appState.activeTrackerId = null;
@@ -6134,6 +6151,7 @@ function doRestore() {
       `<br><br>${trackerLines}`
     );
     clearRestoreState();
+    PalUI.finishRestore({ preview: g6.preview, noun: 'items' });
     setTimeout(() => showDashboard(), 1200);
     return;
   }
@@ -6142,6 +6160,8 @@ function doRestore() {
   if (d && Array.isArray(d.books) && Array.isArray(d.entries)) {
     const t = blankTracker(d.trackerName || "Imported Tracker", d.targetDate || null);
     t.books = d.books; t.entries = d.entries;
+    const g1 = await restoreGuard([t], []);
+    if (!g1.proceed) return;
     if (d.activeBookId !== undefined) t.activeBookId = d.activeBookId;
     appState.trackers = [t]; appState.wishlist = []; appState.activeTrackerId = null;
     appState.monthlyConfig = defaultMonthlyConfig();
@@ -6156,6 +6176,7 @@ function doRestore() {
       `${t.books.length} book${t.books.length!==1?"s":""} · ${t.entries.length} session${t.entries.length!==1?"s":""}`
     );
     clearRestoreState();
+    PalUI.finishRestore({ preview: g1.preview, noun: 'items' });
     setTimeout(() => showDashboard(), 1200);
     return;
   }

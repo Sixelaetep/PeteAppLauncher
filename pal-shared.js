@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.7.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.8.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -1023,7 +1023,7 @@ window.PalBridge = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 4d of 5 — PalRestore + PalUI (bundle 1.7.0, 5 Nov 2026, Suite Phase 3, R34). ADDITIVE and OPT-IN: no app calls anything here yet.
+// SECTION 4d of 5 — PalRestore + PalUI (bundle 1.8.0, 5 Nov 2026, Suite Phase 3, R34/R35). Restore 1.1 / UI 1.1: preview matches PalSync.pull (cloud tombstones stay deleted, data-field stamps only), opts.rows, opts.tombstoneByStamp, PalUI.guardRestore / finishRestore. Apps opt in.
 // ══════════════════════════════════════════════════════════════════
 /**
  * PalSync.restorePreview(tableName, backupRecords, opts)  (decision D11, design in Phase2Close.md 2.4). Read only: it fetches this user's cloud rows
@@ -1061,10 +1061,11 @@ window.PalBridge = (function () {
     var c = {}; Object.keys(o || {}).forEach(function (k) { if (k !== upF && k !== 'updated_at' && k !== 'updatedAt') c[k] = o[k]; });
     return c;
   }
-  function stampOf(rec, upF, row) { var v = rec && rec[upF]; return v ? String(v) : (row && row.updated_at ? String(row.updated_at) : ''); }
+  function stampOf(rec, upF) { var v = rec && rec[upF]; return v ? String(v) : ''; }   // data field only, as PalSync.table().pull compares (1.8.0: no row.updated_at fallback)
   function opt(o) {
     o = o || {};
     return { idF: o.idField || 'id', upF: o.updatedAtField || 'updated_at', prefix: o.prefix || '', shared: !!o.shared, auth: !!o.authoritative,
+      tombByStamp: !!o.tombstoneByStamp, rows: Array.isArray(o.rows) ? o.rows : null,
       max: o.maxNames > 0 ? o.maxNames : 5, label: typeof o.label === 'function' ? o.label : function (r) { return r.title || r.name || r.label || r.id; } };
   }
   function lbl(o, r) { try { var s = o.label(r); return String(s == null ? r[o.idF] : s).slice(0, 60); } catch (e) { return String(r[o.idF]); } }
@@ -1078,6 +1079,7 @@ window.PalBridge = (function () {
     return m;
   }
   function fetchCloud(tableName, o) {
+    if (o.rows) return Promise.resolve({ ok: true, rows: o.rows });   // caller already holds the rows (1.8.0)
     return Promise.resolve(window.PalSync.fetchTableRows(tableName, { shared: o.shared })).then(function (rows) { return { ok: true, rows: rows }; },
       function (e) { return { ok: false, error: String(e && e.message || e).slice(0, 160) }; });
   }
@@ -1096,8 +1098,9 @@ window.PalBridge = (function () {
         var id = String(b[o.idF]), c = cloud[id], bs = stampOf(b, o.upF), name = lbl(o, b);
         seen[id] = 1;
         if (!c) { add('return', id, name); return; }
-        var cs = stampOf(c.data, o.upF, c.row);
-        if (c.data._deleted) { if (o.auth || bs > cs) add('return', id, name); else add('deleted', id, name); return; }
+        var cs = stampOf(c.data, o.upF);
+        // 1.8.0: PalSync.pull() drops a record the cloud has deleted unconditionally, so it stays deleted. Gigs & Trips compares stamps instead (tombstoneByStamp).
+        if (c.data._deleted) { if (o.tombByStamp && (o.auth || bs > cs)) add('return', id, name); else add('deleted', id, name); return; }
         if (canon(bare(b, o.upF)) === canon(bare(c.data, o.upF))) { add('unchanged', id, name); return; }
         if (o.auth || bs > cs) add('replace', id, name); else add('keep', id, name);
       });
@@ -1219,6 +1222,34 @@ window.PalBridge = (function () {
       if (!p || !p.ok) return window.PalUI.confirm({ title: 'Restore ' + (o.app || 'this backup') + '?', message: "Couldn't check the cloud copy" + (p && p.error ? ' (' + p.error + ')' : '') + ", so there's no preview of what will change. The restore will run as usual." + (o.extra ? ' ' + o.extra : ''), okLabel: 'Restore', cancelLabel: 'Cancel' });
       return window.PalUI.confirm({ title: 'Restore ' + (o.app || 'this backup') + '?', message: restoreSummary(p.counts, o.noun) + (p.authoritative ? ' This restore replaces the cloud copy of those.' : ' The cloud copy stays in charge where it is newer.') + (o.extra ? ' ' + o.extra : ''), rows: previewRows(p, o.noun), okLabel: 'Restore', cancelLabel: 'Cancel', danger: !!(p.counts.replace || p.counts.return) });
     },
+    // 1.8.0 — one call an app makes BEFORE it changes anything. collections: [{table, records, opts}] (opts as restorePreview). Resolves {proceed, preview}.
+    guardRestore: function (o) {
+      o = o || {}; var cols = o.collections || [];
+      var hasS = window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession();
+      if (!hasS) return window.PalUI.confirm({ title: 'Restore ' + (o.app || 'this backup') + '?', message: "You're not signed in, so the cloud copy can't be compared. The restore runs on this device" + (o.localOnly ? '.' : ' and syncs the next time you sign in.') + (o.extra ? ' ' + o.extra : ''), okLabel: 'Restore', cancelLabel: 'Cancel' }).then(function (ok) { return { proceed: !!ok, preview: null }; });
+      return Promise.all(cols.map(function (c) { return window.PalSync.restorePreview(c.table, c.records, c.opts); })).then(function (ps) {
+        var agg = { ok: false, counts: { return: 0, replace: 0, keep: 0, deleted: 0, onlyCloud: 0, unchanged: 0 }, names: { return: [], replace: [], keep: [], deleted: [], onlyCloud: [], unchanged: [] }, authoritative: false, unchecked: 0, error: '' };
+        ps.forEach(function (p) {
+          if (!p || !p.ok) { agg.unchecked++; if (p && p.error && !agg.error) agg.error = p.error; return; }
+          agg.ok = true; if (p.authoritative) agg.authoritative = true;
+          Object.keys(agg.counts).forEach(function (k) { agg.counts[k] += p.counts[k] || 0; (p.names[k] || []).forEach(function (n) { if (agg.names[k].length < 5) agg.names[k].push(n); }); });
+        });
+        var extra = (o.extra || '') + (agg.ok && agg.unchecked ? ' (' + agg.unchecked + ' part' + (agg.unchecked > 1 ? 's' : '') + ' of the cloud copy could not be checked.)' : '');
+        return window.PalUI.confirmRestore({ app: o.app, noun: o.noun, preview: agg, extra: extra.trim() }).then(function (ok) { return { proceed: !!ok, preview: agg }; });
+      }, function () { return window.PalUI.confirmRestore({ app: o.app, preview: { ok: false, error: 'check failed' } }).then(function (ok) { return { proceed: !!ok, preview: null }; }); });
+    },
+    // 1.8.0 — one call AFTER the restore ran. Describes what the preview expected; it does not re-read the cloud.
+    finishRestore: function (o) {
+      o = o || {}; var p = o.preview, c = p && p.ok ? p.counts : null;
+      var noun = o.noun || 'records', lines = [];
+      if (!c) return window.PalUI.notice({ title: 'Restore finished', message: (o.summary ? o.summary + ' ' : '') + "The cloud copy wasn't compared, so it will be reconciled by the next sync.", okLabel: 'OK' });
+      if (c.return) lines.push({ label: 'Back from the backup', value: c.return });
+      if (c.replace) lines.push({ label: p.authoritative ? 'Replaced in the cloud' : 'Replaced by the backup', value: c.replace });
+      if (c.keep) lines.push({ label: 'Cloud copy newer, kept', value: c.keep, names: p.names.keep });
+      if (c.deleted) lines.push({ label: 'Deleted elsewhere, stay deleted', value: c.deleted, names: p.names.deleted });
+      if (c.onlyCloud) lines.push({ label: 'Only in the cloud, kept', value: c.onlyCloud });
+      return window.PalUI.notice({ title: 'Restore finished', message: (o.summary ? o.summary + ' ' : '') + (lines.length ? (p.authoritative ? 'The backup is now the cloud copy of ' + noun + '.' : 'The next sync keeps the newer cloud copy where there is one.') : 'Nothing needed to change.'), rows: lines, okLabel: 'OK' });
+    },
     showRestoreReport: function (o) {
       o = o || {}; var r = o.report;
       if (!r || !r.ok) return window.PalUI.notice({ title: 'Restore finished', message: "Couldn't check the cloud copy afterwards. Open the app on another device to see the result.", okLabel: 'OK' });
@@ -1241,6 +1272,7 @@ window.PalBridge = (function () {
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
+ *             1.8.0 (Suite Phase 3, R35) restore 1.1 / ui 1.1: restorePreview now agrees with PalSync.pull (cloud-deleted records stay deleted; stamps from the data field only; opts.tombstoneByStamp for Gigs); opts.rows; PalUI.guardRestore and PalUI.finishRestore used by five apps.
  *             1.7.0 (Suite Phase 3, R34) new section 4d: PalSync.restorePreview / restoreReport (read-only restore preview and report, D11) and PalUI (confirm, notice, toast, restore dialogs). Additive; no app calls them yet.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
@@ -1465,8 +1497,8 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.7.0';
-  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0', restore: '1.0', ui: '1.0' };
+  api.VERSION = '1.8.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0', restore: '1.1', ui: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
   return api;

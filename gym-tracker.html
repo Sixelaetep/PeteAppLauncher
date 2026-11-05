@@ -9,7 +9,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.149</title>
+<title>Gym Tracker v2.150</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230E0D12'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='800' font-size='15' fill='%23CBF55C' text-anchor='middle'>GY</text></svg>">
 <style>
   /* ═══════════════════════════════════════════════════════════════════
@@ -564,7 +564,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon" aria-hidden="true">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.149</div></span>
+      <span>Gym Tracker<div class="ver">v2.150</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1285,7 +1285,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.149"></script>
+<script src="pal-shared.js?v=2.150"></script>
+<!-- v2.150 (R35): restoring a backup now shows what will change in the cloud copy first (PalUI.guardRestore) and a summary afterwards; Cancel changes nothing. -->
 <!-- v2.149 (R30): the saved foods and drinks for the launcher's quick-add now travel in their own small contract (pal_x_gymlists) instead of inside the Gym card contract, which drops from about 85% to about 40% of its size limit and no longer grows with the number of saved foods. Derived cache only; no data, storage, sync or backup change. Needs launcher v11.85 to read the new contract (until then quick-add shows no saved items). -->
 <!-- v2.148 (fix R28-T2/T3): the launcher card data was close to the 48 KB contract limit (104 saved foods were half of it), so a slightly larger Gym left the old contract in place and the launcher showed stale data (a session you had marked ill, no saved items in quick-add). The saved foods and drinks now use short keys (n, c, p, v, q) and, if the contract is still too large to store, are cut back and published again. Derived cache only; no data, storage, sync or backup change. Needs launcher v11.83 to read the short keys. -->
 <!-- v2.146 (Suite Phase 2 / Batch D prep, R24): the launcher card data also carries what the launcher used to read from this app's saved copy: the food and drink reminders, the time each of today's meals and drinks was logged, and the saved foods and drinks for quick-add (marker ext:1). Derived cache only; no data, storage, sync or backup change. -->
@@ -2006,7 +2007,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.149';
+const VERSION = '2.150';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -9017,11 +9018,22 @@ function exportJSON() {
 function importJSON(event) {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = ev => {
+  reader.onload = async ev => {
     try {
       const parsed = JSON.parse(ev.target.result);
+      let _gPrev = null;
       if (parsed.data && (parsed.data.exercises !== undefined || parsed.data.plans !== undefined || parsed.data.templates !== undefined || parsed.data.sessions !== undefined)) {
         if (typeof parsed.version !== 'number') throw new Error('Missing version field');
+        // v2.150 (R35): say what the restore will do to the cloud copy BEFORE anything changes. Restore stays authoritative for the
+        // trainer note sets (they are re-stamped below); everything else follows the normal newest-wins merge on the next sync.
+        const _gymTblNames = { exercise:'gym_exercises', plan:'gym_plans', session:'gym_sessions', weight:'gym_weight', schedule:'gym_schedule', trainerNoteSet:'gym_trainer_notes', ptSession:'gym_pt_sessions', program:'gym_programs', nutritionEntry:'gym_nutrition_entries', nutritionTarget:'gym_nutrition_targets', savedMeal:'gym_saved_meals', waterEntry:'gym_water_entries', savedWaterItem:'gym_saved_water_items', waterTarget:'gym_water_targets', fullyLoggedDay:'gym_fully_logged_days', savedCircuit:'gym_saved_circuits' };
+        const guardCols = Object.keys(_gymTblNames).map(kind => {
+          const arr = kind === 'plan' ? (parsed.data.plans || parsed.data.templates) : parsed.data[_gymArrKeys[kind]];
+          return { table: _gymTblNames[kind], records: Array.isArray(arr) ? arr : [], opts: { idField: 'id', updatedAtField: 'updatedAt', authoritative: kind === 'trainerNoteSet', label: r => r.name || r.title || r.date || r.id } };
+        }).filter(c => c.records.length);
+        const g = await PalUI.guardRestore({ app: 'Gym Tracker', noun: 'records', collections: guardCols });
+        if (!g.proceed) { toast('Restore cancelled'); return; }
+        _gPrev = g.preview;
         _env = parsed;
         _envGeneration++; // GYM-047: any pull already in flight is now stale — see the guard in pullFromCloud()
         _env.lastUpdated  = _env.lastUpdated  || '';
@@ -9074,6 +9086,7 @@ function importJSON(event) {
       closeDataDrawer();
       renderAll();
       toast('Backup restored ✓');
+      PalUI.finishRestore({ preview: _gPrev, noun: 'records' });
     } catch(ex) { toast('Import failed: '+ex.message); }
   };
   reader.readAsText(file);

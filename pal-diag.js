@@ -3,6 +3,7 @@
  * storage-headroom probe that writes a scratch key and ALWAYS removes it again,
  * and (1.5.0, R32) the 'Old data' sheet, which can delete four known orphaned key
  * families only after a backup file has been downloaded and a second tap confirms.
+ * 1.7.1 (R35): Restore check follows the 1.8.0 preview rules (stamps from the data field only).
  * 1.7.0 (R34): a 'Restore check' sheet that tries the shared dialogs (PalUI) and runs the restore preview and report (PalSync.restorePreview / restoreReport) read-only against live tables.
  * 1.6.0 (R33): a contract marked stale (too large to store) or trimmed by the library is reported as an ISSUE / note in the Contracts section.
  * Produces a copyable plain-text report, format "device-check/1".
@@ -13,7 +14,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.7.0';
+  var VERSION = '1.7.1';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -455,7 +456,7 @@
             chk('same data: nothing else', a.counts.return + a.counts.replace + a.counts.keep + a.counts.deleted + a.counts.onlyCloud, 0);
             var mut = same.map(function (d) { return JSON.parse(JSON.stringify(d)); });
             mut.shift();
-            mut[0].__pal_check = 1; mut[0].updated_at = '2000-01-01T00:00:00.000Z';
+            mut[0].__pal_check = 1; mut[0].updated_at = '';
             mut[1].__pal_check = 1; mut[1].updated_at = '2999-01-01T00:00:00.000Z';
             mut.push({ id: '__pal_check_fake__', title: 'Check record', updated_at: '2999-01-01T00:00:00.000Z' });
             return S.restorePreview(t, mut).then(function (b) {

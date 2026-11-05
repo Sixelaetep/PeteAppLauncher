@@ -10,7 +10,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.117</title>
+<title>Gigs &amp; Trips v7.118</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -806,7 +806,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.117</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.118</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -869,7 +869,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.117"></script>
+<script src="pal-shared.js?v=7.118"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v7.113: Suite WP1.2 / D10: dates with a year show dd/mm/yy; date boxes show dd/mm/yy with a calendar button (pal-shared 1.4.0). Failed saves were already reported by this app (storageWriteFailed). -->
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -4113,7 +4113,7 @@ function gatPublishContract(up,today,card){
       if(e.type==='trip') return {id:'gigs-t-'+e.id,t:e.name||'Trip',s:[tripTypeInfo(e.tripType).label,(e.startDate||'')+(e.endDate&&e.endDate!==e.startDate?' to '+e.endDate:''),e.destination||e.location||''].filter(Boolean).join(' \u00b7 '),k:'trip',d:e.startDate||'',open:{view:'trip',id:e.id}};
       return {id:'gigs-g-'+e.id,t:e.name||'Event',s:[e.venue||'',gigTypeInfo(e.gigType||'music').label,e.time||''].filter(Boolean).join(' \u00b7 '),k:'gig',d:e.date||'',open:{view:'gig',id:e.id}};
     });
-    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention,summary:card?{card:card}:undefined,app:'7.117',schema:'1'},{userId:uid_});
+    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention,summary:card?{card:card}:undefined,app:'7.118',schema:'1'},{userId:uid_});
     window.PalContract.publishSearch('gigs',search,evs.length,{userId:uid_});   // v7.111: IndexedDB, not localStorage
   }catch(e){}
 }
@@ -7766,13 +7766,32 @@ function exportJSON(){
 function handleImport(inp){
   const f=inp.files[0]; if(!f) return;
   const reader=new FileReader();
-  reader.onload=function(e){
+  reader.onload=async function(e){
     try{
       const imported=JSON.parse(e.target.result);
       // Accept both native gat format and legacy gig-tracker format
       const isNative=Array.isArray(imported.events);
       const isLegacy=Array.isArray(imported.gigs);
       if(!isNative&&!isLegacy){ showToast('❌ Unrecognised file format'); return; }
+
+      // v7.118 (R35): say what the restore will do BEFORE anything changes. The merge below keeps whichever copy is newer, and the
+      // cloud copy stays in charge: an event deleted elsewhere is not brought back unless the backup copy is newer than the deletion.
+      let guardPrev=null;
+      if(isNative){
+        let rows;
+        try{
+          if(window.PalSync&&PalSync.hasSession()){
+            const raw=await sbFetch('GET','events?select=id,data,updated_at');
+            if(Array.isArray(raw)) rows=raw.filter(r=>r&&r.data&&r.id!=='settings_categories'&&r.id!=='_venues'&&!(typeof r.id==='string'&&r.id.indexOf('venue_')===0)).map(r=>({record_key:r.id,data:r.data,updated_at:r.updated_at}));
+          }
+        }catch(err){ rows=undefined; }
+        const g=await PalUI.guardRestore({ app:'Gigs & Trips', noun:'events', collections:[{ table:'events', records:imported.events, opts:{ idField:'id', updatedAtField:'updatedAt', tombstoneByStamp:true, rows:rows, label:ev=>ev.name||ev.title||ev.id } }] });
+        if(!g.proceed){ showToast('Restore cancelled'); inp.value=''; return; }
+        guardPrev=g.preview;
+      } else {
+        const okLegacy=await PalUI.confirm({ title:'Import old gig-tracker file?', message:'This adds the gigs in the file that are not already here. Existing events are not changed.', okLabel:'Import', cancelLabel:'Cancel' });
+        if(!okLegacy){ showToast('Import cancelled'); inp.value=''; return; }
+      }
 
       const d=getData();
 
@@ -7803,6 +7822,7 @@ function handleImport(inp){
         const evCount=(imported.events||[]).length;
         const vCount=Object.values(vmap).length;
         showToast(`Imported ${evCount} events, ${vCount} venues ✓`);
+        PalUI.finishRestore({ preview:guardPrev, noun:'events' });
         // GT-004 (suite-wide sync audit): this used to push straight to
         // Supabase after merging the imported file only against whatever
         // was already in local storage — never against the cloud's actual
