@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.75</title>
+<title>P Apps v11.76</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1334,7 +1334,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.75</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.76</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1810,6 +1810,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  ADDED (C2, v11.76): the 9-DAY FORTNIGHT card reads the card data the app now publishes inside the contract (summary.card: bundles, holiday leave, leave allowance) first, with the old read of fn_tracker_v5 / v4 / v3 as the fallback; the running-timer line, holiday line and hours bars are unchanged; pxCloudPull redraws the card when a cloud contract is applied; a contract over a week old shows 'as of dd/mm/yy'.
   ADDED (C1, v11.75): the READING, ON BUDGET and GYM cards read the card data their apps now publish inside the contract (summary.card) first, with the old reads of the apps' own stored copies as the fallback; the Reading shelf, week view, Read-today reminder and quick-log book choice use the same Reading card data (rtLoadState); pxCloudPull redraws the three cards when a cloud contract is applied. Still direct reads (later): quick-add category lists, Gym meal / Missed-ill reminders, the Gym quick-add, all handshakes.
   ADDED (B4 to B6, v11.74): the FANTASY, FILM & TV and GIGS & TRIPS cards read the figures their apps now publish inside the contract (summary / summary.card) first, with the old reads (ff_squad_cache, pal_ftt_stat, pal_gat_stat + gat_v1) as the fallback; pxCloudPull redraws the three cards when a cloud contract is applied. Exception kept for now: the Fantasy locked-in squad (ff_locked_card) is still read directly (Batch C).
   ADDED (B3, v11.73): the HORIZON card reads Horizon's contract first (growth-bucket total and count), with the old read of horizon_state_v1 as the fallback; 'horizon' joins PX_CLOUD_EXTRA so a second device gets the number without opening Horizon.
@@ -2215,7 +2216,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=11.75"></script>
+<script src="pal-shared.js?v=11.76"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2226,7 +2227,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v11.75';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v11.76';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -3416,6 +3417,7 @@ async function pxCloudPull(force) {
       if (r.applied.indexOf('reading') >= 0) { try { statReading(); } catch (e) {} }   // v11.75
       if (r.applied.indexOf('budget') >= 0) { try { statOnBudget(); } catch (e) {} }   // v11.75
       if (r.applied.indexOf('gym') >= 0) { try { statGym(); } catch (e) {} }   // v11.75
+      if (r.applied.indexOf('fortnight') >= 0) { try { statFortnight(); } catch (e) {} }   // v11.76
     }
   } catch (e) {} finally { PX_CLOUD.busy = false; }
 }
@@ -5371,11 +5373,13 @@ function tickFortnightTimer() {
 function statFortnight() {
   todaySet('fort', null);
   try {
-    const raw = localStorage.getItem('fn_tracker_v5')
+    // v11.76 (Batch C2): the card data the app publishes in its contract first; its saved copy (fn_tracker_v5, then v4 / v3) only if there is no usable contract
+    const cc = pxContractCard('fortnight', c => c.data && Array.isArray(c.data.bundles));
+    const raw = cc ? null : (localStorage.getItem('fn_tracker_v5')
              || localStorage.getItem('fn_tracker_v4')
-             || localStorage.getItem('fn_tracker_v3');
-    if (!raw) { setCardStat('stat-fortnight', 'No data yet', 'muted'); return; }
-    const parsed = JSON.parse(raw);
+             || localStorage.getItem('fn_tracker_v3'));
+    if (!raw && !cc) { setCardStat('stat-fortnight', 'No data yet', 'muted'); return; }
+    const parsed = cc ? cc.card : JSON.parse(raw);
 
     // Mirrors app load(): handle envelope { data: { bundles } } and legacy flat { bundles }
     let bundles;
@@ -5621,7 +5625,7 @@ function statFortnight() {
       const skyHtml = '<div class="ft-sky" aria-hidden="true" style="grid-template-columns:repeat(' + Math.max(1, days.length) + ',minmax(0,1fr))">' +
         days.map(d => '<i class="' + (d.status ? 'd' : 'p') + (d.date === todayStr ? ' n' : '') + '" style="height:' +
           (d.status ? Math.max(10, Math.round(dayMin(d) / skyMax * 56)) : 12) + 'px"></i>').join('') + '</div>';
-      statEl.innerHTML = skyHtml + todayLine + timerLine + hBar + holLine;
+      statEl.innerHTML = skyHtml + todayLine + timerLine + hBar + holLine + (cc && cardAsOf(cc.built) ? '<div style="font-size:10px;color:var(--ink2);margin-top:4px">' + cardAsOf(cc.built).replace(' · ', '') + '</div>' : '');   // v11.76: stale contract shows its date
       todaySet('fort', doneCount + ' of ' + totalDays + ' days done', 'Fortnight · ' + m2hm(loggedMins) + ' of 70h', todayDay && !todayDay.status ? 'Due today' : hPct + '%');
     }
   } catch(e) {
