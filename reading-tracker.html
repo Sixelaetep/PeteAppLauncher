@@ -14,7 +14,7 @@
 // Apply any explicit global theme preference before first paint. v2.4
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Reading Tracker v3.107</title>
+<title>Reading Tracker v3.108</title>
 <style>
   :root {
     --bg:       #0E0D12;
@@ -1289,6 +1289,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 /* v3.83 (MR-068): Book List › Covers: looks up every existing book without a cover, shows a review list, and adds only the details you tick (cover, publisher, year, ISBN, pages if empty). Also: Find details now works with an author alone. */
 /* v3.82 (MR-067): Book List add form and edit panel can fetch book details by ISBN or title (Open Library, then Google Books): title, author, pages, publisher, year, genre and a cover, shown as a small cover and detail line on the Book List. New optional item fields isbn, coverId, coverUrl, publisher, publishYear, metaSource; manual entry unchanged. */
 /* v3.81 (MR-066): publishes a search list for the launcher's Universal Search (PalContract, key pal_x_reading): books from every tracker and the wishlist (title, author, genre, pages), stored in IndexedDB. Derived cache only; no data, storage, sync or backup change. */
+/* v3.108 (R31): the Reading contract no longer carries the whole wishlist. Finished books older than last month send only their reading days, unstarted inactive books are left out; the launcher shelf, week view, streak and reminder read the same result. Derived cache only; no data, storage, sync or backup change. */
 /* ═══ v3.80 (MR-065) — spine colour and icon ═══ */
 .sp-spine .ic { position: absolute; left: 50%; margin-left: -6px; width: 12px; height: 12px; color: var(--st); }
 .sp-spine .ic.top { top: 11px; } .sp-spine .ic.bot { bottom: 12px; }
@@ -1313,7 +1314,7 @@ body.wl-add-open #wlAddToggle { display: none; }
 <!-- ── Sticky top bar ── -->
 <div class="rt-topbar">
   <div class="rt-topbar-row">
-    <div class="rt-logo">My Reading <span>v3.107</span></div>
+    <div class="rt-logo">My Reading <span>v3.108</span></div>
     <div class="rt-topbar-right">
       <button class="sync-chip state-local" id="rtSyncBadge" onclick="openRtDataModal()" title="Sync status / Backup &amp; data"><span class="sync-chip-dot" id="rtSyncDot"></span><span id="rtSyncText">Local</span></button>
     </div>
@@ -2198,7 +2199,7 @@ body.wl-add-open #wlAddToggle { display: none; }
      getDateRange, getPeriodLabel) gave the PREVIOUS day for the whole of British Summer Time, because toISOString() converts to UTC. They now
      use localISODate() (PalShared.localISO from pal-shared.js 1.0.0, with an identical inline fallback). The pal-shared.js tag is moved from
      ?v=3.89 to ?v=3.100 so this file loads the 1.0.0 copy. -->
-<script src="pal-shared.js?v=3.107"></script>
+<script src="pal-shared.js?v=3.108"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v3.106 (Suite Phase 2 / Batch C1): the launcher card data (the Book List with its reading entries reduced to date and page, the tracker reading days, the cycle start date) now also travels inside the launcher contract (summary.card), so a second device shows the card, shelf and week view without opening this app. The stored data (reading-tracker-v6) is untouched. No data, storage, sync or backup change. -->
 <!-- v3.105 (D10): date inputs show dd/mm/yy via PalShared.ukDateInputs (pal-shared 1.4.0); the calendar button is a transparent native date input laid over the icon. -->
 <script>
@@ -3781,10 +3782,22 @@ function rtCardState() {
     const live = x => x && !x._deleted;
     const slim = list => { const m = {}; (list || []).forEach(e => { if (!e || typeof e.date !== 'string') return; const p = Number(e.pageTo), v = isFinite(p) && p > 0 ? p : 0; if (!(e.date in m) || v > m[e.date]) m[e.date] = v; });
       return Object.keys(m).sort().map(d => ({ date: d, pageTo: m[d] })); };
-    const wishlist = (appState.wishlist || []).filter(live).map(w => ({ id: w.id, title: w.title, type: w.type, pages: w.pages, manualComplete: w.manualComplete,
+    // v3.108 (R31): only what the launcher shows is sent in full. Finished books older than last month keep just their reading days (the week view and
+    // streak need those); unfinished books never started and not marked active are left out. The full wishlist (17 KB) was close to the 48 KB limit.
+    const n0 = new Date(), mk = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'), thisM = mk(n0), prevM = mk(new Date(n0.getFullYear(), n0.getMonth() - 1, 1));
+    const fullItem = w => ({ id: w.id, title: w.title, type: w.type, pages: w.pages, manualComplete: w.manualComplete,
       completedDate: w.completedDate, active: w.active, updatedAt: w.updatedAt, manualOrder: w.manualOrder, spineColor: w.spineColor, spineIcon: w.spineIcon,
       coverId: w.coverId, coverUrl: (typeof w.coverUrl === 'string' && /^https:\/\//.test(w.coverUrl) && w.coverUrl.length < 300) ? w.coverUrl : undefined,
-      shelfStyle: w.shelfStyle, readingEntries: slim(w.readingEntries) }));
+      shelfStyle: w.shelfStyle, readingEntries: slim(w.readingEntries) });
+    const wishlist = [];
+    let stub = null;
+    (appState.wishlist || []).filter(live).forEach(w => {
+      const ents = slim(w.readingEntries), done = !!w.completedDate, cm = done ? String(w.completedDate).slice(0, 7) : '';
+      if (done && cm !== thisM && cm !== prevM) { wishlist.push({ id: w.id, type: w.type, completedDate: w.completedDate, readingEntries: ents.map(e => ({ date: e.date })) }); return; }
+      if (!done && !ents.length && w.active !== true) { if (!stub) stub = { id: w.id, title: w.title, type: w.type }; return; }
+      wishlist.push(fullItem(w));
+    });
+    if (!wishlist.length && stub) wishlist.push(stub);
     const trackers = (appState.trackers || []).filter(live).map(t => ({ type: t.type, entries: Array.from(new Set((t.entries || []).filter(e => e && typeof e.date === 'string').map(e => e.date))).map(d => ({ date: d })) }));
     const mc = appState.monthlyConfig || null;
     return { wishlist, trackers, monthlyConfig: mc && mc.cycleStartDate ? { cycleStartDate: mc.cycleStartDate } : null };
@@ -3813,7 +3826,7 @@ function publishContract() {
       const last = new Date(n.getFullYear(), n.getMonth() + 1, 0), iso = mk + '-' + String(last.getDate()).padStart(2, '0');
       const cur = wl.filter(w => !w.completedDate && typeof window.rtIsActive === 'function' && window.rtIsActive(w)).sort((a, b) => (Number(a.manualOrder) || 0) - (Number(b.manualOrder) || 0))[0];
       const upcoming = finished ? [] : [{ id: 'reading-month-' + mk, date: iso, title: 'Month ends: aim is one full book', sub: 'No book finished yet' + (cur ? ' \u00b7 reading ' + cur.title : ''), kind: 'target', open: { view: 'books' } }];
-      window.PalContract.publish('reading', { upcoming: upcoming.length ? upcoming : undefined, summary: { card: rtCardState() }, app: '3.107', schema: '6' });   // v3.106 (Batch C1)
+      window.PalContract.publish('reading', { upcoming: upcoming.length ? upcoming : undefined, summary: { card: rtCardState() }, app: '3.108', schema: '6' });   // v3.106 (Batch C1)
     } catch (e) {}
   } catch (e) {}
 }
