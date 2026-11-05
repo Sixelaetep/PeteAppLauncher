@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.67</title>
+<title>P Apps v11.68</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1334,7 +1334,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.67</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.68</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1810,6 +1810,8 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  ADDED (Suite Phase 2 Batch B1, v11.68): the HTML Vault card reads the app's contract (app id vault, from the app or the cloud copy) and falls back to the
+  old pal_vault_stat cache for one release. Cloud pull now also fetches vault (PX_CLOUD_EXTRA); vault is not on the Today board.
   ADDED (Suite Phase 2 Batch A, v11.67): app summaries (contracts) are also kept in the cloud (table pal_contracts), so Today, Timeline and Needs attention can show current data even when the app has not run on this device. The launcher pulls them after sign-in and when it is shown again (at most once a minute), writes a cloud contract into the local pal_x_<app> key only if it is newer and belongs to the signed-in user, then redraws the board. bridgeCall() = the shared launcher side of PalBridge (nothing uses it yet). The backup-file check message shows its date as dd/mm/yy (D10). pal-shared.js tag moved from ?v=11.38 to ?v=11.67 (a launcher that kept an old cached copy would not have the new PalContract); pal-diag.js 1.2.0 adds a Contracts check. If the pal_contracts table does not exist the pull and the push quietly do nothing. No app change.
   CHANGED (Suite WP1.1, v11.66): backup manifest gains two additive fields per app, `appVersion` (version in the app's page title) and `library` (PalShared bundle the frame ran); existing `version` unchanged. Device check pal-diag.js 1.1.0 adds a Version check verdict. No other launcher behaviour changed.
   CHANGED (Suite WP0.2, v11.65): Device check pal-diag.js 1.0.1 — also reports apps nested inside other apps (Claims, Vault, Horizon) and shows a real contract age. No launcher behaviour changed; this release exists so the new pal-diag.js is fetched (its tag follows LAUNCHER_VERSION).
@@ -2203,7 +2205,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=11.67"></script>
+<script src="pal-shared.js?v=11.68"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2214,7 +2216,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v11.67';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v11.68';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -3353,14 +3355,27 @@ function pxRead() {
 // is the launcher's own (PX_APPS), so an unknown app id in the cloud is ignored. Throttled to once a minute; quiet when offline, signed out or when
 // the table does not exist yet (status is shown in the Device check).
 const PX_CLOUD = { busy: false, last: 0 };
+// v11.68 (Batch B1): apps whose contract is pulled from the cloud but which are not part of the Today / Timeline board.
+const PX_CLOUD_EXTRA = ['vault'];
+// v11.68: a card number older than a week gets its date, so a stale number is never shown as if it were fresh (D13). '' when fresh or unknown.
+function cardAsOf(iso) {
+  try {
+    const t = Date.parse(iso); if (!t || Date.now() - t < 7 * 86400000) return '';
+    const f = window.PalShared && window.PalShared.fmtDate;
+    return f ? ' · as of ' + f(new Date(t)) : '';
+  } catch (e) { return ''; }
+}
 async function pxCloudPull(force) {
   try {
     if (PX_CLOUD.busy || !window.PalContract || !window.PalContract.pullCloud || !sbSession || !pxUserId()) return;
     if (navigator.onLine === false) return;
     if (!force && Date.now() - PX_CLOUD.last < 60000) return;
     PX_CLOUD.busy = true; PX_CLOUD.last = Date.now();
-    const r = await window.PalContract.pullCloud({ apps: Object.keys(PX_APPS) });
-    if (r && r.applied && r.applied.length) { try { renderTodayBoard(); } catch (e) {} }
+    const r = await window.PalContract.pullCloud({ apps: Object.keys(PX_APPS).concat(PX_CLOUD_EXTRA) });
+    if (r && r.applied && r.applied.length) {
+      try { renderTodayBoard(); } catch (e) {}
+      if (r.applied.indexOf('vault') >= 0) { try { statVaultSub(); } catch (e) {} }   // v11.68
+    }
   } catch (e) {} finally { PX_CLOUD.busy = false; }
 }
 document.addEventListener('visibilitychange', function () { if (!document.hidden) pxCloudPull(false); });
@@ -7797,11 +7812,21 @@ function statClaimsSub() {
 // to Supabase), so this one summary is the only thing there is to
 // read.
 function statVaultSub() {
+  // v11.68 (Batch B1): the contract first (published by the app, or pulled from the cloud copy); the old pal_vault_stat cache only if there is
+  // no usable contract. The contract must belong to the signed-in user.
+  try {
+    const c = window.PalContract && window.PalContract.read('vault'), uid = pxUserId();
+    if (c && uid && c.userId === uid && c.summary && typeof c.summary.count === 'number') {
+      const n = c.summary.count;
+      setCardStat('stat-vault-sub', n + ' app' + (n === 1 ? '' : 's') + ' saved' + cardAsOf(c.built), '');
+      return;
+    }
+  } catch (e) {}
   try {
     const raw = localStorage.getItem('pal_vault_stat');
     if (!raw) { setCardStat('stat-vault-sub', 'Open app to load', 'muted'); return; }
     const d = JSON.parse(raw);
-    setCardStat('stat-vault-sub', (d.count||0) + ' app' + (d.count===1?'':'s') + ' saved', '');
+    setCardStat('stat-vault-sub', (d.count||0) + ' app' + (d.count===1?'':'s') + ' saved' + cardAsOf(d.updatedAt), '');
   } catch (e) {
     setCardStat('stat-vault-sub', 'Open app to load', 'muted');
   }
