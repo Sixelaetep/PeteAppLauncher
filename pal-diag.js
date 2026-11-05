@@ -9,7 +9,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.2.0';
+  var VERSION = '1.3.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -251,6 +251,23 @@
       else L.push('IndexedDB list: n/a');
       return Promise.all(p).then(function () { R.push(['Origin storage', L]); });
     }));
+    // 1.3.0: fonts - are they served from this site (fonts/pal-fonts.css) and loaded, and has anything gone to an outside font host?
+    jobs.push(Promise.resolve().then(function () {
+      var L = [];
+      var res = (performance.getEntriesByType && performance.getEntriesByType('resource')) || [];
+      var own = res.filter(function (e) { return /\/fonts\/[^\/]+\.(woff2|css)(\?|$)/.test(e.name); });
+      var ext = res.filter(function (e) { return /fonts\.(googleapis|gstatic)\.com/.test(e.name); });
+      L.push('font files fetched from this site (this page load): ' + own.length + (own.length ? ' (' + own.map(function (e) { return e.name.split('/').pop().split('?')[0]; }).join(', ') + ')' : ' (none: cached, or not requested)'));
+      L.push('requests to Google font hosts: ' + ext.length + (ext.length ? '  <-- UNEXPECTED' : ' (expected 0)'));
+      if (document.fonts && document.fonts.forEach) {
+        var faces = [];
+        document.fonts.forEach(function (f) { faces.push(f.family.replace(/["']/g, '') + ' ' + f.weight + ' ' + f.status); });
+        L.push('font faces: ' + (faces.length ? faces.join('; ') : 'none registered'));
+      }
+      var chk = function (q) { try { return document.fonts.check(q); } catch (e) { return 'n/a'; } };
+      L.push('DM Sans usable: ' + chk('16px "DM Sans"') + '; Bricolage Grotesque usable: ' + chk('16px "Bricolage Grotesque"'));
+      R.push(['Fonts', L]);
+    }));
     // service workers
     jobs.push(Promise.resolve().then(function () {
       if (!(navigator.serviceWorker && navigator.serviceWorker.getRegistrations)) { R.push(['Service workers', ['n/a']]); return; }
@@ -332,7 +349,7 @@
     try { c = collect(ctx); } catch (e) { running = false; show('Device check failed: ' + (e && e.message || e)); return Promise.resolve(); }
     return asyncSections(c.R).then(function () {
       // keep section order stable regardless of async completion order
-      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Service workers', 'Manifest and install'];
+      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Fonts', 'Service workers', 'Manifest and install'];
       c.R.sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
       show(toText(c.R));
     }).catch(function (e) { show('Device check failed: ' + (e && e.message || e)); })
