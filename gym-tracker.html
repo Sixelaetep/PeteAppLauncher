@@ -11,7 +11,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.144</title>
+<title>Gym Tracker v2.145</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230E0D12'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='800' font-size='15' fill='%23CBF55C' text-anchor='middle'>GY</text></svg>">
 <style>
   /* ═══════════════════════════════════════════════════════════════════
@@ -566,7 +566,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon" aria-hidden="true">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.144</div></span>
+      <span>Gym Tracker<div class="ver">v2.145</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1287,7 +1287,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.144"></script>
+<script src="pal-shared.js?v=2.145"></script>
+<!-- v2.145 (Suite Phase 2 / Batch C1): the launcher card data (this week and recent days only: sessions, plans, schedule, PT sessions, water and nutrition entries, targets) now also travels inside the launcher contract (summary.card), so a second device shows the card without opening this app. gym_tracker_v1 is untouched. No data, storage, sync or backup change. -->
 <!-- v2.144 (GYM-123): calendar day cards collapse: today open, other days collapsed, tap the card header to toggle (view-only, session-only). -->
 <!-- v2.143 (Suite WP1.3): pinch-zoom is allowed again (the viewport no longer locks the scale). -->
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v2.142 (D10): date inputs show dd/mm/yy via PalShared.ukDateInputs (pal-shared 1.4.0); the calendar button is a transparent native date input laid over the icon. -->
@@ -2004,7 +2005,7 @@
 // Full history for v2.32 through v2.90 (59 releases) has moved to
 // gym-tracker.md, kept alongside this file — nothing older than
 // v2.91 is duplicated here any more.
-const VERSION = '2.144';
+const VERSION = '2.145';
 const LS_KEY       = 'gym_tracker_v1'; // storage key retained across versions for continuity
 const GYM_XAPP_KEY = 'gym_pal_xapp';  // GYM-039: lightweight cross-app schedule summary
 
@@ -2267,6 +2268,32 @@ function save(envelope) {
   publishContract();   // v2.132 (GYM-118)
 }
 
+// v2.145 (Batch C1): what the launcher's Gym card needs, and nothing else: the last 21 days of sessions, PT sessions, water and nutrition
+// entries (the card shows today and this week), plus plans, schedule entries and targets. Same shape the launcher card reads (data.*).
+function gymCardState() {
+  try {
+    const d = _env.data || {}, live = x => x && !x._deleted;
+    const lim = new Date(); lim.setHours(0, 0, 0, 0); lim.setDate(lim.getDate() - 21);
+    const cutoff = lim.getFullYear() + '-' + String(lim.getMonth() + 1).padStart(2, '0') + '-' + String(lim.getDate()).padStart(2, '0');
+    const recent = x => String(x.date || '').slice(0, 10) >= cutoff;
+    const num = v => (v == null || v === '') ? undefined : Number(v);
+    const tg = (d.nutritionTargets || []).find(live) || {};
+    const wt = (d.waterTargets || []).find(live);
+    return { data: {
+      sessions: (d.sessions || []).filter(x => live(x) && recent(x)).map(x => ({ date: x.date, name: x.name, planId: x.planId })),
+      plans: (d.plans || []).filter(live).map(p => ({ id: p.id, name: p.name })),
+      scheduleEntries: (d.scheduleEntries || []).filter(live).map(e => ({ kind: e.kind, date: e.date, planId: e.planId, startDate: e.startDate, endDate: e.endDate,
+        exceptions: e.exceptions, freq: e.freq, days: e.days, interval: e.interval })),
+      ptSessions: (d.ptSessions || []).filter(x => live(x) && recent(x)).map(x => ({ date: x.date, ptName: x.ptName })),
+      waterEntries: (d.waterEntries || []).filter(x => live(x) && recent(x)).map(x => ({ date: x.date, volumeMl: num(x.volumeMl) })),
+      nutritionEntries: (d.nutritionEntries || []).filter(x => live(x) && recent(x)).map(x => ({ date: x.date, volumeMl: num(x.volumeMl), calories: num(x.calories), protein: num(x.protein) })),
+      nutritionTargets: [{ calories: num(tg.calories), protein: num(tg.protein), activeCalories: num(tg.activeCalories), restCalories: num(tg.restCalories),
+        activeProtein: num(tg.activeProtein), restProtein: num(tg.restProtein) }],
+      waterTargets: wt ? [{ dailyMl: num(wt.dailyMl) }] : []
+    } };
+  } catch (e) { return undefined; }
+}
+
 // v2.132 (GYM-118): planned sessions (one-off and repeating) for today .. +30 days that are not already done. Derived cache only.
 function publishContract() {
   try {
@@ -2290,7 +2317,7 @@ function publishContract() {
     (_env.data.plans || []).filter(p => !p._deleted && !p.archived).forEach(p => {
       search.push({ id: 'gym-plan-' + p.id, t: p.name, s: 'Plan', k: 'plan', open: { view: 'home' } });
     });
-    window.PalContract.publish('gym', { upcoming: upcoming.slice(0, 30) });
+    window.PalContract.publish('gym', { upcoming: upcoming.slice(0, 30), summary: { card: gymCardState() }, app: VERSION, schema: '1' });
     window.PalContract.publishSearch('gym', search, search.length);   // v2.133: IndexedDB, not localStorage
   } catch (e) {}
 }
