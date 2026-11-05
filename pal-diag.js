@@ -9,7 +9,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -86,12 +86,14 @@
         if (!o.userId) issues.push('no userId');
         var bt = Date.parse(o.built);
         if (isNaN(bt)) issues.push('no valid built time'); else if (Date.now() - bt > 7 * 864e5) issues.push('STALE (over 7 days)');
-        if (raw.length * 2 / 1024 > 48) issues.push('over 48 KB');
+        var pct = Math.round(raw.length * 2 / 1024 / 48 * 100);   // 1.4.0: share of the 48 KB limit the library puts on a stored contract
+        if (pct > 100) issues.push('over 48 KB');
+        else if (pct >= 80) issues.push('NEAR THE 48 KB LIMIT (' + pct + '%): above it the library silently keeps the older copy');
         meta = [o.app ? 'app ' + o.app : '', o.schema ? 'schema ' + o.schema : '', o.lib ? 'lib ' + o.lib : '',
                 o.caps ? 'caps ' + Object.keys(o.caps).length : ''].filter(Boolean).join(', ');
       }
       out.push({
-        key: k, bytes: raw.length, feed: isFeed, meta: meta, issues: issues,
+        key: k, bytes: raw.length, pct: (!isFeed && o) ? Math.round(raw.length * 2 / 1024 / 48 * 100) : null, feed: isFeed, meta: meta, issues: issues,
         v: o && (o.v || o.version || o.schema) || '?',
         uid: o && o.userId ? String(o.userId).slice(0, 8) : '-',
         age: ageOf(o)
@@ -200,7 +202,7 @@
 
     var ct = safe(contracts, []);
     sec('Contracts (pal_x_*)', ct.length ? ct.map(function (c) {
-      return c.key + ': ' + kb(c.bytes) + ', v' + c.v + ', user ' + c.uid + ', age ' + c.age +
+      return c.key + ': ' + kb(c.bytes) + (c.pct != null ? ' (' + c.pct + '% of the 48 KB limit)' : '') + ', v' + c.v + ', user ' + c.uid + ', age ' + c.age +
         (c.meta ? ' | ' + c.meta : (c.feed ? '' : ' | no app/schema/lib yet')) + (c.issues && c.issues.length ? ' | ISSUE: ' + c.issues.join('; ') : '');
     }) : ['none stored']);
 
