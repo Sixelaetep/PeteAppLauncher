@@ -3,6 +3,7 @@
  * storage-headroom probe that writes a scratch key and ALWAYS removes it again,
  * and (1.5.0, R32) the 'Old data' sheet, which can delete four known orphaned key
  * families only after a backup file has been downloaded and a second tap confirms.
+ * 1.7.0 (R34): a 'Restore check' sheet that tries the shared dialogs (PalUI) and runs the restore preview and report (PalSync.restorePreview / restoreReport) read-only against live tables.
  * 1.6.0 (R33): a contract marked stale (too large to store) or trimmed by the library is reported as an ISSUE / note in the Contracts section.
  * Produces a copyable plain-text report, format "device-check/1".
  * No network calls except a same-origin fetch of manifest.json. No secrets are
@@ -12,7 +13,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.6.0';
+  var VERSION = '1.7.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -366,6 +367,7 @@
     wrap.addEventListener('click', function (e) { if (e.target === wrap) close.click(); });
     bar.appendChild(copy);
     var oldN = safe(function () { return findOrphans().length; }, 0);
+    bar.appendChild(btn('Restore check', false, function () { wrap.remove(); document.removeEventListener('keydown', onKey); showRestoreCheck(function () { show(text); }); }));   // 1.7.0
     if (oldN) { bar.appendChild(btn('Old data (' + oldN + ')', false, function () { wrap.remove(); document.removeEventListener('keydown', onKey); showOldData(function () { show(text); }); })); }
     bar.appendChild(close);
     box.appendChild(h); box.appendChild(pre); box.appendChild(bar); wrap.appendChild(box);
@@ -430,6 +432,89 @@
     document.body.appendChild(wrap);
   }
 
+  /* -- 1.7.0 (R34): 'Restore check' sheet. Read only: it never writes to a table or to local storage. -- */
+  var RC_TABLES = ['gym_sessions', 'claim_entries', 'gym_plans'];
+  function runRestoreCheck(out) {
+    var S = window.PalSync, U = window.PalUI, lines = [];
+    if (!S || !S.restorePreview || !U) { out('PalSync.restorePreview / PalUI not loaded. This page has an older pal-shared.js.'); return Promise.resolve(); }
+    if (!S.hasSession || !S.hasSession()) { out('Not signed in, so the live tables cannot be read.'); return Promise.resolve(); }
+    var allPass = true, ran = 0;
+    function chk(name, got, want) { var ok = got === want; if (!ok) allPass = false; lines.push((ok ? '  ok   ' : '  FAIL ') + name + ': ' + got + (ok ? '' : ' (expected ' + want + ')')); }
+    var p = Promise.resolve();
+    RC_TABLES.forEach(function (t) {
+      p = p.then(function () {
+        return Promise.resolve(S.fetchTableRows(t)).then(function (rows) {
+          var live = rows.map(function (r) { return r.data; }).filter(function (d) { return d && d.id != null && d.id !== '' && !d._deleted; });
+          lines.push(t + ': ' + live.length + ' records');
+          if (live.length < 3) { lines.push('  skipped (needs at least 3 records)'); return; }
+          ran++;
+          var same = live.map(function (d) { return JSON.parse(JSON.stringify(d)); });
+          return S.restorePreview(t, same).then(function (a) {
+            if (!a.ok) { allPass = false; lines.push('  FAIL preview: ' + a.error); return; }
+            chk('same data: unchanged', a.counts.unchanged, live.length);
+            chk('same data: nothing else', a.counts.return + a.counts.replace + a.counts.keep + a.counts.deleted + a.counts.onlyCloud, 0);
+            var mut = same.map(function (d) { return JSON.parse(JSON.stringify(d)); });
+            mut.shift();
+            mut[0].__pal_check = 1; mut[0].updated_at = '2000-01-01T00:00:00.000Z';
+            mut[1].__pal_check = 1; mut[1].updated_at = '2999-01-01T00:00:00.000Z';
+            mut.push({ id: '__pal_check_fake__', title: 'Check record', updated_at: '2999-01-01T00:00:00.000Z' });
+            return S.restorePreview(t, mut).then(function (b) {
+              if (!b.ok) { allPass = false; lines.push('  FAIL preview 2: ' + b.error); return; }
+              chk('changed copy: only in cloud', b.counts.onlyCloud, 1);
+              chk('changed copy: cloud newer, kept', b.counts.keep, 1);
+              chk('changed copy: backup newer, replaced', b.counts.replace, 1);
+              chk('changed copy: missing from cloud, returns', b.counts.return, 1);
+              chk('changed copy: unchanged', b.counts.unchanged, live.length - 3);
+              return S.restoreReport(t, mut, b).then(function (r) {
+                if (!r.ok) { allPass = false; lines.push('  FAIL report: ' + r.error); return; }
+                chk('report: came back (nothing was restored, so none)', r.returned + ' of ' + r.returnedOf, '0 of 1');
+                chk('report: replaced (none)', r.replaced + ' of ' + r.replacedOf, '0 of 1');
+              });
+            });
+          });
+        }).catch(function (e) { lines.push(t + ': skipped (' + String(e && e.message || e).slice(0, 80) + ')'); });
+      });
+    });
+    return p.then(function () {
+      lines.unshift(ran ? (allPass ? 'RESTORE CHECK: PASS (' + ran + ' of ' + RC_TABLES.length + ' tables run)' : 'RESTORE CHECK: FAIL') : 'RESTORE CHECK: nothing to run (no table had 3 records)');
+      lines.push('', 'Read only: nothing was written to any table or to this device.');
+      out(lines.join('\n'));
+    });
+  }
+  function showRestoreCheck(back) {
+    var old = document.getElementById('palDiagSheet'); if (old) old.remove();
+    var wrap = document.createElement('div'); wrap.id = 'palDiagSheet';
+    wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true'); wrap.setAttribute('aria-label', 'Restore check');
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:20001;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;font-family:var(--f,system-ui,sans-serif)';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:var(--surface,#1b1a22);color:var(--ink,#f5f2ea);width:100%;max-width:720px;max-height:88vh;border-radius:22px 22px 0 0;display:flex;flex-direction:column;padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));box-sizing:border-box';
+    var h = document.createElement('div'); h.style.cssText = 'font:700 16px var(--fd,inherit);margin-bottom:8px'; h.textContent = 'Dialogs and restore check';
+    var pre = document.createElement('pre');
+    pre.style.cssText = 'flex:1;overflow:auto;margin:0 0 12px;font:12px/1.45 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.12);border-radius:12px;padding:10px';
+    pre.textContent = 'Try dialogs: opens the shared confirm and notice dialogs and a toast. Nothing is changed.\nRun restore check: reads three live tables and tests the restore preview and report on copies of their own data. Read only.';
+    var bar = document.createElement('div'); bar.style.cssText = 'display:flex;gap:8px';
+    function btn(label, primary, fn) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.style.cssText = 'flex:1;min-height:44px;border-radius:12px;border:1px solid var(--sep,#444);font:700 14px var(--f,inherit);cursor:pointer;' +
+        (primary ? 'background:var(--acc,#CBF55C);color:var(--accTx,#14130A);border-color:transparent' : 'background:transparent;color:inherit');
+      b.addEventListener('click', fn); return b;
+    }
+    var tryB = btn('Try dialogs', false, function () {
+      if (!window.PalUI) { pre.textContent = 'PalUI not loaded (older pal-shared.js).'; return; }
+      var log = [];
+      window.PalUI.confirm({ title: 'Restore Gym?', message: 'Restoring will bring back 4 items, replace 2, and keep 11 added since.', rows: [{ label: 'Will come back', value: 4, names: ['Push day', 'Pull day'] }, { label: 'Will be replaced by the backup', value: 2 }, { label: 'Added since the backup, kept', value: 11 }], okLabel: 'Restore', cancelLabel: 'Cancel', danger: true })
+        .then(function (v) { log.push('Sample confirm: ' + (v ? 'Restore chosen' : 'Cancelled') + ' (nothing was changed)'); return window.PalUI.notice({ title: 'Restore finished', message: 'Everything in the backup is now in the cloud copy.', rows: [{ label: 'Came back', value: '4 of 4' }], okLabel: 'OK' }); })
+        .then(function () { log.push('Sample notice closed'); window.PalUI.toast('Sample toast', { action: { label: 'Undo', onClick: function () { pre.textContent = log.concat(['Toast action tapped']).join('\n'); } } }); pre.textContent = log.join('\n') + '\nA toast is showing for a few seconds.'; });
+    });
+    var runB = btn('Run restore check', true, function () { pre.textContent = 'Reading tables...'; runRestoreCheck(function (t) { pre.textContent = t; }); });
+    var close = btn('Back', false, function () { wrap.remove(); document.removeEventListener('keydown', onKey); if (back) back(); });
+    function onKey(e) { if (e.key === 'Escape' && !document.querySelector('[role=dialog][aria-modal=true][aria-labelledby], [role=alertdialog]')) close.click(); }
+    document.addEventListener('keydown', onKey);
+    bar.appendChild(tryB); bar.appendChild(runB); bar.appendChild(close);
+    box.appendChild(h); box.appendChild(pre); box.appendChild(bar); wrap.appendChild(box);
+    document.body.appendChild(wrap);
+  }
+
   var running = false;
   function run(ctx) {
     if (running) return Promise.resolve();
@@ -446,5 +531,5 @@
       .then(function () { running = false; });
   }
 
-  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, run: run, _collect: collect, _probe: probeHeadroom, _text: toText };
+  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, _restoreCheck: showRestoreCheck, _runRestoreCheck: runRestoreCheck, run: run, _collect: collect, _probe: probeHeadroom, _text: toText };
 })();

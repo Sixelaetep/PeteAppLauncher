@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.6.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.7.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -1023,6 +1023,215 @@ window.PalBridge = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
+// SECTION 4d of 5 — PalRestore + PalUI (bundle 1.7.0, 5 Nov 2026, Suite Phase 3, R34). ADDITIVE and OPT-IN: no app calls anything here yet.
+// ══════════════════════════════════════════════════════════════════
+/**
+ * PalSync.restorePreview(tableName, backupRecords, opts)  (decision D11, design in Phase2Close.md 2.4). Read only: it fetches this user's cloud rows
+ *   and says what restoring `backupRecords` would do, record by record. Never writes. Resolves { ok:true, ... } or { ok:false, error } (no session,
+ *   offline, table error), so the caller can fall back to a plain confirmation.
+ *   opts: idField 'id' | updatedAtField 'updated_at' (the same two names pull() takes) | prefix '' | shared false (as table()) |
+ *         authoritative false (true = the app's restore re-stamps its records so the backup wins; Gym and Reading) | label fn(record) -> name | maxNames 5
+ *   Groups (counts, first names, and ids for the later report):
+ *     return     in the backup but not in the cloud, or deleted in the cloud before the backup's time (or always when authoritative)
+ *     replace    in both, different, and the backup is newer (or authoritative)
+ *     keep       in both, different, and the cloud is newer or the same age: the cloud copy stays
+ *     deleted    deleted in the cloud after the backup's time: stays deleted
+ *     onlyCloud  in the cloud (not deleted) but not in the backup: added since, a restore never removes these
+ *     unchanged  identical apart from the timestamp
+ *   Ties go to the cloud, matching pull() (last write wins, the cloud copy on equal stamps).
+ * PalSync.restoreReport(tableName, backupRecords, preview, opts)  after the restore AND the next completed sync: fetches again and says how many of the
+ *   records predicted to return / be replaced are now in the cloud as the backup had them. { ok, returned, returnedOf, replaced, replacedOf, notReturned[], notReplaced[] }.
+ * PalUI (small, self-contained, styled from the page's own colours and font so each app keeps its identity):
+ *   confirm({ title, message, rows:[{label,value,names?}], okLabel, cancelLabel, danger, hideCancel }) -> Promise<boolean>   (Esc, backdrop or Cancel = false)
+ *   notice({ title, message, rows, okLabel }) -> Promise<true>
+ *   toast(message, { ms, action:{label,onClick} })       one at a time, role=status
+ *   restoreSummary(counts, noun) -> "Restoring will bring back 4 items, replace 2, and keep 11 added since."
+ *   confirmRestore({ app, preview, noun, extra }) -> Promise<boolean>     the warning before a restore; with an { ok:false } preview it says the cloud could not be checked
+ *   showRestoreReport({ app, report, noun }) -> Promise<true>             the message after
+ * Sheet, loading and error components are deliberately not here yet: no app needs them, and unused abstraction is what the programme avoids.
+ */
+(function () {
+  if (!window.PalSync) return;
+  function canon(v) {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v);
+    if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+    return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+  }
+  function bare(o, upF) {
+    var c = {}; Object.keys(o || {}).forEach(function (k) { if (k !== upF && k !== 'updated_at' && k !== 'updatedAt') c[k] = o[k]; });
+    return c;
+  }
+  function stampOf(rec, upF, row) { var v = rec && rec[upF]; return v ? String(v) : (row && row.updated_at ? String(row.updated_at) : ''); }
+  function opt(o) {
+    o = o || {};
+    return { idF: o.idField || 'id', upF: o.updatedAtField || 'updated_at', prefix: o.prefix || '', shared: !!o.shared, auth: !!o.authoritative,
+      max: o.maxNames > 0 ? o.maxNames : 5, label: typeof o.label === 'function' ? o.label : function (r) { return r.title || r.name || r.label || r.id; } };
+  }
+  function lbl(o, r) { try { var s = o.label(r); return String(s == null ? r[o.idF] : s).slice(0, 60); } catch (e) { return String(r[o.idF]); } }
+  function cloudMap(rows, o) {
+    var m = {};
+    rows.forEach(function (row) {
+      if (o.prefix && String(row.record_key).indexOf(o.prefix) !== 0) return;
+      var d = row.data; if (!d || d[o.idF] == null || d[o.idF] === '') return;
+      m[String(d[o.idF])] = { data: d, row: row };
+    });
+    return m;
+  }
+  function fetchCloud(tableName, o) {
+    return Promise.resolve(window.PalSync.fetchTableRows(tableName, { shared: o.shared })).then(function (rows) { return { ok: true, rows: rows }; },
+      function (e) { return { ok: false, error: String(e && e.message || e).slice(0, 160) }; });
+  }
+  function restorePreview(tableName, backup, opts) {
+    var o = opt(opts);
+    if (!window.PalSync.hasSession || !window.PalSync.hasSession()) return Promise.resolve({ ok: false, error: 'no session' });
+    if (!Array.isArray(backup)) return Promise.resolve({ ok: false, error: 'no backup records' });
+    return fetchCloud(tableName, o).then(function (f) {
+      if (!f.ok) return f;
+      var cloud = cloudMap(f.rows, o), seen = {};
+      var G = { return: [], replace: [], keep: [], deleted: [], onlyCloud: [], unchanged: [] }, N = { return: [], replace: [], keep: [], deleted: [], onlyCloud: [], unchanged: [] };
+      function add(g, id, name) { G[g].push(id); if (N[g].length < o.max) N[g].push(name); }
+      var skipped = 0;
+      backup.forEach(function (b) {
+        if (!b || b[o.idF] == null || b[o.idF] === '' || b._deleted) { skipped++; return; }
+        var id = String(b[o.idF]), c = cloud[id], bs = stampOf(b, o.upF), name = lbl(o, b);
+        seen[id] = 1;
+        if (!c) { add('return', id, name); return; }
+        var cs = stampOf(c.data, o.upF, c.row);
+        if (c.data._deleted) { if (o.auth || bs > cs) add('return', id, name); else add('deleted', id, name); return; }
+        if (canon(bare(b, o.upF)) === canon(bare(c.data, o.upF))) { add('unchanged', id, name); return; }
+        if (o.auth || bs > cs) add('replace', id, name); else add('keep', id, name);
+      });
+      Object.keys(cloud).forEach(function (id) { if (!seen[id] && !cloud[id].data._deleted) add('onlyCloud', id, lbl(o, cloud[id].data)); });
+      var counts = {}; Object.keys(G).forEach(function (g) { counts[g] = G[g].length; });
+      return { ok: true, table: tableName, at: new Date().toISOString(), total: backup.length, skipped: skipped, authoritative: o.auth, counts: counts, names: N, ids: G };
+    });
+  }
+  function restoreReport(tableName, backup, preview, opts) {
+    var o = opt(opts);
+    if (!preview || !preview.ok) return Promise.resolve({ ok: false, error: 'no preview' });
+    return fetchCloud(tableName, o).then(function (f) {
+      if (!f.ok) return f;
+      var cloud = cloudMap(f.rows, o), by = {};
+      (backup || []).forEach(function (b) { if (b && b[o.idF] != null) by[String(b[o.idF])] = b; });
+      function now(id) { var b = by[id], c = cloud[id]; return !!(b && c && !c.data._deleted && canon(bare(b, o.upF)) === canon(bare(c.data, o.upF))); }
+      var r = { ok: true, returned: 0, returnedOf: preview.ids.return.length, replaced: 0, replacedOf: preview.ids.replace.length, notReturned: [], notReplaced: [] };
+      preview.ids.return.forEach(function (id) { if (now(id)) r.returned++; else if (r.notReturned.length < o.max) r.notReturned.push(lbl(o, by[id] || { id: id })); });
+      preview.ids.replace.forEach(function (id) { if (now(id)) r.replaced++; else if (r.notReplaced.length < o.max) r.notReplaced.push(lbl(o, by[id] || { id: id })); });
+      return r;
+    });
+  }
+  window.PalSync.restorePreview = restorePreview;
+  window.PalSync.restoreReport = restoreReport;
+
+  // ── PalUI ──────────────────────────────────────────────────────────────────
+  var queue = Promise.resolve(), toastEl = null, toastTm = 0;
+  function rgb(s) { var m = /rgba?\(\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)(?:[ ,/]+([\d.]+))?/.exec(s || ''); return m ? [+m[1], +m[2], +m[3], m[4] == null ? 1 : +m[4]] : null; }
+  function theme() {
+    var cs = null, bg = null, el = document.body || document.documentElement;
+    try { cs = getComputedStyle(el); bg = rgb(cs.backgroundColor); if (!bg || bg[3] === 0) bg = rgb(getComputedStyle(document.documentElement).backgroundColor); } catch (e) {}
+    var dark = false; try { dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) {}
+    if (!bg || bg[3] === 0) bg = dark ? [24, 24, 28, 1] : [255, 255, 255, 1];
+    var fg = (cs && rgb(cs.color)) || (bg[0] + bg[1] + bg[2] < 380 ? [240, 240, 240, 1] : [20, 20, 20, 1]);
+    var c = function (a, al) { return 'rgba(' + a[0] + ',' + a[1] + ',' + a[2] + ',' + (al == null ? 1 : al) + ')'; };
+    return { bg: c(bg), fg: c(fg), line: c(fg, .28), soft: c(fg, .08), muted: c(fg, .7), font: (cs && cs.fontFamily) || 'system-ui,sans-serif' };
+  }
+  function mk(tag, css, text) { var e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; }
+  function dialog(o, single) {
+    return new Promise(function (resolve) {
+      var t = theme(), prev = document.activeElement, id = 'palui' + Date.now();
+      var wrap = mk('div', 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;font-family:' + t.font);
+      var box = mk('div', 'background:' + t.bg + ';color:' + t.fg + ';border:1px solid ' + t.line + ';border-radius:14px;width:100%;max-width:420px;max-height:85vh;overflow:auto;padding:18px 18px 14px;box-sizing:border-box;box-shadow:0 12px 40px rgba(0,0,0,.45);font-size:16px;line-height:1.45');
+      box.setAttribute('role', single || o.hideCancel ? 'alertdialog' : 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-labelledby', id + 't');
+      var h = mk('div', 'font-size:18px;font-weight:600;margin:0 0 8px', o.title || 'Are you sure?'); h.id = id + 't'; box.appendChild(h);
+      if (o.message) { var p = mk('div', 'margin:0 0 10px;color:' + t.muted, o.message); p.id = id + 'm'; box.setAttribute('aria-describedby', id + 'm'); box.appendChild(p); }
+      (o.rows || []).forEach(function (r) {
+        var row = mk('div', 'border-top:1px solid ' + t.line + ';padding:8px 0');
+        var top = mk('div', 'display:flex;justify-content:space-between;gap:12px');
+        top.appendChild(mk('span', '', r.label)); top.appendChild(mk('span', 'font-weight:600', String(r.value)));
+        row.appendChild(top);
+        if (r.names && r.names.length) row.appendChild(mk('div', 'font-size:13px;color:' + t.muted + ';margin-top:2px', r.names.join(', ')));
+        box.appendChild(row);
+      });
+      var bar = mk('div', 'display:flex;gap:10px;margin-top:14px;flex-wrap:wrap');
+      function done(v) { document.removeEventListener('keydown', onKey, true); wrap.remove(); try { prev && prev.focus && prev.focus(); } catch (e) {} resolve(v); }
+      function btn(label, kind, v) {
+        var b = mk('button', 'flex:1;min-width:110px;min-height:44px;border-radius:10px;font:600 16px ' + t.font + ';cursor:pointer;padding:8px 14px;' +
+          (kind === 'danger' ? 'background:#c62828;color:#fff;border:1px solid #c62828' : kind === 'primary' ? 'background:' + t.fg + ';color:' + t.bg + ';border:1px solid ' + t.fg : 'background:transparent;color:' + t.fg + ';border:1px solid ' + t.line), label);
+        b.type = 'button'; b.addEventListener('click', function () { done(v); }); return b;
+      }
+      var cancel = (single || o.hideCancel) ? null : btn(o.cancelLabel || 'Cancel', 'plain', false);
+      var ok = btn(o.okLabel || 'OK', o.danger ? 'danger' : 'primary', true);
+      if (cancel) bar.appendChild(cancel); bar.appendChild(ok); box.appendChild(bar); wrap.appendChild(box);
+      wrap.addEventListener('mousedown', function (e) { if (e.target === wrap && cancel) done(false); });
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(cancel ? false : true); return; }
+        if (e.key === 'Tab') {
+          var f = [].slice.call(box.querySelectorAll('button')); if (!f.length) return;
+          var i = f.indexOf(document.activeElement);
+          if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+        }
+      }
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(wrap);
+      (o.danger && cancel ? cancel : ok).focus();
+    });
+  }
+  function enqueue(fn) { var p = queue.then(fn, fn); queue = p.then(function () {}, function () {}); return p; }
+  function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
+  function restoreSummary(c, noun) {
+    noun = noun || 'item'; c = c || {};
+    var a = [];
+    if (c.return) a.push('bring back ' + plural(c.return, noun));
+    if (c.replace) a.push('replace ' + c.replace);
+    if (c.keep) a.push('keep ' + c.keep + ' that changed since');
+    if (c.deleted) a.push('leave ' + c.deleted + ' deleted since');
+    if (c.onlyCloud) a.push('keep ' + c.onlyCloud + ' added since');
+    if (!a.length) return 'Restoring will not change anything.';
+    var last = a.pop();
+    return 'Restoring will ' + (a.length ? a.join(', ') + ', and ' : '') + last + '.';
+  }
+  function previewRows(p, noun) {
+    var c = p.counts, n = p.names, rows = [];
+    function add(g, label) { if (c[g]) rows.push({ label: label, value: c[g], names: n[g] }); }
+    add('return', 'Will come back'); add('replace', 'Will be replaced by the backup'); add('keep', 'Kept as they are now (newer)');
+    add('deleted', 'Stay deleted'); add('onlyCloud', 'Added since the backup, kept'); add('unchanged', 'Already the same');
+    return rows;
+  }
+  window.PalUI = {
+    VERSION: 1,
+    confirm: function (o) { return enqueue(function () { return dialog(o || {}, false); }); },
+    notice: function (o) { return enqueue(function () { return dialog(o || {}, true); }); },
+    toast: function (message, o) {
+      o = o || {};
+      try {
+        var t = theme(); if (toastEl) toastEl.remove(); clearTimeout(toastTm);
+        var el = mk('div', 'position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:2147483001;max-width:min(92vw,420px);background:' + t.fg + ';color:' + t.bg + ';border-radius:10px;padding:10px 14px;font:500 15px/1.4 ' + t.font + ';display:flex;gap:12px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.35)');
+        el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite');
+        el.appendChild(mk('span', '', message));
+        if (o.action && o.action.label) { var b = mk('button', 'background:none;border:0;color:inherit;text-decoration:underline;font:600 15px ' + t.font + ';min-height:32px;cursor:pointer;padding:0 4px', o.action.label); b.type = 'button'; b.addEventListener('click', function () { el.remove(); toastEl = null; try { o.action.onClick && o.action.onClick(); } catch (e) {} }); el.appendChild(b); }
+        document.body.appendChild(el); toastEl = el;
+        toastTm = setTimeout(function () { if (toastEl === el) { el.remove(); toastEl = null; } }, o.ms || 3500);
+      } catch (e) {}
+    },
+    restoreSummary: restoreSummary,
+    confirmRestore: function (o) {
+      o = o || {}; var p = o.preview;
+      if (!p || !p.ok) return window.PalUI.confirm({ title: 'Restore ' + (o.app || 'this backup') + '?', message: "Couldn't check the cloud copy" + (p && p.error ? ' (' + p.error + ')' : '') + ", so there's no preview of what will change. The restore will run as usual." + (o.extra ? ' ' + o.extra : ''), okLabel: 'Restore', cancelLabel: 'Cancel' });
+      return window.PalUI.confirm({ title: 'Restore ' + (o.app || 'this backup') + '?', message: restoreSummary(p.counts, o.noun) + (p.authoritative ? ' This restore replaces the cloud copy of those.' : ' The cloud copy stays in charge where it is newer.') + (o.extra ? ' ' + o.extra : ''), rows: previewRows(p, o.noun), okLabel: 'Restore', cancelLabel: 'Cancel', danger: !!(p.counts.replace || p.counts.return) });
+    },
+    showRestoreReport: function (o) {
+      o = o || {}; var r = o.report;
+      if (!r || !r.ok) return window.PalUI.notice({ title: 'Restore finished', message: "Couldn't check the cloud copy afterwards. Open the app on another device to see the result.", okLabel: 'OK' });
+      var rows = [];
+      if (r.returnedOf) rows.push({ label: 'Came back', value: r.returned + ' of ' + r.returnedOf, names: r.notReturned.length ? ['not back: ' + r.notReturned.join(', ')] : null });
+      if (r.replacedOf) rows.push({ label: 'Replaced by the backup', value: r.replaced + ' of ' + r.replacedOf, names: r.notReplaced.length ? ['kept as before: ' + r.notReplaced.join(', ')] : null });
+      var all = r.returned === r.returnedOf && r.replaced === r.replacedOf;
+      return window.PalUI.notice({ title: 'Restore finished', message: rows.length ? (all ? 'Everything in the backup is now in the cloud copy.' : 'Some records stayed as they were because the cloud copy was newer or deleted.') : 'Nothing needed to change.', rows: rows, okLabel: 'OK' });
+    }
+  };
+})();
+
+// ══════════════════════════════════════════════════════════════════
 // SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.4.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
 
@@ -1032,6 +1241,7 @@ window.PalBridge = (function () {
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
+ *             1.7.0 (Suite Phase 3, R34) new section 4d: PalSync.restorePreview / restoreReport (read-only restore preview and report, D11) and PalUI (confirm, notice, toast, restore dialogs). Additive; no app calls them yet.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -1255,8 +1465,8 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.6.0';
-  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0' };
+  api.VERSION = '1.7.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0', restore: '1.0', ui: '1.0' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
   return api;
