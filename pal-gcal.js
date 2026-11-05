@@ -1,5 +1,5 @@
 /*
- * pal-gcal.js — PGC-002 (v4, R36: fewer sign-in prompts — the token is kept across reloads until it expires, automatic renewals use prompt 'none' so they never show a screen, a manual sign-in only shows the consent screen the first time, an expired token is renewed quietly before an API call and when the app comes back to the foreground, and a renewal that fails is reported through onAuthError; optional init option loginHint. All additive; v3 callers behave as before; v2: updateEvent gains optional expectEtag, GIG-102;
+ * pal-gcal.js — PGC-002 (v4.1, R36.1: an automatic renewal never fires without a tap — Google's renewal opens a small window and the browser's popup blocker asks 'allow pop-ups?' when that happens on its own, so a renewal now waits for the next tap or key press and runs inside it; requestTokenRefresh does nothing while the token is still good. v4, R36: fewer sign-in prompts — the token is kept across reloads until it expires, automatic renewals use prompt 'none' so they never show a screen, a manual sign-in only shows the consent screen the first time, an expired token is renewed quietly before an API call and when the app comes back to the foreground, and a renewal that fails is reported through onAuthError; optional init option loginHint. All additive; v3 callers behave as before; v2: updateEvent gains optional expectEtag, GIG-102;
  * v3: listEvents gains singleEvents/showDeleted/updatedMin options and listInstances is added, GIG-115 —
  * all optional, defaults unchanged, so existing callers behave exactly as before)
  * ─────────────────────────────────────────────────────────────────────────
@@ -105,14 +105,36 @@ window.PalGCal = (function () {
 
   // v4: ask for a token without showing anything. prompt 'none' makes Google answer
   // with an error instead of a sign-in or consent screen. Resolves true/false.
+  // v4.1: Google still opens a small window for the request, and a browser blocks (or asks about)
+  // a window opened without a tap. So the request is only made inside a tap or key press: now if
+  // one is in progress, otherwise on the next one. A caller that cannot wait gets false after 8 s.
+  let _armed = false;
+  function _gestureActive() { try { return !!(navigator.userActivation && navigator.userActivation.isActive); } catch (e) { return false; } }
+  function _fireQuiet() {
+    clearTimeout(_silentTimer);
+    _silentTimer = setTimeout(function () { _settle(false); }, 8000);
+    try { _tokenClient.requestAccessToken({ prompt: 'none' }); } catch (e) { _settle(false); }
+  }
+  function _onGesture() {
+    document.removeEventListener('pointerdown', _onGesture, true);
+    document.removeEventListener('keydown', _onGesture, true);
+    _armed = false;
+    if (!_tokenClient || hasToken() && (_tokenExpiresAt - Date.now()) > EXPIRY_MARGIN_MS) return;
+    _fireQuiet();
+  }
+  function _armGesture() {
+    if (_armed) return;
+    _armed = true;
+    document.addEventListener('pointerdown', _onGesture, true);
+    document.addEventListener('keydown', _onGesture, true);
+  }
   function _renewQuietly() {
     return new Promise(function (resolve) {
       if (!_tokenClient) { resolve(false); return; }
       _pending.push(resolve);
-      if (_pending.length > 1) return;                 // a renewal is already in flight
-      clearTimeout(_silentTimer);
-      _silentTimer = setTimeout(function () { _settle(false); }, 8000);
-      try { _tokenClient.requestAccessToken({ prompt: 'none' }); } catch (e) { _settle(false); }
+      if (_gestureActive()) { _fireQuiet(); return; }
+      _armGesture();
+      if (_pending.length === 1) { clearTimeout(_silentTimer); _silentTimer = setTimeout(function () { _settle(false); }, 8000); }
     });
   }
   function _settle(ok) {
@@ -204,6 +226,7 @@ window.PalGCal = (function () {
   // browser session itself has gone). Exposed for a UI "Reconnect" button.
   function requestTokenRefresh() {
     if (!_tokenClient) { _onAuthError('not-initialised'); return; }
+    if (hasToken() && (_tokenExpiresAt - Date.now()) > EXPIRY_MARGIN_MS) return;   // v4.1: still good, nothing to do
     _renewQuietly();   // v4: prompt 'none' — quiet, no screen
   }
 
