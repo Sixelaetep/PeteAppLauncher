@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.86</title>
+<title>P Apps v11.87</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1349,7 +1349,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.86</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.87</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1825,6 +1825,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (R33, v11.87): Needs attention warns when an app's summary (contract) is at 80% or more of the 48 KB limit (amber; red from 95%) or when the library could not store it and marked it stale (red); the app's card freshness line then reads "Could not update" with the last good time. Pete only; part of the Sync and storage warnings switch. Needs pal-shared.js 1.6.0 (trim ladder and stale marker) and pal-diag.js 1.6.0. No app change.
   CHANGED (R32, v11.86): Device check (pal-diag.js 1.5.0) lists keys left behind by retired apps (ehub.db.v2, meal_planner_data, fs_v1, pt_companion_v1_*) and adds an Old data sheet: download a backup file first, then delete with a second tap (Clean-up gate, D19). Nothing else in the launcher changed.
   CHANGED (R30, v11.85): Gym quick-add reads the saved foods and drinks from Gym v2.149's own contract (gymlists, pulled from the cloud as well), falling back to the Gym card contract of v2.146 to v2.148. Needs gym-tracker.html v2.149 for the smaller Gym card contract.
   CHANGED (R29, v11.84): Device check (pal-diag.js 1.4.0) shows how much of the 48 KB limit each stored contract uses and flags any at 80% or more (the library silently keeps the older copy of a contract that is too large). Launcher otherwise unchanged.
@@ -2242,7 +2243,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=11.86"></script>
+<script src="pal-shared.js?v=11.87"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2253,7 +2254,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v11.86';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v11.87';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -3895,6 +3896,31 @@ function pxFantasyLock(cmap, now) {
     sub: 'Deadline ' + pxDayLabel(u.date) + (u.time ? ' ' + u.time : '') + ' · lock in your squad in Next Week', due: u.date, open: { view: 'nextweek' }, p: 1 }];
 }
 
+// R33 v11.87: an app summary (contract) near or over the 48 KB limit. The library keeps the older copy of a contract that is too large, so the card goes
+// quietly out of date; the stored contract is the only thing the launcher can measure, so 80% or more is the warning (same threshold as the Device check) and
+// a `stale` note (written by pal-shared.js 1.6.0 when a publish was refused) is the proof it has stopped updating. Pete only: he is the one who can slim it.
+// Ids carry no date, so Postpone / Clear stick; the id changes with the level (warn, full, stale), so it comes back when it gets worse.
+const PX_CONTRACT_LABEL = { gigs: 'Gigs & Trips', budget: 'On Budget', claims: 'Claim Tracker', gym: 'Gym Tracker', fortnight: '9-Day Fortnight', fantasy: 'Fantasy Football', screen: 'Film & TV', reading: 'Reading Tracker', vault: 'HTML Vault', horizon: 'Horizon', gymlists: 'Gym lists' };
+function pxContractSizeItems() {
+  const out = [];
+  try {
+    if (!currentUser || !currentUser.isPete) return out;
+    const uid = pxUserId(); if (!uid) return out;
+    Object.keys(PX_CONTRACT_LABEL).forEach(function (app) {
+      let raw = null, c = null;
+      try { raw = localStorage.getItem('pal_x_' + app); c = raw ? JSON.parse(raw) : null; } catch (e) { return; }
+      if (!c || c.v !== 1 || c.appId !== app || c.userId !== uid) return;
+      const pct = Math.round(raw.length * 2 / 1024 / 48 * 100), label = PX_CONTRACT_LABEL[app], stale = !!(c.stale && c.stale.reason === 'too-large');
+      if (stale)
+        out.push({ app: 'platform', id: 'p:contract:' + app + ':stale', level: 'action', title: label + ' could not update', p: 1,
+          sub: 'Its summary grew past the size limit (' + (c.stale.kb || '?') + ' KB of 48), so the card is showing older data. It needs slimming down.', due: '' });
+      else if (pct >= 80)
+        out.push({ app: 'platform', id: 'p:contract:' + app + ':' + (pct >= 95 ? 'full' : 'warn'), level: pct >= 95 ? 'action' : 'soon', title: label + ' summary is nearly full', p: 1,
+          sub: pct + '% of the size limit. At 100% the card stops updating and shows older data. Device check shows the detail.', due: '' });
+    });
+  } catch (e) {}
+  return out;
+}
 // Platform warnings: changes still waiting to sync (the persisted retry queue, only once it has been there 3 minutes) and browser storage.
 function pxHealthItems(now) {
   const out = [];
@@ -3913,6 +3939,7 @@ function pxHealthItems(now) {
       PX_HEALTH.storAt = now.getTime();
       PX_HEALTH.stor = window.PalSync && window.PalSync.storageUsage ? window.PalSync.storageUsage() : null;
     }
+    pxContractSizeItems().forEach(function (it) { out.push(it); });   // R33 v11.87
     const su = PX_HEALTH.stor;
     if (su && su.totalKB >= 4096) {
       const big = su.keys && su.keys[0], act = su.totalKB >= 4700, pct = Math.min(99, Math.round(su.totalKB / 5120 * 100));
@@ -4005,7 +4032,7 @@ function pxAgo(ms) {
   if (m < 1440) return Math.floor(m / 60) + ' h ago';
   return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
-function pxFreshText(at, mode) { return (mode === 2 ? 'Synced from the cloud' : mode ? 'Live from FPL' : 'From the app') + (at ? ' · ' + pxAgo(at) : ''); }   // PET-164: mode 0 app, 1 FPL, 2 cloud
+function pxFreshText(at, mode) { return (mode === 3 ? 'Could not update · last good' : mode === 2 ? 'Synced from the cloud' : mode ? 'Live from FPL' : 'From the app') + (at ? ' · ' + pxAgo(at) : ''); }   // PET-164: mode 0 app, 1 FPL, 2 cloud; R33: 3 = summary over the size limit, card shows older data
 function pxFreshTick() {
   try { document.querySelectorAll('.pxFresh').forEach(function (el) { el.textContent = pxFreshText(Number(el.getAttribute('data-at')), Number(el.getAttribute('data-live'))); }); } catch (e) {}
 }
@@ -4215,6 +4242,7 @@ function pxRenderChips() {
     else if (cm[app] && cm[app].built) {
       at = Date.parse(cm[app].built) || 0; has = at > 0;
       const wt = pxWarmAt(app); if (has && wt > at) { at = wt; mode = 2; }   // PET-164 v11.57: refreshed from the cloud more recently than the app last published
+      if (has && cm[app].stale && cm[app].stale.reason === 'too-large') { at = Date.parse(cm[app].built) || at; mode = 3; }   // R33 v11.87
     }
     let chip = card.querySelector('.card-fresh');
     if (!has) { if (chip) chip.remove(); return; }
@@ -4231,8 +4259,8 @@ function pxRenderChips() {
     }
     chip.setAttribute('data-at', String(at)); chip.setAttribute('data-live', String(mode));
     chip.textContent = pxFreshText(at, mode);
-    chip.classList.toggle('warn', mode === 0 && at > 0 && Date.now() - at > 2 * 86400000);
-    chip.title = mode === 2 ? 'The launcher loaded this app out of sight and let it sync from the cloud.' : app === 'fantasy' && mode === 1 ? 'Read from FPL by the launcher. Tap to refresh now.' : app === 'fantasy' ? 'From the Fantasy Football Tracker. Tap to read FPL now.' : 'The last time this app ran on this device. Open it to refresh.';
+    chip.classList.toggle('warn', mode === 3 || (mode === 0 && at > 0 && Date.now() - at > 2 * 86400000));
+    chip.title = mode === 3 ? 'This app\'s summary is over the size limit, so the launcher could not store the latest one. The card shows the last good data.' : mode === 2 ? 'The launcher loaded this app out of sight and let it sync from the cloud.' : app === 'fantasy' && mode === 1 ? 'Read from FPL by the launcher. Tap to refresh now.' : app === 'fantasy' ? 'From the Fantasy Football Tracker. Tap to read FPL now.' : 'The last time this app ran on this device. Open it to refresh.';
   });
 }
 function pxRenderBadges(items) {

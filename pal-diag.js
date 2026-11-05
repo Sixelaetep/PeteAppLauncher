@@ -3,6 +3,7 @@
  * storage-headroom probe that writes a scratch key and ALWAYS removes it again,
  * and (1.5.0, R32) the 'Old data' sheet, which can delete four known orphaned key
  * families only after a backup file has been downloaded and a second tap confirms.
+ * 1.6.0 (R33): a contract marked stale (too large to store) or trimmed by the library is reported as an ISSUE / note in the Contracts section.
  * Produces a copyable plain-text report, format "device-check/1".
  * No network calls except a same-origin fetch of manifest.json. No secrets are
  * reported: no tokens, no keys, no email, no record contents.
@@ -11,7 +12,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.5.0';
+  var VERSION = '1.6.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -112,9 +113,10 @@
         if (isNaN(bt)) issues.push('no valid built time'); else if (Date.now() - bt > 7 * 864e5) issues.push('STALE (over 7 days)');
         var pct = Math.round(raw.length * 2 / 1024 / 48 * 100);   // 1.4.0: share of the 48 KB limit the library puts on a stored contract
         if (pct > 100) issues.push('over 48 KB');
-        else if (pct >= 80) issues.push('NEAR THE 48 KB LIMIT (' + pct + '%): above it the library silently keeps the older copy');
+        else if (pct >= 80) issues.push('NEAR THE 48 KB LIMIT (' + pct + '%): above it the library keeps the older copy and marks it stale');
+        if (o.stale && o.stale.reason === 'too-large') issues.push('COULD NOT UPDATE: the latest summary was ' + (o.stale.kb || '?') + ' KB, over the 48 KB limit, so this is older data (since ' + String(o.stale.at || '').slice(0, 16).replace('T', ' ') + ')');   // 1.6.0
         meta = [o.app ? 'app ' + o.app : '', o.schema ? 'schema ' + o.schema : '', o.lib ? 'lib ' + o.lib : '',
-                o.caps ? 'caps ' + Object.keys(o.caps).length : ''].filter(Boolean).join(', ');
+                o.caps ? 'caps ' + Object.keys(o.caps).length : '', o.trim ? 'trimmed ' + o.trim + ' step' + (o.trim > 1 ? 's' : '') : ''].filter(Boolean).join(', ');
       }
       out.push({
         key: k, bytes: raw.length, pct: (!isFeed && o) ? Math.round(raw.length * 2 / 1024 / 48 * 100) : null, feed: isFeed, meta: meta, issues: issues,

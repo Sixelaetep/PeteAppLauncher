@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.4.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.6.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -741,6 +741,14 @@ function uid(prefix) {
  *   (record_key = appId), debounced, so the launcher can show current data even when this app has not run on the device in front of it.
  *   PalContract.pullCloud() is the launcher's side: it writes a cloud contract into the local pal_x_<app> key only when it is newer than
  *   the local one and belongs to the signed-in user. If the table does not exist yet, both sides quietly do nothing.
+ * v1.3 (pal-shared 1.6.0, Suite Phase 3, R33) contract size policy (ContractSizeProposal.md, D18/D20). The limit stays 48 KB (JSON characters x 2 / 1024).
+ *   publish(appId, payload, { trim: [...] }) : when the contract is over the limit, up to three trim steps are applied in order and publishing is retried
+ *     after each; the first version that fits is stored and carries `trim: <steps used>`. A step is a dot path to delete ('summary.card.wishlist') or a function(o)
+ *     that shrinks the contract object in place. No app passes `trim` yet, so this is dormant until one opts in. Returns { stored:true, trimmed:<steps> }.
+ *   If nothing fits, the older contract is KEPT and gets `stale: { reason:'too-large', at, kb }` added (or, with no older contract, a small marker with built = 1970 so a
+ *     valid cloud copy still wins). The next successful publish writes a fresh contract without it. Returns { stored:false, reason:'too-large', stale:true, kb }.
+ *     The launcher shows a Needs attention alert for a stale contract and for one at 80% or more of the limit; the Device check lists it as an ISSUE.
+ *   The cloud copy is made from the same (trimmed) contract, so a second device never receives a larger contract than the first; it is never sent when still too large.
  * userId is the publisher's Supabase user id; the launcher ignores a contract whose userId is not
  * the signed-in user and removes all pal_x_* keys on sign-out. publish() never throws, and does
  * nothing without a user id, so an app calling it keeps working if this section is absent
@@ -836,6 +844,24 @@ window.PalContract = (function () {
       return done();
     });
   }
+  function kbOf(json) { return json.length * 2 / 1024; }
+  // v1.3: delete the value at a dot path ('summary.card.wishlist'); a missing path is ignored.
+  function dropPath(o, path) {
+    var p = String(path).split('.'), cur = o;
+    for (var i = 0; i < p.length - 1; i++) { cur = cur && cur[p[i]]; if (!cur || typeof cur !== 'object') return; }
+    if (cur && /^[A-Za-z0-9_]+$/.test(p[p.length - 1])) delete cur[p[p.length - 1]];
+  }
+  // v1.3: the refused publish leaves the older contract in place; this adds a small `stale` note to it (or writes a marker when there is none).
+  function markStale(appId, userId, kb) {
+    try {
+      var cur = read(appId), m;
+      if (cur && cur.userId === userId) m = cur;
+      else m = { v: 1, appId: appId, userId: userId, built: new Date(0).toISOString() };
+      m.stale = { reason: 'too-large', at: new Date().toISOString(), kb: kb };
+      var j = JSON.stringify(m);
+      if (window.PalSync && window.PalSync.cacheSet) window.PalSync.cacheSet(PREFIX + appId, j); else localStorage.setItem(PREFIX + appId, j);
+    } catch (e) {}
+  }
   function publish(appId, payload, opts) {
     try {
       var userId = (opts && opts.userId) || (window.PalSync && window.PalSync.getUserId && window.PalSync.getUserId());
@@ -852,17 +878,29 @@ window.PalContract = (function () {
       if (payload.schema != null && payload.schema !== '') o.schema = clip(payload.schema, 24);
       var cp = cleanCaps(payload.caps); if (cp) o.caps = cp;
       try { if (window.PalShared && window.PalShared.VERSION) o.lib = String(window.PalShared.VERSION).slice(0, 12); } catch (x) {}
-      try { scheduleCloud(appId, o); } catch (x) {}   // v1.2: cloud copy, never blocks or throws
       var json = JSON.stringify(o);
-      if (json.length * 2 / 1024 > MAX_KB && o.search) {   // trim the (reserved) search list first, then give up quietly
-        while (o.search.length && JSON.stringify(o).length * 2 / 1024 > MAX_KB) o.search.length = Math.floor(o.search.length / 2);
+      if (kbOf(json) > MAX_KB && o.search) {   // trim the (reserved) search list first
+        while (o.search.length && kbOf(JSON.stringify(o)) > MAX_KB) o.search.length = Math.floor(o.search.length / 2);
         o.trimmed = true;
         json = JSON.stringify(o);
       }
-      if (json.length * 2 / 1024 > MAX_KB) return { stored: false, reason: 'too-large' };
+      var steps = opts && Array.isArray(opts.trim) ? opts.trim.slice(0, 3) : [], used = 0;   // v1.3: the app's own trim ladder
+      if (steps.length && kbOf(json) > MAX_KB && o.summary) { try { o.summary = JSON.parse(JSON.stringify(o.summary)); } catch (x) {} }   // trim a copy: the summary object belongs to the app and must never be edited in place
+      for (var i = 0; i < steps.length && kbOf(json) > MAX_KB; i++) {
+        try { if (typeof steps[i] === 'function') steps[i](o); else dropPath(o, steps[i]); } catch (x) {}
+        used = i + 1; o.trim = used; json = JSON.stringify(o);
+      }
+      if (kbOf(json) > MAX_KB) {   // nothing fits: keep the older contract and mark it, never show old data as current
+        var kbNow = Math.round(kbOf(json));
+        markStale(appId, userId, kbNow);
+        try { console.warn('PalContract: ' + appId + ' is ' + kbNow + ' KB, over the ' + MAX_KB + ' KB limit; the older copy is kept and marked stale.'); } catch (x) {}
+        return { stored: false, reason: 'too-large', stale: true, kb: kbNow };
+      }
+      try { scheduleCloud(appId, o); } catch (x) {}   // v1.2: cloud copy, never blocks or throws (v1.3: made from the trimmed contract)
       var res = window.PalSync && window.PalSync.cacheSet ? window.PalSync.cacheSet(PREFIX + appId, json) : null;
-      if (res) return res;
-      localStorage.setItem(PREFIX + appId, json); return { stored: true, mode: 'local' };
+      if (!res) { localStorage.setItem(PREFIX + appId, json); res = { stored: true, mode: 'local' }; }
+      if (used && res && typeof res === 'object') res.trimmed = used;
+      return res;
     } catch (e) { return { stored: false, reason: 'error' }; }
   }
   // ── Universal Search index (v11.38) ──────────────────────────────────────────────────────────────────────────────
@@ -993,6 +1031,7 @@ window.PalBridge = (function () {
  *   VERSION   bundle version of pal-shared.js (semver). patch = comment/fix with no API change, minor = new function, major = removed/changed function.
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
+ *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
  *   localISO(d)   the LOCAL calendar date of Date d (default now) as 'YYYY-MM-DD'; '' for an invalid Date. Use this instead of
  *                 d.toISOString().slice(0, 10), which is the UTC date and a day early for local-midnight dates in British Summer Time.
@@ -1216,8 +1255,8 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.5.0';
-  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.2', bridge: '1.0' };
+  api.VERSION = '1.6.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
   return api;
