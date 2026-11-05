@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.77</title>
+<title>P Apps v11.78</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1351,7 +1351,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.77</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.78</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1827,6 +1827,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (R24, v11.78): the launcher stops reading three apps' saved copies for features. GYM: the food & drink reminders, the closed-session check (done / missed / ill) and the quick-add list read the data the Gym Tracker v2.146 publishes in its contract (data.ext = 1: reminders, the time today's meals and drinks were logged, saved foods and drinks). FANTASY: the locked-in squad pitch, the no-squad lock-in alert, the live-score polling list and the FPL feed read the locked squad and entry id the Fantasy Football Tracker v1.69 publishes (summary.ext = 1). FILM & TV: the favourites strip uses the app's own contract list (no read of its saved copy). Each read uses the contract only when it is the signed-in user's and carries the ext marker; otherwise (an older app version) the saved copy is read as before, so the launcher and the apps may be deployed in either order. Also redraws on a contract change from another tab. No data, storage, sync or backup change.
   ADDED (cards, v11.77): the GYM card shows calories, protein and water as circle rings like the Gym app's Fuel rings (OPP-19); the 9-DAY FORTNIGHT card's day bars follow the app's own week bars (height against the day's standard, on target green / over purple / under red, today lime, unmarked days hatched, holiday and sick hours blue) with the app's status icons (OPP-20). Card faces only; no data, contract or app change.
   ADDED (C2, v11.76): the 9-DAY FORTNIGHT card reads the card data the app now publishes inside the contract (summary.card: bundles, holiday leave, leave allowance) first, with the old read of fn_tracker_v5 / v4 / v3 as the fallback; the running-timer line, holiday line and hours bars are unchanged; pxCloudPull redraws the card when a cloud contract is applied; a contract over a week old shows 'as of dd/mm/yy'.
   ADDED (C1, v11.75): the READING, ON BUDGET and GYM cards read the card data their apps now publish inside the contract (summary.card) first, with the old reads of the apps' own stored copies as the fallback; the Reading shelf, week view, Read-today reminder and quick-log book choice use the same Reading card data (rtLoadState); pxCloudPull redraws the three cards when a cloud contract is applied. Still direct reads (later): quick-add category lists, Gym meal / Missed-ill reminders, the Gym quick-add, all handshakes.
@@ -2234,7 +2235,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=11.77"></script>
+<script src="pal-shared.js?v=11.78"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2245,7 +2246,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v11.77';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v11.78';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -3636,20 +3637,49 @@ function pxAttentionItems(cmap) {
 // after (time - 30 minutes). Worked out here, from the Gym Tracker's saved data, so it needs no running app and no contract refresh.
 // The id carries today's date so Tomorrow / 7d / Ignore only ever hide that day's reminder.
 let _pxGymSig = '';
+// v11.78 (R24): the Gym data the reminders, closed-session check and quick-add need. The Gym Tracker (v2.146+) publishes it inside its
+// contract (data.ext === 1: reminders, today's log times, saved foods and drinks); an older app version falls back to its saved copy.
+function pxGymData() {
+  const cc = pxContractCard('gym', function (c) { return c.data && Array.isArray(c.data.sessions) && c.data.ext === 1; });
+  if (cc) return cc.card.data;
+  try {
+    const raw = localStorage.getItem('gym_tracker_v1');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && parsed.data && typeof parsed.data === 'object') ? parsed.data : (parsed || {});
+  } catch (e) { return null; }
+}
+// v11.78 (R24): the Fantasy locked-in squad copy and FPL entry id, from the contract summary (Fantasy v1.69+, summary.ext === 1; locked null = nothing
+// locked in), else the app's own saved keys as before.
+function pxFfExt() {
+  try {
+    const c = window.PalContract && window.PalContract.read('fantasy'), uid = pxUserId();
+    if (c && uid && c.userId === uid && c.summary && c.summary.ext === 1) return c.summary;
+  } catch (e) {}
+  return null;
+}
+function pxFfLocked(uid) {
+  const x = pxFfExt();
+  if (x) return x.locked || null;
+  try { return JSON.parse(localStorage.getItem(uid ? 'ff_locked_card_u_' + uid : 'ff_locked_card') || 'null'); } catch (e) { return null; }
+}
+function pxFfEntryId(uid) {
+  const x = pxFfExt();
+  if (x && /^\d+$/.test(String(x.entryId || ''))) return String(x.entryId);
+  try { return String((JSON.parse(localStorage.getItem('ff_settings_local_u_' + uid) || 'null') || {}).entryId || '').trim(); } catch (e) { return ''; }
+}
 function pxGymReminders() {
   let items = [];
   try {
-    const raw = localStorage.getItem('gym_tracker_v1');
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const d = (parsed && parsed.data && parsed.data.waterTargets != null) ? parsed.data : (parsed || {});
+    const d = pxGymData();   // v11.78 (R24): contract first
+    if (d) {
       const rec = (d.waterTargets || []).find(function (t) { return t && !t._deleted; });
       const list = rec && Array.isArray(rec.reminders) ? rec.reminders : [];
       if (list.length) {
         const now = new Date(), today = todayISO(), nowMin = now.getHours() * 60 + now.getMinutes();
         const live = function (a) { return (a || []).filter(function (e) { return e && !e._deleted && e.date === today; }); };
         const food = live(d.nutritionEntries), drink = live(d.waterEntries);
-        const stamp = function (e) { return Date.parse(e.updatedAt || e.createdAt || '') || 0; };
+        const stamp = function (e) { return Date.parse(e.at || e.updatedAt || e.createdAt || '') || 0; };
         list.forEach(function (r) {
           if (!r || !r.id || r.on === false || !/^\d{2}:\d{2}$/.test(r.time || '')) return;
           const hh = Number(r.time.slice(0, 2)), mm = Number(r.time.slice(3));
@@ -3679,7 +3709,7 @@ function pxGymTick() {
 setInterval(function () { if (!document.hidden) pxGymTick(); }, 60000);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) pxGymTick(); });
 // PET-155 v11.48: the Gym Tracker open in another tab / window writes gym_tracker_v1 - re-check straight away.
-window.addEventListener('storage', function (e) { if (e.key === 'gym_tracker_v1') pxGymTick(); });
+window.addEventListener('storage', function (e) { if (e.key === 'gym_tracker_v1' || e.key === 'pal_x_gym') pxGymTick(); });
 // PET-155 v11.48: the launcher only sees this device's copy of the Gym data. Load the Gym frame quietly once per session (a few seconds after
 // sign-in) so it pulls the latest from the cloud - a reminder set on another device then reaches this one without opening the Gym Tracker.
 let _pxGymWarmed = false;
@@ -3771,9 +3801,8 @@ function pxSigOf(items) { return items.map(function (i) { return i.key + '|' + i
 // or the date has a live {kind:'illness'} schedule record (Gym v2.130). An unreadable or missing copy keeps the alert.
 function pxGymClosed(u) {
   try {
-    const raw = localStorage.getItem('gym_tracker_v1');
-    if (!raw) return false;
-    const parsed = JSON.parse(raw), d = (parsed && parsed.data && parsed.data.sessions != null) ? parsed.data : (parsed || {});
+    const d = pxGymData();   // v11.78 (R24): contract first
+    if (!d) return false;
     if ((d.scheduleEntries || []).some(function (e) { return e && !e._deleted && e.kind === 'illness' && e.date === u.date; })) return true;
     const pre = 'gym-' + u.date + '-', id = String(u.id || '');
     const planId = id.indexOf(pre) === 0 ? id.slice(pre.length) : '';
@@ -3860,7 +3889,7 @@ function pxFantasyLock(cmap, now) {
   const gw = Number(u.id.slice(6)), today = pxIso(now);
   if (now >= pxClockTime(u.date, u.time, '23:59') || today < pxAddDays(u.date, -1)) return [];
   const uid = pxUserId(); let locked = false;
-  try { const d = JSON.parse(localStorage.getItem(uid ? 'ff_locked_card_u_' + uid : 'ff_locked_card') || 'null'); locked = !!(d && Number(d.gw) === gw && Array.isArray(d.starters) && d.starters.length === 11); } catch (e) {}
+  try { const d = pxFfLocked(uid); locked = !!(d && Number(d.gw) === gw && Array.isArray(d.starters) && d.starters.length === 11); } catch (e) {}
   if (locked) return [];
   const level = today === u.date ? 'action' : 'soon';
   return [{ app: 'fantasy', id: 'p:fflock:' + gw + ':' + level, level: level, title: 'No locked-in squad for GW ' + gw,
@@ -3934,7 +3963,7 @@ function pxClockTick() {
 }
 setInterval(pxClockTick, 60000);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) pxClockTick(); });
-window.addEventListener('storage', function (e) { if (e.key && (e.key.indexOf('ff_locked_card') === 0 || e.key === 'gym_tracker_v1')) pxClockTick(); });   // PET-161: a session logged in another tab
+window.addEventListener('storage', function (e) { if (e.key && (e.key.indexOf('ff_locked_card') === 0 || e.key === 'gym_tracker_v1' || e.key === 'pal_x_gym' || e.key === 'pal_x_fantasy')) pxClockTick(); });   // PET-161: a session logged in another tab
 // <<PET160-END>>
 
 
@@ -4037,8 +4066,7 @@ function pxFplFlag(el) {
 async function pxFeedFantasy(ctx) {
   const cfg = window.PAL_CONFIG || {}, uid = pxUserId();
   if (!cfg.SB_URL || !cfg.FF_PROXY_KEY || cfg.FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') return { skip: 'no proxy key' };
-  let entryId = '';
-  try { entryId = String((JSON.parse(localStorage.getItem('ff_settings_local_u_' + uid) || 'null') || {}).entryId || '').trim(); } catch (e) {}
+  const entryId = pxFfEntryId(uid);   // v11.78 (R24): contract first
   if (!/^\d+$/.test(entryId)) return { skip: 'no FPL entry id yet (set it in the app)' };
   const base = cfg.SB_URL + '/functions/v1/pal-fpl-proxy', hdr = { 'x-pal-key': cfg.FF_PROXY_KEY };
   const get = async function (path) {
@@ -4055,7 +4083,7 @@ async function pxFeedFantasy(ctx) {
   // who to watch: the locked-in squad if it is for the next gameweek (that is the plan), else this gameweek's picks
   let watch = [];
   try {
-    const lc = JSON.parse(localStorage.getItem('ff_locked_card_u_' + uid) || 'null');
+    const lc = pxFfLocked(uid);
     if (lc && nxt && Number(lc.gw) === nxt.id && Array.isArray(lc.starters)) {
       lc.starters.forEach(function (p) { if (p && p.id != null) watch.push({ id: p.id, st: 1, cap: p.cap === 1 }); });
       (lc.bench || []).forEach(function (p) { if (p && p.id != null) watch.push({ id: p.id, st: 0, cap: false }); });
@@ -5878,7 +5906,7 @@ function ffpMatchHtml(p) {
 function ffpLivePlayers() {
   try {
     const uid = (typeof sbSession !== 'undefined' && sbSession && sbSession.user) ? sbSession.user.id : null;
-    const d = JSON.parse(localStorage.getItem(uid ? 'ff_locked_card_u_' + uid : 'ff_locked_card') || 'null');
+    const d = pxFfLocked(uid);   // v11.78 (R24): contract first
     return d && Array.isArray(d.starters) ? d.starters.concat(d.bench || []) : [];
   } catch (x) { return []; }
 }
@@ -5924,7 +5952,7 @@ async function ffpLiveTick() {
 function ffLockedPitchHtml(uid) {
   const e = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   let d = null;
-  try { d = JSON.parse(localStorage.getItem(uid ? 'ff_locked_card_u_' + uid : 'ff_locked_card') || 'null'); } catch (x) {}
+  try { d = pxFfLocked(uid); } catch (x) {}   // v11.78 (R24): contract first
   if (!d || !Array.isArray(d.starters) || d.starters.length !== 11 || !Array.isArray(d.bench) || d.bench.length !== 4)
     return '<div class="ffp-note">Open Next Week in the app, and lock in your squad, to see it here.</div>';
   const hex = function (v, f) { return /^#[0-9a-f]{6}$/i.test(v || '') ? v : f; };
@@ -6099,11 +6127,11 @@ function ffLockedPitchHtml(uid) {
 // lead its My favourites shelf). The tracker writes them into pal_ftt_stat as `topFavourites`; a cache written by an older
 // tracker has no such key, so fall back to deriving them from the tracker's own saved data (ftt_v1) with the same ordering rule.
 function fttEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function fttTopFavourites(sm) {
+function fttTopFavourites(sm, fromContract) {
   // PET-152 v11.45: up to eight (desktop shows all eight in two rows, phone / tablet the first four). The tracker's own summary may hold only four,
   // so when its saved data (ftt_v1, same origin) has more with the same ordering rule, those are used instead.
   const fromSummary = (sm && Array.isArray(sm.topFavourites)) ? sm.topFavourites.slice(0, 8) : null;
-  if (fromSummary && fromSummary.length >= 8) return fromSummary;
+  if (fromSummary && (fromSummary.length >= 8 || fromContract)) return fromSummary;   // v11.78 (R24): the app's own contract list is complete (same ordering rule), so its saved copy is not read
   let derived = [];
   try {
     const d = JSON.parse(localStorage.getItem('ftt_v1') || 'null');
@@ -6137,7 +6165,7 @@ function statScreen() {
     if (!cc && !raw) { setCardStat('stat-screen', 'Open app to set up', 'muted'); return; }
     const sm = cc ? cc.card : JSON.parse(raw);
     const asOf = cc ? cardAsOf(cc.built) : '';
-    const favs = fttTopFavourites(sm);
+    const favs = fttTopFavourites(sm, !!cc);
     if (!sm || !sm.watchlistCount) {
       // An empty watchlist is dimmed only when there is nothing else to show; with favourites the card stays at full strength.
       setCardStat('stat-screen', 'Watchlist is empty' + asOf, favs.length ? '' : 'muted');
@@ -6912,8 +6940,7 @@ let _gymSuggCache = [];
 // PET-155 v11.48: saved foods AND drinks together: [{ kind:'food'|'drink', name, kcal, prot, ml, quick }]
 function gymQuickLoadItems() {
   try {
-    const parsed = JSON.parse(localStorage.getItem('gym_tracker_v1') || 'null');
-    const d = (parsed && (parsed.data || parsed)) || {};
+    const d = pxGymData() || {};   // v11.78 (R24): contract first
     const live = a => (a || []).filter(x => x && !x._deleted && x.name);
     const foods = live(d.savedMeals).map(m => ({ kind: 'food', name: String(m.name), kcal: Math.round(Number(m.calories) || 0), prot: Math.round(Number(m.protein) || 0), ml: Math.round(Number(m.volumeMl) || 0), quick: !!m.quickAdd }));
     const drinks = live(d.savedWaterItems).map(w => ({ kind: 'drink', name: String(w.name), kcal: Math.round(Number(w.calories) || 0), prot: Math.round(Number(w.protein) || 0), ml: Math.round(Number(w.volumeMl) || 0), quick: !!w.quickAdd }));
