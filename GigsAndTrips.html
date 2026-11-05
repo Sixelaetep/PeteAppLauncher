@@ -12,7 +12,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.113</title>
+<title>Gigs &amp; Trips v7.114</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -605,6 +605,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 .gym-plan-badge:hover{background:rgba(56,189,248,.22)}
 [data-theme="dark"] .gym-plan-badge{color:#7dd3fc;background:rgba(56,189,248,.15)}
 
+/* v7.114 (GIG-123): gigs deleted in Google are removed here with a Restore list; Calendar is also checked when you return to the app; no visual change elsewhere. */
 /* v7.112 (GIG-094): More › Fortnight holidays (adds work holiday days as events, with duplicate checks); no visual change elsewhere. */
 /* v7.111 (GIG-093): also publishes a search list (Universal Search, IndexedDB); no visual change. */
 /* v7.110 (GIG-092): launcher contract + PAL_OPEN; no visual change. */
@@ -794,7 +795,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.113</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.114</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -857,7 +858,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <div class="toast" id="toast"></div>
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(this)">
 
-<script src="pal-shared.js?v=7.113"></script>
+<script src="pal-shared.js?v=7.114"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v7.113: Suite WP1.2 / D10: dates with a year show dd/mm/yy; date boxes show dd/mm/yy with a calendar button (pal-shared 1.4.0). Failed saves were already reported by this app (storageWriteFailed). -->
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -7209,6 +7210,7 @@ function showDataManager(){
       <!-- GIG-088 — full history in GigsAndTrips.md. Read-only. -->
       ${(()=>{ const n=classReviewList().length; return n ? `<button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openClassReview()">🏷 Review classes (${n})</button>` : ''; })()}
       ${gcalConflictsSectionHtml()}
+      ${gcalRemovedSectionHtml()}
       ${gcalQueueSectionHtml()}
       <button class="btn btn-ghost" style="width:100%;margin-bottom:12px" onclick="openDuplicateTool()">🧹 Find duplicates</button>
 
@@ -7249,6 +7251,7 @@ function storageClassify(key){
     'gat_cal_filter':              K('Gigs & Trips','UI pref','Agenda/Upcoming class filter','Keep (tiny)'),
     'gat_gcal_queue':              K('Gigs & Trips','Sync queue','pending Calendar writes/deletes','Removed only when sent or discarded'),
     'gat_gcal_conflicts':          K('Gigs & Trips','Temporary','Calendar changes awaiting a decision','Pruned automatically when resolved or stale'),
+    'gat_gcal_removed':            K('Gigs & Trips','Temporary','gigs removed because they were deleted in Google (for Restore)','Pruned automatically after 30 days or 30 entries'),
     'pal_theme':                   K('Suite','UI pref','theme','Keep (tiny)'),
     'pal_retry_queue_v1':          K('Suite','Sync queue','pending writes for apps using pal-shared','Owned by those apps; never touched here'),
     'pal_nav_request':             K('Suite','Temporary','cross-app navigation hand-off','Cleared by the app that reads it'),
@@ -10000,11 +10003,96 @@ function gcalHandleGigEvent(g, G){
   return 'none';
 }
 
+// ==GIG-123 BEGIN==
+// GIG-123 (v7.114) — a plain gig deleted in Google Calendar is removed here too, with a Restore list.
+// Held back for review as before: repeating events (series and their changed occurrences), trips and trip items,
+// anything with a Calendar change still waiting to send, a batch of more than GCAL_AUTO_REMOVE_MAX_PER_PULL at once,
+// and any pull where Google returned no events at all. Removal is local + Supabase only (Google already lacks it).
+const GCAL_REMOVED_KEY = 'gat_gcal_removed';
+const GCAL_REMOVED_KEEP_DAYS = 30, GCAL_REMOVED_MAX = 30;
+const GCAL_AUTO_REMOVE_MAX_PER_PULL = 5;
+function gcalRemovedLoad(){
+  try { const r = JSON.parse(localStorage.getItem(GCAL_REMOVED_KEY) || 'null'); if (r && Array.isArray(r.items)) return r; } catch(e){}
+  return { v:1, items:[] };
+}
+function gcalRemovedSave(r){   // returns true if the write is in place
+  const cutoff = Date.now() - GCAL_REMOVED_KEEP_DAYS*86400000;
+  r.items = r.items.filter(x=>Date.parse(x.removedAt) >= cutoff).sort((a,b)=>String(b.removedAt).localeCompare(String(a.removedAt))).slice(0, GCAL_REMOVED_MAX);
+  try {
+    if (r.items.length) localStorage.setItem(GCAL_REMOVED_KEY, JSON.stringify(r)); else localStorage.removeItem(GCAL_REMOVED_KEY);
+    return true;
+  } catch(e){ return false; }
+}
+function gcalRemovedPrune(){ const r = gcalRemovedLoad(), n = r.items.length; gcalRemovedSave(r); return n; }
+function gcalFlagDeleted(c){   // the existing review entry; returns true if it is new
+  return gcalConfAdd({
+    key:gcalConfKey('deleted-in-google', c.kind, c.ids), reason:'deleted-in-google', kind:c.kind,
+    id:c.ids.id||null, tripId:c.ids.tripId||null, dayId:c.ids.dayId||null, itemId:c.ids.itemId||null,
+    calendarEventId:c.rec.calendarEventId, name:c.name, date:c.date, detectedAt:new Date().toISOString()
+  });
+}
+function gcalAutoRemoveEligible(rec){
+  if (!rec || rec.type !== 'gig' || rec._deleted) return false;
+  if (rec.recurrence || rec.recurrenceOf) return false;                       // series and changed occurrences stay on review
+  const st = gcalSyncState('gig', {id:rec.id}, rec);
+  return st !== 'pending' && st !== 'error';                                  // a local change still waiting to send: let the person decide
+}
+function gcalAutoRemoveGig(rec){   // snapshot first; only remove if the snapshot is safely stored
+  if (!rec || !rec.id) return false;
+  const r = gcalRemovedLoad();
+  r.items = r.items.filter(x=>x.id !== rec.id);
+  r.items.unshift({ id:rec.id, name:rec.name||'', date:rec.date||'', removedAt:new Date().toISOString(), record:JSON.parse(JSON.stringify(rec)) });
+  if (!gcalRemovedSave(r)) return false;
+  if (!gcalRemovedLoad().items.some(x=>x.id === rec.id)) return false;
+  deleteEvent(rec.id);
+  gcalQueueRemove('upsert','gig',{id:rec.id});
+  return true;
+}
+async function gcalRestoreRemoved(id){
+  const r = gcalRemovedLoad(), x = r.items.find(i=>i.id === id);
+  if (!x) return;
+  const rec = JSON.parse(JSON.stringify(x.record));
+  delete rec._deleted; gcalClearLink(rec);
+  rec.updatedAt = new Date().toISOString();
+  saveEvent(rec);                                   // newer updatedAt, so it wins over the cloud tombstone
+  r.items = r.items.filter(i=>i.id !== id); gcalRemovedSave(r);
+  showToast('Restored "' + (rec.name||'gig') + '"');
+  try { await gcalSyncGig(getEvent(id), true); } catch(e){ syncLog('Calendar send for restored gig failed: ' + String(e && e.message || e), 'err'); }   // new Google event (queued if not signed in)
+  render();
+  showDataManager();
+}
+function gcalRemovedDismiss(id){ const r = gcalRemovedLoad(); r.items = r.items.filter(i=>i.id !== id); gcalRemovedSave(r); showDataManager(); }
+function gcalRemovedSectionHtml(){
+  gcalRemovedPrune();
+  const r = gcalRemovedLoad();
+  if (!r.items.length) return '';
+  const rows = r.items.map(x=>{
+    const k = esc(x.id);
+    return '<div class="gcal-conf"><div class="gcal-conf-title">' + esc(x.name||'(no title)') + ' <span style="font-weight:400;color:var(--ink3)">· ' + esc(x.date||'') + '</span></div>' +
+      '<div class="gcal-conf-diff">Removed here because it was deleted in Google Calendar · ' + esc(String(x.removedAt||'').slice(0,10)) + '</div>' +
+      '<div class="gcal-conf-btns"><button class="btn btn-ghost" onclick="gcalRestoreRemoved(\'' + k + '\')">Restore</button><button class="btn btn-ghost" onclick="gcalRemovedDismiss(\'' + k + '\')">Forget</button></div></div>';
+  }).join('');
+  return '<div class="section-hdr">Recently removed (' + r.items.length + ')</div>' + rows;
+}
+// Coming back to the app is when a delete made in the Calendar app is most likely to be waiting.
+const GCAL_RETURN_PULL_GAP_MS = 2 * 60 * 1000;
+let _gcalLastReturnPull = 0;
+function gcalPullOnReturn(){
+  if (document.visibilityState !== 'visible') return;
+  const now = Date.now();
+  if (now - _gcalLastReturnPull < GCAL_RETURN_PULL_GAP_MS) return;
+  _gcalLastReturnPull = now;
+  if (PalGCal.hasToken()) gcalMirrorPull(true);
+  else PalGCal.requestTokenRefresh();    // silent; a successful sign-in runs the pull itself (onAuthChange)
+}
+// ==GIG-123 END==
+
 // Records whose Calendar event did not come back in the window: check each
 // individually (it may simply have been moved out of the window) and only flag
 // ones Google says are gone. Capped per pull to protect the API quota.
 const GCAL_DELETE_CHECKS_PER_PULL = 10;
-async function gcalDetectDeleted(fetchedIds, timeMin, timeMax){
+async function gcalDetectDeleted(fetchedIds, timeMin, timeMax, opts){
+  opts = opts || {};   // v7.114 (GIG-123): opts.autoOk = Google returned a normal, non-empty list this pull
   const minD = localDateStr(timeMin), maxD = localDateStr(timeMax);
   const pendingDel = gcalQueuePendingDeleteIds();
   const flagged = new Set(gcalConfLoad().items.map(x=>x.key));
@@ -10024,7 +10112,8 @@ async function gcalDetectDeleted(fetchedIds, timeMin, timeMax){
   const todo = cands.filter(c=>!flagged.has(gcalConfKey('deleted-in-google', c.kind, c.ids)))
                     .sort((a,b)=>(a.kind==='gig'?0:1)-(b.kind==='gig'?0:1))
                     .slice(0, GCAL_DELETE_CHECKS_PER_PULL);
-  let found = 0, moved = 0;
+  let found = 0, moved = 0, removed = 0;
+  const goneGigs = [];   // v7.114 (GIG-123): plain gigs Google says are gone; decided after the loop
   for (const c of todo){
     let G = null, gone = false;
     try { G = await PalGCal.getEvent(GCAL_CALENDAR_ID, c.rec.calendarEventId); }
@@ -10034,18 +10123,21 @@ async function gcalDetectDeleted(fetchedIds, timeMin, timeMax){
     }
     if (G && G.status === 'cancelled') gone = true;
     if (gone){
-      const isNew = gcalConfAdd({
-        key:gcalConfKey('deleted-in-google', c.kind, c.ids), reason:'deleted-in-google', kind:c.kind,
-        id:c.ids.id||null, tripId:c.ids.tripId||null, dayId:c.ids.dayId||null, itemId:c.ids.itemId||null,
-        calendarEventId:c.rec.calendarEventId, name:c.name, date:c.date, detectedAt:new Date().toISOString()
-      });
-      if (isNew) found++;
+      if (c.kind === 'gig' && opts.autoOk && gcalAutoRemoveEligible(c.rec)){ goneGigs.push(c); }
+      else if (gcalFlagDeleted(c)) found++;
     } else if (G && c.kind === 'gig'){
       moved++; gcalHandleGigEvent(getEvent(c.rec.id) || c.rec, G); // exists, just outside the window (e.g. moved)
     }
     await new Promise(r=>setTimeout(r, 250));
   }
-  return { found:found, moved:moved, unchecked:Math.max(0, cands.filter(c=>!flagged.has(gcalConfKey('deleted-in-google', c.kind, c.ids))).length - todo.length) };
+  // v7.114 (GIG-123): a handful of plain gigs deleted in Google are removed here (with Restore); a big batch is more likely
+  // a wrong account or a bulk clean-up than intent, so ALL of those go to review instead. A failed snapshot also falls back to review.
+  const removedNames = [];
+  goneGigs.forEach(c=>{
+    if (goneGigs.length <= GCAL_AUTO_REMOVE_MAX_PER_PULL && gcalAutoRemoveGig(getEvent(c.rec.id) || c.rec)){ removed++; removedNames.push(c.name || '(no title)'); }
+    else if (gcalFlagDeleted(c)) found++;
+  });
+  return { found:found, moved:moved, removed:removed, removedNames:removedNames, unchecked:Math.max(0, cands.filter(c=>!flagged.has(gcalConfKey('deleted-in-google', c.kind, c.ids))).length - todo.length) };
 }
 
 async function gcalReviewLinked(events, timeMin, timeMax){
@@ -10057,18 +10149,22 @@ async function gcalReviewLinked(events, timeMin, timeMax){
     const a = gcalHandleGigEvent(g, G);
     if (a==='applied') tally.applied++; else if (a==='baseline') tally.baseline++; else if (a==='conflict-new') tally.conflictsNew++;
   });
-  const del = await gcalDetectDeleted(presentIds, timeMin, timeMax);
+  const del = await gcalDetectDeleted(presentIds, timeMin, timeMax, { autoOk: events.length > 0 });   // v7.114: no auto-removal off an empty list
   gcalConfPrune();
   const parts = [];
   if (tally.applied) parts.push(tally.applied + ' updated from Google');
   if (tally.baseline) parts.push(tally.baseline + ' baselined');
   if (tally.conflictsNew) parts.push(tally.conflictsNew + ' changed in both places');
+  if (del.removed) parts.push(del.removed + ' removed (deleted in Google)');
   if (del.found) parts.push(del.found + ' deleted in Google');
   if (del.unchecked) parts.push(del.unchecked + ' deletion checks left for next time');
   if (parts.length) syncLog('Calendar review: ' + parts.join(', '), (tally.conflictsNew||del.found) ? 'err' : 'ok');
   const needs = tally.conflictsNew + del.found;
-  if (tally.applied) render();
-  if (needs) showToast(needs + ' Calendar change' + (needs===1?'':'s') + ' need review — see Sync & Backup');
+  if (tally.applied || del.removed) render();
+  const msgs = [];
+  if (del.removed) msgs.push(del.removed === 1 ? '"' + del.removedNames[0] + '" was deleted in Google and removed here (Restore: Sync & Backup)' : del.removed + ' gigs deleted in Google were removed here (Restore: Sync & Backup)');
+  if (needs) msgs.push(needs + ' Calendar change' + (needs===1?'':'s') + ' need review — see Sync & Backup');
+  if (msgs.length) showToast(msgs.join(' · '));
   return { tally:tally, del:del };
 }
 
@@ -10955,7 +11051,7 @@ function initGCalSync(){
   syncLog('Google Calendar sync module loaded', 'info');
   // GIG-101: coming back to the app is a natural moment to catch Google up.
   document.addEventListener('visibilitychange', function(){
-    if (document.visibilityState === 'visible') gcalQueueDrain(false);
+    if (document.visibilityState === 'visible') { gcalQueueDrain(false); gcalPullOnReturn(); }   // v7.114 (GIG-123)
   });
   window.addEventListener('online', function(){ gcalQueueDrain(false); });
   // GIG-074: silent sign-in attempt, same pattern as PeteGCal — fails
