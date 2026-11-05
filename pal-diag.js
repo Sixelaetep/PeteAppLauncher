@@ -1,6 +1,8 @@
 /* pal-diag.js - P Apps Device check (Suite Programme, WP0.2)
  * Loaded on demand by the launcher (Pete only). Read-only apart from one bounded
- * storage-headroom probe that writes a scratch key and ALWAYS removes it again.
+ * storage-headroom probe that writes a scratch key and ALWAYS removes it again,
+ * and (1.5.0, R32) the 'Old data' sheet, which can delete four known orphaned key
+ * families only after a backup file has been downloaded and a second tap confirms.
  * Produces a copyable plain-text report, format "device-check/1".
  * No network calls except a same-origin fetch of manifest.json. No secrets are
  * reported: no tokens, no keys, no email, no record contents.
@@ -9,7 +11,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.4.0';
+  var VERSION = '1.5.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -63,6 +65,28 @@
     }
     rows.sort(function (a, b) { return b[1] - a[1]; });
     return { keys: n, chars: total, top: rows.slice(0, 8), groups: groups };
+  }
+
+
+  /* -- 1.5.0 (R32, Clean-up gate, D19): keys left behind by retired apps. Nothing in the suite reads them.
+        Exact names / prefix only; the apps' own legacy keys (reading-tracker-v5 etc.) are NOT listed. -- */
+  var ORPHAN_EXACT = ['ehub.db.v2', 'meal_planner_data', 'fs_v1'], ORPHAN_PREFIX = ['pt_companion_v1_'];
+  function isOrphan(k) {
+    return ORPHAN_EXACT.indexOf(k) >= 0 || ORPHAN_PREFIX.some(function (p) { return k.indexOf(p) === 0; });
+  }
+  function findOrphans() {
+    var ls = window.localStorage, out = [];
+    for (var i = 0; i < ls.length; i++) {
+      var k = ls.key(i); if (!isOrphan(k)) continue;
+      var v = ls.getItem(k) || ''; out.push({ key: k, size: k.length + v.length });
+    }
+    out.sort(function (a, b) { return b.size - a.size; });
+    return out;
+  }
+  function orphanBackup(list) {
+    var o = { format: 'pal-old-data-backup/1', created: new Date().toISOString(), keys: {} };
+    list.forEach(function (r) { o.keys[r.key] = window.localStorage.getItem(r.key); });
+    return JSON.stringify(o);
   }
 
   // 1.0.1: contracts carry `built` (ISO string); 1.0.0 looked for `updatedAt`, which does not exist, so age always showed '-'
@@ -191,6 +215,8 @@
       lines.push('by group: ' + Object.keys(inv.groups).sort(function (a, b) { return inv.groups[b] - inv.groups[a]; })
         .slice(0, 8).map(function (g) { return g + ' ' + kb(inv.groups[g]); }).join(', '));
       lines.push('largest keys: ' + inv.top.map(function (r) { return r[0] + ' ' + kb(r[1]); }).join(', '));
+      var orph = safe(function () { return findOrphans(); }, []);   // 1.5.0
+      lines.push('old data from retired apps: ' + (orph.length ? orph.length + ' keys, ' + kb(orph.reduce(function (t, r) { return t + r.size; }, 0)) + ' (Old data button)' : 'none'));
     } else lines.push('localStorage: unavailable');
     var pr = probeHeadroom();
     if (pr.ok) {
@@ -336,10 +362,70 @@
     function onKey(e) { if (e.key === 'Escape') close.click(); }
     document.addEventListener('keydown', onKey);
     wrap.addEventListener('click', function (e) { if (e.target === wrap) close.click(); });
-    bar.appendChild(copy); bar.appendChild(close);
+    bar.appendChild(copy);
+    var oldN = safe(function () { return findOrphans().length; }, 0);
+    if (oldN) { bar.appendChild(btn('Old data (' + oldN + ')', false, function () { wrap.remove(); document.removeEventListener('keydown', onKey); showOldData(function () { show(text); }); })); }
+    bar.appendChild(close);
     box.appendChild(h); box.appendChild(pre); box.appendChild(bar); wrap.appendChild(box);
     document.body.appendChild(wrap);
     close.focus();
+  }
+
+
+  /* -- 1.5.0: 'Old data' sheet. Step 1 list, step 2 download the backup file, step 3 tap twice to delete. -- */
+  function showOldData(back) {
+    var old = document.getElementById('palDiagSheet'); if (old) old.remove();
+    var list = findOrphans(), backedUp = false, armed = false;
+    var wrap = document.createElement('div'); wrap.id = 'palDiagSheet';
+    wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true'); wrap.setAttribute('aria-label', 'Old data');
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:20001;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;font-family:var(--f,system-ui,sans-serif)';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:var(--surface,#1b1a22);color:var(--ink,#f5f2ea);width:100%;max-width:720px;max-height:88vh;border-radius:22px 22px 0 0;display:flex;flex-direction:column;padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px))';
+    var h = document.createElement('div'); h.style.cssText = 'font:700 16px var(--fd,inherit);margin-bottom:8px'; h.textContent = 'Old data from retired apps';
+    var pre = document.createElement('pre');
+    pre.style.cssText = 'flex:1;overflow:auto;margin:0 0 12px;font:12px/1.45 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.12);border-radius:12px;padding:10px';
+    var bar = document.createElement('div'); bar.style.cssText = 'display:flex;gap:8px';
+    function btn(label, primary, fn) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      b.style.cssText = 'flex:1;min-height:44px;border-radius:12px;border:1px solid var(--sep,#444);font:700 14px var(--f,inherit);cursor:pointer;' +
+        (primary ? 'background:var(--acc,#CBF55C);color:var(--accTx,#14130A);border-color:transparent' : 'background:transparent;color:inherit');
+      b.addEventListener('click', fn); return b;
+    }
+    function text() {
+      if (!list.length) return 'No old data found. Nothing to clean up.';
+      var tot = list.reduce(function (a, r) { return a + r.size; }, 0);
+      return list.map(function (r) { return r.key + '  ' + kb(r.size); }).join('\n') + '\n\nTotal ' + kb(tot) + '. No app reads these keys.\n\n' +
+        (backedUp ? '1. Backup file downloaded.\n2. ' + (armed ? 'Tap "Confirm delete" to remove them now.' : 'Tap "Delete" once, then tap again to confirm.') :
+        '1. Download the backup file first. Delete stays locked until you have.\n2. Then delete.');
+    }
+    pre.textContent = text();
+    var dl = btn('Download backup', true, function () {
+      if (!list.length) return;
+      try {
+        var blob = new Blob([orphanBackup(list)], { type: 'application/json' });
+        var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = 'pal-old-data-backup-' + localISO(new Date()) + '.json';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+        backedUp = true; del.style.opacity = '1'; pre.textContent = text();
+      } catch (e) { pre.textContent = 'Could not create the backup file (' + (e && e.message || e) + '). Nothing was deleted.'; }
+    });
+    var del = btn('Delete', false, function () {
+      if (!backedUp) { pre.textContent = text(); return; }
+      if (!armed) { armed = true; del.textContent = 'Confirm delete'; pre.textContent = text(); return; }
+      var n = 0;
+      list.forEach(function (r) { try { if (isOrphan(r.key)) { window.localStorage.removeItem(r.key); n++; } } catch (e) {} });
+      list = findOrphans(); armed = false; del.textContent = 'Delete';
+      pre.textContent = 'Removed ' + n + ' old keys. ' + (list.length ? list.length + ' could not be removed.' : 'Nothing left to clean up.') + '\nRun the Device check again to see the new storage figures.';
+    });
+    del.style.opacity = '.45';
+    if (!list.length) { dl.style.display = 'none'; del.style.display = 'none'; }
+    var close = btn('Back', false, function () { wrap.remove(); document.removeEventListener('keydown', onKey); if (back) back(); });
+    function onKey(e) { if (e.key === 'Escape') close.click(); }
+    document.addEventListener('keydown', onKey);
+    bar.appendChild(dl); bar.appendChild(del); bar.appendChild(close);
+    box.appendChild(h); box.appendChild(pre); box.appendChild(bar); wrap.appendChild(box);
+    document.body.appendChild(wrap);
   }
 
   var running = false;
@@ -358,5 +444,5 @@
       .then(function () { running = false; });
   }
 
-  window.PalDiag = { VERSION: VERSION, run: run, _collect: collect, _probe: probeHeadroom, _text: toText };
+  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, run: run, _collect: collect, _probe: probeHeadroom, _text: toText };
 })();
