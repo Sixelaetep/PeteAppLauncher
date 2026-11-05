@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.8.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.8.1, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -1023,7 +1023,7 @@ window.PalBridge = (function () {
 })();
 
 // ══════════════════════════════════════════════════════════════════
-// SECTION 4d of 5 — PalRestore + PalUI (bundle 1.8.0, 5 Nov 2026, Suite Phase 3, R34/R35). Restore 1.1 / UI 1.1: preview matches PalSync.pull (cloud tombstones stay deleted, data-field stamps only), opts.rows, opts.tombstoneByStamp, PalUI.guardRestore / finishRestore. Apps opt in.
+// SECTION 4d of 5 — PalRestore + PalUI (bundle 1.8.1, 5 Nov 2026, Suite Phase 3, R34/R35). Restore 1.1 / UI 1.1: preview matches PalSync.pull (cloud tombstones stay deleted, data-field stamps only), opts.rows, opts.tombstoneByStamp, PalUI.guardRestore / finishRestore. Apps opt in.
 // ══════════════════════════════════════════════════════════════════
 /**
  * PalSync.restorePreview(tableName, backupRecords, opts)  (decision D11, design in Phase2Close.md 2.4). Read only: it fetches this user's cloud rows
@@ -1085,7 +1085,7 @@ window.PalBridge = (function () {
   }
   function restorePreview(tableName, backup, opts) {
     var o = opt(opts);
-    if (!window.PalSync.hasSession || !window.PalSync.hasSession()) return Promise.resolve({ ok: false, error: 'no session' });
+    if (!o.rows && (!window.PalSync.hasSession || !window.PalSync.hasSession())) return Promise.resolve({ ok: false, error: 'no session' });   // 1.8.1: rows supplied by the caller need no PalSync session (Gigs & Trips)
     if (!Array.isArray(backup)) return Promise.resolve({ ok: false, error: 'no backup records' });
     return fetchCloud(tableName, o).then(function (f) {
       if (!f.ok) return f;
@@ -1225,7 +1225,7 @@ window.PalBridge = (function () {
     // 1.8.0 — one call an app makes BEFORE it changes anything. collections: [{table, records, opts}] (opts as restorePreview). Resolves {proceed, preview}.
     guardRestore: function (o) {
       o = o || {}; var cols = o.collections || [];
-      var hasS = window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession();
+      var hasS = o.signedIn !== undefined ? !!o.signedIn : (window.PalSync && window.PalSync.hasSession && window.PalSync.hasSession());   // 1.8.1: o.signedIn lets an app with its own session say so
       if (!hasS) return window.PalUI.confirm({ title: 'Restore ' + (o.app || 'this backup') + '?', message: "You're not signed in, so the cloud copy can't be compared. The restore runs on this device" + (o.localOnly ? '.' : ' and syncs the next time you sign in.') + (o.extra ? ' ' + o.extra : ''), okLabel: 'Restore', cancelLabel: 'Cancel' }).then(function (ok) { return { proceed: !!ok, preview: null }; });
       return Promise.all(cols.map(function (c) { return window.PalSync.restorePreview(c.table, c.records, c.opts); })).then(function (ps) {
         var agg = { ok: false, counts: { return: 0, replace: 0, keep: 0, deleted: 0, onlyCloud: 0, unchanged: 0 }, names: { return: [], replace: [], keep: [], deleted: [], onlyCloud: [], unchanged: [] }, authoritative: false, unchecked: 0, error: '' };
@@ -1272,6 +1272,7 @@ window.PalBridge = (function () {
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
+ *             1.8.1 (Suite Phase 3, R35.1) guardRestore accepts signedIn (apps with their own session); restorePreview needs no PalSync session when rows are supplied. Fix for R35-T5 (Gigs & Trips said 'not signed in').
  *             1.8.0 (Suite Phase 3, R35) restore 1.1 / ui 1.1: restorePreview now agrees with PalSync.pull (cloud-deleted records stay deleted; stamps from the data field only; opts.tombstoneByStamp for Gigs); opts.rows; PalUI.guardRestore and PalUI.finishRestore used by five apps.
  *             1.7.0 (Suite Phase 3, R34) new section 4d: PalSync.restorePreview / restoreReport (read-only restore preview and report, D11) and PalUI (confirm, notice, toast, restore dialogs). Additive; no app calls them yet.
  *   SECTIONS  versions of the four sections as they stood when VERSION was set (for the launcher's future mismatch report).
@@ -1497,7 +1498,7 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.8.0';
+  api.VERSION = '1.8.1';
   api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0', restore: '1.1', ui: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
