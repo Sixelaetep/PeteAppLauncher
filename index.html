@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v11.73</title>
+<title>P Apps v11.74</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1334,7 +1334,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
 <nav id="nav">
   <div class="nav-inner">
     <div class="nav-left">
-      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.73</span></button>
+      <button class="nav-logo active" id="navHome" onclick="switchTo('home', this)" title="Home"><span class="nl-mark">P</span><span class="nl-word">Apps</span><span class="nav-version">v11.74</span></button>
       <!-- PET-138 v11.34: phone / tablet menu button (open app's name + arrow). The P itself is always one tap to Home. -->
       <button class="nav-menu-btn" id="navMenuBtn" type="button" onclick="navMenuToggle()" aria-haspopup="menu" aria-expanded="false" aria-label="Menu"><span class="nl-cur" id="navCur">Home</span><span class="nl-caret" aria-hidden="true">&#9662;</span></button>
       <div class="nav-icons-group">
@@ -1810,6 +1810,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  ADDED (B4 to B6, v11.74): the FANTASY, FILM & TV and GIGS & TRIPS cards read the figures their apps now publish inside the contract (summary / summary.card) first, with the old reads (ff_squad_cache, pal_ftt_stat, pal_gat_stat + gat_v1) as the fallback; pxCloudPull redraws the three cards when a cloud contract is applied. Exception kept for now: the Fantasy locked-in squad (ff_locked_card) is still read directly (Batch C).
   ADDED (B3, v11.73): the HORIZON card reads Horizon's contract first (growth-bucket total and count), with the old read of horizon_state_v1 as the fallback; 'horizon' joins PX_CLOUD_EXTRA so a second device gets the number without opening Horizon.
   FIXED (R16.1-T3, v11.72): the Claim Tracker card's amount box types in pence like the On Budget one (digits only: 200 shows 2.00), by using the same obQuickPenny() handler.
   CHANGED (Suite Phase 2 Batch B2, v11.71): the Claim Tracker card reads the app's contract (claims) first, with the old calculation from claim_tracker_v1 as the fallback for one
@@ -2213,7 +2214,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=11.73"></script>
+<script src="pal-shared.js?v=11.74"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2224,7 +2225,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v11.73';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v11.74';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -3388,6 +3389,14 @@ function cardAsOf(iso) {
     return f ? ' · as of ' + f(new Date(t)) : '';
   } catch (e) { return ''; }
 }
+// v11.74 (Batch B4 to B6): the card summary an app publishes inside its contract (summary.card), only if it belongs to the signed-in user and passes the caller's shape test.
+function pxContractCard(appId, ok) {
+  try {
+    const c = window.PalContract && window.PalContract.read(appId), uid = pxUserId();
+    if (c && uid && c.userId === uid && c.summary && c.summary.card && ok(c.summary.card)) return { card: c.summary.card, built: c.built };
+  } catch (e) {}
+  return null;
+}
 async function pxCloudPull(force) {
   try {
     if (PX_CLOUD.busy || !window.PalContract || !window.PalContract.pullCloud || !sbSession || !pxUserId()) return;
@@ -3400,6 +3409,9 @@ async function pxCloudPull(force) {
       if (r.applied.indexOf('vault') >= 0) { try { statVaultSub(); } catch (e) {} }   // v11.68
       if (r.applied.indexOf('claims') >= 0) { try { statClaimsSub(); } catch (e) {} }   // v11.71
       if (r.applied.indexOf('horizon') >= 0) { try { statHorizonSub(); } catch (e) {} }   // v11.73
+      if (r.applied.indexOf('fantasy') >= 0) { try { statFantasy(); } catch (e) {} }   // v11.74
+      if (r.applied.indexOf('screen') >= 0) { try { statScreen(); } catch (e) {} }   // v11.74
+      if (r.applied.indexOf('gigs') >= 0) { try { statGigs(); } catch (e) {} }   // v11.74
     }
   } catch (e) {} finally { PX_CLOUD.busy = false; }
 }
@@ -5749,10 +5761,20 @@ function statFantasy() {
   try {
     const uid = (typeof sbSession !== 'undefined' && sbSession && sbSession.user) ? sbSession.user.id : null;
     const key = uid ? 'ff_squad_cache_u_' + uid : 'ff_squad_cache';
-    const raw = localStorage.getItem(key);
     PX_FRESH.fantasy = null;
-    if (!raw) { setCardStat('stat-fantasy', 'Open app to load your squad', 'muted'); return; }
-    const cache = JSON.parse(raw);
+    // v11.74 (Batch B4): the contract's headline figures first (published by the app, or pulled from the cloud copy); the squad cache only if there is no usable contract
+    let cache = null;
+    try {
+      const fc = window.PalContract && window.PalContract.read('fantasy');
+      if (fc && uid && fc.userId === uid && fc.summary && fc.summary.gwId != null && fc.summary.points != null && fc.summary.value != null && fc.summary.bank != null)
+        cache = { gwId: fc.summary.gwId, picksData: { entry_history: { points: fc.summary.points, value: fc.summary.value, bank: fc.summary.bank } },
+          nextGwId: fc.summary.nextGwId, nextGwDeadline: fc.summary.nextGwDeadline, cachedAt: fc.summary.cachedAt || 0 };
+    } catch (e) {}
+    if (!cache) {
+      const raw = localStorage.getItem(key);
+      if (!raw) { setCardStat('stat-fantasy', 'Open app to load your squad', 'muted'); return; }
+      cache = JSON.parse(raw);
+    }
     const hist = cache.picksData && cache.picksData.entry_history;
     if (!hist || cache.gwId == null) { setCardStat('stat-fantasy', 'Open app to load your squad', 'muted'); return; }
     // PET-162 v11.55: figures read from FPL by the launcher's own feed, used only when newer than the app's squad cache
@@ -6069,18 +6091,21 @@ function fttFavStripHtml(favs) {
 }
 function statScreen() {
   try {
+    // v11.74 (Batch B5): the contract's card figures first; pal_ftt_stat only if there is no usable contract
+    const cc = pxContractCard('screen', c => typeof c.watchlistCount === 'number');
     const raw = localStorage.getItem('pal_ftt_stat');
-    if (!raw) { setCardStat('stat-screen', 'Open app to set up', 'muted'); return; }
-    const sm = JSON.parse(raw);
+    if (!cc && !raw) { setCardStat('stat-screen', 'Open app to set up', 'muted'); return; }
+    const sm = cc ? cc.card : JSON.parse(raw);
+    const asOf = cc ? cardAsOf(cc.built) : '';
     const favs = fttTopFavourites(sm);
     if (!sm || !sm.watchlistCount) {
       // An empty watchlist is dimmed only when there is nothing else to show; with favourites the card stays at full strength.
-      setCardStat('stat-screen', 'Watchlist is empty', favs.length ? '' : 'muted');
+      setCardStat('stat-screen', 'Watchlist is empty' + asOf, favs.length ? '' : 'muted');
     } else {
       const bits = [sm.watchlistCount + ' on watchlist'];
       if (sm.availableNow) bits.push(sm.availableNow + ' available now');
       if (sm.bedtimeNow) bits.push(sm.bedtimeNow + ' for bedtime');
-      setCardStat('stat-screen', bits.join(' · '), sm.availableNow ? 'ok' : '');
+      setCardStat('stat-screen', bits.join(' · ') + asOf, sm.availableNow ? 'ok' : '');
     }
     const el = document.getElementById('stat-screen');
     if (el && favs.length) el.insertAdjacentHTML('beforeend', fttFavStripHtml(favs));
@@ -6097,9 +6122,11 @@ function statScreen() {
 function statGigs() {
   todaySet('gigs', null);
   try {
+    // v11.74 (Batch B6): the contract's card summary first; with it the card no longer needs gat_v1 on this device
+    const cc = pxContractCard('gigs', c => c.v === 1 && Array.isArray(c.items));
     const raw = localStorage.getItem('gat_v1');
-    if (!raw) { setCardStat('stat-gigs', 'Syncing…', 'muted'); return; }
-    const d = JSON.parse(raw);
+    if (!raw && !cc) { setCardStat('stat-gigs', 'Syncing…', 'muted'); return; }
+    const d = raw ? JSON.parse(raw) : {};
     const events = (d.events || []).filter(ev => !ev._deleted && !ev.recurrence);   // real (non-repeating) events — fallback source and clash fallback
     const todayStr = todayISO();
     const now = new Date();
@@ -6107,8 +6134,8 @@ function statGigs() {
     // PET-129 v11.25: the app (v7.107+) writes pal_gat_stat — its own next events, NOT filtered by class and including
     // the occurrences of repeating events (which need the app's repeat engine, so they cannot be worked out here).
     // Missing or unusable → fall back to gat_v1 as before (no repeating events).
-    let stat = null;
-    try {
+    let stat = cc ? cc.card : null;
+    if (!stat) try {
       const st = JSON.parse(localStorage.getItem('pal_gat_stat') || 'null');
       if (st && st.v === 1 && Array.isArray(st.items)) stat = st;
     } catch (e) {}
@@ -6271,6 +6298,7 @@ function statGigs() {
     if (conflicts.length) {
       html += `<div class="gg-warn">${conflicts.join(' · ')}</div>`;
     }
+    if (cc && cardAsOf(cc.built)) html += `<div style="font-size:10px;color:var(--ink2);margin-top:4px">${cardAsOf(cc.built).replace(' · ', '')}</div>`;   // v11.74: stale contract shows its date
 
     // Write directly for full-width layout
     const statEl = document.getElementById('stat-gigs');
