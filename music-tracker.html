@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint (own cache key; the launcher's PAL_THEME message keeps it current).
 (function(){try{if(localStorage.getItem('mus_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Music Tracker v1.06</title>
+<title>Music Tracker v1.07</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='20' text-anchor='middle'>🎵</text></svg>">
 <style>
@@ -158,7 +158,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎵 Music <span class="v">v1.06</span></h1>
+  <h1>🎵 Music <span class="v">v1.07</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" type="button" onclick="openDataModal()" title="Sync status / Backup &amp; settings"><span class="sync-chip-dot"></span><span id="sync-lbl">Connecting…</span></button>
 </div>
 
@@ -223,6 +223,7 @@
   <label class="sw" style="border-top:0"><span>New albums<small>Show a new album from a followed artist under Needs attention for three weeks</small></span><input type="checkbox" id="swAlbums" onchange="setAlert('albums', this.checked)"></label>
   <label class="sw"><span>New singles<small>Off by default: singles and EPs are frequent</small></span><input type="checkbox" id="swSingles" onchange="setAlert('singles', this.checked)"></label>
   <label class="sw"><span>Scottish concerts<small>Show a newly announced date in a Scottish city for an artist you follow under Needs attention</small></span><input type="checkbox" id="swConcerts" onchange="setAlert('scotland_concerts', this.checked)"></label>
+  <label class="sw"><span>Reconnect with artists<small>Show an artist you have not played in a while under Needs attention when they have a gig within 45 days or tickets going on sale. The period is set in Listening.</small></span><input type="checkbox" id="swReconnect" onchange="setAlert('reconnect', this.checked)"></label>
   <div class="pal-ds-label">Releases</div>
   <div class="data-box" id="relInfo"></div>
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshReleases({force:true})">🔄 Refresh releases now</button></div>
@@ -231,7 +232,7 @@
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshConcerts({})">🔄 Check for concerts now</button></div>
 </div>
 
-<script src="pal-shared.js?v=1.06"></script>
+<script src="pal-shared.js?v=1.07"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script>
 
 <script id="musCore">
@@ -275,7 +276,7 @@ window.MusicCore = (function () {
   // v1.05 (MUS-009): per-artist switches. Absent means on, so every artist saved before v1.05 behaves as before. Same rule as the server's wantsReleases / wantsGigs.
   function wantsReleases(a) { return isFollowed(a) && a.releases !== false; }
   function wantsGigs(a) { return isFollowed(a) && a.gigs !== false; }
-  function defaultSettings() { return { attention: { albums: true, singles: false, scotland_concerts: true }, updatedAt: '' }; }
+  function defaultSettings() { return { attention: { albums: true, singles: false, scotland_concerts: true, reconnect: true }, lapsedDays: 60, updatedAt: '' }; }
   function dealtSet(attn) { var s = {}; (attn || []).forEach(function (x) { if (x && x.id && x.dealt && !x._deleted) s[x.id] = true; }); return s; }
   // ── concerts (same rules as the server's core.ts concertCandidates / concertUpcoming; tests/parity compares them) ──
   var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -302,8 +303,36 @@ window.MusicCore = (function () {
   function concertUpcoming(live) {
     return live.slice(0, 30).map(function (c) { return { id: c.id, date: c.date, time: c.time || undefined, title: c.artist + ' at ' + c.venue, sub: c.city, kind: 'concert', open: { view: 'concerts', id: c.id } }; });
   }
+  // v1.07 (MUS-006): same rules as the server's lapsedRows / reconnectCandidates (core.ts); tests/parity compares them.
+  var LAPSED_CHOICES = [30, 60, 90, 180], RECONNECT_GIG_DAYS = 45, RECONNECT_SALE_DAYS = 14;
+  function daysBetweenIso(a, b) { return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5); }
+  function utcDayOfUts(uts) { return new Date(uts * 1000).toISOString().slice(0, 10); }
+  function lapsedDaysOf(settings) { var d = settings && settings.lapsedDays; return LAPSED_CHOICES.indexOf(d) >= 0 ? d : 60; }
+  function lapsedRows(artists, L, today, days, dayOf) {
+    if (!L || typeof L !== 'object' || !L.artists) return [];
+    dayOf = dayOf || utcDayOfUts;
+    var tracking = L.since ? daysBetweenIso(L.since, today) + 1 : 0;
+    return (artists || []).filter(isFollowed).map(function (a) {
+      var e = L.artists[norm(a.name)], last = e && e.l ? dayOf(e.l) : '', gap = last ? daysBetweenIso(last, today) : null;
+      return { a: a, gap: gap, eff: gap == null ? tracking : gap };
+    }).filter(function (r) { return r.eff >= days && (r.gap != null || tracking >= days); })
+      .sort(function (x, y) { return y.eff - x.eff || String(x.a.name).localeCompare(String(y.a.name)); });
+  }
+  function reconnectCandidates(vis, lapsed, today) {
+    var out = [];
+    lapsed.forEach(function (r) {
+      if (!wantsGigs(r.a)) return;
+      var mine = vis.filter(function (c) { return String(c.artistId) === String(r.a.id); });
+      var gig = mine.filter(function (c) { return String(c.date) <= addDays(today, RECONNECT_GIG_DAYS); })[0];
+      var sale = mine.filter(function (c) { return /^\d{4}-\d{2}-\d{2}$/.test(String(c.saleDay || '')) && c.saleDay >= today && c.saleDay <= addDays(today, RECONNECT_SALE_DAYS); })[0];
+      var c = gig || sale; if (!c) return;
+      out.push({ id: 'reconnect_' + c.id, kind: 'reconnect', title: r.a.name + ': ' + (r.gap != null ? 'not played for ' + r.gap + ' days' : 'not played since tracking began'),
+        sub: c.venue + ', ' + dateLabel(c.date) + (sale && String(sale.id) === String(c.id) ? ' \u00B7 tickets on sale ' + dateLabel(sale.saleDay) : ''), date: c.date, until: c.date, open: { view: 'concerts', id: c.id } });
+    });
+    return out;
+  }
   // Releases and concerts that may reach Needs attention. Returns { items, overflow, eligible }.
-  function attention(releases, artists, settings, attn, today, concerts, cstate) {
+  function attention(releases, artists, settings, attn, today, concerts, cstate, lis, dayOf) {
     var followed = {}; (artists || []).forEach(function (a) { if (wantsReleases(a) && /^\d{1,12}$/.test(String(a.appleArtistId || ''))) followed[String(a.appleArtistId)] = true; });
     var set = (settings && settings.attention) || {}, dealt = dealtSet(attn), cutoff = addDays(today, -WINDOW_DAYS), cands = [], seen = {};
     (releases || []).forEach(function (r) {
@@ -324,7 +353,11 @@ window.MusicCore = (function () {
       if (seen[c.id] || dealt[c.id] || c.until < today) return;
       seen[c.id] = true; cands.push(c);
     });
-    var pr = { sale: 0, concert: 1, album: 2, single: 3 };
+    if (set.reconnect !== false && lis) reconnectCandidates(vis, lapsedRows(artists, lis, today, lapsedDaysOf(settings), dayOf), today).forEach(function (c) {   // v1.07
+      if (seen[c.id] || dealt[c.id] || c.until < today) return;
+      seen[c.id] = true; cands.push(c);
+    });
+    var pr = { sale: 0, concert: 1, reconnect: 1.5, album: 2, single: 3 };
     cands.sort(function (a, b) { return pr[a.kind] - pr[b.kind] || a.date.localeCompare(b.date) || a.id.localeCompare(b.id); });
     var items = cands.slice(0, CAP).map(function (c) {
       return { id: c.id, level: (c.kind === 'sale' || c.kind === 'concert' || (c.kind === 'album' && c.date <= today)) ? 'soon' : 'info', title: c.title, sub: c.sub, due: c.date, until: c.until, open: c.open };
@@ -333,20 +366,20 @@ window.MusicCore = (function () {
   }
   return { norm: norm, slug: slug, classify: classify, kindOf: kindOf, artSize: artSize, parseRelease: parseRelease, addDays: addDays, isFollowed: isFollowed, wantsReleases: wantsReleases, wantsGigs: wantsGigs,
            defaultSettings: defaultSettings, dealtSet: dealtSet, attention: attention, dateLabel: dateLabel, liveConcerts: liveConcerts,
-           concertCandidates: concertCandidates, concertUpcoming: concertUpcoming, visibleConcerts: visibleConcerts, saleCandidates: saleCandidates, SALE_LEAD_DAYS: SALE_LEAD_DAYS, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP, CONCERT_NEW_DAYS: CONCERT_NEW_DAYS };
+           concertCandidates: concertCandidates, concertUpcoming: concertUpcoming, visibleConcerts: visibleConcerts, saleCandidates: saleCandidates, lapsedRows: lapsedRows, reconnectCandidates: reconnectCandidates, lapsedDaysOf: lapsedDaysOf, LAPSED_CHOICES: LAPSED_CHOICES, SALE_LEAD_DAYS: SALE_LEAD_DAYS, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP, CONCERT_NEW_DAYS: CONCERT_NEW_DAYS };
 })();
 </script>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// MUSIC TRACKER v1.06. v1.06: Artists has a Grid / List view; the list has Follow, New releases and Tour dates ticks on every row. v1.05: follow for releases and tour dates separately (optional booleans releases / gigs on the artist record, absent = on), Ignore in Listening (recfb state "ignored"), a Played but not followed list, error toasts that stay until dismissed. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read. v1.04 (Phase 4/5): Artists gets Discover (Last.fm similar-artist suggestions with Follow / Already know / Not for me) and Listening (recent plays, top artists, followed artists not played in a while).
+// MUSIC TRACKER v1.07. v1.07: the launcher card gets a reconnect line (a lapsed artist with a gig or release) or a Try suggestion; Needs attention gets a reconnect line for a lapsed artist with a dated gig or sale; the "not played in a while" period is a synced setting (lapsedDays). v1.06: Artists has a Grid / List view; the list has Follow, New releases and Tour dates ticks on every row. v1.05: follow for releases and tour dates separately (optional booleans releases / gigs on the artist record, absent = on), Ignore in Listening (recfb state "ignored"), a Played but not followed list, error toasts that stay until dismissed. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read. v1.04 (Phase 4/5): Artists gets Discover (Last.fm similar-artist suggestions with Follow / Already know / Not for me) and Listening (recent plays, top artists, followed artists not played in a while).
 // Data: pal_music rows (this user only): artist_<id>, attn_<releaseId>, gig_<concertId> (link to a Gigs & Trips gig), __settings__ and, written by the
 // server only, concert_<id> (Ticketmaster dates in Scottish cities for followed artists) and __concerts__ (its bookkeeping). The scheduled server function
 // (swift-responder / pal-music-proxy) reads the same rows, so the field names below (following, excluded, releases, gigs, appleArtistId, dealt, attention)
 // are shared with it and must not be renamed. Releases are a cache rebuilt from Apple (IndexedDB mus_db), never synced.
 // v1.04: the server also writes rec_<id> (a Last.fm suggestion), __listening__ (plays summary) and __recmeta__ (cache); the app writes recfb_<id> {id,state:followed|known|dismissed|new} (your feedback).
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.06';
+const APP_VERSION = '1.07';
 const SB_TABLE = 'pal_music';
 const STAT_CACHE_KEY = 'pal_mus_stat';
 const UI_KEY = 'mus_ui';
@@ -432,7 +465,7 @@ function normaliseState(s) {
                 recs: Array.isArray(o.recs) ? o.recs.filter(a => a && a.id) : [], recfb: Array.isArray(o.recfb) ? o.recfb.filter(a => a && a.id) : [],
                 listening: (o.listening && typeof o.listening === 'object' && o.listening.artists && typeof o.listening.artists === 'object') ? o.listening : null,
                 settings: C.defaultSettings(), lastExported: o.lastExported || null };
-  if (o.settings && o.settings.attention) { out.settings.attention = Object.assign(out.settings.attention, o.settings.attention); out.settings.updatedAt = o.settings.updatedAt || ''; }
+  if (o.settings && o.settings.attention) { out.settings.attention = Object.assign(out.settings.attention, o.settings.attention); out.settings.updatedAt = o.settings.updatedAt || ''; if (C.LAPSED_CHOICES.indexOf(o.settings.lapsedDays) >= 0) out.settings.lapsedDays = o.settings.lapsedDays; }
   return out;
 }
 
@@ -504,7 +537,7 @@ function setSeenId(id, on) {
   if (!r) { r = { id, dealt: !!on }; state.attn.push(r); } else r.dealt = !!on;
   r.updatedAt = new Date().toISOString(); saveState(); pushAttn(r); afterChange();
 }
-function setAlert(key, on) {   // keys: albums, singles, scotland_concerts (the server reads the same names)
+function setAlert(key, on) {   // keys: albums, singles, scotland_concerts, reconnect (the server reads the same names)
   state.settings.attention[key] = !!on; state.settings.updatedAt = new Date().toISOString(); saveState(); pushSettings(); afterChange();
 }
 
@@ -628,13 +661,18 @@ function nextConcertCard(c) {
 }
 function buildPayload(status) {
   const today = todayISO(), live = liveArtists(), fol = followedArtists();
-  const att = C.attention(allReleases(), state.artists, state.settings, state.attn, today, state.concerts, cstMap());
+  const att = C.attention(allReleases(), state.artists, state.settings, state.attn, today, state.concerts, cstMap(), lis(), localDay);
   const cons = liveConcertList();
   const folAids = new Set(relArtists().filter(hasApple).map(a => String(a.appleArtistId)));
   const latest = allReleases().filter(r => folAids.has(r.aid) && r.date <= today).sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)).slice(0, 4)
     .map(r => ({ a: r.artistName, t: r.name, d: r.date, img: C.artSize(r.art, 200) }));
   const card = { artists: live.length, followed: fol.length, newReleases: att.eligible, latest, concerts: cons.length,
                  nextConcert: cons[0] ? nextConcertCard(cons[0]) : null };
+  // v1.07: one reconnect line (a lapsed artist with a gig soon) wins; otherwise one Try suggestion. The launcher shows at most one of them.
+  const rcn = (state.settings.attention.reconnect !== false && lis()) ? C.reconnectCandidates(cons, C.lapsedRows(state.artists, lis(), today, C.lapsedDaysOf(state.settings), localDay), today)[0] : null;
+  if (rcn) { const c = cons.find(x => String(x.id) === String(rcn.open.id)); const lr = C.lapsedRows(state.artists, lis(), today, C.lapsedDaysOf(state.settings), localDay).find(r => r.a.name === c.artist || String(r.a.id) === String(c.artistId));
+    card.reconnect = { a: c.artist, gap: lr && lr.gap != null ? lr.gap : null, v: c.venue, d: c.date }; }
+  else { const t = visibleRecs()[0]; if (t) { card.try = { a: t.name }; const sd = Array.isArray(t.seeds) && t.seeds[0]; if (sd && sd.n) card.try.like = sd.n; } }
   return { attention: att.items, upcoming: C.concertUpcoming(cons), summary: { artists: live.length, followed: fol.length, newReleases: att.eligible, attentionOverflow: att.overflow, card,
            refresh: { at: rel.fetchedAt || new Date().toISOString(), status: status || 'ok', current: (status || 'ok') === 'ok', source: 'app', providers: { 'itunes-releases': status || 'ok' } } } };
 }
@@ -668,7 +706,7 @@ function renderAll() {
   $('nArtists').textContent = live ? String(live) : '';
   const nc = liveConcertList().length; $('nCon').textContent = nc ? String(nc) : '';
   if (ui.tab === 'releases') renderReleases(); else if (ui.tab === 'concerts') renderConcerts(); else if (ui.tab === 'artists') renderArtistsHub();
-  setRelInfo(); setConInfo(); fillSummary(); $('swAlbums').checked = state.settings.attention.albums !== false; $('swSingles').checked = state.settings.attention.singles === true; $('swConcerts').checked = state.settings.attention.scotland_concerts !== false;
+  setRelInfo(); setConInfo(); fillSummary(); $('swAlbums').checked = state.settings.attention.albums !== false; $('swSingles').checked = state.settings.attention.singles === true; $('swReconnect').checked = state.settings.attention.reconnect !== false; $('swConcerts').checked = state.settings.attention.scotland_concerts !== false;
 }
 function chip(label, on, js) { return '<button type="button" class="chip" aria-pressed="' + on + '" onclick="' + js + '">' + label + '</button>'; }
 function renderReleases() {
@@ -834,10 +872,7 @@ function recAction(kind, id) {
 function lapsedList() {
   const L = lis(); if (!L) return { rows: [], tracking: 0 };
   const today = todayISO(), tracking = L.since ? daysBetween(L.since, today) + 1 : 0, cons = liveConcertList();
-  const rows = followedArtists().map(a => {
-    const e = L.artists[C.norm(a.name)], last = e && e.l ? localDay(e.l) : '', gap = last ? daysBetween(last, today) : null;
-    return { a, last, gap, eff: gap == null ? tracking : gap, plays: e ? e.t : 0 };
-  }).filter(r => r.eff >= ui.lGap && (r.gap != null || tracking >= ui.lGap)).sort((x, y) => y.eff - x.eff || x.a.name.localeCompare(y.a.name));
+  const rows = C.lapsedRows(liveArtists(), L, today, ui.lGap, localDay).map(r => { const e = L.artists[C.norm(r.a.name)]; return { a: r.a, last: e && e.l ? localDay(e.l) : '', gap: r.gap, eff: r.eff, plays: e ? e.t : 0 }; });
   rows.forEach(r => {
     const rl = relsOf(r.a).filter(x => x.date <= today && x.date >= C.addDays(today, -60)).sort((p, q) => q.date.localeCompare(p.date))[0];
     r.rel = rl || null; r.con = cons.filter(c => c.artistId === r.a.id)[0] || null;
@@ -902,7 +937,12 @@ function renderListening() {
   el.innerHTML = h;
 }
 function setLRange(k) { ui.lRange = k; saveUi(); renderListening(); }
-function setLGap(d) { ui.lGap = d; saveUi(); renderListening(); }
+function setLGap(d) {   // v1.07: also the period for the launcher reconnect line and Needs attention, so it is a synced setting
+  ui.lGap = d; saveUi();
+  if (state.settings.lapsedDays !== d) { state.settings.lapsedDays = d; state.settings.updatedAt = new Date().toISOString(); saveState(); pushSettings(); afterChange(); }
+  renderListening();
+}
+function syncLapsedFromSettings() { const d = state.settings && state.settings.lapsedDays; if (C.LAPSED_CHOICES.indexOf(d) >= 0 && ui.lGap !== d) ui.lGap = d; }
 
 function matchFlag(a) { return a.match === 'medium' ? 'Check' : (!hasApple(a) ? 'No match' : ''); }
 function renderArtists() {
@@ -1066,7 +1106,7 @@ async function syncPull() {
       if ((sr.data.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: sr.data }).settings;
       else if ((sr.data.updatedAt || '') < (state.settings.updatedAt || '')) await pushSettings();
     } else if (state.settings.updatedAt) await pushSettings();
-    saveState(); renderAll();
+    syncLapsedFromSettings(); saveState(); renderAll();
     slog('Pulled ' + liveArtists().length + ' artists (' + a.pushedCount + ' local-only sent up)', 'ok'); setSyncStatus('synced');
   } catch (e) { slog('Pull failed: ' + hint(e), 'error'); setSyncStatus('error'); }
 }
@@ -1224,6 +1264,7 @@ setSyncStatus('connecting');
   try {
     loadUi(); await kvOpen();
     state = normaliseState(await kvGet('state'));
+    syncLapsedFromSettings();
     _stateLoaded = true;
     if (_readFail.state) _storeBad = 'read';
     storeNotice();
