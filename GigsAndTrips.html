@@ -10,7 +10,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.122</title>
+<title>Gigs &amp; Trips v7.123</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -806,7 +806,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.122</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.123</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -871,7 +871,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- v7.122 (R39 / SB-2): this app's own parts of the shared Sync & Backup sheet; filled by showDataManager() and moved into the sheet at start-up -->
 <div id="gatDataTop" style="display:none"></div><div id="gatDataAfterSync" style="display:none"></div><div id="gatDataAfterBackup" style="display:none"></div><div id="gatDataBottom" style="display:none"></div>
 
-<script src="pal-shared.js?v=7.122"></script>
+<script src="pal-shared.js?v=7.123"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v7.113: Suite WP1.2 / D10: dates with a year show dd/mm/yy; date boxes show dd/mm/yy with a calendar button (pal-shared 1.4.0). Failed saves were already reported by this app (storageWriteFailed). -->
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -4115,10 +4115,53 @@ function gatPublishContract(up,today,card){
       if(e.type==='trip') return {id:'gigs-t-'+e.id,t:e.name||'Trip',s:[tripTypeInfo(e.tripType).label,(e.startDate||'')+(e.endDate&&e.endDate!==e.startDate?' to '+e.endDate:''),e.destination||e.location||''].filter(Boolean).join(' \u00b7 '),k:'trip',d:e.startDate||'',open:{view:'trip',id:e.id}};
       return {id:'gigs-g-'+e.id,t:e.name||'Event',s:[e.venue||'',gigTypeInfo(e.gigType||'music').label,e.time||''].filter(Boolean).join(' \u00b7 '),k:'gig',d:e.date||'',open:{view:'gig',id:e.id}};
     });
-    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention,summary:card?{card:card}:undefined,app:'7.122',schema:'1'},{userId:uid_});
+    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention,summary:card?{card:card}:undefined,app:'7.123',schema:'1'},{userId:uid_});
     window.PalContract.publishSearch('gigs',search,evs.length,{userId:uid_});   // v7.111: IndexedDB, not localStorage
   }catch(e){}
 }
+
+// v7.123 (MUS-002): Music Tracker hands a concert over through the launcher (PalBridge prefix GIG, action addGig). Makes one Music gig per concert
+// (musicConcertId stops a second tap, or a second device, making a duplicate) and answers with its id. The Calendar send is queued exactly as for a
+// gig added by hand (saveGig). Waits for start-up like the PAL_OPEN handler below, because the launcher may have just loaded this frame.
+function addGigFromMusic(msg){
+  const c = msg && msg.concert;
+  if(!c || !/^con_[A-Za-z0-9_-]{1,60}$/.test(String(c.id||'')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date||'')) || !String(c.artist||'').trim()) return Promise.reject(new Error('Not a valid concert'));
+  const clip=(v,n)=>String(v==null?'':v).trim().slice(0,n);
+  return new Promise((resolve,reject)=>{
+    let tries=0;
+    (function go(){
+      if(!window._gatInited){ if(++tries<60) return setTimeout(go,250); return reject(new Error('NOT_READY')); }
+      try{
+        const d=getData();
+        const dup=d.events.find(e=>e&&!e._deleted&&e.type==='gig'&&e.musicConcertId===c.id);
+        if(dup) return resolve({gigId:dup.id, existing:true});
+        const now=new Date().toISOString();
+        const g={ id:uid('gat'), type:'gig', gigType:'music', createdAt:now, done:false, missed:false, addedBy:_currentUserKey,
+                  name:clip(c.artist,120), date:c.date, time:/^\d{2}:\d{2}$/.test(String(c.time||''))?c.time:'', venue:clip(c.venue,120),
+                  ticketUrl:/^https:\/\//.test(String(c.url||''))?clip(c.url,500):'', ticketPrice:0, ticketNote:'', tripId:null,
+                  notes:clip((c.name&&c.name!==c.artist?c.name+'. ':'')+(c.city?c.city+'. ':'')+'Added from Music Tracker.',300),
+                  musicConcertId:c.id, updatedAt:now };
+        let newVenue=null;
+        if(g.venue){
+          const venues=normaliseVenues(d.venues);
+          if(!venues.find(x=>x.name.toLowerCase()===g.venue.toLowerCase())){
+            newVenue={id:venueId(g.venue),name:g.venue,mapUrl:'',updatedAt:now};
+            venues.push(newVenue); venues.sort((a,b)=>a.name.localeCompare(b.name));
+          }
+          d.venues=venues;
+        }
+        d.events.push(g);
+        saveData(d);
+        if(newVenue) syncVenueNow(newVenue);
+        pushEvent(g);
+        try{ gcalSyncGig(g,true); }catch(_){}
+        try{ render(); }catch(_){}
+        resolve({gigId:g.id, existing:false});
+      }catch(err){ reject(err); }
+    })();
+  });
+}
+window.PalBridge && PalBridge.listen('GIG', { addGig: addGigFromMusic }, { app: '7.123' });
 
 // v7.110 (GIG-092): the launcher asks us to open a specific record (from Needs Attention / Upcoming). Waits for the app to finish
 // starting (the launcher's message can arrive just before unlock); unknown views are ignored.

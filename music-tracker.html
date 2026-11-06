@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint (own cache key; the launcher's PAL_THEME message keeps it current).
 (function(){try{if(localStorage.getItem('mus_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Music Tracker v1.00</title>
+<title>Music Tracker v1.01</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='20' text-anchor='middle'>🎵</text></svg>">
 <style>
@@ -78,6 +78,9 @@
   .rt { font-weight:700; font-size:15px; overflow-wrap:anywhere; }
   .rs { color:var(--ink2); font-size:13px; margin-top:1px; overflow-wrap:anywhere; }
   .rm { display:flex; gap:8px; align-items:center; margin-top:5px; font-size:12px; color:var(--ink3); flex-wrap:wrap; }
+  .dt { width:54px; height:54px; flex:none; border-radius:12px; background:var(--surface2); display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .dt b { font-size:20px; line-height:1.1; } .dt span { font-size:11px; font-weight:700; text-transform:uppercase; color:var(--ink3); }
+  .mh { font:700 12px var(--f); letter-spacing:.06em; text-transform:uppercase; color:var(--ink3); margin:16px 2px 8px; }
   .badge { border-radius:6px; padding:1px 7px; font-size:11px; font-weight:700; background:var(--surface2); color:var(--ink2); }
   .badge.new { background:var(--mus); color:var(--accTx); }
   .badge.warn { background:color-mix(in srgb, var(--orange) 25%, transparent); color:var(--orange); }
@@ -128,7 +131,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎵 Music <span class="v">v1.00</span></h1>
+  <h1>🎵 Music <span class="v">v1.01</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" type="button" onclick="openDataModal()" title="Sync status / Backup &amp; settings"><span class="sync-chip-dot"></span><span id="sync-lbl">Connecting…</span></button>
 </div>
 
@@ -136,6 +139,7 @@
   <div id="no-pal-banner">Not connected to the launcher, so this runs on this device only. Open it through Pete’s Apps to sync.</div>
   <div class="seg" role="tablist" aria-label="Music sections">
     <button role="tab" id="tab-releases" aria-selected="true" onclick="switchTab('releases')">Releases</button>
+    <button role="tab" id="tab-concerts" aria-selected="false" onclick="switchTab('concerts')">Concerts<span class="n" id="nCon"></span></button>
     <button role="tab" id="tab-artists" aria-selected="false" onclick="switchTab('artists')">Artists<span class="n" id="nArtists"></span></button>
     <button role="tab" id="tab-add" aria-selected="false" onclick="switchTab('add')">+ Add</button>
   </div>
@@ -145,6 +149,12 @@
     <div class="chips" id="relKinds" role="group" aria-label="Type"></div>
     <div class="note" id="relStatus" style="margin:-4px 0 12px" role="status"></div>
     <div id="relList"></div>
+  </section>
+
+  <section class="panel" id="panel-concerts" role="tabpanel" aria-labelledby="tab-concerts">
+    <div class="chips" role="group" aria-label="Concerts"><button type="button" class="chip ghost" id="conCheck" style="margin-left:0" onclick="refreshConcerts({})">🔄 Check now</button></div>
+    <div class="note" id="conStatus" style="margin:-4px 0 12px" role="status"></div>
+    <div id="conList"></div>
   </section>
 
   <section class="panel" id="panel-artists" role="tabpanel" aria-labelledby="tab-artists">
@@ -179,12 +189,16 @@
   <div class="pal-ds-label">Launcher alerts</div>
   <label class="sw" style="border-top:0"><span>New albums<small>Show a new album from a followed artist under Needs attention for three weeks</small></span><input type="checkbox" id="swAlbums" onchange="setAlert('albums', this.checked)"></label>
   <label class="sw"><span>New singles<small>Off by default: singles and EPs are frequent</small></span><input type="checkbox" id="swSingles" onchange="setAlert('singles', this.checked)"></label>
+  <label class="sw"><span>Scottish concerts<small>Show a newly announced date in a Scottish city for an artist you follow under Needs attention</small></span><input type="checkbox" id="swConcerts" onchange="setAlert('scotland_concerts', this.checked)"></label>
   <div class="pal-ds-label">Releases</div>
   <div class="data-box" id="relInfo"></div>
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshReleases({force:true})">🔄 Refresh releases now</button></div>
+  <div class="pal-ds-label">Concerts</div>
+  <div class="data-box" id="conInfo"></div>
+  <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshConcerts({})">🔄 Check for concerts now</button></div>
 </div>
 
-<script src="pal-shared.js?v=1.00"></script>
+<script src="pal-shared.js?v=1.01"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script>
 
 <script id="musCore">
@@ -194,7 +208,7 @@
 // whether the app or the server built the contract last: same ids, same 45-day window, same 21-day life, same order, same cap.
 // ══════════════════════════════════════════════════════════════════
 window.MusicCore = (function () {
-  var WINDOW_DAYS = 45, LIFE_DAYS = 21, CAP = 10;
+  var WINDOW_DAYS = 45, LIFE_DAYS = 21, CAP = 10, CONCERT_NEW_DAYS = 21;
   function norm(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ''); }
   function slug(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'artist'; }
   // Confidence from name evidence only. high = the top result is the only exact name match; medium = an exact match exists but not alone / not first;
@@ -225,10 +239,27 @@ window.MusicCore = (function () {
   }
   function addDays(iso, n) { return new Date(Date.parse(iso + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10); }
   function isFollowed(a) { return !!a && !a._deleted && a.following === true && !a.excluded; }
-  function defaultSettings() { return { attention: { albums: true, singles: false }, updatedAt: '' }; }
+  function defaultSettings() { return { attention: { albums: true, singles: false, scotland_concerts: true }, updatedAt: '' }; }
   function dealtSet(attn) { var s = {}; (attn || []).forEach(function (x) { if (x && x.id && x.dealt && !x._deleted) s[x.id] = true; }); return s; }
-  // Releases that may reach Needs attention. Returns { items, overflow, eligible }.
-  function attention(releases, artists, settings, attn, today) {
+  // ── concerts (same rules as the server's core.ts concertCandidates / concertUpcoming; tests/parity compares them) ──
+  var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function dateLabel(iso) { var d = new Date(iso + 'T00:00:00Z'); return DOW[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()]; }
+  function liveConcerts(concerts, artists, today) {
+    var ids = {}; (artists || []).forEach(function (a) { if (isFollowed(a)) ids[String(a.id)] = true; });
+    return (concerts || []).filter(function (c) { return c && !c._deleted && c.id && ids[String(c.artistId)] && String(c.date) >= today; })
+      .sort(function (x, y) { return String(x.date).localeCompare(String(y.date)) || String(x.id).localeCompare(String(y.id)); });
+  }
+  function concertCandidates(live, today) {
+    return live.filter(function (c) { return c.firstSeen && c.firstSeen >= addDays(today, -CONCERT_NEW_DAYS); }).map(function (c) {
+      var until = addDays(c.firstSeen, CONCERT_NEW_DAYS);
+      return { id: c.id, kind: 'concert', title: c.artist + ': ' + c.venue + ', ' + c.city, sub: dateLabel(c.date), date: c.date, until: until < c.date ? until : c.date, open: { view: 'concerts', id: c.id } };
+    });
+  }
+  function concertUpcoming(live) {
+    return live.slice(0, 30).map(function (c) { return { id: c.id, date: c.date, time: c.time || undefined, title: c.artist + ' at ' + c.venue, sub: c.city, kind: 'concert', open: { view: 'concerts', id: c.id } }; });
+  }
+  // Releases and concerts that may reach Needs attention. Returns { items, overflow, eligible }.
+  function attention(releases, artists, settings, attn, today, concerts) {
     var followed = {}; (artists || []).forEach(function (a) { if (isFollowed(a) && /^\d{1,12}$/.test(String(a.appleArtistId || ''))) followed[String(a.appleArtistId)] = true; });
     var set = (settings && settings.attention) || {}, dealt = dealtSet(attn), cutoff = addDays(today, -WINDOW_DAYS), cands = [], seen = {};
     (releases || []).forEach(function (r) {
@@ -240,36 +271,47 @@ window.MusicCore = (function () {
       if (until < today || dealt[id]) return;
       cands.push({ id: id, kind: single ? 'single' : 'album', title: r.artistName + ': ' + r.name, sub: single ? 'New single' : 'New album', date: r.date, until: until, open: { view: 'releases', id: id } });
     });
-    var pr = { album: 2, single: 3 };
+    if (set.scotland_concerts !== false) concertCandidates(liveConcerts(concerts, artists, today), today).forEach(function (c) {
+      if (seen[c.id] || dealt[c.id] || c.until < today) return;
+      seen[c.id] = true; cands.push(c);
+    });
+    var pr = { concert: 1, album: 2, single: 3 };
     cands.sort(function (a, b) { return pr[a.kind] - pr[b.kind] || a.date.localeCompare(b.date) || a.id.localeCompare(b.id); });
     var items = cands.slice(0, CAP).map(function (c) {
-      return { id: c.id, level: (c.kind === 'album' && c.date <= today) ? 'soon' : 'info', title: c.title, sub: c.sub, due: c.date, until: c.until, open: c.open };
+      return { id: c.id, level: (c.kind === 'concert' || (c.kind === 'album' && c.date <= today)) ? 'soon' : 'info', title: c.title, sub: c.sub, due: c.date, until: c.until, open: c.open };
     });
     return { items: items, overflow: Math.max(0, cands.length - items.length), eligible: cands.length };
   }
   return { norm: norm, slug: slug, classify: classify, kindOf: kindOf, artSize: artSize, parseRelease: parseRelease, addDays: addDays, isFollowed: isFollowed,
-           defaultSettings: defaultSettings, dealtSet: dealtSet, attention: attention, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP };
+           defaultSettings: defaultSettings, dealtSet: dealtSet, attention: attention, dateLabel: dateLabel, liveConcerts: liveConcerts,
+           concertCandidates: concertCandidates, concertUpcoming: concertUpcoming, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP, CONCERT_NEW_DAYS: CONCERT_NEW_DAYS };
 })();
 </script>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// MUSIC TRACKER v1.00. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention.
-// Data: pal_music rows (this user only): artist_<id>, attn_<releaseId> and __settings__. The scheduled server function
+// MUSIC TRACKER v1.01. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts.
+// Data: pal_music rows (this user only): artist_<id>, attn_<releaseId>, gig_<concertId> (link to a Gigs & Trips gig), __settings__ and, written by the
+// server only, concert_<id> (Ticketmaster dates in Scottish cities for followed artists) and __concerts__ (its bookkeeping). The scheduled server function
 // (swift-responder / pal-music-proxy) reads the same rows, so the field names below (following, excluded, appleArtistId, dealt, attention)
 // are shared with it and must not be renamed. Releases are a cache rebuilt from Apple (IndexedDB mus_db), never synced.
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.00';
+const APP_VERSION = '1.01';
 const SB_TABLE = 'pal_music';
 const STAT_CACHE_KEY = 'pal_mus_stat';
 const UI_KEY = 'mus_ui';
 const REFRESH_STALE_MS = 6 * 3600 * 1000;
 const _tArtists  = window.PalSync.table(SB_TABLE, { prefix: 'artist_' });
 const _tAttn     = window.PalSync.table(SB_TABLE, { prefix: 'attn_' });
+const _tGigs     = window.PalSync.table(SB_TABLE, { prefix: 'gig_' });      // v1.01: link from a concert to the Gigs & Trips gig made from it
+const CON_URL = (window.PAL_CONFIG && PAL_CONFIG.SB_URL ? PAL_CONFIG.SB_URL : '') + '/functions/v1/swift-responder/refresh';   // the scheduled function's manual refresh (caller's own JWT)
+const CON_STALE_MS = 24 * 3600 * 1000;
 const _tSettings = window.PalSync.table(SB_TABLE, {});
 const C = window.MusicCore;
 
-let state = { v: 1, artists: [], attn: [], settings: C.defaultSettings(), lastExported: null };
+let state = { v: 1, artists: [], attn: [], gigs: [], concerts: [], settings: C.defaultSettings(), lastExported: null };
+let cinfo = { at: null, msg: '' };      // last concert check made from this device (the server's own daily check is not recorded here)
+let _tok = null, _conBusy = false; const _gigBusy = {}, _gigReq = {};
 let rel = { fetchedAt: null, items: {}, fetched: {} };          // items: collectionId -> release; fetched: appleArtistId -> ISO
 let ui = { tab: 'releases', range: '90', album: true, single: true, aFilter: 'all', aQuery: '' };
 let _syncState = 'connecting', _syncLog = [], _refreshing = false, _hl = null, _lastRefreshInfo = '';
@@ -325,6 +367,7 @@ function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ range: u
 function normaliseState(s) {
   const o = (s && typeof s === 'object') ? s : {};
   const out = { v: 1, artists: Array.isArray(o.artists) ? o.artists.filter(a => a && a.id) : [], attn: Array.isArray(o.attn) ? o.attn.filter(a => a && a.id) : [],
+                gigs: Array.isArray(o.gigs) ? o.gigs.filter(a => a && a.id) : [], concerts: Array.isArray(o.concerts) ? o.concerts.filter(a => a && a.id) : [],
                 settings: C.defaultSettings(), lastExported: o.lastExported || null };
   if (o.settings && o.settings.attention) { out.settings.attention = Object.assign(out.settings.attention, o.settings.attention); out.settings.updatedAt = o.settings.updatedAt || ''; }
   return out;
@@ -380,12 +423,13 @@ function removeArtist(a) {
   a._deleted = true; touch(a); closeSheet(); afterChange();
   window.PalUI && PalUI.toast(a.name + ' removed', { action: { label: 'Undo', onClick: () => { a._deleted = false; touch(a); afterChange(); } } });
 }
-function setSeen(relId, on) {
-  const id = 'rel_' + relId; let r = state.attn.find(x => x.id === id);
+function setSeen(relId, on) { setSeenId('rel_' + relId, on); }
+function setSeenId(id, on) {
+  let r = state.attn.find(x => x.id === id);
   if (!r) { r = { id, dealt: !!on }; state.attn.push(r); } else r.dealt = !!on;
   r.updatedAt = new Date().toISOString(); saveState(); pushAttn(r); afterChange();
 }
-function setAlert(key, on) {
+function setAlert(key, on) {   // keys: albums, singles, scotland_concerts (the server reads the same names)
   state.settings.attention[key] = !!on; state.settings.updatedAt = new Date().toISOString(); saveState(); pushSettings(); afterChange();
 }
 
@@ -418,32 +462,93 @@ async function refreshReleases(o) {
   if (_again) { _again = false; refreshReleases({}); }
 }
 function releasesStale() { return !rel.fetchedAt || Date.now() - Date.parse(rel.fetchedAt) > REFRESH_STALE_MS; }
+function setConInfo() {
+  const n = liveConcertList().length;
+  $('conInfo').innerHTML = '<strong>' + n + '</strong> upcoming Scottish date' + (n === 1 ? '' : 's') + ' for followed artists<br>Last checked from this device <strong>' + (cinfo.at ? esc(ago(cinfo.at)) : 'never') + '</strong>' +
+    '<br><span class="note">Ticketmaster is checked on the server once a day; this device also asks once a day when you open the app.</span>';
+}
 function setRelInfo() {
   const n = followedArtists().filter(hasApple).length;
   $('relInfo').innerHTML = 'Following <strong>' + n + '</strong> artist' + (n === 1 ? '' : 's') + ' with an Apple Music match<br>Last refreshed <strong>' + (rel.fetchedAt ? esc(ago(rel.fetchedAt)) : 'never') + '</strong>' +
     '<br><span class="note">The app checks when you open it if it has been more than six hours. The launcher is also kept up to date by a daily server check.</span>';
 }
 
+// ── concerts (v1.01) ──────────────────────────────────────────────
+const liveConcertList = () => C.liveConcerts(state.concerts, state.artists, todayISO());
+const gigLinks = () => new Map(state.gigs.filter(g => !g._deleted).map(g => [g.id, g]));
+function isNewCon(c) { const t = todayISO(); return !!c.firstSeen && C.addDays(c.firstSeen, C.CONCERT_NEW_DAYS) >= t && !dealtMap()[c.id]; }
+function saveCinfo() { kvSet('cinfo', cinfo); }
+/** Ask the scheduled function (swift-responder) to check now; it saves the dates into this library and we pull them. Throttled server-side. */
+async function refreshConcerts(o) {
+  o = o || {};
+  if (_conBusy) return;
+  if (!window.PalSync.hasSession() || !_tok) { if (!o.silent) toast('Open Music through Pete’s Apps to check for concerts', 'err'); return; }
+  if (!followedArtists().length) { if (!o.silent) toast('Follow some artists first', 'err'); return; }
+  _conBusy = true; renderConcerts();
+  try {
+    const res = await fetch(CON_URL, { method: 'POST', headers: { authorization: 'Bearer ' + _tok, 'content-type': 'application/json' }, body: '{}' });
+    if (res.status === 429) {
+      const j = await res.json().catch(() => ({}));
+      cinfo.msg = j.error === 'daily-cap' ? 'Daily limit reached. Try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.';
+    } else if (!res.ok) { throw new Error(res.status === 403 ? 'this account is not set up for the scheduled check' : 'HTTP ' + res.status); }
+    else {
+      const j = await res.json(), r = j.result || {}, tm = r.providers && r.providers.ticketmaster;
+      if (r.ran === false) cinfo.msg = r.reason === 'in-progress' ? 'A check is already running.' : '';
+      else if (tm && tm.status === 'error') cinfo.msg = 'Ticketmaster could not be checked: ' + (tm.error || 'error') + '. Showing the last dates found.';
+      else { cinfo.at = new Date().toISOString(); cinfo.msg = ''; }
+    }
+    saveCinfo();
+    await syncPull();
+    slog('Concert check: ' + (cinfo.msg || 'ok'), cinfo.msg ? 'error' : 'ok');
+    if (!o.silent) toast(cinfo.msg || 'Concerts up to date');
+  } catch (e) {
+    cinfo.msg = 'Could not reach the concert check (' + ((e && e.message) || 'offline') + '). Showing the last dates found.'; saveCinfo();
+    slog('Concert check failed: ' + cinfo.msg, 'error'); if (!o.silent) toast(cinfo.msg, 'err');
+  } finally { _conBusy = false; renderAll(); publishContract(_lastRefreshInfo ? 'partial' : 'ok'); }
+}
+function openExternal(url) { if (/^https:\/\//.test(url)) window.open(url, '_blank', 'noopener'); }
+/** Hand a concert to Gigs & Trips through the launcher (the launcher relays it to the Gigs & Trips frame). */
+function addToGigs(conId) {
+  const c = state.concerts.find(x => x.id === conId && !x._deleted); if (!c || _gigBusy[conId]) return;
+  if (window.parent === window) { toast('Open Music through Pete’s Apps to add gigs', 'err'); return; }
+  const reqId = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  _gigBusy[conId] = true; renderConcerts();
+  new Promise((res, rej) => {
+    const t = setTimeout(() => { delete _gigReq[reqId]; rej(new Error('Gigs & Trips did not answer. Try again.')); }, 30000);
+    _gigReq[reqId] = { res, rej, t };
+    window.parent.postMessage({ type: 'PAL_MUSIC_ADD_GIG', reqId, concert: { id: c.id, tm: c.tm, artist: c.artist, name: c.name, date: c.date, time: c.time || '', venue: c.venue, city: c.city, url: c.url || '' } }, window.location.origin);
+  }).then(r => {
+    const link = { id: conId, gigId: r && r.gigId ? String(r.gigId) : '', addedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const i = state.gigs.findIndex(g => g.id === conId); if (i >= 0) state.gigs[i] = link; else state.gigs.push(link);
+    saveState(); pushGig(link);
+    toast(r && r.existing ? 'Already in Gigs & Trips' : 'Added to Gigs & Trips');
+  }).catch(e => toast((e && e.message) || 'Could not add to Gigs & Trips', 'err')).finally(() => { delete _gigBusy[conId]; renderAll(); });
+}
+function openGig(conId) { const g = gigLinks().get(conId); if (g && g.gigId && window.parent !== window) window.parent.postMessage({ type: 'PAL_MUSIC_OPEN_GIG', gigId: g.gigId }, window.location.origin); }
+
 // ── contract + launcher cache ─────────────────────────────────────
 function buildPayload(status) {
   const today = todayISO(), live = liveArtists(), fol = followedArtists();
-  const att = C.attention(allReleases(), state.artists, state.settings, state.attn, today);
+  const att = C.attention(allReleases(), state.artists, state.settings, state.attn, today, state.concerts);
+  const cons = liveConcertList();
   const folAids = new Set(fol.filter(hasApple).map(a => String(a.appleArtistId)));
   const latest = allReleases().filter(r => folAids.has(r.aid) && r.date <= today).sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)).slice(0, 4)
     .map(r => ({ a: r.artistName, t: r.name, d: r.date, img: C.artSize(r.art, 100) }));
-  const card = { artists: live.length, followed: fol.length, newReleases: att.eligible, latest };
-  return { attention: att.items, summary: { artists: live.length, followed: fol.length, newReleases: att.eligible, attentionOverflow: att.overflow, card,
+  const card = { artists: live.length, followed: fol.length, newReleases: att.eligible, latest, concerts: cons.length,
+                 nextConcert: cons[0] ? { a: cons[0].artist, v: cons[0].venue, c: cons[0].city, d: cons[0].date } : null };
+  return { attention: att.items, upcoming: C.concertUpcoming(cons), summary: { artists: live.length, followed: fol.length, newReleases: att.eligible, attentionOverflow: att.overflow, card,
            refresh: { at: rel.fetchedAt || new Date().toISOString(), status: status || 'ok', current: (status || 'ok') === 'ok', source: 'app', providers: { 'itunes-releases': status || 'ok' } } } };
 }
 function publishContract(status) {
   try {
     if (!window.PalContract || !window.PalSync.getUserId() || !liveArtists().length) return;   // an empty library never overwrites a good contract
     const p = buildPayload(status);
-    window.PalContract.publish('music', { attention: p.attention, summary: p.summary, app: 'music-' + APP_VERSION, schema: '1', caps: { app: true } });
+    window.PalContract.publish('music', { attention: p.attention, upcoming: p.upcoming, summary: p.summary, app: 'music-' + APP_VERSION, schema: '1', caps: { app: true } });
     const rows = [];
     liveArtists().forEach(a => rows.push({ id: 'artist:' + a.id, t: a.name, s: a.genre || '', k: 'Artist', open: { view: 'artist', id: a.id } }));
     allReleases().filter(r => r.date <= todayISO()).sort((x, y) => y.date.localeCompare(x.date)).slice(0, 300)
       .forEach(r => rows.push({ id: 'rel_' + r.id, t: r.name, s: r.artistName, k: r.kind === 'single' ? 'Single' : r.kind === 'ep' ? 'EP' : 'Album', d: r.date, open: { view: 'releases', id: 'rel_' + r.id } }));
+    liveConcertList().forEach(c => rows.push({ id: c.id, t: c.artist, s: c.venue + ', ' + c.city, k: 'Concert', d: c.date, open: { view: 'concerts', id: c.id } }));
     window.PalContract.publishSearch('music', rows, rows.length);
   } catch (e) {}
   writeStatCache();
@@ -456,14 +561,15 @@ function afterChange() { renderAll(); publishContract(_lastRefreshInfo ? 'partia
 // ── rendering ─────────────────────────────────────────────────────
 function switchTab(name) {
   ui.tab = name;
-  ['releases', 'artists', 'add'].forEach(t => { $('panel-' + t).classList.toggle('on', t === name); $('tab-' + t).setAttribute('aria-selected', String(t === name)); });
+  ['releases', 'concerts', 'artists', 'add'].forEach(t => { $('panel-' + t).classList.toggle('on', t === name); $('tab-' + t).setAttribute('aria-selected', String(t === name)); });
   renderAll();
 }
 function renderAll() {
   const live = liveArtists().length;
   $('nArtists').textContent = live ? String(live) : '';
-  if (ui.tab === 'releases') renderReleases(); else if (ui.tab === 'artists') renderArtists();
-  setRelInfo(); fillSummary(); $('swAlbums').checked = state.settings.attention.albums !== false; $('swSingles').checked = state.settings.attention.singles === true;
+  const nc = liveConcertList().length; $('nCon').textContent = nc ? String(nc) : '';
+  if (ui.tab === 'releases') renderReleases(); else if (ui.tab === 'concerts') renderConcerts(); else if (ui.tab === 'artists') renderArtists();
+  setRelInfo(); setConInfo(); fillSummary(); $('swAlbums').checked = state.settings.attention.albums !== false; $('swSingles').checked = state.settings.attention.singles === true; $('swConcerts').checked = state.settings.attention.scotland_concerts !== false;
 }
 function chip(label, on, js) { return '<button type="button" class="chip" aria-pressed="' + on + '" onclick="' + js + '">' + label + '</button>'; }
 function renderReleases() {
@@ -490,6 +596,25 @@ function renderReleases() {
       '<div class="rb"><div class="rt">' + esc(r.name) + '</div><div class="rs">' + esc(r.artistName) + '</div><div class="rm"><span class="badge">' + kindLbl + '</span><span>' + (r.date > today ? 'Coming ' : '') + esc(fmtDate(r.date)) + '</span>' + (fresh ? '<span class="badge new">New</span>' : '') + '</div></div>' +
       '<div class="ra"><button class="btn pri" data-open-rel="' + esc(r.id) + '" aria-label="Open ' + esc(r.name) + ' in Apple Music">▶ Open</button>' +
       (r.date <= today && C.addDays(r.date, C.LIFE_DAYS) >= today ? '<button class="btn" data-seen="' + esc(r.id) + '" data-on="' + (dealt[id] ? '0' : '1') + '">' + (dealt[id] ? 'Undo seen' : '✓ Seen') + '</button>' : '') + '</div></div>';
+  }).join('');
+}
+function renderConcerts() {
+  const list = $('conList'), fol = followedArtists(), cons = liveConcertList(), gl = gigLinks(), dealt = dealtMap();
+  $('conCheck').disabled = _conBusy; $('conCheck').textContent = _conBusy ? 'Checking…' : '🔄 Check now';
+  $('conStatus').textContent = (_conBusy ? 'Checking Ticketmaster… ' : cinfo.at ? 'Checked ' + ago(cinfo.at) + '. ' : 'Not checked from this device yet. ') + cinfo.msg + (cons.length ? ' ' + cons.length + ' date' + (cons.length === 1 ? '' : 's') + ' in Scotland.' : '');
+  if (!fol.length) { list.innerHTML = '<div class="empty"><div class="big">🎟️</div>Follow some artists and their Scottish dates appear here.</div>'; return; }
+  if (!cons.length) { list.innerHTML = '<div class="empty"><div class="big">🎟️</div>' + (_conBusy ? 'Looking for concerts…' : 'No Scottish dates found for the artists you follow yet.<div class="note" style="margin-top:6px">Glasgow, Edinburgh, Aberdeen, Dundee, Inverness and other Scottish cities are checked once a day.</div>') + '</div>'; return; }
+  let month = '';
+  list.innerHTML = cons.map(c => {
+    const m = c.date.slice(0, 7), d = new Date(c.date + 'T00:00:00Z');
+    const head = m !== month ? '<div class="mh">' + esc(d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })) + '</div>' : ''; month = m;
+    const fresh = isNewCon(c), link = gl.get(c.id), busy = !!_gigBusy[c.id], off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
+    return head + '<div class="rel' + (_hl === c.id ? ' hl' : '') + '" id="' + esc(c.id) + '"><div class="dt"><b>' + d.getUTCDate() + '</b><span>' + esc(C.dateLabel(c.date).split(' ')[2]) + '</span></div>' +
+      '<div class="rb"><div class="rt">' + esc(c.artist) + '</div><div class="rs">' + esc(c.venue) + ', ' + esc(c.city) + '</div><div class="rm"><span>' + esc(C.dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + esc(c.time) : '') + '</span>' +
+      (fresh ? '<span class="badge new">New</span>' : '') + (off ? '<span class="badge warn">' + esc(c.status) + '</span>' : '') + (link ? '<span class="badge">In Gigs &amp; Trips</span>' : '') + '</div></div>' +
+      '<div class="ra">' + (c.url ? '<button class="btn pri" data-url="' + esc(c.url) + '" aria-label="Tickets for ' + esc(c.artist) + '">🎟 Tickets</button>' : '') +
+      (link ? (link.gigId ? '<button class="btn" data-opengig="' + esc(c.id) + '">Open gig</button>' : '') : '<button class="btn" data-addgig="' + esc(c.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Adding…' : '＋ Gigs &amp; Trips') + '</button>') +
+      (fresh ? '<button class="btn" data-seen-id="' + esc(c.id) + '" data-on="1">✓ Seen</button>' : (dealt[c.id] ? '' : '')) + '</div></div>';
   }).join('');
 }
 function setRange(k) { ui.range = k; saveUi(); renderReleases(); }
@@ -611,6 +736,7 @@ function setSyncStatus(s) {
 const hint = e => window.PalSync.errorHint(e && e.status, e && e.message);
 async function pushArtist(a) { if (!window.PalSync.hasSession()) return; setSyncStatus('syncing'); try { await _tArtists.upsert(a.id, a); setSyncStatus('synced'); } catch (e) { slog('Artist ' + a.name + ': ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushAttn(r) { if (!window.PalSync.hasSession()) return; try { await _tAttn.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Seen mark: ' + hint(e), 'error'); setSyncStatus('error'); } }
+async function pushGig(r) { if (!window.PalSync.hasSession()) return; try { await _tGigs.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Gig link: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushSettings() { if (!window.PalSync.hasSession()) return; try { await _tSettings.upsert('__settings__', state.settings); setSyncStatus('synced'); } catch (e) { slog('Settings: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function syncPull() {
   if (!window.PalSync.hasSession()) return;
@@ -619,6 +745,9 @@ async function syncPull() {
     const rows = await window.PalSync.fetchTableRows(SB_TABLE);
     const a = await _tArtists.pull(state.artists, 'id', 'updatedAt', rows); state.artists = a.merged;
     const t = await _tAttn.pull(state.attn, 'id', 'updatedAt', rows); state.attn = t.merged;
+    const g = await _tGigs.pull(state.gigs, 'id', 'updatedAt', rows); state.gigs = g.merged;
+    // concerts are written by the server only: take them as they are (never pushed back, so a stale copy here cannot overwrite the server's)
+    state.concerts = rows.filter(r => r.record_key.indexOf('concert_') === 0 && r.data && r.data.id && !r.data._deleted).map(r => r.data);
     const sr = rows.find(r => r.record_key === '__settings__');
     if (sr && sr.data && sr.data.attention) {
       if ((sr.data.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: sr.data }).settings;
@@ -632,7 +761,7 @@ function manualPull() { if (!window.PalSync.hasSession()) { toast('Not connected
 async function manualPush() {
   if (!window.PalSync.hasSession()) { toast('Not connected to cloud', 'err'); return; }
   setSyncStatus('syncing');
-  try { for (const a of state.artists) await _tArtists.upsert(a.id, a); for (const r of state.attn) await _tAttn.upsert(r.id, r); if (state.settings.updatedAt) await _tSettings.upsert('__settings__', state.settings);
+  try { for (const a of state.artists) await _tArtists.upsert(a.id, a); for (const r of state.attn) await _tAttn.upsert(r.id, r); for (const r of state.gigs) await _tGigs.upsert(r.id, r); if (state.settings.updatedAt) await _tSettings.upsert('__settings__', state.settings);
         slog('Pushed ' + state.artists.length + ' artists', 'ok'); setSyncStatus('synced'); toast('Pushed to cloud'); }
   catch (e) { slog('Push error: ' + hint(e), 'error'); setSyncStatus('error'); toast('Push had errors', 'err'); }
 }
@@ -640,7 +769,7 @@ async function manualPush() {
 // ── backup ────────────────────────────────────────────────────────
 function exportJSON() {
   state.lastExported = new Date().toISOString(); flushState();
-  const out = { format: 'music-tracker-backup/1', app: 'music', version: APP_VERSION, exportedAt: state.lastExported, artists: state.artists, attn: state.attn, settings: state.settings };
+  const out = { format: 'music-tracker-backup/1', app: 'music', version: APP_VERSION, exportedAt: state.lastExported, artists: state.artists, attn: state.attn, gigs: state.gigs, settings: state.settings };
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
   a.download = 'music-tracker-backup.json'; a.click(); toast('Exported');
 }
@@ -655,6 +784,8 @@ function importJSON(evt) {
       inc.artists.forEach(a => { if (!a || !a.id) return; const cur = have.get(a.id); if (!cur) { state.artists.push(a); added++; } else if ((a.updatedAt || '') > (cur.updatedAt || '')) { Object.assign(cur, a); newer++; } });
       const hv = new Map(state.attn.map(a => [a.id, a]));
       (inc.attn || []).forEach(a => { if (!a || !a.id) return; const cur = hv.get(a.id); if (!cur) state.attn.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
+      const hg = new Map(state.gigs.map(a => [a.id, a]));
+      (inc.gigs || []).forEach(a => { if (!a || !a.id) return; const cur = hg.get(a.id); if (!cur) state.gigs.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       if (inc.settings && inc.settings.attention && (inc.settings.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: inc.settings }).settings;
       saveState(); renderAll(); toast('Imported ' + added + ' new, ' + newer + ' updated');
       if (window.PalSync.hasSession()) manualPush();
@@ -686,10 +817,14 @@ PalUI.pill.dock('#sync-chip');
 
 // ── events ────────────────────────────────────────────────────────
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-artist],[data-open-rel],[data-seen]'); if (!t) return;
+  const t = e.target.closest('[data-artist],[data-open-rel],[data-seen],[data-seen-id],[data-url],[data-addgig],[data-opengig]'); if (!t) return;
   if (t.dataset.artist) openSheet(t.dataset.artist);
   else if (t.dataset.openRel) { const r = rel.items[t.dataset.openRel]; if (r) openApple(releaseUrl(r)); }
   else if (t.dataset.seen) setSeen(t.dataset.seen, t.dataset.on === '1');
+  else if (t.dataset.seenId) setSeenId(t.dataset.seenId, t.dataset.on === '1');
+  else if (t.dataset.url) openExternal(t.dataset.url);
+  else if (t.dataset.addgig) addToGigs(t.dataset.addgig);
+  else if (t.dataset.opengig) openGig(t.dataset.opengig);
 });
 $('sheetBg').addEventListener('mousedown', e => { if (e.target === $('sheetBg')) closeSheet(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('sheetBg').classList.contains('on')) { e.preventDefault(); closeSheet(); } });
@@ -697,9 +832,17 @@ window.addEventListener('message', e => {
   if (e.origin !== window.location.origin || !e.data) return;
   if (e.data.type === 'PAL_THEME' && e.data.theme) {
     const dark = e.data.theme === 'dark'; applyThemeCore(dark, { dark: '#0E0D12', light: '#F4F0E6' }); try { localStorage.setItem('mus_theme_pref', dark ? 'dark' : 'light'); } catch (x) {}
+  } else if (e.data.type === 'PAL_MUSIC_ADD_GIG_RESULT') {   // the launcher's answer after Gigs & Trips handled an Add to Gigs & Trips request
+    const q = _gigReq[e.data.reqId]; if (!q) return; delete _gigReq[e.data.reqId]; clearTimeout(q.t);
+    if (e.data.ok) q.res(e.data.result || {}); else q.rej(new Error(e.data.error || 'Could not add to Gigs & Trips'));
   } else if (e.data.type === 'PAL_OPEN') {                 // from the launcher's Needs attention and Universal Search
     _bootReady.then(() => {
       if (e.data.view === 'artist' && e.data.id && byId(e.data.id)) { switchTab('artists'); openSheet(e.data.id); }
+      else if (e.data.view === 'concerts') {
+        _hl = e.data.id || null; switchTab('concerts');
+        if (_hl) setTimeout(() => { const el = document.getElementById(_hl); if (el) el.scrollIntoView({ block: 'center' }); }, 120);
+        setTimeout(() => { _hl = null; if (ui.tab === 'concerts') renderConcerts(); }, 4000);
+      }
       else if (e.data.view === 'releases') {
         ui.range = 'all'; ui.album = ui.single = true; _hl = e.data.id || null; switchTab('releases');
         if (_hl) setTimeout(() => { const el = document.getElementById(_hl); if (el) el.scrollIntoView({ block: 'center' }); }, 120);
@@ -711,11 +854,14 @@ window.addEventListener('message', e => {
 window.PalBridge && PalBridge.listen('MUS', { refresh: () => refreshReleases({ force: true }).then(() => true) }, { app: 'music' });
 
 window.PalSync.initSession({
-  onSession: async () => {
+  onSession: async (token) => {
+    _tok = token || _tok;
     await _bootReady;
     slog('PAL_SESSION received for user ' + (window.PalSync.getUserId() || '?').slice(0, 8) + '…'); setSyncStatus('connecting');
     await syncPull(); publishContract(_lastRefreshInfo ? 'partial' : 'ok');
     if (followedArtists().some(hasApple) && releasesStale()) refreshReleases({});
+    // once a day from each device, ask the server to check concerts too (silent; the server's own 04:30 UTC check does the same)
+    if (followedArtists().length && (!cinfo.at || Date.now() - Date.parse(cinfo.at) > CON_STALE_MS)) refreshConcerts({ silent: true });
   },
   onRetryFlushed: r => { if (r.flushed) slog('Retried ' + r.flushed + ' queued change(s): done', 'ok'); setSyncStatus(_syncState); },
   onNoSession: () => { setSyncStatus('local'); slog('No PAL_SESSION after 3 s: running on this device only', 'error'); $('no-pal-banner').style.display = 'block';
@@ -730,6 +876,7 @@ setSyncStatus('connecting');
     loadUi(); await kvOpen();
     state = normaliseState(await kvGet('state'));
     const r = await kvGet('rel'); if (r && r.items) rel = { fetchedAt: r.fetchedAt || null, items: r.items, fetched: r.fetched || {} };
+    const ci = await kvGet('cinfo'); if (ci && typeof ci === 'object') cinfo = { at: ci.at || null, msg: ci.msg || '' };
     writeStatCache(); switchTab('releases');
   } finally { _bootResolve(); }
 })();
