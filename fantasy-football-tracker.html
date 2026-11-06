@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fantasy Football Tracker v1.76</title>
+<title>Fantasy Football Tracker v1.77</title>
 <meta name="theme-color" content="#0E0D12" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -803,7 +803,7 @@
 </div>
 
 <nav>
-  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.76</span></div>
+  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.77</span></div>
   <div class="nav-actions"><span class="sync-chip"><i></i><span id="navSyncTxt">Not loaded</span></span>
     <button type="button" class="nav-refresh" aria-label="Refresh from FPL" onclick="loadSquad()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button></div>
 </nav>
@@ -985,7 +985,8 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.76"></script>
+<script src="pal-shared.js?v=1.77"></script>
+<!-- v1.77 (FF-044): while a match of your gameweek is on, the whole squad (points, bonus, auto-subs) re-reads from FPL quietly every 3 minutes, and once more when a match finishes; no toast, no loading state, other tabs untouched. -->
 <!-- v1.76 (FF-043): live score chips and the matches panel show the match minute the score is from (63') or HT; full time still shows FT. -->
 <!-- v1.75 (FF-042): yellow / red cards (FPL fixtures "stats") show on the in-play Squad pitch chips and in the gameweek matches panel, and are passed to the launcher card. -->
 <!-- v1.74 (FF-041): the Squad pitch shows the opponent under every player whose club has a match still to play ("AVL (H)"), next to the live / full-time score chip that was already there; a Gameweek matches panel (right column on desktop, bottom on a phone) lists every match of the shown gameweek with its score; the launcher contract summary gains `current` (this gameweek's squad with opponent and score) so the Fantasy card can show it until next week's squad is locked in. Cache gains gwFixtures (additive); no storage key, table, backup or export change. -->
@@ -2308,7 +2309,7 @@ function ffSet(k, v) {   // v1.67 (Suite WP1.4): user-data writes report a refus
   if (window.PalShared && PalShared.safeSet) return PalShared.safeSet(k, v, 'Fantasy Football');
   try { localStorage.setItem(k, v); return true; } catch (e) { return false; }
 }
-const FF_VERSION = '1.76';
+const FF_VERSION = '1.77';
 try { if (window.PalUI && PalUI.pill) PalUI.pill.dock('.sync-chip'); } catch (e) { /* R39.1: chip top right on desktop; never block start-up */ }
 let _lockedPublished = false;
 let _lockedCardOut = null;   // v1.69: the same object ff_locked_card holds (null when nothing is locked in); declared early because ffPublishContract reads it
@@ -4247,6 +4248,18 @@ function ffPublishCurrentCard() {
 }
 
 // Once a minute, only while a match is live (or about to start / just started) and the page is visible: re-read the fixtures, forced fresh.
+// v1.77 (FF-044): the quiet full refresh. Last time the whole squad was read, and the detail pane's "This GW" block redrawn in place (no scroll jump).
+let _ffLastFullRefresh = 0;
+const FF_FULL_REFRESH_MS = 170000;   // "every 3 minutes" on a one-minute tick, with a little slack so timer jitter never skips a tick
+function ffRefreshOpenDetail() {
+  try {
+    if (_pdSelectedId == null || !pdIsPane()) return;
+    const body = document.getElementById('playerDetailBody'), el = findPlayerEl(_pdSelectedId);
+    const old = body && body.querySelector('.pd-stats'); if (!old || !el) return;
+    const tmp = document.createElement('div'); tmp.innerHTML = playerDetailHtml(el);
+    const nu = tmp.querySelector('.pd-stats'); if (nu) old.replaceWith(nu);
+  } catch (e) {}
+}
 async function ffLiveTick() {
   try {
     const c = _lastLiveSquadCache;
@@ -4264,6 +4277,8 @@ async function ffLiveTick() {
       return f.st === 0 && isFinite(k) && k - now < 10 * 60000 && now - k < 3 * 3600000;
     }));
     if (!livish) return;
+    // v1.77 (FF-044): every 3 minutes the whole squad (points, bonus, auto-subs) is re-read instead of just the scores
+    if (now - _ffLastFullRefresh >= FF_FULL_REFRESH_MS) { await loadSquad({ silent: true }); if (_ffLastFullRefresh >= now) return; }
     const res = await fetch(FF_PROXY_URL + '/fixtures', { headers: proxyHeaders(true) });
     if (!res.ok) return;
     const fixtures = await res.json();
@@ -4272,8 +4287,11 @@ async function ffLiveTick() {
     const nextFx = buildGwFixtures(fixtures, teamsById, c.gwId);
     const nextCards = buildCardsByElement(fixtures, c.gwId);
     if (JSON.stringify(next) === JSON.stringify(c.matchStateByTeam) && JSON.stringify(nextFx) === JSON.stringify(c.gwFixtures || null) && JSON.stringify(nextCards) === JSON.stringify(c.cardsByElement || {})) { ffRefreshMatchChips(); ffRenderGwMatches(); return; }   // v1.76: nothing new from FPL, but HT is inferred from the clock, so redraw
+    const wasLive = Object.keys(c.matchStateByTeam).some(t => { const m = c.matchStateByTeam[t]; return m && m.started && !isMatchFullTime(m); });
+    const nowLive = Object.keys(next).some(t => { const m = next[t]; return m && m.started && !isMatchFullTime(m); });
     c.matchStateByTeam = next;
     c.gwFixtures = nextFx;
+    if (wasLive && !nowLive) setTimeout(() => loadSquad({ silent: true }), 0);   // v1.77: the last live match just finished: one more full read for the final points
     c.cardsByElement = nextCards;
     ffRefreshMatchChips();
     ffRenderGwMatches();   // v1.74 (FF-041)
@@ -4438,7 +4456,8 @@ function refreshSquadDisplay() {
     _lastLiveSquadCache.nextFixtureByTeam, _lastLiveSquadCache.maxPointsByPos, _lastLiveSquadCache.topPlayerIdByPos);
 }
 
-async function loadSquad() {
+async function loadSquad(opts) {
+  const silent = !!(opts && opts.silent);   // v1.77 (FF-044): a background refresh during live play: no button / toast / error panel, Next Week and the planner untouched
   if (_squadLoading) return;
   if (!FF_PROXY_URL) { safeToast('pal-config.js did not load — cannot reach the proxy', 'err'); return; }
   if (!FF_PROXY_KEY || FF_PROXY_KEY === 'REPLACE_WITH_YOUR_PAL_PROXY_KEY') {
@@ -4446,11 +4465,11 @@ async function loadSquad() {
   }
   if (!_settings.entryId) { safeToast('Set your FPL entry ID in Settings first', 'err'); return; }
 
+  if (silent && (!FF_PROXY_URL || !FF_PROXY_KEY || !_settings.entryId)) return;
   _squadLoading = true;
   const btn = document.getElementById('squadRefreshBtn');
   const prevLabel = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Loading…';
-  document.getElementById('squadMeta').textContent = 'Loading…';
+  if (!silent) { btn.disabled = true; btn.textContent = 'Loading…'; document.getElementById('squadMeta').textContent = 'Loading…'; }
 
   try {
     const bootRes = await fetch(FF_PROXY_URL + '/bootstrap', { headers: proxyHeaders(true) });
@@ -4490,20 +4509,29 @@ async function loadSquad() {
     if (Array.isArray(bootstrap.elements) && bootstrap.elements.length) _allPlayersCache = bootstrap.elements;   // FF-040: same fresh FPL read, so a planned-in player's status is current too
     ffPublishContract();   // v1.57 (FF-031)
     refreshSquadDisplay();
+    if (silent) {
+      persistSquadCache(cache);
+      renderSquadFreshness(cache, 'live');
+      ffRefreshOpenDetail();
+      _ffLastFullRefresh = Date.now();
+      return;
+    }
     refreshNextWeekView();
     persistSquadCache(cache);
     updateFreeTransfersGwDisplay();
     renderSquadFreshness(cache, 'live');
     capturePreFreeHit(cache);
+    _ffLastFullRefresh = Date.now();
     safeToast('Squad loaded');
   } catch (e) {
+    if (silent) { console.log('Silent squad refresh failed (kept what is on screen): ' + e.message); return; }
     document.getElementById('squadBody').innerHTML =
       `<div class="placeholder"><div class="emoji">⚠️</div><p><strong>Couldn't load squad.</strong><br>${safeEsc(e.message)}</p></div>`;
     document.getElementById('squadMeta').textContent = 'Load failed';
     safeToast('Squad load failed — see the Squad tab for details', 'err');
   } finally {
     _squadLoading = false;
-    btn.disabled = false; btn.textContent = prevLabel;
+    if (!silent) { btn.disabled = false; btn.textContent = prevLabel; }
   }
 }
 
