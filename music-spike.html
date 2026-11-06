@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Spike</title>
+<style>
+:root{--bg:#f6f5f2;--fg:#1d1d1f;--mut:#6b6b70;--card:#fff;--line:#dcdad4;--acc:#0a5dc2;--ok:#1a7f37;--warn:#9a6700;--bad:#c4271c}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#ececee;--mut:#9a9aa2;--card:#1e1e22;--line:#34343a;--acc:#5aa2ff;--ok:#4cc26a;--warn:#e3b341;--bad:#ff6b5e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;padding:16px;max-width:760px;margin-inline:auto}
+h1{font-size:1.3rem;margin:.2rem 0}h2{font-size:1.05rem;margin:1.4rem 0 .5rem}
+p,li{color:var(--mut);margin:.3rem 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:10px 0}
+textarea{width:100%;min-height:96px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
+button,.btn{min-height:44px;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+button[aria-pressed=true]{outline:2px solid var(--acc)}
+button:focus-visible,a:focus-visible,textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row.top{align-items:flex-start}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:.8rem;font-weight:600;border:1px solid currentColor}
+.high{color:var(--ok)}.medium{color:var(--warn)}.low,.none{color:var(--bad)}
+img.art{width:64px;height:64px;border-radius:6px;background:var(--line);object-fit:cover}
+.name{font-weight:650}.small{font-size:.85rem;color:var(--mut)}
+#bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}#bar>i{display:block;height:100%;width:0;background:var(--acc)}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:.85rem;color:var(--fg)}
+fieldset{border:1px solid var(--line);border-radius:8px;margin:8px 0;padding:8px}legend{color:var(--fg);font-weight:600;padding:0 6px}
+label{display:inline-flex;gap:6px;align-items:center;min-height:36px;margin-right:12px;color:var(--fg)}
+</style>
+</head>
+<body>
+<h1>Music Spike <span class="small">v1</span></h1>
+<p id="intro">Throwaway test for the Music app. Nothing is saved and no other app is touched. Part A checks matching and images. Part B checks that links open the Apple Music app.</p>
+
+<div id="partA">
+<h2>Part A: matching and artwork</h2>
+<div class="card">
+<label for="names" class="small">Artists, one per line</label>
+<textarea id="names">ABBA
+Adele
+AFI
+Stephen Wilson Jr.
+Steely Dan
+Steve Aoki
+Slipknot
+Pearl Jam
+Red Hot Chili Peppers
+Raghu Dixit
+R.E.M.
+Queen
+Placebo
+Pete Shellard
+Oasis
+Ocean Colour Scene
+Neil Young</textarea>
+<div class="row" style="margin-top:8px"><button class="primary" id="run">Run lookups</button><span class="small" id="status">Ready. About 2 minutes for 17 artists (Apple allows roughly 20 calls a minute).</span></div>
+<div id="bar" style="margin-top:8px"><i></i></div>
+</div>
+<div id="results"></div>
+</div>
+
+<div id="partB">
+<h2>Part B: do links open the Music app?</h2>
+<p>Tap each link on this device. Choose what happened. Do this on your iPhone and again on your Mac. Use the Home Screen app version on iPhone too if you can.</p>
+<div class="card" id="links"></div>
+</div>
+
+<div id="partC">
+<h2>Part C: results to send back</h2>
+<div class="card">
+<label for="device" class="small">Which device is this?</label>
+<div class="row"><input id="device" placeholder="e.g. iPhone Safari, iPhone Home Screen, Mac Safari" style="flex:1;min-height:44px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit"><button id="make">Build summary</button><button id="copy">Copy</button></div>
+<pre id="summary">Press Build summary after Parts A and B.</pre>
+</div>
+</div>
+
+<script>
+'use strict';
+var FRAME = /(^|[?&])frame=1/.test(location.search);
+var COUNTRY = 'gb';
+
+function norm(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9]+/g,'');
+}
+// confidence from name evidence only: high = top result is the only exact name match; medium = exact match exists but not alone/not first; low = no exact name match; none = nothing found
+function classify(query, results){
+  if(!results||!results.length) return {level:'none',pick:null};
+  var q=norm(query), exact=[], i;
+  for(i=0;i<results.length;i++) if(norm(results[i].artistName)===q) exact.push(results[i]);
+  if(!exact.length) return {level:'low',pick:results[0]};
+  if(exact.length===1 && exact[0]===results[0]) return {level:'high',pick:exact[0]};
+  return {level:'medium',pick:exact[0]};
+}
+function summarise(rows, device, linkAnswers, deezer, cors){
+  var t=rows.length, lv={high:0,medium:0,low:0,none:0}, right=0,wrong=0,artRight=0,artWrong=0, lines=[];
+  rows.forEach(function(r){
+    lv[r.level]=(lv[r.level]||0)+1;
+    if(r.verdict==='right')right++; if(r.verdict==='wrong')wrong++;
+    if(r.art==='right')artRight++; if(r.art==='wrong')artWrong++;
+    lines.push('- '+r.name+' => '+(r.pickName||'(nothing)')+' ['+r.level+']'+(r.verdict?' verdict:'+r.verdict:'')+(r.art?' artwork:'+r.art:''));
+  });
+  var out=['Music spike v1 results','Device: '+(device||'(not given)'),'iTunes from browser: '+cors,
+    'Deezer from browser: '+deezer,
+    'Confidence tiers: high '+lv.high+', medium '+lv.medium+', low '+lv.low+', none '+lv.none+' (of '+t+')',
+    'Your verdicts: right '+right+', wrong '+wrong+'; artwork right '+artRight+', wrong '+artWrong,
+    'Link tests:'];
+  Object.keys(linkAnswers).forEach(function(k){out.push('- '+k+': '+linkAnswers[k]);});
+  return out.concat(['Per artist:'],lines).join('\n');
+}
+
+if(typeof document!=='undefined'){
+(function(){
+var $=function(id){return document.getElementById(id)};
+var rows=[], linkAnswers={}, deezerState='not tested', corsState='not tested';
+
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+async function getJson(url){
+  for(var attempt=0;attempt<2;attempt++){
+    var res;
+    try{ res=await fetch(url); }
+    catch(e){ throw new Error('blocked-or-offline'); }
+    if(res.ok) return res.json();
+    if((res.status===403||res.status===429)&&attempt===0){ $('status').textContent='Apple asked us to slow down. Waiting 25 seconds...'; await sleep(25000); continue; }
+    throw new Error('HTTP '+res.status);
+  }
+}
+function el(tag,attrs,kids){
+  var e=document.createElement(tag);
+  if(attrs) Object.keys(attrs).forEach(function(k){ if(k==='text') e.textContent=attrs[k]; else e.setAttribute(k,attrs[k]); });
+  (kids||[]).forEach(function(c){e.appendChild(c)});
+  return e;
+}
+function toggles(row,key,labels){
+  var wrap=el('span',{class:'row'});
+  labels.forEach(function(l){
+    var b=el('button',{type:'button','aria-pressed':'false',text:l[1]});
+    b.addEventListener('click',function(){
+      row[key]=l[0];
+      Array.prototype.forEach.call(wrap.children,function(x){x.setAttribute('aria-pressed','false')});
+      b.setAttribute('aria-pressed','true');
+    });
+    wrap.appendChild(b);
+  });
+  return wrap;
+}
+function render(row){
+  var card=row.card; card.textContent='';
+  var head=el('div',{class:'row top'});
+  if(row.artUrl){ var im=el('img',{class:'art',alt:'',src:row.artUrl,loading:'lazy'}); head.appendChild(im); }
+  var info=el('div',{});
+  info.appendChild(el('div',{class:'name',text:row.name}));
+  var m=el('div',{});
+  m.appendChild(el('span',{class:'pill '+row.level,text:row.level.toUpperCase()}));
+  m.appendChild(document.createTextNode(' '+(row.pickName?row.pickName+' (id '+row.pickId+')':'no result')));
+  info.appendChild(m);
+  if(row.albumNames) info.appendChild(el('div',{class:'small',text:'Albums: '+row.albumNames}));
+  if(row.err) info.appendChild(el('div',{class:'small',text:'Error: '+row.err}));
+  head.appendChild(info); card.appendChild(head);
+  if(row.pickName){
+    var a=el('div',{class:'row',style:'margin-top:8px'});
+    a.appendChild(el('span',{class:'small',text:'Is this the right artist?'}));
+    a.appendChild(toggles(row,'verdict',[['right','Yes'],['wrong','No']]));
+    a.appendChild(el('span',{class:'small',text:'Artwork belongs to them?'}));
+    a.appendChild(toggles(row,'art',[['right','Yes'],['wrong','No']]));
+    card.appendChild(a);
+  }
+}
+async function run(){
+  var names=$('names').value.split('\n').map(function(s){return s.trim()}).filter(Boolean);
+  rows=[]; $('results').textContent=''; $('run').disabled=true;
+  var bar=$('bar').firstChild;
+  for(var i=0;i<names.length;i++){
+    var n=names[i], row={name:n,level:'none',card:el('div',{class:'card'})};
+    rows.push(row); $('results').appendChild(row.card);
+    $('status').textContent='Looking up '+n+' ('+(i+1)+' of '+names.length+')';
+    try{
+      var s=await getJson('https://itunes.apple.com/search?term='+encodeURIComponent(n)+'&entity=musicArtist&limit=5&country='+COUNTRY);
+      corsState='works directly from the browser';
+      var c=classify(n,s.results||[]); row.level=c.level;
+      if(c.pick){
+        row.pickName=c.pick.artistName; row.pickId=c.pick.artistId; row.link=c.pick.artistLinkUrl;
+        await sleep(3300);
+        var l=await getJson('https://itunes.apple.com/lookup?id='+c.pick.artistId+'&entity=album&limit=5&country='+COUNTRY);
+        var albums=(l.results||[]).filter(function(x){return x.wrapperType==='collection'});
+        row.albumNames=albums.slice(0,3).map(function(x){return x.collectionName}).join('; ');
+        if(albums[0]) row.artUrl=albums[0].artworkUrl100;
+      }
+    }catch(e){
+      row.err=e.message;
+      if(e.message==='blocked-or-offline') corsState='FAILED: blocked by the browser (CORS) or offline';
+    }
+    render(row);
+    bar.style.width=Math.round((i+1)/names.length*100)+'%';
+    if(i===0) await testDeezer(n);
+    await sleep(3300);
+  }
+  $('status').textContent='Done. Mark each artist Yes or No, then do Part B and Part C.';
+  $('run').disabled=false; buildLinks();
+}
+async function testDeezer(n){
+  try{
+    var d=await getJson('https://api.deezer.com/search/artist?q='+encodeURIComponent(n)+'&limit=1');
+    deezerState=(d&&d.data&&d.data[0])?'works from the browser (returned '+d.data[0].name+')':'reachable but empty';
+  }catch(e){ deezerState='FAILED from the browser ('+e.message+'); would need the server function'; }
+}
+var LINKS=[
+  ['Artist page (ABBA)','https://music.apple.com/gb/artist/abba/372976'],
+  ['Search fallback (ABBA)','https://music.apple.com/gb/search?term=abba']
+];
+function buildLinks(){
+  var box=$('links'); if(box.dataset.built==='1') return; box.dataset.built='1'; box.textContent='';
+  var all=LINKS.slice();
+  rows.forEach(function(r){ if(r.link && r.verdict!=='wrong' && all.length<4) all.push(['First matched artist ('+r.name+')',r.link]); });
+  all.forEach(function(L){
+    ['new tab','same tab'].forEach(function(mode){
+      var key=L[0]+' / '+mode;
+      var fs=el('fieldset',{}); fs.appendChild(el('legend',{text:key}));
+      var attrs={href:L[1],class:'btn',text:'Open ('+mode+')',rel:'noopener'};
+      if(mode==='new tab') attrs.target='_blank'; else attrs.target='_top';
+      fs.appendChild(el('a',attrs));
+      var grp=el('div',{});
+      ['Opened the Music app','Opened in the browser','Nothing happened','Not tried'].forEach(function(opt){
+        var id='r'+Math.random().toString(36).slice(2);
+        var lab=el('label',{});
+        var inp=el('input',{type:'radio',name:'g'+key.replace(/\W/g,''),id:id});
+        inp.addEventListener('change',function(){ linkAnswers[key]=opt; });
+        lab.appendChild(inp); lab.appendChild(document.createTextNode(opt)); grp.appendChild(lab);
+      });
+      fs.appendChild(grp); box.appendChild(fs);
+    });
+  });
+  linkAnswers={};
+  var tip=el('p',{class:'small',text:'Frame test: the box below is this page inside a frame, like the launcher will do. Try its links too.'});
+  box.appendChild(tip);
+  var fr=el('iframe',{src:location.pathname+'?frame=1',style:'width:100%;height:520px;border:1px solid var(--line);border-radius:8px',title:'frame test'});
+  box.appendChild(fr);
+}
+$('run').addEventListener('click',run);
+$('make').addEventListener('click',function(){
+  $('summary').textContent=summarise(rows,$('device').value,linkAnswers,deezerState,corsState);
+});
+$('copy').addEventListener('click',function(){
+  var t=$('summary').textContent;
+  try{ navigator.clipboard.writeText(t).then(function(){$('copy').textContent='Copied'},function(){$('copy').textContent='Select the text and copy'}); }
+  catch(e){ $('copy').textContent='Select the text and copy'; }
+});
+if(FRAME){
+  $('partA').style.display='none';$('partC').style.display='none';$('intro').style.display='none';
+  document.querySelector('h1').textContent='Frame link test';
+  buildLinksFrame();
+}
+function buildLinksFrame(){
+  var box=$('links'); box.textContent='';
+  LINKS.slice(0,2).forEach(function(L){
+    ['new tab','same tab'].forEach(function(mode){
+      var attrs={href:L[1],class:'btn',text:L[0]+' ('+mode+')',rel:'noopener',style:'margin:4px'};
+      attrs.target=(mode==='new tab')?'_blank':'_top';
+      box.appendChild(el('a',attrs));
+    });
+  });
+  box.appendChild(el('p',{class:'small',text:'Tell Claude which of these opened the Music app from inside the frame.'}));
+}
+if(!FRAME) buildLinks();
+})();
+}
+</script>
+</body>
+</html>
