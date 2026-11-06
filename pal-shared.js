@@ -1,5 +1,5 @@
 /**
- * pal-shared.js (bundle 1.8.1, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
+ * pal-shared.js (bundle 1.9.0, see section 5) — pal-config + pal-sync + pal-utils + pal-contract, concatenated in that order
  * (config sets window.PAL_CONFIG before sync/utils use it). Loaded as
  * <script src="pal-shared.js?v=X.X">. Edit a section in place.
  * Version history and design notes: PeteAppsChangeLog.md -> "pal-shared.js"
@@ -1262,6 +1262,148 @@ window.PalBridge = (function () {
   };
 })();
 
+
+// ── PalUI.dataSheet (bundle 1.9.0, R39 / SB-2): ONE Sync & Backup sheet for every app ──────────────────────────────────────
+// The app calls PalUI.dataSheet.mount(cfg) once at start-up. The sheet is built hidden and kept in the page, so the element ids an
+// app's own code writes to (status rows, log box, file input) always exist. The app's own extras (storage figures, import tools,
+// danger zone, ...) are MOVED into named slots by reference, so their ids and handlers keep working. Same layout and wording in
+// every app; bottom sheet on phones, centred window on desktop. It stores nothing and changes no data.
+//   cfg.ids      { status, session, user, log }   ids the sheet creates for the three status values and the log box
+//   cfg.fileId   id of the hidden file input (restore); cfg.accept
+//   cfg.onPull / onPush / onExport / onFile(event) / onOpen() / onClose()
+//   cfg.extraButtons  [{label, onClick}]  extra buttons beside Download backup (for example Copy to clipboard)
+//   cfg.hintId   id of a small line under the backup buttons (for example "Last backup ...")
+//   cfg.slots    { top, afterSync, afterBackup, bottom } each an element or an id
+//   cfg.exportLabel / cfg.restoreLabel / cfg.pullLabel / cfg.pushLabel  optional wording overrides (default is the same everywhere)
+//   cfg.hidePush / cfg.hideLog  for an app with no push or no sync log (HTML Vault)
+(function () {
+  if (!window.PalUI || window.PalUI.dataSheet) return;
+  var mountedCfg = null, root = null, panel = null, prevFocus = null, openState = false;
+  function el(tag, css, text) { var e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; }
+  function rgbOf(c) { var m = /rgba?\(([^)]+)\)/.exec(c || ''); if (!m) return null; var a = m[1].split(',').map(function (x) { return parseFloat(x); }); return a; }
+  function palette() {
+    var el0 = document.body || document.documentElement, cs = null, bg = null, fg = null;
+    try { cs = getComputedStyle(el0); bg = rgbOf(cs.backgroundColor); if (!bg || bg.length > 3 && bg[3] === 0) bg = rgbOf(getComputedStyle(document.documentElement).backgroundColor); fg = rgbOf(cs.color); } catch (e) {}
+    var dark = false; try { dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) {}
+    if (!bg || (bg.length > 3 && bg[3] === 0)) bg = dark ? [24, 24, 28] : [255, 255, 255];
+    if (!fg) fg = (bg[0] + bg[1] + bg[2] < 380) ? [240, 240, 240] : [20, 20, 20];
+    var c = function (a, al) { return 'rgba(' + a[0] + ',' + a[1] + ',' + a[2] + ',' + (al == null ? 1 : al) + ')'; };
+    return { bg: c(bg), fg: c(fg), line: c(fg, .22), soft: c(fg, .07), muted: c(fg, .68), font: (cs && cs.fontFamily) || 'system-ui,sans-serif' };
+  }
+  function byRef(x) { return !x ? null : (typeof x === 'string' ? document.getElementById(x) : x); }
+  function label(t, text) { return el('div', 'font:600 12px ' + t.font + ';letter-spacing:.04em;text-transform:uppercase;color:' + t.muted + ';margin:18px 0 6px', text); }
+  function btn(t, text, primary, fn) {
+    var b = el('button', 'flex:1 1 150px;min-height:44px;border-radius:10px;font:600 15px ' + t.font + ';cursor:pointer;padding:8px 12px;' +
+      (primary ? 'background:' + t.fg + ';color:' + t.bg + ';border:1px solid ' + t.fg : 'background:transparent;color:' + t.fg + ';border:1px solid ' + t.line), text);
+    b.type = 'button'; b.addEventListener('click', function () { try { fn && fn(); } catch (e) { try { console.error(e); } catch (x) {} } }); return b;
+  }
+  function row(t, name, id) {
+    var r = el('div', 'display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid ' + t.line + ';font:15px ' + t.font);
+    r.appendChild(el('span', 'color:' + t.muted, name));
+    var v = el('span', 'font-weight:600;text-align:right;word-break:break-word', '—'); if (id) v.id = id; r.appendChild(v); return r;
+  }
+  function build(cfg) {
+    var t = palette(); cfg = cfg || {}; var ids = cfg.ids || {};
+    root = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2000;background:rgba(0,0,0,.55);display:none;box-sizing:border-box;font-family:' + t.font);
+    root.setAttribute('data-pal-datasheet', '1');
+    if (!document.getElementById('pal-datasheet-css')) { var st = el('style'); st.id = 'pal-datasheet-css'; st.textContent = '[data-pal-datasheet] .log-entry{padding:1px 0}[data-pal-datasheet] .log-entry.err,[data-pal-datasheet] .log-entry.error{color:#c62828}[data-pal-datasheet] .log-entry.ok,[data-pal-datasheet] .log-entry.success{color:#2e7d32}[data-pal-datasheet] .log-entry.warn{color:#b26a00}[data-pal-datasheet] button:focus-visible{outline:2px solid currentColor;outline-offset:2px}[data-pal-datasheet] .pal-ds-label{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;opacity:.7;margin:18px 0 6px}[data-pal-datasheet] .pal-ds-rows{border-bottom:1px solid rgba(128,128,128,.35)}[data-pal-datasheet] .pal-ds-row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid rgba(128,128,128,.35);font-size:15px}[data-pal-datasheet] .pal-ds-row>span:first-child{opacity:.72}[data-pal-datasheet] .pal-ds-row>span:last-child{font-weight:600;text-align:right;word-break:break-word}[data-pal-datasheet] .pal-ds-note{font-size:13px;line-height:1.5;opacity:.75;margin:6px 0}[data-pal-datasheet] .pal-ds-btns{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}[data-pal-datasheet] .pal-ds-btn{flex:1 1 150px;min-height:44px;border-radius:10px;font:600 15px inherit;font-family:inherit;padding:8px 12px;cursor:pointer;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.5)}[data-pal-datasheet] .pal-ds-btn.danger{color:#c62828;border-color:#c62828}[data-pal-datasheet] .pal-ds-extra input[type=file]{font-size:14px;max-width:100%}'; document.head.appendChild(st); }
+    panel = el('div', 'background:' + t.bg + ';color:' + t.fg + ';border:1px solid ' + t.line + ';box-sizing:border-box;width:100%;max-width:520px;max-height:90vh;overflow:auto;-webkit-overflow-scrolling:touch;padding:16px 18px calc(18px + env(safe-area-inset-bottom,0px));box-shadow:0 12px 40px rgba(0,0,0,.35)');
+    panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); panel.setAttribute('aria-label', 'Sync and backup'); panel.setAttribute('data-pal-datasheet-panel', '1');
+    var head = el('div', 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 4px');
+    head.appendChild(el('div', 'font:600 18px ' + t.font, '💾 Sync & Backup'));
+    var x = el('button', 'min-width:44px;min-height:44px;border-radius:10px;background:transparent;color:' + t.fg + ';border:1px solid ' + t.line + ';font:600 16px ' + t.font + ';cursor:pointer', '✕');
+    x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.addEventListener('click', close); head.appendChild(x); panel.appendChild(head);
+    var slots = {}; ['top', 'afterSync', 'afterBackup', 'bottom'].forEach(function (k) { slots[k] = el('div', ''); slots[k].className = 'pal-ds-extra'; slots[k].setAttribute('data-slot', k); });
+    panel.appendChild(slots.top);
+    panel.appendChild(label(t, 'Cloud sync'));
+    var rows = el('div', 'border-bottom:1px solid ' + t.line);
+    rows.appendChild(row(t, 'Status', ids.status)); rows.appendChild(row(t, 'Session', ids.session)); rows.appendChild(row(t, 'User', ids.user)); panel.appendChild(rows);
+    var pp = el('div', 'display:flex;gap:10px;flex-wrap:wrap;margin-top:10px');
+    pp.appendChild(btn(t, cfg.pullLabel || '↓ Pull from cloud', false, cfg.onPull)); if (!cfg.hidePush) pp.appendChild(btn(t, cfg.pushLabel || '↑ Push to cloud', false, cfg.onPush)); panel.appendChild(pp);
+    if (!cfg.hideLog) {
+      panel.appendChild(label(t, 'Sync log'));
+      var log = el('div', 'background:' + t.soft + ';border-radius:8px;padding:8px 10px;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;max-height:150px;overflow:auto;white-space:pre-wrap;word-break:break-word');
+      if (ids.log) log.id = ids.log; log.textContent = 'No sync activity yet'; panel.appendChild(log);
+    }
+    panel.appendChild(slots.afterSync);
+    panel.appendChild(label(t, 'Backup'));
+    var bb = el('div', 'display:flex;gap:10px;flex-wrap:wrap');
+    bb.appendChild(btn(t, cfg.exportLabel || '↓ Download backup', true, cfg.onExport));
+    (cfg.extraButtons || []).forEach(function (b) { bb.appendChild(btn(t, b.label, false, b.onClick)); });
+    var fi = el('input'); fi.type = 'file'; fi.accept = cfg.accept || '.json,application/json'; fi.style.cssText = 'display:none'; if (cfg.fileId) fi.id = cfg.fileId;
+    fi.addEventListener('change', function (e) { try { cfg.onFile && cfg.onFile(e); } catch (er) { try { console.error(er); } catch (x2) {} } });
+    bb.appendChild(btn(t, cfg.restoreLabel || '↑ Restore from backup', false, function () { fi.value = ''; fi.click(); }));
+    panel.appendChild(bb); panel.appendChild(fi);
+    if (cfg.hintId) { var h = el('div', 'font:13px ' + t.font + ';color:' + t.muted + ';margin-top:8px'); h.id = cfg.hintId; panel.appendChild(h); }
+    panel.appendChild(slots.afterBackup);
+    panel.appendChild(slots.bottom);
+    panel.appendChild(el('div', 'font:12px/1.5 ' + t.font + ';color:' + t.muted + ';margin-top:18px', 'Cloud sync works when this app is opened through Pete’s Apps (it needs the launcher login). Opened on its own it runs on this device only, so download a backup regularly.'));
+    var s = cfg.slots || {};
+    Object.keys(slots).forEach(function (k) { var n = byRef(s[k]); if (n) { n.style.display = ''; slots[k].appendChild(n); } });
+    root.appendChild(panel);
+    root.addEventListener('mousedown', function (e) { if (e.target === root) close(); });
+    document.body.appendChild(root);
+    layout();
+  }
+  function layout() {
+    if (!root) return;
+    var phone = false; try { phone = window.innerWidth < 640; } catch (e) {}
+    root.style.alignItems = phone ? 'flex-end' : 'center'; root.style.justifyContent = 'center'; root.style.padding = phone ? '0' : '16px';
+    panel.style.borderRadius = phone ? '16px 16px 0 0' : '14px'; panel.style.maxHeight = phone ? '92vh' : '88vh';
+  }
+  function onKey(e) {
+    if (!openState) return;
+    if (e.key === 'Escape') {
+      // leave Escape to a confirm / notice dialog that is actually on screen (hidden dialogs kept in the page do not count)
+      var others = document.querySelectorAll('[role=alertdialog],[role=dialog][aria-modal]:not([data-pal-datasheet-panel])');
+      for (var i = 0; i < others.length; i++) { var o = others[i]; if (o.getClientRects().length && getComputedStyle(o).visibility !== 'hidden') return; }
+      e.preventDefault(); close();
+    }
+  }
+  function open() {
+    if (!root) return false;
+    try { if (mountedCfg && mountedCfg.onOpen) mountedCfg.onOpen(); } catch (e) { try { console.error(e); } catch (x) {} }
+    prevFocus = document.activeElement; layout(); root.style.display = 'flex'; openState = true;
+    try { panel.scrollTop = 0; panel.setAttribute('tabindex', '-1'); panel.style.outline = 'none'; panel.focus(); } catch (e) {}
+    return true;
+  }
+  function close() {
+    if (!root || !openState) return; root.style.display = 'none'; openState = false;
+    try { if (mountedCfg && mountedCfg.onClose) mountedCfg.onClose(); } catch (e) {}
+    try { prevFocus && prevFocus.focus && prevFocus.focus(); } catch (e) {}
+  }
+  function mount(cfg) {
+    if (root) return api;
+    mountedCfg = cfg || {};
+    var go = function () { if (!root) build(mountedCfg); };
+    if (document.body) go(); else document.addEventListener('DOMContentLoaded', go);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', layout);
+    return api;
+  }
+  // PalUI.pill.dock(target, opts) — R39 / SB-1: one position for the sync pill on a desktop screen (top right, same size in every app).
+  // Below opts.minWidth (default 1100, where these apps put their pill in the top bar already) it does nothing, so phones and tablets are
+  // untouched. Skipped when the page carries an "embedded" class (an app shown inside another app). Stores nothing, changes no data.
+  function dockPill(target, o) {
+    o = o || {}; var min = o.minWidth || 1100, st = ['position', 'top', 'right', 'left', 'bottom', 'width', 'min-width', 'height', 'margin', 'padding', 'border-radius', 'font-size', 'white-space', 'z-index', 'display', 'transform', 'align-items', 'justify-content', 'gap'];
+    function node() { return typeof target === 'string' ? document.querySelector(target) : target; }
+    function apply() {
+      var e = node(); if (!e) return;
+      var skip = false; try { var c = document.documentElement.classList; skip = c.contains('embedded') || c.contains('is-embedded'); } catch (x) {}
+      var on = window.innerWidth >= min && !skip;
+      if (!on) { st.forEach(function (k) { e.style.removeProperty(k); }); return; }
+      var v = { position: 'fixed', top: (o.top == null ? 6 : o.top) + 'px', right: (o.right == null ? 16 : o.right) + 'px', left: 'auto', bottom: 'auto', width: 'auto', 'min-width': '0', height: '28px', margin: '0', padding: '0 12px', 'border-radius': '999px', 'font-size': '12px', 'white-space': 'nowrap', 'z-index': '900', display: 'inline-flex', transform: 'none', 'align-items': 'center', 'justify-content': 'center', gap: '6px' };
+      Object.keys(v).forEach(function (k) { e.style.setProperty(k, v[k], 'important'); });
+    }
+    apply(); window.addEventListener('resize', apply);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', apply);
+    return apply;
+  }
+  window.PalUI.pill = { dock: dockPill, VERSION: 1 };
+  var api = { mount: mount, open: open, close: close, isOpen: function () { return openState; }, isMounted: function () { return !!root; }, VERSION: 1 };
+  window.PalUI.dataSheet = api;
+})();
+
 // ══════════════════════════════════════════════════════════════════
 // SECTION 5 of 5 — PalShared: bundle identity, date helpers, failed-write handler (bundle 1.4.0, 4 Nov 2026, Suite WP1.2 / WP1.4)
 // ══════════════════════════════════════════════════════════════════
@@ -1272,6 +1414,7 @@ window.PalBridge = (function () {
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
+ *             1.9.0 (Suite Phase 3, R39) new PalUI.dataSheet (one Sync & Backup sheet for the apps) and PalUI.pill.dock (sync pill top right on desktop). Additive; no existing function changed.
  *             1.8.1 (Suite Phase 3, R35.1) guardRestore accepts signedIn (apps with their own session); restorePreview needs no PalSync session when rows are supplied. Fix for R35-T5 (Gigs & Trips said 'not signed in').
  *             1.8.0 (Suite Phase 3, R35) restore 1.1 / ui 1.1: restorePreview now agrees with PalSync.pull (cloud-deleted records stay deleted; stamps from the data field only; opts.tombstoneByStamp for Gigs); opts.rows; PalUI.guardRestore and PalUI.finishRestore used by five apps.
  *             1.7.0 (Suite Phase 3, R34) new section 4d: PalSync.restorePreview / restoreReport (read-only restore preview and report, D11) and PalUI (confirm, notice, toast, restore dialogs). Additive; no app calls them yet.
@@ -1498,7 +1641,7 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.8.1';
+  api.VERSION = '1.9.0';
   api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0', restore: '1.1', ui: '1.1' };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
