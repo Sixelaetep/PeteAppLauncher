@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint (own cache key; the launcher's PAL_THEME message keeps it current).
 (function(){try{if(localStorage.getItem('mus_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Music Tracker v1.03</title>
+<title>Music Tracker v1.04</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='20' text-anchor='middle'>🎵</text></svg>">
 <style>
@@ -92,6 +92,13 @@
   .btn.on { background:color-mix(in srgb, var(--mus) 22%, transparent); border-color:var(--mus); color:var(--ink); }
   .badge.sale { background:color-mix(in srgb, var(--mus) 22%, transparent); color:var(--ink); }
   .rel.dim { opacity:.6; }
+  .sub-nav { margin-bottom:12px; }
+  .note a, .lstat a { color:var(--mus); font-weight:600; }
+  .rec .rt { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .rec .why { font-size:12.5px; color:var(--ink2); margin-top:3px; line-height:1.35; }
+  .rec .ra.wrap .btn { min-width:0; }
+  .lrow .ct { font:700 15px var(--fd); min-width:34px; text-align:right; }
+  .lstat { font-size:12.5px; color:var(--ink3); margin:-2px 0 12px; line-height:1.4; }
   .hidtoggle { display:block; margin:14px auto 4px; background:none; border:0; color:var(--ink3); font:600 13px var(--f); text-decoration:underline; cursor:pointer; min-height:36px; }
 
   /* artists */
@@ -139,7 +146,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎵 Music <span class="v">v1.03</span></h1>
+  <h1>🎵 Music <span class="v">v1.04</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" type="button" onclick="openDataModal()" title="Sync status / Backup &amp; settings"><span class="sync-chip-dot"></span><span id="sync-lbl">Connecting…</span></button>
 </div>
 
@@ -167,9 +174,14 @@
   </section>
 
   <section class="panel" id="panel-artists" role="tabpanel" aria-labelledby="tab-artists">
-    <div class="row"><input type="search" id="aQuery" placeholder="Filter artists" aria-label="Filter artists" autocomplete="off" oninput="ui.aQuery=this.value;renderArtists()"></div>
-    <div class="chips" id="aFilters" role="group" aria-label="Show"></div>
-    <div id="aList"></div>
+    <div class="chips sub-nav" id="aSub" role="group" aria-label="Artists section"></div>
+    <div id="aSubArtists">
+      <div class="row"><input type="search" id="aQuery" placeholder="Filter artists" aria-label="Filter artists" autocomplete="off" oninput="ui.aQuery=this.value;renderArtists()"></div>
+      <div class="chips" id="aFilters" role="group" aria-label="Show"></div>
+      <div id="aList"></div>
+    </div>
+    <div id="aSubDiscover" style="display:none"><div id="recList"></div></div>
+    <div id="aSubListening" style="display:none"><div id="lisList"></div></div>
   </section>
 
   <section class="panel" id="panel-add" role="tabpanel" aria-labelledby="tab-add">
@@ -207,7 +219,7 @@
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshConcerts({})">🔄 Check for concerts now</button></div>
 </div>
 
-<script src="pal-shared.js?v=1.03"></script>
+<script src="pal-shared.js?v=1.04"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script>
 
 <script id="musCore">
@@ -312,13 +324,14 @@ window.MusicCore = (function () {
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// MUSIC TRACKER v1.03. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read.
+// MUSIC TRACKER v1.04. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read. v1.04 (Phase 4/5): Artists gets Discover (Last.fm similar-artist suggestions with Follow / Already know / Not for me) and Listening (recent plays, top artists, followed artists not played in a while).
 // Data: pal_music rows (this user only): artist_<id>, attn_<releaseId>, gig_<concertId> (link to a Gigs & Trips gig), __settings__ and, written by the
 // server only, concert_<id> (Ticketmaster dates in Scottish cities for followed artists) and __concerts__ (its bookkeeping). The scheduled server function
 // (swift-responder / pal-music-proxy) reads the same rows, so the field names below (following, excluded, appleArtistId, dealt, attention)
 // are shared with it and must not be renamed. Releases are a cache rebuilt from Apple (IndexedDB mus_db), never synced.
+// v1.04: the server also writes rec_<id> (a Last.fm suggestion), __listening__ (plays summary) and __recmeta__ (cache); the app writes recfb_<id> {id,state:followed|known|dismissed|new} (your feedback).
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.03';
+const APP_VERSION = '1.04';
 const SB_TABLE = 'pal_music';
 const STAT_CACHE_KEY = 'pal_mus_stat';
 const UI_KEY = 'mus_ui';
@@ -330,13 +343,14 @@ const _tCst      = window.PalSync.table(SB_TABLE, { prefix: 'cstate_' });    // 
 const CON_URL = (window.PAL_CONFIG && PAL_CONFIG.SB_URL ? PAL_CONFIG.SB_URL : '') + '/functions/v1/swift-responder/refresh';   // the scheduled function's manual refresh (caller's own JWT)
 const CON_STALE_MS = 24 * 3600 * 1000;
 const _tSettings = window.PalSync.table(SB_TABLE, {});
+const _tRecfb    = window.PalSync.table(SB_TABLE, { prefix: 'recfb_' });     // v1.04: your feedback on a Last.fm suggestion (followed / known / dismissed); the server reads it
 const C = window.MusicCore;
 
-let state = { v: 1, artists: [], attn: [], gigs: [], cst: [], concerts: [], settings: C.defaultSettings(), lastExported: null };
-let cinfo = { at: null, msg: '' };      // last concert check made from this device (the server's own daily check is not recorded here)
+let state = { v: 1, artists: [], attn: [], gigs: [], cst: [], concerts: [], recs: [], recfb: [], listening: null, settings: C.defaultSettings(), lastExported: null };
+let cinfo = { at: null, msg: '', lfm: '' };      // last concert check made from this device (the server's own daily check is not recorded here)
 let _tok = null, _conBusy = false; const _gigBusy = {}, _gigReq = {};
 let rel = { fetchedAt: null, items: {}, fetched: {} };          // items: collectionId -> release; fetched: appleArtistId -> ISO
-let ui = { showHidden: false, tab: 'releases', range: '90', album: true, single: true, aFilter: 'all', aQuery: '' };
+let ui = { showHidden: false, tab: 'releases', range: '90', album: true, single: true, aFilter: 'all', aQuery: '', aSub: 'artists', lRange: '30', lGap: 60, showRecHidden: false };
 let _syncState = 'connecting', _syncLog = [], _refreshing = false, _hl = null, _lastRefreshInfo = '';
 let _bootResolve; const _bootReady = new Promise(r => { _bootResolve = r; });
 
@@ -387,18 +401,21 @@ function kvGet(k) { return new Promise(res => { if (!_db) { try { res(JSON.parse
 function kvSet(k, v) { return new Promise(res => { if (!_db) { try { localStorage.setItem('mus_' + k, JSON.stringify(v)); res(true); } catch (e) { try { PalShared.writeFailure('Music', e); } catch (x) {} res(false); } return; } try { const t = _db.transaction('kv', 'readwrite'); t.objectStore('kv').put(JSON.parse(JSON.stringify(v)), k); t.oncomplete = () => res(true); t.onerror = t.onabort = () => res(false); } catch (e) { res(false); } }); }
 let _saveT = null, _relT = null;
 function saveState() { clearTimeout(_saveT); _saveT = setTimeout(flushState, 250); }
-function flushState() { clearTimeout(_saveT); _saveT = null; if (_readFail.state) return Promise.resolve(false); return kvSet('state', state); }
+let _stateLoaded = false;   // v1.04: never save the empty starting state over the real one if the page is hidden or closed before the saved data has been read
+function flushState() { clearTimeout(_saveT); _saveT = null; if (!_stateLoaded || _readFail.state) return Promise.resolve(false); return kvSet('state', state); }
 function saveRel() { clearTimeout(_relT); _relT = setTimeout(flushRel, 400); }
 function flushRel() { clearTimeout(_relT); _relT = null; return kvSet('rel', rel); }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { flushState(); flushRel(); } });
 window.addEventListener('pagehide', () => { flushState(); flushRel(); });
-function loadUi() { try { const o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (['upcoming', '30', '90', '365', 'all'].includes(o.range)) ui.range = o.range; if (typeof o.album === 'boolean') ui.album = o.album; if (typeof o.single === 'boolean') ui.single = o.single; } } catch (e) {} }
-function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ range: ui.range, album: ui.album, single: ui.single })); } catch (e) {} }
+function loadUi() { try { const o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (['upcoming', '30', '90', '365', 'all'].includes(o.range)) ui.range = o.range; if (typeof o.album === 'boolean') ui.album = o.album; if (typeof o.single === 'boolean') ui.single = o.single; if (['artists', 'discover', 'listening'].includes(o.aSub)) ui.aSub = o.aSub; if (['7', '30', '90'].includes(o.lRange)) ui.lRange = o.lRange; if ([30, 60, 90, 180].includes(o.lGap)) ui.lGap = o.lGap; } } catch (e) {} }
+function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ range: ui.range, album: ui.album, single: ui.single, aSub: ui.aSub, lRange: ui.lRange, lGap: ui.lGap })); } catch (e) {} }
 
 function normaliseState(s) {
   const o = (s && typeof s === 'object') ? s : {};
   const out = { v: 1, artists: Array.isArray(o.artists) ? o.artists.filter(a => a && a.id) : [], attn: Array.isArray(o.attn) ? o.attn.filter(a => a && a.id) : [],
                 gigs: Array.isArray(o.gigs) ? o.gigs.filter(a => a && a.id) : [], cst: Array.isArray(o.cst) ? o.cst.filter(a => a && a.id) : [], concerts: Array.isArray(o.concerts) ? o.concerts.filter(a => a && a.id) : [],
+                recs: Array.isArray(o.recs) ? o.recs.filter(a => a && a.id) : [], recfb: Array.isArray(o.recfb) ? o.recfb.filter(a => a && a.id) : [],
+                listening: (o.listening && typeof o.listening === 'object' && o.listening.artists && typeof o.listening.artists === 'object') ? o.listening : null,
                 settings: C.defaultSettings(), lastExported: o.lastExported || null };
   if (o.settings && o.settings.attention) { out.settings.attention = Object.assign(out.settings.attention, o.settings.attention); out.settings.updatedAt = o.settings.updatedAt || ''; }
   return out;
@@ -537,10 +554,11 @@ async function refreshConcerts(o) {
     const res = await fetch(CON_URL, { method: 'POST', headers: { authorization: 'Bearer ' + _tok, 'content-type': 'application/json' }, body: '{}' });
     if (res.status === 429) {
       const j = await res.json().catch(() => ({}));
-      cinfo.msg = j.error === 'daily-cap' ? 'Daily limit reached. Try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.';
+      cinfo.msg = j.error === 'daily-cap' ? 'Daily limit reached. Try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.'; cinfo.lfm = cinfo.msg;
     } else if (!res.ok) { throw new Error(res.status === 403 ? 'this account is not set up for the scheduled check' : 'HTTP ' + res.status); }
     else {
       const j = await res.json(), r = j.result || {}, tm = r.providers && r.providers.ticketmaster;
+      cinfo.lfm = lfmMessage(r);
       if (r.ran === false) cinfo.msg = r.reason === 'in-progress' ? 'A check is already running.' : '';
       else if (tm && tm.status === 'error') cinfo.msg = 'Ticketmaster could not be checked: ' + (tm.error || 'error') + '. Showing the last dates found.';
       else { cinfo.at = new Date().toISOString(); cinfo.msg = ''; }
@@ -548,9 +566,9 @@ async function refreshConcerts(o) {
     saveCinfo();
     await syncPull();
     slog('Concert check: ' + (cinfo.msg || 'ok'), cinfo.msg ? 'error' : 'ok');
-    if (!o.silent) toast(cinfo.msg || 'Concerts up to date');
+    if (!o.silent) toast(o.what === 'music' ? (cinfo.lfm || 'Suggestions and listening updated') : (cinfo.msg || 'Concerts up to date'));
   } catch (e) {
-    cinfo.msg = 'Could not reach the concert check (' + ((e && e.message) || 'offline') + '). Showing the last dates found.'; saveCinfo();
+    cinfo.msg = 'Could not reach the concert check (' + ((e && e.message) || 'offline') + '). Showing the last dates found.'; cinfo.lfm = cinfo.msg; saveCinfo();
     slog('Concert check failed: ' + cinfo.msg, 'error'); if (!o.silent) toast(cinfo.msg, 'err');
   } finally { _conBusy = false; renderAll(); publishContract(_lastRefreshInfo ? 'partial' : 'ok'); }
 }
@@ -622,7 +640,7 @@ function renderAll() {
   const live = liveArtists().length;
   $('nArtists').textContent = live ? String(live) : '';
   const nc = liveConcertList().length; $('nCon').textContent = nc ? String(nc) : '';
-  if (ui.tab === 'releases') renderReleases(); else if (ui.tab === 'concerts') renderConcerts(); else if (ui.tab === 'artists') renderArtists();
+  if (ui.tab === 'releases') renderReleases(); else if (ui.tab === 'concerts') renderConcerts(); else if (ui.tab === 'artists') renderArtistsHub();
   setRelInfo(); setConInfo(); fillSummary(); $('swAlbums').checked = state.settings.attention.albums !== false; $('swSingles').checked = state.settings.attention.singles === true; $('swConcerts').checked = state.settings.attention.scotland_concerts !== false;
 }
 function chip(label, on, js) { return '<button type="button" class="chip" aria-pressed="' + on + '" onclick="' + js + '">' + label + '</button>'; }
@@ -688,6 +706,146 @@ function renderConcerts() {
 }
 function setRange(k) { ui.range = k; saveUi(); renderReleases(); }
 function toggleKind(k) { ui[k] = !ui[k]; if (!ui.album && !ui.single) ui[k === 'album' ? 'single' : 'album'] = true; saveUi(); renderReleases(); }
+
+
+// ── v1.04: Artists sub-sections. Discover = Last.fm suggestions; Listening = your Last.fm plays ──────────────────────
+const REC_HIDDEN = ['known', 'dismissed'], REC_GONE = ['followed', 'known', 'dismissed'], _followBusy = {};
+const recfbMap = () => { const m = {}; state.recfb.forEach(x => { if (x && x.id && !x._deleted) m[x.id] = x.state; }); return m; };
+const haveNames = () => new Set(state.artists.filter(a => !a._deleted).map(a => C.norm(a.name)));
+function visibleRecs() { const fb = recfbMap(), have = haveNames(); return state.recs.filter(r => r && !r._deleted && r.name && !REC_GONE.includes(fb[r.id]) && !have.has(C.norm(r.name))).sort((a, b) => (b.score || 0) - (a.score || 0)); }
+function hiddenRecs() { const fb = recfbMap(), have = haveNames(); return state.recs.filter(r => r && !r._deleted && r.name && REC_HIDDEN.includes(fb[r.id]) && !have.has(C.norm(r.name))); }
+const lis = () => (state.listening && typeof state.listening === 'object' && state.listening.artists) ? state.listening : null;
+const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+const localDay = uts => { const d = new Date(uts * 1000); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+function playsIn(key, days) {
+  const L = lis(), e = L && L.artists[key]; if (!e) return 0;
+  const from = C.addDays(todayISO(), -(days - 1)); let n = 0;
+  for (const d of Object.keys(e.d || {})) if (d >= from) n += Number(e.d[d]) || 0;
+  return n;
+}
+function lfmMessage(r) {
+  const lf = r && r.providers && r.providers.lastfm;
+  if (!lf) return 'The server has not been updated for Last.fm yet.';
+  if (lf.status === 'skipped') return lf.error ? 'Last.fm is not set up on the server yet (' + lf.error + ').' : 'Last.fm is not set up for this account.';
+  if (lf.status === 'error') return 'Last.fm could not be checked: ' + (lf.error || 'error') + '.';
+  return lf.error ? 'Last.fm partly worked: ' + lf.error + '.' : '';
+}
+function setASub(k) { ui.aSub = k; saveUi(); renderArtistsHub(); }
+function renderArtistsHub() {
+  const nRec = visibleRecs().length;
+  $('aSub').innerHTML = chip('Artists', ui.aSub === 'artists', "setASub('artists')") + chip('Discover' + (nRec ? ' <span class="n">' + nRec + '</span>' : ''), ui.aSub === 'discover', "setASub('discover')") + chip('Listening', ui.aSub === 'listening', "setASub('listening')");
+  $('aSubArtists').style.display = ui.aSub === 'artists' ? '' : 'none'; $('aSubDiscover').style.display = ui.aSub === 'discover' ? '' : 'none'; $('aSubListening').style.display = ui.aSub === 'listening' ? '' : 'none';
+  if (ui.aSub === 'discover') renderDiscover(); else if (ui.aSub === 'listening') renderListening(); else renderArtists();
+}
+const checkBtn = () => '<button type="button" class="chip ghost" onclick="refreshConcerts({what:\'music\'})" ' + (_conBusy ? 'disabled' : '') + '>' + (_conBusy ? 'Checking…' : '🔄 Check now') + '</button>';
+function recReason(r) {
+  const sd = Array.isArray(r.seeds) ? r.seeds : [];
+  if (!sd.length) return 'Suggested by Last.fm';
+  let t = 'Last.fm lists them as similar to ' + sd[0].n + ' (match ' + Number(sd[0].x).toFixed(2) + ')';
+  const more = (r.nSeeds || sd.length) - 1; if (more > 0) t += ' and ' + more + ' other' + (more === 1 ? '' : 's') + ' you follow or play';
+  const pl = playsIn(C.norm(sd[0].n), 30); if (pl > 0) t += '. You played ' + sd[0].n + ' ' + pl + (pl === 1 ? ' time' : ' times') + ' in the last 30 days';
+  return t;
+}
+const appleSearchUrl = name => macify('https://music.apple.com/gb/search?term=' + encodeURIComponent(name));
+function recRow(r, hidden) {
+  const busy = !!_followBusy[r.name], init = (String(r.name).trim()[0] || '?').toUpperCase();
+  const acts = hidden ? '<button class="btn" data-recshow="' + esc(r.id) + '">↩ Show again</button>' :
+    '<button class="btn pri" data-recfollow="' + esc(r.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Adding…' : '＋ Follow') + '</button>' +
+    '<button class="btn" data-recapple="' + esc(r.id) + '" aria-label="Search ' + esc(r.name) + ' in Apple Music">▶ Apple Music</button>' +
+    '<button class="btn" data-recknown="' + esc(r.id) + '">✓ Already know</button><button class="btn" data-recno="' + esc(r.id) + '" aria-label="Not for me: ' + esc(r.name) + '">✕ Not for me</button>';
+  return '<div class="rel con rec' + (hidden ? ' dim' : '') + '" id="' + esc(r.id) + '"><div class="dt"><b>' + esc(init) + '</b></div><div class="rb"><div class="rt">' + esc(r.name) + '</div><div class="why">' + esc(recReason(r)) + '</div></div><div class="ra wrap">' + acts + '</div></div>';
+}
+function renderDiscover() {
+  const recs = visibleRecs(), hid = hiddenRecs(), L = lis();
+  const fol = followedArtists().length;
+  let msg = _conBusy ? 'Checking Last.fm… ' : cinfo.lfm ? cinfo.lfm + ' ' : '';
+  const base = '<div class="chips" role="group" aria-label="Discover">' + checkBtn() + '</div><div class="lstat" role="status">' + esc(msg) + (recs.length ? recs.length + ' suggestion' + (recs.length === 1 ? '' : 's') + ' based on the artists you follow and play' + (L && L.polledAt ? ', updated ' + esc(fmtDate(L.polledAt)) : '') + '. ' : '') + '</div>';
+  const hidBtn = hid.length ? '<button type="button" class="hidtoggle" data-togglerechidden="1">' + (ui.showRecHidden ? 'Hide' : 'Show') + ' ' + hid.length + ' you hid</button>' + (ui.showRecHidden ? hid.map(r => recRow(r, true)).join('') : '') : '';
+  if (!recs.length) {
+    $('recList').innerHTML = base + '<div class="empty"><div class="big">🔎</div>' + (!fol ? 'Follow some artists and suggestions based on them appear here.' : 'No suggestions yet.<div class="note" style="margin-top:6px">They appear after the server’s next daily check, or press Check now. Suggestions come from Last.fm’s similar-artist lists.</div>') + '</div>' + hidBtn;
+    return;
+  }
+  const fam = recs.filter(r => r.cat === 'familiar'), adj = recs.filter(r => r.cat !== 'familiar');
+  $('recList').innerHTML = base + (fam.length ? '<div class="h2" style="margin-top:4px">Familiar territory</div>' + fam.map(r => recRow(r, false)).join('') : '') +
+    (adj.length ? '<div class="h2">Adjacent</div>' + adj.map(r => recRow(r, false)).join('') : '') + hidBtn +
+    '<div class="note" style="margin-top:14px">What you play shapes these too. <a href="#" onclick="setASub(\'listening\');return false">See your listening</a></div>';
+}
+function setRecFb(id, st) {
+  let r = state.recfb.find(x => x.id === id);
+  if (!r) { r = { id }; state.recfb.push(r); }
+  r.state = st; r._deleted = false; r.updatedAt = new Date().toISOString(); saveState(); pushRecfb(r); renderAll();
+}
+async function followByName(name, recId) {
+  if (_followBusy[name]) return; _followBusy[name] = 1; renderAll();
+  try {
+    const ex = state.artists.find(a => C.norm(a.name) === C.norm(name));
+    if (ex) { ex._deleted = false; ex.excluded = false; ex.following = true; touch(ex); afterChange(); }
+    else {
+      const hits = await searchArtists(name), c = C.classify(name, hits);
+      if ((c.level === 'high' || c.level === 'medium') && c.pick) {
+        const dup = findByApple(c.pick.artistId);
+        if (dup) setFollow(dup, true); else addArtist(name, c.pick, c.level);
+      } else addArtist(name, null, c.level);
+      afterChange();
+    }
+    if (recId) setRecFb(recId, 'followed');
+    toast('Following ' + name); refreshReleases({});
+  } catch (err) { toast('Could not follow ' + name + ': ' + ((err && err.message) || 'error'), 'err'); }
+  finally { delete _followBusy[name]; renderAll(); }
+}
+function recAction(kind, id) {
+  const r = state.recs.find(x => x.id === id); if (!r) return;
+  if (kind === 'follow') followByName(r.name, id);
+  else if (kind === 'apple') openApple(appleSearchUrl(r.name));
+  else if (kind === 'known') { setRecFb(id, 'known'); window.PalUI && PalUI.toast(r.name + ' hidden', { action: { label: 'Undo', onClick: () => setRecFb(id, 'new') } }); }
+  else if (kind === 'no') { setRecFb(id, 'dismissed'); window.PalUI && PalUI.toast(r.name + ' hidden', { action: { label: 'Undo', onClick: () => setRecFb(id, 'new') } }); }
+  else if (kind === 'show') setRecFb(id, 'new');
+}
+function lapsedList() {
+  const L = lis(); if (!L) return { rows: [], tracking: 0 };
+  const today = todayISO(), tracking = L.since ? daysBetween(L.since, today) + 1 : 0, cons = liveConcertList();
+  const rows = followedArtists().map(a => {
+    const e = L.artists[C.norm(a.name)], last = e && e.l ? localDay(e.l) : '', gap = last ? daysBetween(last, today) : null;
+    return { a, last, gap, eff: gap == null ? tracking : gap, plays: e ? e.t : 0 };
+  }).filter(r => r.eff >= ui.lGap && (r.gap != null || tracking >= ui.lGap)).sort((x, y) => y.eff - x.eff || x.a.name.localeCompare(y.a.name));
+  rows.forEach(r => {
+    const rl = relsOf(r.a).filter(x => x.date <= today && x.date >= C.addDays(today, -60)).sort((p, q) => q.date.localeCompare(p.date))[0];
+    r.rel = rl || null; r.con = cons.filter(c => c.artistId === r.a.id)[0] || null;
+  });
+  return { rows, tracking };
+}
+function renderListening() {
+  const L = lis(), el = $('lisList'), today = todayISO();
+  const head = '<div class="chips" role="group" aria-label="Listening">' + checkBtn() + '</div>';
+  if (!L) { el.innerHTML = head + '<div class="lstat" role="status">' + esc(_conBusy ? 'Checking Last.fm… ' : cinfo.lfm || '') + '</div><div class="empty"><div class="big">🎧</div>No listening data yet.<div class="note" style="margin-top:6px">Plays come from Last.fm. They appear after the server’s next daily check, or press Check now.</div></div>'; return; }
+  const total = Object.values(L.artists).reduce((n, e) => n + (e.t || 0), 0), tracking = L.since ? daysBetween(L.since, today) + 1 : 0;
+  const status = (_conBusy ? 'Checking Last.fm… ' : cinfo.lfm ? cinfo.lfm + ' ' : '') + 'Tracking since ' + fmtDate(L.since) + ' (' + total + ' play' + (total === 1 ? '' : 's') + ').' + (L.polledAt ? ' Last checked ' + fmtDate(L.polledAt) + '.' : '') + (L.gap ? ' Some plays may be missing: more than 1,000 arrived between two checks.' : '');
+  let h = head + '<div class="lstat" role="status">' + esc(status) + '</div>';
+  // recent plays
+  const rec = (L.recent || []).slice(0, 10);
+  h += '<div class="h2" style="margin-top:4px">Recent plays</div>' + (rec.length ? rec.map(p => '<div class="res lrow"><div class="rb"><div class="rt">' + esc(p.a) + '</div><div class="rs">' + esc(p.t || '') + ' · ' + esc(ago(new Date(p.u * 1000).toISOString())) + '</div></div></div>').join('') : '<div class="note">Nothing played since tracking began.</div>');
+  // top artists
+  const rng = Number(ui.lRange), have = haveNames();
+  const top = Object.keys(L.artists).map(k => ({ k, e: L.artists[k], n: playsIn(k, rng) })).filter(x => x.n > 0).sort((a, b) => b.n - a.n || a.e.n.localeCompare(b.e.n)).slice(0, 15);
+  h += '<div class="h2">Top artists</div><div class="chips" role="group" aria-label="Period">' + [['7', '7 days'], ['30', '30 days'], ['90', '90 days']].map(([k, l]) => chip(l, ui.lRange === k, "setLRange('" + k + "')")).join('') + '</div>';
+  h += top.length ? top.map(x => { const mine = state.artists.find(a => !a._deleted && C.norm(a.name) === x.k), fol = mine && C.isFollowed(mine);
+    return '<div class="res lrow"><div class="rb"><div class="rt">' + esc(x.e.n) + (fol ? ' <span class="badge">Following</span>' : '') + '</div></div><div class="ct">' + x.n + '</div>' +
+      (fol ? '' : '<button class="btn sm" data-followname="' + esc(x.e.n) + '"' + (_followBusy[x.e.n] ? ' disabled' : '') + '>' + (_followBusy[x.e.n] ? 'Adding…' : '＋ Follow') + '</button>') + '</div>'; }).join('') : '<div class="note">No plays in this period.</div>';
+  // not played in a while
+  const lp = lapsedList();
+  h += '<div class="h2">Not played in a while</div><div class="chips" role="group" aria-label="How long">' + [30, 60, 90, 180].map(d => chip(d + ' days', ui.lGap === d, 'setLGap(' + d + ')')).join('') + '</div>';
+  if (!followedArtists().length) h += '<div class="note">Follow some artists to see which ones you have not played lately.</div>';
+  else if (!lp.rows.length) h += '<div class="note">' + (tracking < ui.lGap ? 'Tracking began ' + tracking + ' day' + (tracking === 1 ? '' : 's') + ' ago, so nobody can have gone ' + ui.lGap + ' days unplayed yet. This list fills in as your history builds.' : 'You have played everyone you follow within ' + ui.lGap + ' days.') + '</div>';
+  else h += lp.rows.map(r => {
+    const when = r.gap != null ? 'Last played ' + r.gap + ' day' + (r.gap === 1 ? '' : 's') + ' ago (' + fmtDate(r.last) + ')' : 'Not played since tracking began (' + fmtDate(L.since) + ')';
+    const badges = (r.rel ? '<span class="badge new">🆕 ' + esc(r.rel.name) + '</span>' : '') + (r.con ? '<span class="badge sale">🎟 ' + esc(r.con.venue) + ', ' + esc(C.dateLabel(r.con.date)) + '</span>' : '');
+    return '<div class="res lrow"><div class="rb"><div class="rt">' + esc(r.a.name) + '</div><div class="rs">' + esc(when) + '</div>' + (badges ? '<div class="rm" style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">' + badges + '</div>' : '') + '</div>' +
+      '<button class="btn sm" data-lapple="' + esc(r.a.id) + '" aria-label="Open ' + esc(r.a.name) + ' in Apple Music">▶ Play</button></div>'; }).join('');
+  h += '<div class="note" style="margin-top:14px">Your plays also shape Discover. <a href="#" onclick="setASub(\'discover\');return false">See suggestions</a></div>';
+  el.innerHTML = h;
+}
+function setLRange(k) { ui.lRange = k; saveUi(); renderListening(); }
+function setLGap(d) { ui.lGap = d; saveUi(); renderListening(); }
 
 function matchFlag(a) { return a.match === 'medium' ? 'Check' : (!hasApple(a) ? 'No match' : ''); }
 function renderArtists() {
@@ -807,6 +965,7 @@ async function pushArtist(a) { if (!window.PalSync.hasSession()) return; setSync
 async function pushAttn(r) { if (!window.PalSync.hasSession()) return; try { await _tAttn.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Seen mark: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushGig(r) { if (!window.PalSync.hasSession()) return; try { await _tGigs.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Gig link: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushCst(r) { if (!window.PalSync.hasSession()) return; try { await _tCst.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Concert flag: ' + hint(e), 'error'); setSyncStatus('error'); } }
+async function pushRecfb(r) { if (!window.PalSync.hasSession()) return; try { await _tRecfb.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Suggestion feedback: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushSettings() { if (!window.PalSync.hasSession()) return; try { await _tSettings.upsert('__settings__', state.settings); setSyncStatus('synced'); } catch (e) { slog('Settings: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function syncPull() {
   if (!window.PalSync.hasSession()) return;
@@ -817,6 +976,11 @@ async function syncPull() {
     const t = await _tAttn.pull(state.attn, 'id', 'updatedAt', rows); state.attn = t.merged;
     const g = await _tGigs.pull(state.gigs, 'id', 'updatedAt', rows); state.gigs = g.merged;
     const cs = await _tCst.pull(state.cst, 'id', 'updatedAt', rows); state.cst = cs.merged;
+    const rf = await _tRecfb.pull(state.recfb, 'id', 'updatedAt', rows); state.recfb = rf.merged;
+    // suggestions and the listening summary are written by the server only: take them as they are (never pushed back)
+    state.recs = rows.filter(r => r.record_key.indexOf('rec_') === 0 && r.data && r.data.id && !r.data._deleted).map(r => r.data);
+    const lr = rows.find(r => r.record_key === '__listening__');
+    state.listening = (lr && lr.data && !lr.data._deleted && lr.data.artists && typeof lr.data.artists === 'object') ? lr.data : null;
     // concerts are written by the server only: take them as they are (never pushed back, so a stale copy here cannot overwrite the server's)
     state.concerts = rows.filter(r => r.record_key.indexOf('concert_') === 0 && r.data && r.data.id && !r.data._deleted).map(r => r.data);
     const sr = rows.find(r => r.record_key === '__settings__');
@@ -832,7 +996,7 @@ function manualPull() { if (!window.PalSync.hasSession()) { toast('Not connected
 async function manualPush() {
   if (!window.PalSync.hasSession()) { toast('Not connected to cloud', 'err'); return; }
   setSyncStatus('syncing');
-  try { for (const a of state.artists) await _tArtists.upsert(a.id, a); for (const r of state.attn) await _tAttn.upsert(r.id, r); for (const r of state.gigs) await _tGigs.upsert(r.id, r); for (const r of state.cst) await _tCst.upsert(r.id, r); if (state.settings.updatedAt) await _tSettings.upsert('__settings__', state.settings);
+  try { for (const a of state.artists) await _tArtists.upsert(a.id, a); for (const r of state.attn) await _tAttn.upsert(r.id, r); for (const r of state.gigs) await _tGigs.upsert(r.id, r); for (const r of state.cst) await _tCst.upsert(r.id, r); for (const r of state.recfb) await _tRecfb.upsert(r.id, r); if (state.settings.updatedAt) await _tSettings.upsert('__settings__', state.settings);
         slog('Pushed ' + state.artists.length + ' artists', 'ok'); setSyncStatus('synced'); toast('Pushed to cloud'); }
   catch (e) { slog('Push error: ' + hint(e), 'error'); setSyncStatus('error'); toast('Push had errors', 'err'); }
 }
@@ -840,7 +1004,7 @@ async function manualPush() {
 // ── backup ────────────────────────────────────────────────────────
 function exportJSON() {
   state.lastExported = new Date().toISOString(); flushState();
-  const out = { format: 'music-tracker-backup/1', app: 'music', version: APP_VERSION, exportedAt: state.lastExported, artists: state.artists, attn: state.attn, gigs: state.gigs, cst: state.cst, settings: state.settings };
+  const out = { format: 'music-tracker-backup/1', app: 'music', version: APP_VERSION, exportedAt: state.lastExported, artists: state.artists, attn: state.attn, gigs: state.gigs, cst: state.cst, recfb: state.recfb, settings: state.settings };
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
   a.download = 'music-tracker-backup.json'; a.click(); toast('Exported');
 }
@@ -854,25 +1018,27 @@ function importJSON(evt) {
       // v1.03 (MV-1): check every record before it can touch state. A record must be an object with a string id (artists also a non-empty string name);
       // anything else is skipped and counted. Merge rules are unchanged: newer updatedAt wins and nothing local is deleted.
       let skipped = 0;
-      const clean = (list, needName) => {
+      const clean = (list, needName, needState) => {
         if (list == null) return [];
         if (!Array.isArray(list)) { skipped++; return []; }
         const out = [];
         list.forEach(r => {
-          if (!r || typeof r !== 'object' || Array.isArray(r) || typeof r.id !== 'string' || !r.id.trim() || (needName && (typeof r.name !== 'string' || !r.name.trim()))) { skipped++; return; }
+          if (!r || typeof r !== 'object' || Array.isArray(r) || typeof r.id !== 'string' || !r.id.trim() || (needName && (typeof r.name !== 'string' || !r.name.trim())) || (needState && typeof r.state !== 'string')) { skipped++; return; }
           const c = {}; Object.keys(r).forEach(k => { if (k !== '__proto__') c[k] = r[k]; });
           if (c.updatedAt != null && typeof c.updatedAt !== 'string') delete c.updatedAt;
           out.push(c);
         });
         return out;
       };
-      const ok = normaliseState({ artists: clean(inc.artists, true), attn: clean(inc.attn), gigs: clean(inc.gigs), cst: clean(inc.cst) });
+      const ok = normaliseState({ artists: clean(inc.artists, true), attn: clean(inc.attn), gigs: clean(inc.gigs), cst: clean(inc.cst), recfb: clean(inc.recfb, false, true) });
       const have = new Map(state.artists.map(a => [a.id, a])); let added = 0, newer = 0;
       ok.artists.forEach(a => { const cur = have.get(a.id); if (!cur) { state.artists.push(a); added++; } else if ((a.updatedAt || '') > (cur.updatedAt || '')) { Object.assign(cur, a); newer++; } });
       const hv = new Map(state.attn.map(a => [a.id, a]));
       ok.attn.forEach(a => { const cur = hv.get(a.id); if (!cur) state.attn.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       const hg = new Map(state.gigs.map(a => [a.id, a]));
       ok.gigs.forEach(a => { const cur = hg.get(a.id); if (!cur) state.gigs.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
+      const hf = new Map(state.recfb.map(a => [a.id, a]));
+      ok.recfb.forEach(a => { const cur = hf.get(a.id); if (!cur) state.recfb.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       const hc = new Map(state.cst.map(a => [a.id, a]));
       ok.cst.forEach(a => { const cur = hc.get(a.id); if (!cur) state.cst.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       if (inc.settings && inc.settings.attention && (inc.settings.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: inc.settings }).settings;
@@ -906,7 +1072,7 @@ PalUI.pill.dock('#sync-chip');
 
 // ── events ────────────────────────────────────────────────────────
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-artist],[data-open-rel],[data-seen],[data-seen-id],[data-url],[data-addgig],[data-opengig],[data-notint],[data-restore],[data-salealert],[data-togglehidden]'); if (!t) return;
+  const t = e.target.closest('[data-artist],[data-open-rel],[data-seen],[data-seen-id],[data-url],[data-addgig],[data-opengig],[data-notint],[data-restore],[data-salealert],[data-togglehidden],[data-recfollow],[data-recapple],[data-recknown],[data-recno],[data-recshow],[data-togglerechidden],[data-followname],[data-lapple]'); if (!t) return;
   if (t.dataset.artist) openSheet(t.dataset.artist);
   else if (t.dataset.openRel) { const r = rel.items[t.dataset.openRel]; if (r) openApple(releaseUrl(r)); }
   else if (t.dataset.seen) setSeen(t.dataset.seen, t.dataset.on === '1');
@@ -915,6 +1081,14 @@ document.addEventListener('click', e => {
   else if (t.dataset.restore) restoreConcert(t.dataset.restore);
   else if (t.dataset.salealert) toggleSaleAlert(t.dataset.salealert);
   else if (t.dataset.togglehidden) { ui.showHidden = !ui.showHidden; renderConcerts(); }
+  else if (t.dataset.recfollow) recAction('follow', t.dataset.recfollow);
+  else if (t.dataset.recapple) recAction('apple', t.dataset.recapple);
+  else if (t.dataset.recknown) recAction('known', t.dataset.recknown);
+  else if (t.dataset.recno) recAction('no', t.dataset.recno);
+  else if (t.dataset.recshow) recAction('show', t.dataset.recshow);
+  else if (t.dataset.togglerechidden) { ui.showRecHidden = !ui.showRecHidden; renderDiscover(); }
+  else if (t.dataset.followname) followByName(t.dataset.followname, null);
+  else if (t.dataset.lapple) { const a = byId(t.dataset.lapple); if (a) openApple(artistUrl(a)); }
   else if (t.dataset.url) openExternal(t.dataset.url);
   else if (t.dataset.addgig) addToGigs(t.dataset.addgig);
   else if (t.dataset.opengig) openGig(t.dataset.opengig);
@@ -968,10 +1142,11 @@ setSyncStatus('connecting');
   try {
     loadUi(); await kvOpen();
     state = normaliseState(await kvGet('state'));
+    _stateLoaded = true;
     if (_readFail.state) _storeBad = 'read';
     storeNotice();
     const r = await kvGet('rel'); if (r && r.items) rel = { fetchedAt: r.fetchedAt || null, items: r.items, fetched: r.fetched || {} };
-    const ci = await kvGet('cinfo'); if (ci && typeof ci === 'object') cinfo = { at: ci.at || null, msg: ci.msg || '' };
+    const ci = await kvGet('cinfo'); if (ci && typeof ci === 'object') cinfo = { at: ci.at || null, msg: ci.msg || '', lfm: ci.lfm || '' };
     writeStatCache(); switchTab('releases');
   } finally { _bootResolve(); }
 })();
