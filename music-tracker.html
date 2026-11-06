@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint (own cache key; the launcher's PAL_THEME message keeps it current).
 (function(){try{if(localStorage.getItem('mus_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Music Tracker v1.02</title>
+<title>Music Tracker v1.03</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='20' text-anchor='middle'>🎵</text></svg>">
 <style>
@@ -131,6 +131,7 @@
   #toast.show { display:block; } #toast.err { border-color:var(--red); }
   .data-box { background:var(--surface2); border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.6; margin-bottom:8px; }
   .pal-ds-label { font:700 12px var(--f); letter-spacing:.06em; text-transform:uppercase; margin:18px 0 6px; opacity:.7; }
+  #store-banner { display:none; margin:0 0 12px; padding:10px 12px; border-radius:11px; background:color-mix(in srgb, var(--red, #d33) 16%, transparent); color:var(--ink); font-size:13px; }
   #no-pal-banner { display:none; margin:0 0 12px; padding:10px 12px; border-radius:11px; background:color-mix(in srgb, var(--orange) 18%, transparent); color:var(--ink); font-size:13px; }
   @media (prefers-reduced-motion: reduce) { .prog > i, .sync-chip-dot { transition:none; animation:none !important; } }
 </style>
@@ -138,11 +139,12 @@
 <body>
 
 <div class="chrome">
-  <h1>🎵 Music <span class="v">v1.02</span></h1>
+  <h1>🎵 Music <span class="v">v1.03</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" type="button" onclick="openDataModal()" title="Sync status / Backup &amp; settings"><span class="sync-chip-dot"></span><span id="sync-lbl">Connecting…</span></button>
 </div>
 
 <div class="wrap">
+  <div id="store-banner" role="alert"></div>
   <div id="no-pal-banner">Not connected to the launcher, so this runs on this device only. Open it through Pete’s Apps to sync.</div>
   <div class="seg" role="tablist" aria-label="Music sections">
     <button role="tab" id="tab-releases" aria-selected="true" onclick="switchTab('releases')">Releases</button>
@@ -205,7 +207,7 @@
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshConcerts({})">🔄 Check for concerts now</button></div>
 </div>
 
-<script src="pal-shared.js?v=1.02"></script>
+<script src="pal-shared.js?v=1.03"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script>
 
 <script id="musCore">
@@ -310,13 +312,13 @@ window.MusicCore = (function () {
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// MUSIC TRACKER v1.02. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card.
+// MUSIC TRACKER v1.03. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read.
 // Data: pal_music rows (this user only): artist_<id>, attn_<releaseId>, gig_<concertId> (link to a Gigs & Trips gig), __settings__ and, written by the
 // server only, concert_<id> (Ticketmaster dates in Scottish cities for followed artists) and __concerts__ (its bookkeeping). The scheduled server function
 // (swift-responder / pal-music-proxy) reads the same rows, so the field names below (following, excluded, appleArtistId, dealt, attention)
 // are shared with it and must not be renamed. Releases are a cache rebuilt from Apple (IndexedDB mus_db), never synced.
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.02';
+const APP_VERSION = '1.03';
 const SB_TABLE = 'pal_music';
 const STAT_CACHE_KEY = 'pal_mus_stat';
 const UI_KEY = 'mus_ui';
@@ -372,12 +374,20 @@ function artHtml(url, size, fallback) {
 
 // ── local storage: IndexedDB mus_db (artists can run to thousands), localStorage fallback ──
 let _db = null;
-function kvOpen() { return new Promise(res => { try { const r = indexedDB.open('mus_db', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => { _db = r.result; res(true); }; r.onerror = r.onblocked = () => res(false); } catch (e) { res(false); } }); }
-function kvGet(k) { return new Promise(res => { if (!_db) { try { res(JSON.parse(localStorage.getItem('mus_' + k) || 'null')); } catch (e) { res(null); } return; } try { const q = _db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result == null ? null : q.result); q.onerror = () => res(null); } catch (e) { res(null); } }); }
+// v1.03 (MV-4): if IndexedDB cannot be opened we fall back to localStorage (which starts empty), and if a read fails we must not save over what is really there. Both show a notice.
+let _storeBad = '', _readFail = {};
+function storeNotice() {
+  const el = document.getElementById('store-banner'); if (!el) return;
+  if (_storeBad === 'open') { el.textContent = "This device's saved music data couldn't be opened, so Music is using a small temporary store. Your cloud copy is safe and will load when you sign in. Close other tabs of this app or restart the browser, then reload."; el.style.display = 'block'; }
+  else if (_storeBad === 'read') { el.textContent = "This device's saved music data couldn't be read, so changes are not being saved here to avoid overwriting it. Reload to try again; your cloud copy is safe."; el.style.display = 'block'; }
+  else el.style.display = 'none';
+}
+function kvOpen() { return new Promise(res => { const bad = () => { _storeBad = 'open'; res(false); }; try { const r = indexedDB.open('mus_db', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => { _db = r.result; res(true); }; r.onerror = r.onblocked = bad; } catch (e) { bad(); } }); }
+function kvGet(k) { return new Promise(res => { if (!_db) { try { res(JSON.parse(localStorage.getItem('mus_' + k) || 'null')); } catch (e) { res(null); } return; } try { const q = _db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result == null ? null : q.result); q.onerror = () => { _readFail[k] = true; res(null); }; } catch (e) { _readFail[k] = true; res(null); } }); }
 function kvSet(k, v) { return new Promise(res => { if (!_db) { try { localStorage.setItem('mus_' + k, JSON.stringify(v)); res(true); } catch (e) { try { PalShared.writeFailure('Music', e); } catch (x) {} res(false); } return; } try { const t = _db.transaction('kv', 'readwrite'); t.objectStore('kv').put(JSON.parse(JSON.stringify(v)), k); t.oncomplete = () => res(true); t.onerror = t.onabort = () => res(false); } catch (e) { res(false); } }); }
 let _saveT = null, _relT = null;
 function saveState() { clearTimeout(_saveT); _saveT = setTimeout(flushState, 250); }
-function flushState() { clearTimeout(_saveT); _saveT = null; return kvSet('state', state); }
+function flushState() { clearTimeout(_saveT); _saveT = null; if (_readFail.state) return Promise.resolve(false); return kvSet('state', state); }
 function saveRel() { clearTimeout(_relT); _relT = setTimeout(flushRel, 400); }
 function flushRel() { clearTimeout(_relT); _relT = null; return kvSet('rel', rel); }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { flushState(); flushRel(); } });
@@ -587,7 +597,7 @@ function publishContract(status) {
   try {
     if (!window.PalContract || !window.PalSync.getUserId() || !liveArtists().length) return;   // an empty library never overwrites a good contract
     const p = buildPayload(status);
-    window.PalContract.publish('music', { attention: p.attention, upcoming: p.upcoming, summary: p.summary, app: 'music-' + APP_VERSION, schema: '1', caps: { app: true } });
+    window.PalContract.publish('music', { attention: p.attention, upcoming: p.upcoming, summary: p.summary, app: APP_VERSION, schema: '1', caps: { app: true } });
     const rows = [];
     liveArtists().forEach(a => rows.push({ id: 'artist:' + a.id, t: a.name, s: a.genre || '', k: 'Artist', open: { view: 'artist', id: a.id } }));
     allReleases().filter(r => r.date <= todayISO()).sort((x, y) => y.date.localeCompare(x.date)).slice(0, 300)
@@ -841,16 +851,32 @@ function importJSON(evt) {
     try {
       const inc = JSON.parse(reader.result);
       if (!inc || inc.format !== 'music-tracker-backup/1' || !Array.isArray(inc.artists)) throw new Error('Not a Music Tracker backup file');
+      // v1.03 (MV-1): check every record before it can touch state. A record must be an object with a string id (artists also a non-empty string name);
+      // anything else is skipped and counted. Merge rules are unchanged: newer updatedAt wins and nothing local is deleted.
+      let skipped = 0;
+      const clean = (list, needName) => {
+        if (list == null) return [];
+        if (!Array.isArray(list)) { skipped++; return []; }
+        const out = [];
+        list.forEach(r => {
+          if (!r || typeof r !== 'object' || Array.isArray(r) || typeof r.id !== 'string' || !r.id.trim() || (needName && (typeof r.name !== 'string' || !r.name.trim()))) { skipped++; return; }
+          const c = {}; Object.keys(r).forEach(k => { if (k !== '__proto__') c[k] = r[k]; });
+          if (c.updatedAt != null && typeof c.updatedAt !== 'string') delete c.updatedAt;
+          out.push(c);
+        });
+        return out;
+      };
+      const ok = normaliseState({ artists: clean(inc.artists, true), attn: clean(inc.attn), gigs: clean(inc.gigs), cst: clean(inc.cst) });
       const have = new Map(state.artists.map(a => [a.id, a])); let added = 0, newer = 0;
-      inc.artists.forEach(a => { if (!a || !a.id) return; const cur = have.get(a.id); if (!cur) { state.artists.push(a); added++; } else if ((a.updatedAt || '') > (cur.updatedAt || '')) { Object.assign(cur, a); newer++; } });
+      ok.artists.forEach(a => { const cur = have.get(a.id); if (!cur) { state.artists.push(a); added++; } else if ((a.updatedAt || '') > (cur.updatedAt || '')) { Object.assign(cur, a); newer++; } });
       const hv = new Map(state.attn.map(a => [a.id, a]));
-      (inc.attn || []).forEach(a => { if (!a || !a.id) return; const cur = hv.get(a.id); if (!cur) state.attn.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
+      ok.attn.forEach(a => { const cur = hv.get(a.id); if (!cur) state.attn.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       const hg = new Map(state.gigs.map(a => [a.id, a]));
-      (inc.gigs || []).forEach(a => { if (!a || !a.id) return; const cur = hg.get(a.id); if (!cur) state.gigs.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
+      ok.gigs.forEach(a => { const cur = hg.get(a.id); if (!cur) state.gigs.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       const hc = new Map(state.cst.map(a => [a.id, a]));
-      (inc.cst || []).forEach(a => { if (!a || !a.id) return; const cur = hc.get(a.id); if (!cur) state.cst.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
+      ok.cst.forEach(a => { const cur = hc.get(a.id); if (!cur) state.cst.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       if (inc.settings && inc.settings.attention && (inc.settings.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: inc.settings }).settings;
-      saveState(); renderAll(); toast('Imported ' + added + ' new, ' + newer + ' updated');
+      saveState(); renderAll(); toast('Imported ' + added + ' new, ' + newer + ' updated' + (skipped ? ', ' + skipped + ' skipped' : ''));
       if (window.PalSync.hasSession()) manualPush();
       refreshReleases({});
     } catch (e) { toast('Import failed: ' + e.message, 'err'); }
@@ -942,6 +968,8 @@ setSyncStatus('connecting');
   try {
     loadUi(); await kvOpen();
     state = normaliseState(await kvGet('state'));
+    if (_readFail.state) _storeBad = 'read';
+    storeNotice();
     const r = await kvGet('rel'); if (r && r.items) rel = { fetchedAt: r.fetchedAt || null, items: r.items, fetched: r.fetched || {} };
     const ci = await kvGet('cinfo'); if (ci && typeof ci === 'object') cinfo = { at: ci.at || null, msg: ci.msg || '' };
     writeStatCache(); switchTab('releases');
