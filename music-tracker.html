@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint (own cache key; the launcher's PAL_THEME message keeps it current).
 (function(){try{if(localStorage.getItem('mus_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Music Tracker v1.01</title>
+<title>Music Tracker v1.02</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='20' text-anchor='middle'>🎵</text></svg>">
 <style>
@@ -86,6 +86,13 @@
   .badge.warn { background:color-mix(in srgb, var(--orange) 25%, transparent); color:var(--orange); }
   .ra { display:flex; flex-direction:column; gap:6px; }
   .ra .btn { min-height:38px; padding:0 12px; font-size:13px; }
+  .rel.con { flex-wrap:wrap; }
+  .ra.wrap { flex:1 0 100%; flex-direction:row; flex-wrap:wrap; justify-content:flex-start; margin-top:2px; }
+  .ra.wrap .btn { flex:1 1 auto; }
+  .btn.on { background:color-mix(in srgb, var(--mus) 22%, transparent); border-color:var(--mus); color:var(--ink); }
+  .badge.sale { background:color-mix(in srgb, var(--mus) 22%, transparent); color:var(--ink); }
+  .rel.dim { opacity:.6; }
+  .hidtoggle { display:block; margin:14px auto 4px; background:none; border:0; color:var(--ink3); font:600 13px var(--f); text-decoration:underline; cursor:pointer; min-height:36px; }
 
   /* artists */
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:12px; }
@@ -131,7 +138,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎵 Music <span class="v">v1.01</span></h1>
+  <h1>🎵 Music <span class="v">v1.02</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" type="button" onclick="openDataModal()" title="Sync status / Backup &amp; settings"><span class="sync-chip-dot"></span><span id="sync-lbl">Connecting…</span></button>
 </div>
 
@@ -198,7 +205,7 @@
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshConcerts({})">🔄 Check for concerts now</button></div>
 </div>
 
-<script src="pal-shared.js?v=1.01"></script>
+<script src="pal-shared.js?v=1.02"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script>
 
 <script id="musCore">
@@ -255,11 +262,19 @@ window.MusicCore = (function () {
       return { id: c.id, kind: 'concert', title: c.artist + ': ' + c.venue + ', ' + c.city, sub: dateLabel(c.date), date: c.date, until: until < c.date ? until : c.date, open: { view: 'concerts', id: c.id } };
     });
   }
+  // v1.02: "Not interested" hides one concert; "Alert me" raises a Needs attention line two days before its tickets go on sale (until the end of that day).
+  var SALE_LEAD_DAYS = 2;
+  function visibleConcerts(live, cs) { cs = cs || {}; return live.filter(function (c) { return !(cs[String(c.id)] && cs[String(c.id)].ni); }); }
+  function saleCandidates(live, cs, today) {
+    cs = cs || {};
+    return live.filter(function (c) { var f = cs[String(c.id)]; return f && f.alert && !f.ni && /^\d{4}-\d{2}-\d{2}$/.test(String(c.saleDay || '')) && c.saleDay >= today && today >= addDays(c.saleDay, -SALE_LEAD_DAYS); })
+      .map(function (c) { return { id: 'sale_' + c.id, kind: 'sale', title: c.artist + ': tickets on sale', sub: dateLabel(c.saleDay) + (c.saleTime ? ' ' + c.saleTime : '') + ' \u00B7 ' + c.venue, date: c.saleDay, until: c.saleDay, open: { view: 'concerts', id: c.id } }; });
+  }
   function concertUpcoming(live) {
     return live.slice(0, 30).map(function (c) { return { id: c.id, date: c.date, time: c.time || undefined, title: c.artist + ' at ' + c.venue, sub: c.city, kind: 'concert', open: { view: 'concerts', id: c.id } }; });
   }
   // Releases and concerts that may reach Needs attention. Returns { items, overflow, eligible }.
-  function attention(releases, artists, settings, attn, today, concerts) {
+  function attention(releases, artists, settings, attn, today, concerts, cstate) {
     var followed = {}; (artists || []).forEach(function (a) { if (isFollowed(a) && /^\d{1,12}$/.test(String(a.appleArtistId || ''))) followed[String(a.appleArtistId)] = true; });
     var set = (settings && settings.attention) || {}, dealt = dealtSet(attn), cutoff = addDays(today, -WINDOW_DAYS), cands = [], seen = {};
     (releases || []).forEach(function (r) {
@@ -271,32 +286,37 @@ window.MusicCore = (function () {
       if (until < today || dealt[id]) return;
       cands.push({ id: id, kind: single ? 'single' : 'album', title: r.artistName + ': ' + r.name, sub: single ? 'New single' : 'New album', date: r.date, until: until, open: { view: 'releases', id: id } });
     });
-    if (set.scotland_concerts !== false) concertCandidates(liveConcerts(concerts, artists, today), today).forEach(function (c) {
+    var vis = visibleConcerts(liveConcerts(concerts, artists, today), cstate);
+    saleCandidates(vis, cstate, today).forEach(function (c) {          // asked for on one concert: not switched off by the general concerts switch
       if (seen[c.id] || dealt[c.id] || c.until < today) return;
       seen[c.id] = true; cands.push(c);
     });
-    var pr = { concert: 1, album: 2, single: 3 };
+    if (set.scotland_concerts !== false) concertCandidates(vis, today).forEach(function (c) {
+      if (seen[c.id] || dealt[c.id] || c.until < today) return;
+      seen[c.id] = true; cands.push(c);
+    });
+    var pr = { sale: 0, concert: 1, album: 2, single: 3 };
     cands.sort(function (a, b) { return pr[a.kind] - pr[b.kind] || a.date.localeCompare(b.date) || a.id.localeCompare(b.id); });
     var items = cands.slice(0, CAP).map(function (c) {
-      return { id: c.id, level: (c.kind === 'concert' || (c.kind === 'album' && c.date <= today)) ? 'soon' : 'info', title: c.title, sub: c.sub, due: c.date, until: c.until, open: c.open };
+      return { id: c.id, level: (c.kind === 'sale' || c.kind === 'concert' || (c.kind === 'album' && c.date <= today)) ? 'soon' : 'info', title: c.title, sub: c.sub, due: c.date, until: c.until, open: c.open };
     });
     return { items: items, overflow: Math.max(0, cands.length - items.length), eligible: cands.length };
   }
   return { norm: norm, slug: slug, classify: classify, kindOf: kindOf, artSize: artSize, parseRelease: parseRelease, addDays: addDays, isFollowed: isFollowed,
            defaultSettings: defaultSettings, dealtSet: dealtSet, attention: attention, dateLabel: dateLabel, liveConcerts: liveConcerts,
-           concertCandidates: concertCandidates, concertUpcoming: concertUpcoming, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP, CONCERT_NEW_DAYS: CONCERT_NEW_DAYS };
+           concertCandidates: concertCandidates, concertUpcoming: concertUpcoming, visibleConcerts: visibleConcerts, saleCandidates: saleCandidates, SALE_LEAD_DAYS: SALE_LEAD_DAYS, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP, CONCERT_NEW_DAYS: CONCERT_NEW_DAYS };
 })();
 </script>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// MUSIC TRACKER v1.01. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts.
+// MUSIC TRACKER v1.02. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card.
 // Data: pal_music rows (this user only): artist_<id>, attn_<releaseId>, gig_<concertId> (link to a Gigs & Trips gig), __settings__ and, written by the
 // server only, concert_<id> (Ticketmaster dates in Scottish cities for followed artists) and __concerts__ (its bookkeeping). The scheduled server function
 // (swift-responder / pal-music-proxy) reads the same rows, so the field names below (following, excluded, appleArtistId, dealt, attention)
 // are shared with it and must not be renamed. Releases are a cache rebuilt from Apple (IndexedDB mus_db), never synced.
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.01';
+const APP_VERSION = '1.02';
 const SB_TABLE = 'pal_music';
 const STAT_CACHE_KEY = 'pal_mus_stat';
 const UI_KEY = 'mus_ui';
@@ -304,16 +324,17 @@ const REFRESH_STALE_MS = 6 * 3600 * 1000;
 const _tArtists  = window.PalSync.table(SB_TABLE, { prefix: 'artist_' });
 const _tAttn     = window.PalSync.table(SB_TABLE, { prefix: 'attn_' });
 const _tGigs     = window.PalSync.table(SB_TABLE, { prefix: 'gig_' });      // v1.01: link from a concert to the Gigs & Trips gig made from it
+const _tCst      = window.PalSync.table(SB_TABLE, { prefix: 'cstate_' });    // v1.02: the user's own flags on one concert (not interested / alert me when tickets go on sale); the server reads it
 const CON_URL = (window.PAL_CONFIG && PAL_CONFIG.SB_URL ? PAL_CONFIG.SB_URL : '') + '/functions/v1/swift-responder/refresh';   // the scheduled function's manual refresh (caller's own JWT)
 const CON_STALE_MS = 24 * 3600 * 1000;
 const _tSettings = window.PalSync.table(SB_TABLE, {});
 const C = window.MusicCore;
 
-let state = { v: 1, artists: [], attn: [], gigs: [], concerts: [], settings: C.defaultSettings(), lastExported: null };
+let state = { v: 1, artists: [], attn: [], gigs: [], cst: [], concerts: [], settings: C.defaultSettings(), lastExported: null };
 let cinfo = { at: null, msg: '' };      // last concert check made from this device (the server's own daily check is not recorded here)
 let _tok = null, _conBusy = false; const _gigBusy = {}, _gigReq = {};
 let rel = { fetchedAt: null, items: {}, fetched: {} };          // items: collectionId -> release; fetched: appleArtistId -> ISO
-let ui = { tab: 'releases', range: '90', album: true, single: true, aFilter: 'all', aQuery: '' };
+let ui = { showHidden: false, tab: 'releases', range: '90', album: true, single: true, aFilter: 'all', aQuery: '' };
 let _syncState = 'connecting', _syncLog = [], _refreshing = false, _hl = null, _lastRefreshInfo = '';
 let _bootResolve; const _bootReady = new Promise(r => { _bootResolve = r; });
 
@@ -367,7 +388,7 @@ function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ range: u
 function normaliseState(s) {
   const o = (s && typeof s === 'object') ? s : {};
   const out = { v: 1, artists: Array.isArray(o.artists) ? o.artists.filter(a => a && a.id) : [], attn: Array.isArray(o.attn) ? o.attn.filter(a => a && a.id) : [],
-                gigs: Array.isArray(o.gigs) ? o.gigs.filter(a => a && a.id) : [], concerts: Array.isArray(o.concerts) ? o.concerts.filter(a => a && a.id) : [],
+                gigs: Array.isArray(o.gigs) ? o.gigs.filter(a => a && a.id) : [], cst: Array.isArray(o.cst) ? o.cst.filter(a => a && a.id) : [], concerts: Array.isArray(o.concerts) ? o.concerts.filter(a => a && a.id) : [],
                 settings: C.defaultSettings(), lastExported: o.lastExported || null };
   if (o.settings && o.settings.attention) { out.settings.attention = Object.assign(out.settings.attention, o.settings.attention); out.settings.updatedAt = o.settings.updatedAt || ''; }
   return out;
@@ -474,7 +495,24 @@ function setRelInfo() {
 }
 
 // ── concerts (v1.01) ──────────────────────────────────────────────
-const liveConcertList = () => C.liveConcerts(state.concerts, state.artists, todayISO());
+const cstMap = () => { const m = {}; state.cst.forEach(x => { if (x && x.id && !x._deleted) m[x.id] = { ni: x.ni === true, alert: x.alert === true }; }); return m; };
+const allLiveConcerts = () => C.liveConcerts(state.concerts, state.artists, todayISO());
+const liveConcertList = () => C.visibleConcerts(allLiveConcerts(), cstMap());           // what the tab count, card, Upcoming and search use: hidden ones are left out
+const hiddenConcertList = () => { const m = cstMap(); return allLiveConcerts().filter(c => m[c.id] && m[c.id].ni); };
+function setCst(conId, patch) {
+  let r = state.cst.find(x => x.id === conId);
+  if (!r) { r = { id: conId, ni: false, alert: false }; state.cst.push(r); }
+  Object.assign(r, patch); r.updatedAt = new Date().toISOString(); saveState(); pushCst(r); afterChange();
+}
+function notInterested(conId) {
+  const c = state.concerts.find(x => x.id === conId); if (!c) return;
+  setCst(conId, { ni: true, alert: false });
+  window.PalUI && PalUI.toast(c.artist + ' at ' + c.venue + ' hidden', { action: { label: 'Undo', onClick: () => setCst(conId, { ni: false }) } });
+}
+function restoreConcert(conId) { setCst(conId, { ni: false }); }
+function toggleSaleAlert(conId) { const f = cstMap()[conId]; const on = !(f && f.alert); setCst(conId, { alert: on }); toast(on ? 'You will be alerted when tickets go on sale' : 'Alert removed'); }
+const salePending = c => /^\d{4}-\d{2}-\d{2}$/.test(String(c.saleDay || '')) && c.saleDay >= todayISO();
+const saleText = c => { const t = todayISO(); return (c.saleDay === t ? 'today' : C.dateLabel(c.saleDay)) + (c.saleTime ? ' ' + c.saleTime : ''); };
 const gigLinks = () => new Map(state.gigs.filter(g => !g._deleted).map(g => [g.id, g]));
 function isNewCon(c) { const t = todayISO(); return !!c.firstSeen && C.addDays(c.firstSeen, C.CONCERT_NEW_DAYS) >= t && !dealtMap()[c.id]; }
 function saveCinfo() { kvSet('cinfo', cinfo); }
@@ -527,15 +565,21 @@ function addToGigs(conId) {
 function openGig(conId) { const g = gigLinks().get(conId); if (g && g.gigId && window.parent !== window) window.parent.postMessage({ type: 'PAL_MUSIC_OPEN_GIG', gigId: g.gigId }, window.location.origin); }
 
 // ── contract + launcher cache ─────────────────────────────────────
+function nextConcertCard(c) {
+  const f = state.artists.find(a => String(a.id) === String(c.artistId)), img = f ? C.artSize(artFor(f), 200) : '';
+  const o = { a: c.artist, v: c.venue, c: c.city, d: c.date }; if (img) o.img = img; if (c.time) o.t = c.time;
+  if (salePending(c)) { o.s = c.saleDay; if (c.saleTime) o.st = c.saleTime; }
+  return o;
+}
 function buildPayload(status) {
   const today = todayISO(), live = liveArtists(), fol = followedArtists();
-  const att = C.attention(allReleases(), state.artists, state.settings, state.attn, today, state.concerts);
+  const att = C.attention(allReleases(), state.artists, state.settings, state.attn, today, state.concerts, cstMap());
   const cons = liveConcertList();
   const folAids = new Set(fol.filter(hasApple).map(a => String(a.appleArtistId)));
   const latest = allReleases().filter(r => folAids.has(r.aid) && r.date <= today).sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)).slice(0, 4)
-    .map(r => ({ a: r.artistName, t: r.name, d: r.date, img: C.artSize(r.art, 100) }));
+    .map(r => ({ a: r.artistName, t: r.name, d: r.date, img: C.artSize(r.art, 200) }));
   const card = { artists: live.length, followed: fol.length, newReleases: att.eligible, latest, concerts: cons.length,
-                 nextConcert: cons[0] ? { a: cons[0].artist, v: cons[0].venue, c: cons[0].city, d: cons[0].date } : null };
+                 nextConcert: cons[0] ? nextConcertCard(cons[0]) : null };
   return { attention: att.items, upcoming: C.concertUpcoming(cons), summary: { artists: live.length, followed: fol.length, newReleases: att.eligible, attentionOverflow: att.overflow, card,
            refresh: { at: rel.fetchedAt || new Date().toISOString(), status: status || 'ok', current: (status || 'ok') === 'ok', source: 'app', providers: { 'itunes-releases': status || 'ok' } } } };
 }
@@ -598,24 +642,39 @@ function renderReleases() {
       (r.date <= today && C.addDays(r.date, C.LIFE_DAYS) >= today ? '<button class="btn" data-seen="' + esc(r.id) + '" data-on="' + (dealt[id] ? '0' : '1') + '">' + (dealt[id] ? 'Undo seen' : '✓ Seen') + '</button>' : '') + '</div></div>';
   }).join('');
 }
+function conRow(c, o) {
+  const d = new Date(c.date + 'T00:00:00Z'), link = o.gl.get(c.id), flag = o.cs[c.id] || {}, busy = !!_gigBusy[c.id];
+  const off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || '')), fresh = !o.hidden && isNewCon(c), pend = !o.hidden && salePending(c);
+  const badges = (fresh ? '<span class="badge new">New</span>' : '') + (off ? '<span class="badge warn">' + esc(c.status) + '</span>' : '') + (link ? '<span class="badge">In Gigs &amp; Trips</span>' : '') +
+    (pend ? '<span class="badge sale">🎫 On sale ' + esc(saleText(c)) + '</span>' : '') + (flag.alert && pend ? '<span class="badge sale">🔔 Alert on</span>' : '');
+  const acts = o.hidden ? '<button class="btn" data-restore="' + esc(c.id) + '">↩ Show again</button>' :
+    (c.url ? '<button class="btn pri" data-url="' + esc(c.url) + '" aria-label="Tickets for ' + esc(c.artist) + '">🎟 Tickets</button>' : '') +
+    (link ? (link.gigId ? '<button class="btn" data-opengig="' + esc(c.id) + '">Open gig</button>' : '') : '<button class="btn" data-addgig="' + esc(c.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Adding…' : '＋ Gigs &amp; Trips') + '</button>') +
+    (pend ? '<button class="btn' + (flag.alert ? ' on' : '') + '" data-salealert="' + esc(c.id) + '" aria-pressed="' + (flag.alert ? 'true' : 'false') + '">🔔 ' + (flag.alert ? 'Alert on' : 'Alert me') + '</button>' : '') +
+    (fresh ? '<button class="btn" data-seen-id="' + esc(c.id) + '" data-on="1">✓ Seen</button>' : '') +
+    '<button class="btn" data-notint="' + esc(c.id) + '" aria-label="Not interested in ' + esc(c.artist) + ' at ' + esc(c.venue) + '">✕ Not interested</button>';
+  return '<div class="rel con' + (o.hidden ? ' dim' : '') + (_hl === c.id ? ' hl' : '') + '" id="' + esc(c.id) + '"><div class="dt"><b>' + d.getUTCDate() + '</b><span>' + esc(C.dateLabel(c.date).split(' ')[2]) + '</span></div>' +
+    '<div class="rb"><div class="rt">' + esc(c.artist) + '</div><div class="rs">' + esc(c.venue) + ', ' + esc(c.city) + '</div><div class="rm"><span>' + esc(C.dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + esc(c.time) : '') + '</span>' + badges + '</div></div>' +
+    '<div class="ra wrap">' + acts + '</div></div>';
+}
 function renderConcerts() {
-  const list = $('conList'), fol = followedArtists(), cons = liveConcertList(), gl = gigLinks(), dealt = dealtMap();
+  const list = $('conList'), fol = followedArtists(), cons = liveConcertList(), hid = hiddenConcertList(), gl = gigLinks(), cs = cstMap();
   $('conCheck').disabled = _conBusy; $('conCheck').textContent = _conBusy ? 'Checking…' : '🔄 Check now';
   $('conStatus').textContent = (_conBusy ? 'Checking Ticketmaster… ' : cinfo.at ? 'Checked ' + ago(cinfo.at) + '. ' : 'Not checked from this device yet. ') + cinfo.msg + (cons.length ? ' ' + cons.length + ' date' + (cons.length === 1 ? '' : 's') + ' in Scotland.' : '');
   if (!fol.length) { list.innerHTML = '<div class="empty"><div class="big">🎟️</div>Follow some artists and their Scottish dates appear here.</div>'; return; }
-  if (!cons.length) { list.innerHTML = '<div class="empty"><div class="big">🎟️</div>' + (_conBusy ? 'Looking for concerts…' : 'No Scottish dates found for the artists you follow yet.<div class="note" style="margin-top:6px">Glasgow, Edinburgh, Aberdeen, Dundee, Inverness and other Scottish cities are checked once a day.</div>') + '</div>'; return; }
+  const hidBtn = hid.length ? '<button type="button" class="hidtoggle" data-togglehidden="1">' + (ui.showHidden ? 'Hide' : 'Show') + ' ' + hid.length + ' you are not interested in</button>' : '';
+  const hidRows = hid.length && ui.showHidden ? hid.map(c => conRow(c, { gl, cs, hidden: true })).join('') : '';
+  if (!cons.length) {
+    list.innerHTML = (hid.length ? '<div class="empty"><div class="big">🎟️</div>No other Scottish dates right now.</div>' :
+      '<div class="empty"><div class="big">🎟️</div>' + (_conBusy ? 'Looking for concerts…' : 'No Scottish dates found for the artists you follow yet.<div class="note" style="margin-top:6px">Glasgow, Edinburgh, Aberdeen, Dundee, Inverness and other Scottish cities are checked.</div>') + '</div>') + hidBtn + hidRows;
+    return;
+  }
   let month = '';
   list.innerHTML = cons.map(c => {
     const m = c.date.slice(0, 7), d = new Date(c.date + 'T00:00:00Z');
     const head = m !== month ? '<div class="mh">' + esc(d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })) + '</div>' : ''; month = m;
-    const fresh = isNewCon(c), link = gl.get(c.id), busy = !!_gigBusy[c.id], off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
-    return head + '<div class="rel' + (_hl === c.id ? ' hl' : '') + '" id="' + esc(c.id) + '"><div class="dt"><b>' + d.getUTCDate() + '</b><span>' + esc(C.dateLabel(c.date).split(' ')[2]) + '</span></div>' +
-      '<div class="rb"><div class="rt">' + esc(c.artist) + '</div><div class="rs">' + esc(c.venue) + ', ' + esc(c.city) + '</div><div class="rm"><span>' + esc(C.dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + esc(c.time) : '') + '</span>' +
-      (fresh ? '<span class="badge new">New</span>' : '') + (off ? '<span class="badge warn">' + esc(c.status) + '</span>' : '') + (link ? '<span class="badge">In Gigs &amp; Trips</span>' : '') + '</div></div>' +
-      '<div class="ra">' + (c.url ? '<button class="btn pri" data-url="' + esc(c.url) + '" aria-label="Tickets for ' + esc(c.artist) + '">🎟 Tickets</button>' : '') +
-      (link ? (link.gigId ? '<button class="btn" data-opengig="' + esc(c.id) + '">Open gig</button>' : '') : '<button class="btn" data-addgig="' + esc(c.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Adding…' : '＋ Gigs &amp; Trips') + '</button>') +
-      (fresh ? '<button class="btn" data-seen-id="' + esc(c.id) + '" data-on="1">✓ Seen</button>' : (dealt[c.id] ? '' : '')) + '</div></div>';
-  }).join('');
+    return head + conRow(c, { gl, cs, hidden: false });
+  }).join('') + hidBtn + hidRows;
 }
 function setRange(k) { ui.range = k; saveUi(); renderReleases(); }
 function toggleKind(k) { ui[k] = !ui[k]; if (!ui.album && !ui.single) ui[k === 'album' ? 'single' : 'album'] = true; saveUi(); renderReleases(); }
@@ -737,6 +796,7 @@ const hint = e => window.PalSync.errorHint(e && e.status, e && e.message);
 async function pushArtist(a) { if (!window.PalSync.hasSession()) return; setSyncStatus('syncing'); try { await _tArtists.upsert(a.id, a); setSyncStatus('synced'); } catch (e) { slog('Artist ' + a.name + ': ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushAttn(r) { if (!window.PalSync.hasSession()) return; try { await _tAttn.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Seen mark: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushGig(r) { if (!window.PalSync.hasSession()) return; try { await _tGigs.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Gig link: ' + hint(e), 'error'); setSyncStatus('error'); } }
+async function pushCst(r) { if (!window.PalSync.hasSession()) return; try { await _tCst.upsert(r.id, r); setSyncStatus('synced'); } catch (e) { slog('Concert flag: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function pushSettings() { if (!window.PalSync.hasSession()) return; try { await _tSettings.upsert('__settings__', state.settings); setSyncStatus('synced'); } catch (e) { slog('Settings: ' + hint(e), 'error'); setSyncStatus('error'); } }
 async function syncPull() {
   if (!window.PalSync.hasSession()) return;
@@ -746,6 +806,7 @@ async function syncPull() {
     const a = await _tArtists.pull(state.artists, 'id', 'updatedAt', rows); state.artists = a.merged;
     const t = await _tAttn.pull(state.attn, 'id', 'updatedAt', rows); state.attn = t.merged;
     const g = await _tGigs.pull(state.gigs, 'id', 'updatedAt', rows); state.gigs = g.merged;
+    const cs = await _tCst.pull(state.cst, 'id', 'updatedAt', rows); state.cst = cs.merged;
     // concerts are written by the server only: take them as they are (never pushed back, so a stale copy here cannot overwrite the server's)
     state.concerts = rows.filter(r => r.record_key.indexOf('concert_') === 0 && r.data && r.data.id && !r.data._deleted).map(r => r.data);
     const sr = rows.find(r => r.record_key === '__settings__');
@@ -761,7 +822,7 @@ function manualPull() { if (!window.PalSync.hasSession()) { toast('Not connected
 async function manualPush() {
   if (!window.PalSync.hasSession()) { toast('Not connected to cloud', 'err'); return; }
   setSyncStatus('syncing');
-  try { for (const a of state.artists) await _tArtists.upsert(a.id, a); for (const r of state.attn) await _tAttn.upsert(r.id, r); for (const r of state.gigs) await _tGigs.upsert(r.id, r); if (state.settings.updatedAt) await _tSettings.upsert('__settings__', state.settings);
+  try { for (const a of state.artists) await _tArtists.upsert(a.id, a); for (const r of state.attn) await _tAttn.upsert(r.id, r); for (const r of state.gigs) await _tGigs.upsert(r.id, r); for (const r of state.cst) await _tCst.upsert(r.id, r); if (state.settings.updatedAt) await _tSettings.upsert('__settings__', state.settings);
         slog('Pushed ' + state.artists.length + ' artists', 'ok'); setSyncStatus('synced'); toast('Pushed to cloud'); }
   catch (e) { slog('Push error: ' + hint(e), 'error'); setSyncStatus('error'); toast('Push had errors', 'err'); }
 }
@@ -769,7 +830,7 @@ async function manualPush() {
 // ── backup ────────────────────────────────────────────────────────
 function exportJSON() {
   state.lastExported = new Date().toISOString(); flushState();
-  const out = { format: 'music-tracker-backup/1', app: 'music', version: APP_VERSION, exportedAt: state.lastExported, artists: state.artists, attn: state.attn, gigs: state.gigs, settings: state.settings };
+  const out = { format: 'music-tracker-backup/1', app: 'music', version: APP_VERSION, exportedAt: state.lastExported, artists: state.artists, attn: state.attn, gigs: state.gigs, cst: state.cst, settings: state.settings };
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
   a.download = 'music-tracker-backup.json'; a.click(); toast('Exported');
 }
@@ -786,6 +847,8 @@ function importJSON(evt) {
       (inc.attn || []).forEach(a => { if (!a || !a.id) return; const cur = hv.get(a.id); if (!cur) state.attn.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       const hg = new Map(state.gigs.map(a => [a.id, a]));
       (inc.gigs || []).forEach(a => { if (!a || !a.id) return; const cur = hg.get(a.id); if (!cur) state.gigs.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
+      const hc = new Map(state.cst.map(a => [a.id, a]));
+      (inc.cst || []).forEach(a => { if (!a || !a.id) return; const cur = hc.get(a.id); if (!cur) state.cst.push(a); else if ((a.updatedAt || '') > (cur.updatedAt || '')) Object.assign(cur, a); });
       if (inc.settings && inc.settings.attention && (inc.settings.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: inc.settings }).settings;
       saveState(); renderAll(); toast('Imported ' + added + ' new, ' + newer + ' updated');
       if (window.PalSync.hasSession()) manualPush();
@@ -817,11 +880,15 @@ PalUI.pill.dock('#sync-chip');
 
 // ── events ────────────────────────────────────────────────────────
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-artist],[data-open-rel],[data-seen],[data-seen-id],[data-url],[data-addgig],[data-opengig]'); if (!t) return;
+  const t = e.target.closest('[data-artist],[data-open-rel],[data-seen],[data-seen-id],[data-url],[data-addgig],[data-opengig],[data-notint],[data-restore],[data-salealert],[data-togglehidden]'); if (!t) return;
   if (t.dataset.artist) openSheet(t.dataset.artist);
   else if (t.dataset.openRel) { const r = rel.items[t.dataset.openRel]; if (r) openApple(releaseUrl(r)); }
   else if (t.dataset.seen) setSeen(t.dataset.seen, t.dataset.on === '1');
   else if (t.dataset.seenId) setSeenId(t.dataset.seenId, t.dataset.on === '1');
+  else if (t.dataset.notint) notInterested(t.dataset.notint);
+  else if (t.dataset.restore) restoreConcert(t.dataset.restore);
+  else if (t.dataset.salealert) toggleSaleAlert(t.dataset.salealert);
+  else if (t.dataset.togglehidden) { ui.showHidden = !ui.showHidden; renderConcerts(); }
   else if (t.dataset.url) openExternal(t.dataset.url);
   else if (t.dataset.addgig) addToGigs(t.dataset.addgig);
   else if (t.dataset.opengig) openGig(t.dataset.opengig);
