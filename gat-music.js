@@ -1,11 +1,11 @@
-/* gat-music.js v1.08 (v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.09 (v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.08', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.09', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -292,7 +292,16 @@
     '.gm .nmb{flex:1;min-width:0;text-align:left;background:none;border:none;color:var(--ink);padding:0;cursor:pointer;font-family:var(--f)}.gm .nm{font-weight:700;font-size:16px}.gm .sw{display:flex;gap:2px;flex-wrap:wrap;margin-top:4px}' +
     '.gm .lsw{display:flex;flex-direction:column;align-items:center;font-size:10px;color:var(--ink3);min-width:44px;min-height:44px;justify-content:center;cursor:pointer}.gm .lsw.na{visibility:hidden}.gm .lsw input{width:22px;height:22px;margin:0}' +
     '.gmx .gm-sheet{padding:20px 22px 22px}.gmx .gm-sheet h2{margin:0 0 4px;font-size:20px}.gmx .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;min-height:44px;box-sizing:border-box;border-bottom:1px solid var(--sep);font-size:14px}.gmx .kv span{color:var(--ink3)}.gmx .kv b{text-align:right}.gmx .kv .lsw{min-height:0}' +
-    '@media(max-width:420px){.gm .row{padding:10px;gap:10px}}';
+    '.gm .row{display:flex;gap:0;align-items:stretch;background:var(--card);border:none;border-radius:22px;overflow:hidden;padding:0;margin:0 0 10px}' +
+    '.gm .row>.dt{flex:0 0 64px;border-radius:0;padding:12px 0;display:flex;flex-direction:column;align-items:center;justify-content:center;border-right:2px dashed rgba(14,13,18,.28)}.gm .dt b{font-family:var(--fd);font-size:28px;font-weight:800;line-height:1;letter-spacing:-.03em}.gm .dt span{font-size:11px;font-weight:700;letter-spacing:.08em;margin-top:2px}' +
+    '.gm .row>.rb{padding:12px 12px 12px 14px}.gm .row>.tl{align-self:flex-start;margin:12px 12px 0 0}.gm .row>.av{align-self:flex-start;margin:12px 0 12px 12px}.gm .rt{letter-spacing:-.01em}' +
+    '.gm .row.art .nmb{display:block;width:100%;padding:0}.gm .sw{gap:6px;margin-top:8px}.gm .lsw{flex-direction:row;gap:6px;border:1px solid var(--bdr);border-radius:999px;padding:0 12px;min-height:36px;min-width:0;font-size:12px;font-weight:600;color:var(--ink2)}.gm .lsw input{width:16px;height:16px}.gm .lsw.na{display:none}' +
+    '.gm .hero{cursor:default;margin:2px 0 14px}.gm .hero-open{text-decoration:none;white-space:nowrap}.gm .hero-foot{flex-wrap:wrap}' +
+    '.gm .stat{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;font-size:13px;color:var(--ink3);margin:0 2px 10px}.gm .stat .note{margin:0}.gm .lnk{background:none;border:none;color:var(--ink);font:600 13px var(--f);text-decoration:underline;cursor:pointer;padding:6px 0;min-height:36px}' +
+    '.gm .card{background:var(--card);border-radius:22px;padding:14px 14px 4px;margin:0 0 14px}.gm .card h3{margin:0 0 8px}.gm .card .row{background:var(--s2)}.gm .card .row>.rb{padding:10px 12px}' +
+    '.gm .dash-sec{margin-top:14px}.gm .acts2{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}.gm .tools{font-size:13px;color:var(--ink3)}.gm .tools .btn{margin-top:6px}' +
+    '.gmx .jbrow{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--sep);font-size:14px}.gmx .jbrow b{font-weight:700}.gmx .jbd{font-size:12px;color:var(--ink3);margin:0 0 6px}' +
+    '@media(max-width:420px){.gm .row>.rb{padding:10px}}';
   function ensureCss() { if (document.getElementById('gm-css')) return; var s = document.createElement('style'); s.id = 'gm-css'; s.textContent = CSS; document.head.appendChild(s); }
   function chip(label, on, a) { return '<button type="button" class="chip' + (on ? ' on' : '') + '" data-m="' + a + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>'; }
   function avatar(a) {
@@ -315,7 +324,7 @@
       var c = it.c, link = H().gigFor && H().gigFor(c.id), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
       return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === c.id ? ' hl' : '') + '" id="gm-' + E(c.id) + '" data-item="' + E(c.id) + '" data-kind="gig"><div class="dt gg"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(c.artist) + '</div>' +
         '<div class="rs">' + E(c.venue) + ', ' + E(c.city) + ' · ' + E(dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + E(c.time) : '') + '</div><div class="bd"><span class="badge">Gig</span>' +
-        (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
+        (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + (c.src === 'jambase' ? '<span class="badge">JamBase</span>' : '') + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
         (salePending(c) ? '<span class="badge sale">On sale ' + E(saleText(c)) + '</span>' : '') + '</div><div class="acts">' + conActs(it) + '</div></div><div class="tl" aria-hidden="true">🎸</div></div>';
     }
     var r = it.r, t = today(), isNew = r.date <= t;
@@ -324,17 +333,31 @@
       '<div class="acts">' + (it.hidden ? '<button class="btn" data-m="rrestore:' + E(it.id) + '">Show again</button>' :
         '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button><button class="btn' + (it.interested ? ' on' : '') + '" data-m="rinterested:' + E(it.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button>') + '</div></div><div class="tl rl" aria-hidden="true">💿</div></div>';
   }
-  function checkBtn() { return '<button type="button" class="chip ghost" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Check for new dates') + '</button>'; }
+  function checkBtn(label) { return '<button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : label || 'Check for new dates') + '</button>'; }
+  function seg(items) { return '<div class="agenda-filter">' + items.map(function (x) { return '<button type="button" class="' + (x[1] ? 'on' : '') + '" data-m="' + x[2] + '" aria-pressed="' + (x[1] ? 'true' : 'false') + '">' + x[0] + '</button>'; }).join('') + '</div>'; }
+  function head() { return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists']]); }
+  function heroHtml(c, it) {
+    var t = today(), dl = dateLabel(c.date).split(' '), n = Math.round((Date.parse(c.date + 'T00:00:00Z') - Date.parse(t + 'T00:00:00Z')) / 864e5);
+    var chips = [it.interested ? 'Interested ✓' : '', salePending(c) ? 'On sale ' + saleText(c) : '', c.src === 'jambase' ? 'JamBase' : 'Ticketmaster'].filter(Boolean);
+    return '<div class="hero"><div class="hero-top"><span class="hero-k">NEXT GIG</span><span class="hero-pill">' + (n <= 0 ? 'Today' : n === 1 ? 'Tomorrow' : 'In ' + n + ' days') + '</span></div>' +
+      '<div class="hero-date"><div class="hero-num">' + E(dl[1]) + '</div><div class="hero-mon">' + E(dl[2].toUpperCase()) + '<br>' + E(dl[0].toUpperCase()) + '</div></div>' +
+      '<div class="hero-title">' + E(c.artist) + '</div><div class="hero-sub">' + E([c.venue + (c.city ? ', ' + c.city : ''), c.time].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="hero-perf"></div><div class="hero-foot"><div class="hero-chips">' + chips.map(function (x) { return '<span class="hero-chip">' + E(x) + '</span>'; }).join('') + '</div>' + (c.url ? '<button type="button" class="hero-open" data-m="tickets:' + E(c.id) + '">Tickets ›</button>' : '') + '</div></div>';
+  }
   function renderComing() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var allItems = comingItems(), items = allItems.filter(function (i) { return ui.cFilter === 'all' || (ui.cFilter === 'gigs' ? i.kind === 'con' : i.kind === 'rel'); }), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
-    var status = (busy.con ? 'Checking Ticketmaster… ' : cinfo.at ? 'Checked ' + ago(cinfo.at) + '. ' : '') + cinfo.msg + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland.' : '');
+    var status = (busy.con ? 'Checking Ticketmaster and JamBase… ' : cinfo.at ? 'Checked ' + ago(cinfo.at) + '. ' : '') + cinfo.msg + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland.' : '');
     var nG = allItems.filter(function (i) { return i.kind === 'con' && !i.hidden; }).length, nR = allItems.filter(function (i) { return i.kind === 'rel' && !i.hidden; }).length;
-    var h = '<div class="chips">' + chip('All ' + (nG + nR), ui.cFilter === 'all', 'cfilter:all') + chip('Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs') + chip('Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases') + checkBtn() + '</div><div class="note" role="status">' + E(status) + ' <span>Check for new dates asks Ticketmaster now for tour dates of the artists you follow; it also runs by itself every day.</span></div>';
+    var hasJb = allItems.some(function (i) { return i.kind === 'con' && i.c && i.c.src === 'jambase'; });
+    var h = head() + seg([['All ' + (nG + nR), ui.cFilter === 'all', 'cfilter:all'], ['Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs'], ['Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases']]);
+    var nextCon = shown.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0];
+    if (nextCon) h += heroHtml(nextCon.c, nextCon);
+    h += '<div class="stat"><span role="status">' + E(status) + '</span>' + checkBtn('Check for new dates') + '</div><div class="note">Check for new dates asks Ticketmaster and JamBase now for tour dates of the artists you follow; it also runs by itself every day.' + (hasJb ? ' Dates marked JamBase come from JamBase.' : '') + '</div>';
     if (!followed().length) return h + '<div class="empty">Follow some artists and their Scottish dates and new releases appear here.<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">Go to Artists</button></div></div>';
     if (!shown.length) h += '<div class="empty">' + (busy.con ? 'Looking for concerts…' : '' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '') + '</div>';
     var month = '';
-    shown.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<h3>' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</h3>'; } h += itemRow(it); });
+    shown.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<div class="dash-sec">' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</div>'; } h += itemRow(it); });
     if (hid.length) h += '<button type="button" class="chip ghost" data-m="togglehidden">' + (ui.showHidden ? 'Hide' : 'Show') + ' ' + hid.length + ' you are not interested in</button>' + (ui.showHidden ? hid.map(itemRow).join('') : '');
     return h;
   }
@@ -349,35 +372,80 @@
       .filter(function (x) { return x.n >= ui.lMin && !(mine[x.k] && isFollowed(mine[x.k])) && fb['rc_' + x.k] !== 'ignored'; })
       .sort(function (a, b) { return (b.l || 0) - (a.l || 0) || b.n - a.n || a.name.localeCompare(b.name); }).slice(0, 15);
   }
+  function listenAge() { var t = 0; listeners().forEach(function (w) { var p = state.listBy[w] && state.listBy[w].polledAt; var v = Date.parse(p); if (v > t) t = v; }); return t ? ago(new Date(t).toISOString()) : ''; }
   function renderArtists() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var all = live(), q = norm(ui.aQuery), notFol = all.filter(function (a) { return !isFollowed(a); }).length;
-    var h = '<div class="chips">' + checkBtn() + '<button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
-      '<input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
-      '<div class="chips">' + chip('All ' + all.length, ui.aFilter === 'all', 'afilter:all') + chip('Following', ui.aFilter === 'following', 'afilter:following') + chip('Not following' + (notFol ? ' ' + notFol : ''), ui.aFilter === 'not', 'afilter:not') + '</div>';
+    var la = listenAge();
+    var h = head() + '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
+      '<div class="stat"><span role="status">' + (listeners().length ? 'Last.fm plays ' + (la ? 'checked ' + E(la) : 'not checked yet') + '.' : 'No Last.fm plays yet.') + (cinfo.msg ? ' ' + E(cinfo.msg) : '') + '</span>' + checkBtn('Check for new listening') + '</div>' +
+      '<div class="note">Check for new listening brings in your latest Last.fm plays now (it also looks for new tour dates). It runs by itself every day.</div>';
     var pnf = playedNotFollowed();
     if (listeners().length && !q) {
-      h += '<h3>Played, not followed</h3>' + (listeners().length > 1 ? '<div class="chips">' + chip('Both', !ui.pWho, 'pwho:') + listeners().map(function (w) { return chip(WHO[w] || w, ui.pWho === w, 'pwho:' + w); }).join('') + '</div>' : '') + '<div class="chips">' + [1, 2, 3, 5, 10].map(function (n) { return chip(n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n); }).join('') + '</div>';
+      h += '<div class="card"><h3>Played, not followed</h3>' + (listeners().length > 1 ? seg([['Both', !ui.pWho, 'pwho:']].concat(listeners().map(function (w) { return [E(WHO[w] || w), ui.pWho === w, 'pwho:' + w]; }))) : '') +
+        seg([1, 2, 3, 5, 10].map(function (n) { return [n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n]; }));
       h += pnf.length ? pnf.map(function (x) {
-        return '<div class="row"><div class="rb"><div class="rt">' + E(x.name) + '</div><div class="rs">' + x.n + ' plays in 30 days · last ' + E(ago(new Date(x.l * 1000).toISOString())) + '</div></div><button class="btn pri" data-m="followname:' + E(x.name) + '"' + (busy.follow[x.name] ? ' disabled' : '') + '>' + (busy.follow[x.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="ignorename:' + E(x.name) + '">Ignore</button></div>';
-      }).join('') : '<div class="note">' + (ui.lMin === 1 ? 'Everyone played in the last 30 days is already followed.' : 'Nobody played ' + ui.lMin + ' or more times in 30 days is missing from your follows.') + '</div>';
+        return '<div class="row"><div class="rb"><div class="rt">' + E(x.name) + '</div><div class="rs">' + x.n + ' plays in 30 days · last ' + E(ago(new Date(x.l * 1000).toISOString())) + '</div><div class="acts"><button class="btn pri" data-m="followname:' + E(x.name) + '"' + (busy.follow[x.name] ? ' disabled' : '') + '>' + (busy.follow[x.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="ignorename:' + E(x.name) + '">Ignore</button></div></div></div>';
+      }).join('') : '<div class="note" style="padding-bottom:10px">' + (ui.lMin === 1 ? 'Everyone played in the last 30 days is already followed.' : 'Nobody played ' + ui.lMin + ' or more times in 30 days is missing from your follows.') + '</div>';
+      h += '</div>';
     }
+    h += '<div class="dash-sec">Your artists</div><input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
+      seg([['All ' + all.length, ui.aFilter === 'all', 'afilter:all'], ['Following', ui.aFilter === 'following', 'afilter:following'], ['Not following' + (notFol ? ' ' + notFol : ''), ui.aFilter === 'not', 'afilter:not']]);
     var rows = all.filter(function (a) { return (!q || norm(a.name).indexOf(q) >= 0) && (ui.aFilter === 'all' || (ui.aFilter === 'following' && isFollowed(a)) || (ui.aFilter === 'not' && !isFollowed(a))); })
       .sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
-    h += '<h3>Artists</h3>';
     if (!all.length) return h + '<div class="empty">No artists yet. Add one to start.</div>';
     if (!rows.length) return h + '<div class="empty">No artists match.</div>';
-    return h + rows.map(function (a) {
+    h += rows.map(function (a) {
       var fol = isFollowed(a), sw = function (key, label, on, show) { return '<label class="lsw' + (show ? '' : ' na') + '"><input type="checkbox" data-sw="' + key + '" data-id="' + E(a.id) + '" aria-label="' + label + ' for ' + E(a.name) + '"' + (on ? ' checked' : '') + (show ? '' : ' tabindex="-1" aria-hidden="true"') + '>' + label + '</label>'; };
       var pl = playLine(a);
-      return '<div class="row' + (fol ? '' : ' dim') + '">' + avatar(a) + '<button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="nm">' + E(a.name) + '</div><div class="rs">' + E(pl) + (pl && (fol && a.gigs !== false && tourEnded(a)) ? ' · ' : '') + (fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '') + (!hasApple(a) ? (pl ? ' · ' : '') + 'No Apple match' : '') + '</div></button>' +
-        '<div class="sw">' + sw('follow', 'Follow', fol, true) + sw('releases', 'Releases', fol && a.releases !== false, fol) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div>';
+      return '<div class="row art' + (fol ? '' : ' dim') + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="nm">' + E(a.name) + '</div><div class="rs">' + E(pl) + (pl && (fol && a.gigs !== false && tourEnded(a)) ? ' · ' : '') + (fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '') + (!hasApple(a) ? (pl ? ' · ' : '') + 'No Apple match' : '') + '</div></button>' +
+        '<div class="sw">' + sw('follow', 'Follow', fol, true) + sw('releases', 'Releases', fol && a.releases !== false, fol) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div></div>';
     }).join('');
+    h += '<div class="card tools" style="margin-top:18px"><h3>JamBase</h3>Tour dates now come from Ticketmaster and JamBase. This test asks both about up to 15 of the artists you follow and shows which one finds Scottish dates.<div><button type="button" class="btn" data-m="jbtest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test JamBase') + '</button></div></div>';
+    return h;
+  }
+  // ── JamBase test (asks the server's probe with the signed-in session) ──
+  var jbRes = null;
+  function jbTest() {
+    if (busy.jb) return;
+    if (!ensureSession()) { sayErr('Open Gigs & Trips through Pete’s Apps to run the test'); return; }
+    var names = followed().filter(function (a) { return a.gigs !== false && !tourEnded(a); }).sort(function (a, b) { return totalPlays(norm(b.name)) - totalPlays(norm(a.name)); }).map(function (a) { return a.name; }).slice(0, 15);
+    if (!names.length) { say('Follow some artists first'); return; }
+    var base = (window.PAL_CONFIG && PAL_CONFIG.SB_URL) || '';
+    busy.jb = 1; paint();
+    fetch(base + '/functions/v1/swift-responder/probe-jambase', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: JSON.stringify({ artists: names, scotland: true }) })
+      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (j) { return { res: res, j: j }; }); })
+      .then(function (r) {
+        if (!r.res.ok) throw new Error(r.res.status === 404 ? 'the server has not been updated to v0.10.0 yet' : r.res.status === 403 ? 'this account is not allowed to run it' : (r.j && r.j.error) || 'HTTP ' + r.res.status);
+        jbRes = r.j; openJb();
+      })
+      .catch(function (e) { sayErr('JamBase test failed: ' + ((e && e.message) || 'offline')); })
+      .finally(function () { busy.jb = 0; paint(); });
+  }
+  function openJb() {
+    var j = jbRes || {}, h = '<div class="gm-sheet"><h2>JamBase test</h2>';
+    if (j.error) h += '<div class="note">' + E(j.error) + '</div>';
+    else {
+      var sm = j.summary || {};
+      h += '<div class="note">' + E(String(sm.artists || 0)) + ' artists asked. Scottish dates found by JamBase for ' + E(String(sm.jambaseScottish || 0)) + ', by Ticketmaster for ' + E(String(sm.ticketmasterScottish || 0)) + '. Only JamBase: ' + E(String(sm.onlyJambase || 0)) + '. Calls used: JamBase ' + E(String(j.jambaseCalls || 0)) + ', Ticketmaster ' + E(String(j.ticketmasterCalls || 0)) + '.</div>';
+      (j.artists || []).forEach(function (r) {
+        var jb = r.jambase || {}, tm = r.ticketmaster || {};
+        h += '<div class="jbrow"><span>' + E(r.artist) + (r.onlyJambase ? ' <b>(only JamBase)</b>' : '') + '</span><span>Ticketmaster ' + (tm.error ? 'error' : (tm.scottish == null ? '–' : tm.scottish)) + ' · JamBase ' + (jb.error ? 'error ' + E(String(jb.status || '')) : (jb.scottish == null ? '–' : jb.scottish)) + '</span></div>';
+        if (r.onlyJambase && jb.scottishDates) h += '<div class="jbd">' + jb.scottishDates.map(function (d) { return E(d.date + ' ' + (d.venue || '') + ', ' + (d.city || '')); }).join(' · ') + '</div>';
+      });
+      if (j.scotlandList) h += '<div class="note">JamBase lists ' + E(String(j.scotlandList.total == null ? j.scotlandList.returned : j.scotlandList.total)) + ' upcoming events in Scotland in total' + (j.scotlandList.error ? ' (error ' + E(String(j.scotlandList.status || '')) + ')' : '') + '.</div>';
+    }
+    h += '<div class="acts"><button class="btn pri" data-m="jbcopy">Copy result</button><button class="btn" data-m="closemodal">Close</button></div></div>';
+    modal('jb', h);
+  }
+  function jbCopy() {
+    var t = JSON.stringify(jbRes || {}, null, 1);
+    try { navigator.clipboard.writeText(t).then(function () { say('Copied'); }, function () { say('Could not copy'); }); } catch (e) { say('Could not copy'); }
   }
   function paint() {
     if (!root || !root.isConnected) return;
     var keep = document.activeElement && document.activeElement.id === 'gmq' ? document.activeElement.selectionStart : null;
-    root.innerHTML = '<div class="gm"><div class="chips">' + chip('Coming up', ui.sub === 'coming', 'sub:coming') + chip('Artists', ui.sub === 'artists', 'sub:artists') + '</div>' + (ui.sub === 'artists' ? renderArtists() : renderComing()) + '<div style="height:90px"></div></div>';
+    root.innerHTML = '<div class="gm">' + (ready ? '' : head()) + (ui.sub === 'artists' ? renderArtists() : renderComing()) + '<div style="height:90px"></div></div>';
     if (keep != null) { var q = document.getElementById('gmq'); if (q) { q.focus(); try { q.setSelectionRange(keep, keep); } catch (e) {} } }
     var mo = document.getElementById('modal'); if (mo && mo.dataset.gm === 'recs' && mo.querySelector('.gm-sheet') && document.getElementById('movl').classList.contains('on')) openRecs(true);
   }
@@ -435,6 +503,8 @@
     var s = b.getAttribute('data-m'), i = s.indexOf(':'), k = i < 0 ? s : s.slice(0, i), v = i < 0 ? '' : s.slice(i + 1);
     if (k === 'sub') { ui.sub = v; saveUi(); paint(); }
     else if (k === 'check') checkNow(false);
+    else if (k === 'jbtest') jbTest();
+    else if (k === 'jbcopy') jbCopy();
     else if (k === 'togglehidden') { ui.showHidden = !ui.showHidden; paint(); }
     else if (k === 'afilter') { ui.aFilter = v; saveUi(); paint(); }
     else if (k === 'cfilter') { ui.cFilter = v; saveUi(); paint(); }
