@@ -1,15 +1,30 @@
-/* gat-music.js v1.02 (MUS-016 step 2b; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.03 (v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.02', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.03', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
-  function norm(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ''); }
+  // v1.03: a leading "The " is ignored when names are compared ("The Levellers" is "Levellers"), so a played artist matches the followed one.
+  function norm(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/^\s*the\s+(?=\S)/, '').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ''); }
+  // The server keys plays by the full name; merge entries that now share a key ("the levellers" + "levellers").
+  function rekey(L) {
+    if (!L || !L.artists) return L;
+    var A = {}, out = Object.assign({}, L);
+    Object.keys(L.artists).forEach(function (k) {
+      var e = L.artists[k] || {}, nk = norm(typeof e.n === 'string' && e.n ? e.n : k), t = A[nk];
+      if (!t) { A[nk] = Object.assign({}, e, { d: Object.assign({}, e.d || {}), mo: Object.assign({}, e.mo || {}) }); return; }
+      if ((e.t || 0) > (t.t || 0) && typeof e.n === 'string') t.n = e.n;
+      t.t = (t.t || 0) + (e.t || 0); if ((e.l || 0) > (t.l || 0)) t.l = e.l;
+      Object.keys(e.d || {}).forEach(function (d) { t.d[d] = (Number(t.d[d]) || 0) + (Number(e.d[d]) || 0); });
+      Object.keys(e.mo || {}).forEach(function (m) { t.mo[m] = (Number(t.mo[m]) || 0) + (Number(e.mo[m]) || 0); });
+    });
+    out.artists = A; return out;
+  }
   function slug(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'artist'; }
   function classify(query, results) {
     if (!results || !results.length) return { level: 'none', pick: null };
@@ -108,7 +123,7 @@
       var live_ = function (p) { return rows.filter(function (x) { return x.record_key.indexOf(p) === 0 && x.data && x.data.id && !x.data._deleted; }).map(function (x) { return x.data; }); };
       state.recs = live_('rec_'); state.concerts = live_('concert_');
       var lb = {};
-      rows.forEach(function (x) { var m = /^__listening(?:_([a-z0-9]+))?__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') lb[m[1] || 'pete'] = d; });
+      rows.forEach(function (x) { var m = /^__listening(?:_([a-z0-9]+))?__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') lb[m[1] || 'pete'] = rekey(d); });
       state.listBy = lb;
       var cr = rows.find(function (x) { return x.record_key === '__concerts__'; });
       state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {} } : { fetched: {}, empty: {} };
@@ -128,7 +143,7 @@
   function lastPlayed(key) { var l = 0; listeners().forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.l > l) l = e.l; }); return l; }
   function playedName(key) { var nm = ''; listeners().forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.n && !nm) nm = e.n; }); return nm; }
   function allPlayedKeys() { var k = {}; listeners().forEach(function (w) { Object.keys(state.listBy[w].artists).forEach(function (x) { k[x] = 1; }); }); return Object.keys(k); }
-  var fbMap = function () { var m = {}; state.recfb.forEach(function (x) { if (x && x.id && !x._deleted) m[x.id] = x.state; }); return m; };
+  var fbMap = function () { var m = {}; state.recfb.forEach(function (x) { if (x && x.id && !x._deleted) { m[x.id] = x.state; if (x.n && /^rc_/.test(x.id)) m['rc_' + norm(x.n)] = x.state; } }); return m; };   // v1.03: also under the new key for names that start with "The"
 
   // ── Apple (iTunes: free, no key, allows browser requests) ──
   function itunes(path) {
@@ -335,7 +350,7 @@
   function renderArtists() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var all = live(), q = norm(ui.aQuery), notFol = all.filter(function (a) { return !isFollowed(a); }).length;
-    var h = '<div class="chips"><button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
+    var h = '<div class="chips">' + checkBtn() + '<button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
       '<input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
       '<div class="chips">' + chip('All ' + all.length, ui.aFilter === 'all', 'afilter:all') + chip('Following', ui.aFilter === 'following', 'afilter:following') + chip('Not following' + (notFol ? ' ' + notFol : ''), ui.aFilter === 'not', 'afilter:not') + '</div>';
     var pnf = playedNotFollowed();
@@ -483,7 +498,7 @@
     try { var ci = JSON.parse(localStorage.getItem('gat_mus_cinfo') || 'null'); if (ci) cinfo = { at: ci.at || null, msg: ci.msg || '' }; } catch (e) {}
     booted = kvOpen().then(function () { return Promise.all([kvGet('state'), kvGet('rel')]); }).then(function (v) {
       var s = v[0]; if (s && typeof s === 'object') ['artists', 'cst', 'rst', 'recfb', 'concerts', 'recs'].forEach(function (k) { if (Array.isArray(s[k])) state[k] = s[k]; });
-      if (s && s.listBy && typeof s.listBy === 'object') state.listBy = s.listBy; if (s && s.conCheck) state.conCheck = s.conCheck;
+      if (s && s.listBy && typeof s.listBy === 'object') { state.listBy = {}; Object.keys(s.listBy).forEach(function (w) { state.listBy[w] = rekey(s.listBy[w]); }); } if (s && s.conCheck) state.conCheck = s.conCheck;
       if (v[1] && v[1].items) rel = { fetchedAt: v[1].fetchedAt || null, items: v[1].items, fetched: v[1].fetched || {} };
       if (state.artists.length) ready = true;
     });
