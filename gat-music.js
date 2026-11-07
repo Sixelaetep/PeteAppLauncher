@@ -1,11 +1,11 @@
-/* gat-music.js v1.05 (v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.06 (v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.05', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.06', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -268,7 +268,7 @@
       if (busy['g' + id]) return; busy['g' + id] = true; paint();
       Promise.resolve(H().addGig({ id: c.id, tm: c.tm, artist: c.artist, name: c.name, date: c.date, time: c.time || '', venue: c.venue, city: c.city, url: c.url || '' }))
         .then(function (r) { setCst(id, { interested: true, ni: false }); say(r && r.existing ? 'Already in Gigs & Trips' : 'Added to Gigs & Trips'); })
-        .catch(function (e) { sayErr((e && e.message) || 'Could not add the gig'); })
+        .catch(function (e) { if (e && e.message === 'CANCELLED') return; sayErr((e && e.message) || 'Could not add the gig'); })
         .finally(function () { delete busy['g' + id]; paint(); });
     }
     else if (kind === 'opengig') { var g = H().gigFor && H().gigFor(id); if (g) { H().closeModal && H().closeModal(); H().openGig(g); } }

@@ -10,7 +10,7 @@
 // Apply any explicit global theme preference before first paint. v4.3
 (function(){try{if(localStorage.getItem('pal_theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
 </script>
-<title>Gigs &amp; Trips v7.131</title>
+<title>Gigs &amp; Trips v7.132</title>
 <style>
 /* ── Reset & tokens ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -835,7 +835,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- ── Header ───────────────────────────────────────────────────── -->
 <div class="hdr" id="appHdr">
   <div class="hdr-title">
-    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.131</span></h1>
+    <h1 id="hdrTitle">Gigs &amp; Trips <span class="ver">v7.132</span></h1>
     <button class="sync-chip state-local" id="gatSyncBadge" onclick="handleSyncChipClick()" title="Sync status / Backup &amp; Sync"><span class="sync-chip-dot" id="gatSyncDot"></span><span id="gatSyncText">Local</span></button>
   </div>
   <div class="hdr-nav" id="mainNav">
@@ -902,7 +902,7 @@ textarea.fi{resize:vertical;min-height:72px;font-size:16px}
 <!-- v7.122 (R39 / SB-2): this app's own parts of the shared Sync & Backup sheet; filled by showDataManager() and moved into the sheet at start-up -->
 <div id="gatDataTop" style="display:none"></div><div id="gatDataAfterSync" style="display:none"></div><div id="gatDataAfterBackup" style="display:none"></div><div id="gatDataBottom" style="display:none"></div>
 
-<script src="pal-shared.js?v=7.131"></script>
+<script src="pal-shared.js?v=7.132"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script><!-- v7.113: Suite WP1.2 / D10: dates with a year show dd/mm/yy; date boxes show dd/mm/yy with a calendar button (pal-shared 1.4.0). Failed saves were already reported by this app (storageWriteFailed). -->
 <!-- GIG-072 — full history in GigsAndTrips.md -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -2313,6 +2313,70 @@ function normaliseVenues(raw){
   });
 }
 
+// ── v7.132 (MV-3): venue aliases ───────────────────────────────────────────────────────────────────
+// A venue is {id,name,mapUrl,updatedAt} and may now carry aliases:[names]. Nothing else changes (the id stays the lower-cased name; the record syncs whole).
+const VENUE_GENERIC=new Set(['the','of','and','at','hall','ballroom','arena','theatre','theater','club','live','centre','center','stadium','room','venue']);
+function venueExactKey(s){ return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,''); }
+function venueTokens(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/&/g,' and ').replace(/['’]/g,'')
+    .split(/[^a-z0-9]+/).filter(w=>w&&!VENUE_GENERIC.has(w)).map(w=>w.length>3&&/s$/.test(w)?w.slice(0,-1):w);
+}
+function venueNamesOf(v){ return [v.name].concat(Array.isArray(v.aliases)?v.aliases:[]).filter(Boolean); }
+// → {exact: venue|null (same name or a saved alias), possible: [venues that look similar]}
+function venueResolve(name,venues){
+  const list=(venues||normaliseVenues(getData().venues)).filter(v=>v&&!v._deleted&&v.name);
+  const k=venueExactKey(name); if(!k) return {exact:null,possible:[]};
+  const ex=list.find(v=>venueNamesOf(v).some(n=>venueExactKey(n)===k));
+  if(ex) return {exact:ex,possible:[]};
+  const ta=venueTokens(name), possible=[];
+  if(ta.length) list.forEach(v=>{
+    const hit=venueNamesOf(v).some(n=>{
+      const tb=venueTokens(n); if(!tb.length) return false;
+      const inter=ta.filter(w=>tb.indexOf(w)>=0).length; if(!inter) return false;
+      const uni=new Set(ta.concat(tb)).size;
+      return inter===Math.min(ta.length,tb.length) || inter/uni>0.5;
+    });
+    if(hit) possible.push(v);
+  });
+  return {exact:null,possible:possible.slice(0,3)};
+}
+// The question: same venue (add as alias) or a new venue. Its own overlay so a form that is open underneath is not lost.
+// Resolves to the venue name to use, or null if cancelled.
+function venueAsk(name,candidates){
+  return new Promise(resolve=>{
+    const old=document.getElementById('venueAsk'); if(old) old.remove();
+    const el=document.createElement('div'); el.id='venueAsk';
+    el.style.cssText='position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+    el.innerHTML='<div class="modal" role="dialog" aria-modal="true" style="opacity:1;transform:none;max-width:460px;width:100%;padding:20px 22px"><div class="modal-title" style="margin:0 0 6px">Is this a venue you already have?</div>'+
+      '<div style="font-size:14px;color:var(--ink2);margin:0 0 14px">“'+esc(name)+'” looks like '+(candidates.length>1?'these venues':'a venue')+' already saved.</div><div id="vaBtns" style="display:flex;flex-direction:column;gap:8px"></div></div>';
+    document.body.appendChild(el);
+    const box=el.querySelector('#vaBtns');
+    const done=v=>{ el.remove(); resolve(v); };
+    candidates.forEach(c=>{
+      const b=document.createElement('button'); b.type='button'; b.className='btn btn-pri'; b.style.cssText='min-height:44px;text-align:left';
+      b.textContent='Same venue as “'+c.name+'” (add as another name)'; b.onclick=()=>done({alias:c}); box.appendChild(b);
+    });
+    const nb=document.createElement('button'); nb.type='button'; nb.className='btn btn-ghost'; nb.style.minHeight='44px'; nb.textContent='New venue'; nb.onclick=()=>done({fresh:true}); box.appendChild(nb);
+    const cb=document.createElement('button'); cb.type='button'; cb.className='btn btn-ghost'; cb.style.minHeight='44px'; cb.textContent='Cancel'; cb.onclick=()=>done(null); box.appendChild(cb);
+  });
+}
+// Saves the alias on the venue and returns the venue's own name.
+function venueAddAlias(v,name){
+  const d=getData(), venues=normaliseVenues(d.venues), cur=venues.find(x=>x.id===v.id); if(!cur) return v.name;
+  const al=Array.isArray(cur.aliases)?cur.aliases.slice():[];
+  if(venueExactKey(name)!==venueExactKey(cur.name) && !al.some(a=>venueExactKey(a)===venueExactKey(name))) al.push(name);
+  cur.aliases=al; cur.updatedAt=new Date().toISOString(); d.venues=venues; saveData(d); syncVenueNow(cur);
+  return cur.name;
+}
+// name → Promise<name to use | null if cancelled>: a known name or alias gives the venue's own name; a lookalike asks; anything else is used as typed.
+function venueDecide(name){
+  if(!name) return Promise.resolve(name);
+  const r=venueResolve(name);
+  if(r.exact) return Promise.resolve(r.exact.name);
+  if(!r.possible.length) return Promise.resolve(name);
+  return venueAsk(name,r.possible).then(ch=>ch===null?null:(ch.alias?venueAddAlias(ch.alias,name):name));
+}
+
 function getData(){
   try{
     const raw=JSON.parse(localStorage.getItem(SK)||'null');
@@ -2954,6 +3018,7 @@ window.GAT_HOST={
   closeModal:function(){ closeModal(); },
   toast:function(m){ try{ toast(m); }catch(e){} }
 };
+// v7.132 (MV-3, Pete 7 Nov): venue aliases stay in Gigs & Trips. A venue can have "also known as" names. When a gig is added from Music (Bought), saved, or a venue is added, a name that is not exactly a known venue or alias but looks like one (for example "Barrowland Ballroom" and "The Barrowlands") asks: same venue (add as alias) or new venue. Aliases travel with the venue record (no schema change). gat-music.js 1.06 (a cancelled Bought is silent).
 // v7.131 (from the v7.130 deployment check, v0.9.0-T4): the Music artist, add and recommendations windows have padding and evenly sized rows on a computer. gat-music.js 1.05.
 // v7.130 (from Pete's report): Music → Artists → Played, not followed gets an All played choice, so an artist played once (for example by Lex) is listed. gat-music.js 1.04.
 // v7.129 (from Pete's report): "The Levellers" (played) now matches the followed "Levellers": a leading "The" is ignored when names are compared; Check now is also on the Music Artists tab. gat-music.js 1.03.
@@ -2994,7 +3059,7 @@ let _musicLoad=null;
 function loadMusicModule(){
   if(window.GatMusic) return Promise.resolve();
   if(_musicLoad) return _musicLoad;
-  _musicLoad=new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='gat-music.js?v=1.05'; s.onload=()=>res(); s.onerror=()=>{ _musicLoad=null; rej(new Error('Could not load the Music section')); }; document.head.appendChild(s); });
+  _musicLoad=new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='gat-music.js?v=1.06'; s.onload=()=>res(); s.onerror=()=>{ _musicLoad=null; rej(new Error('Could not load the Music section')); }; document.head.appendChild(s); });
   return _musicLoad;
 }
 function renderMusic(){
@@ -4266,7 +4331,7 @@ function gatPublishContract(up,today,card){
       if(e.type==='trip') return {id:'gigs-t-'+e.id,t:e.name||'Trip',s:[tripTypeInfo(e.tripType).label,(e.startDate||'')+(e.endDate&&e.endDate!==e.startDate?' to '+e.endDate:''),e.destination||e.location||''].filter(Boolean).join(' \u00b7 '),k:'trip',d:e.startDate||'',open:{view:'trip',id:e.id}};
       return {id:'gigs-g-'+e.id,t:e.name||'Event',s:[e.venue||'',gigTypeInfo(e.gigType||'music').label,e.time||''].filter(Boolean).join(' \u00b7 '),k:'gig',d:e.date||'',open:{view:'gig',id:e.id}};
     });
-    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention,summary:card?{card:card}:undefined,app:'7.131',schema:'1'},{userId:uid_});
+    window.PalContract.publish('gigs',{upcoming:upcoming,attention:attention,summary:card?{card:card}:undefined,app:'7.132',schema:'1'},{userId:uid_});
     window.PalContract.publishSearch('gigs',search,evs.length,{userId:uid_});   // v7.111: IndexedDB, not localStorage
   }catch(e){}
 }
@@ -4291,9 +4356,15 @@ function addGigFromMusic(msg){
         const d=getData();
         const dup=d.events.find(e=>e&&!e._deleted&&e.type==='gig'&&e.musicConcertId===c.id);
         if(dup) return resolve({gigId:dup.id, existing:true});
-        const now=new Date().toISOString();
+        // v7.132 (MV-3): a venue that is not exactly known but looks like a saved one asks first (alias or new venue)
+        return venueDecide(clip(c.venue,120)).then(vn=>{
+          if(vn===null) return reject(new Error('CANCELLED'));
+          const d=getData();
+          const dup2=d.events.find(e=>e&&!e._deleted&&e.type==='gig'&&e.musicConcertId===c.id);
+          if(dup2) return resolve({gigId:dup2.id, existing:true});
+          const now=new Date().toISOString();
         const g={ id:uid('gat'), type:'gig', gigType:'music', createdAt:now, done:false, missed:false, addedBy:_currentUserKey,
-                  name:clip(c.artist,120), date:c.date, time:/^\d{2}:\d{2}$/.test(String(c.time||''))?c.time:'', venue:clip(c.venue,120),
+                  name:clip(c.artist,120), date:c.date, time:/^\d{2}:\d{2}$/.test(String(c.time||''))?c.time:'', venue:vn||'',
                   ticketUrl:/^https:\/\//.test(String(c.url||''))?clip(c.url,500):'', ticketPrice:0, ticketNote:'', tripId:null,
                   notes:clip((c.name&&c.name!==c.artist?c.name+'. ':'')+(c.city?c.city+'. ':'')+'Added from Music Tracker.',300),
                   musicConcertId:c.id, updatedAt:now };
@@ -4313,11 +4384,12 @@ function addGigFromMusic(msg){
         try{ gcalSyncGig(g,true); }catch(_){}
         try{ render(); }catch(_){}
         resolve({gigId:g.id, existing:false});
+        }).catch(err=>reject(err));
       }catch(err){ reject(err); }
     })();
   });
 }
-window.PalBridge && PalBridge.listen('GIG', { addGig: addGigFromMusic }, { app: '7.131' });
+window.PalBridge && PalBridge.listen('GIG', { addGig: addGigFromMusic }, { app: '7.132' });
 
 // v7.110 (GIG-092): the launcher asks us to open a specific record (from Needs Attention / Upcoming). Waits for the app to finish
 // starting (the launcher's message can arrive just before unlock); unknown views are ignored.
@@ -4808,6 +4880,18 @@ function saveGig(){
   const date=document.getElementById('gfDate')?.value;
   const err=document.getElementById('gfErr');
   if(!name||!date){ if(err) err.textContent='Name and date are required'; return; }
+  // v7.132 (MV-3): a venue typed or picked that is a saved alias becomes the venue's own name; a lookalike asks first (alias or new venue)
+  if(!window._venueChecked){
+    const vIn=document.getElementById('gfVenue'), vName=vIn?vIn.value.trim():'';
+    if(vName){
+      const rv=venueResolve(vName);
+      if(rv.exact){ if(rv.exact.name!==vName) vIn.value=rv.exact.name; }
+      else if(rv.possible.length){
+        venueAsk(vName,rv.possible).then(ch=>{ if(ch===null) return; vIn.value=ch.alias?venueAddAlias(ch.alias,vName):vName; window._venueChecked=true; try{ saveGig(); } finally { window._venueChecked=false; } });
+        return;
+      }
+    }
+  }
 
   const d=getData();
   const isNew=!_editGigId;
@@ -6939,7 +7023,7 @@ function renderVenues(){
     const idAttr=esc(v.id).replace(/'/g,"\\'");
     const mapHref=v.mapUrl?v.mapUrl:gmapsSearchUrl(v.name);
     html+=`<div class="vlib-item">
-      <span class="vlib-name">${esc(v.name)}</span>
+      <span class="vlib-name">${esc(v.name)}${(Array.isArray(v.aliases)&&v.aliases.length)?`<span style="display:block;font-size:11px;font-weight:400;color:var(--ink3)">Also: ${esc(v.aliases.join(', '))}</span>`:''}</span>
       <a href="${esc(mapHref)}" target="_blank" rel="noopener" class="vlib-map has-link" title="${v.mapUrl?'Open map':'Search on Google Maps'}" onclick="event.stopPropagation()">🗺</a>
       <button class="vlib-edit" onclick="editVenue('${idAttr}')" title="Edit">✏️</button>
       <button class="vlib-del" onclick="deleteVenue('${idAttr}')" title="Remove">✕</button>
@@ -6954,6 +7038,11 @@ function renderVenues(){
 function addVenueFromInput(){
   const inp=document.getElementById('newVenueName');
   const name=inp?.value?.trim(); if(!name) return;
+  if(!window._venueChecked){
+    const rv=venueResolve(name);
+    if(rv.exact){ inp.value=''; showToast('Already have it as “'+rv.exact.name+'”'); return; }
+    if(rv.possible.length){ venueAsk(name,rv.possible).then(ch=>{ if(ch===null) return; if(ch.alias){ venueAddAlias(ch.alias,name); inp.value=''; renderVenues(); showToast('Added as another name for “'+ch.alias.name+'”'); return; } window._venueChecked=true; try{ addVenueFromInput(); } finally { window._venueChecked=false; } }); return; }
+  }
   const d=getData();
   const venues=normaliseVenues(d.venues);
   let newVenue=null;
@@ -6998,6 +7087,10 @@ function editVenue(id){
       <div class="fg"><label>Venue Name</label>
         <input class="fi" id="evName" value="${esc(v.name)}">
       </div>
+      <div class="fg"><label>Also known as</label>
+        <input class="fi" id="evAliases" placeholder="Other names, separated by commas" value="${esc((Array.isArray(v.aliases)?v.aliases:[]).join(', '))}">
+        <div style="font-size:11px;color:var(--ink3);margin-top:4px">Gigs and Music dates using one of these names use this venue.</div>
+      </div>
       <div class="fg"><label>Map Link</label>
         <div style="display:flex;gap:8px">
           <input class="fi" id="evMap" type="url" placeholder="https://maps.google.com/…" value="${esc(v.mapUrl||'')}" style="flex:1">
@@ -7040,7 +7133,10 @@ function saveVenueEdit(id){
   // identity now, not derived fresh from the current name. Rebuilding
   // the object from scratch here would have silently orphaned the old
   // cloud record every time someone renamed a venue.
+  const aliasIn=(document.getElementById('evAliases')?.value||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const aliases=[]; aliasIn.forEach(a=>{ if(venueExactKey(a)!==venueExactKey(name)&&!aliases.some(b=>venueExactKey(b)===venueExactKey(a))) aliases.push(a); });
   const updated=Object.assign({},existing,{name,mapUrl,updatedAt:new Date().toISOString()});
+  if(aliases.length) updated.aliases=aliases; else delete updated.aliases;
   venues[idx]=updated;
   venues.sort((a,b)=>a.name.localeCompare(b.name));
   d.venues=venues;
