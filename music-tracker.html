@@ -9,7 +9,7 @@
 // Apply any explicit global theme preference before first paint (own cache key; the launcher's PAL_THEME message keeps it current).
 (function(){try{if(localStorage.getItem('mus_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Music Tracker v1.10</title>
+<title>Music Tracker v1.11</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-size='20' text-anchor='middle'>🎵</text></svg>">
 <style>
@@ -202,7 +202,7 @@
 <body>
 
 <div class="chrome">
-  <h1>🎵 Music <span class="v">v1.10</span></h1>
+  <h1>🎵 Music <span class="v">v1.11</span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" type="button" onclick="openDataModal()" title="Sync status / Backup &amp; settings"><span class="sync-chip-dot"></span><span id="sync-lbl">Connecting…</span></button>
 </div>
 
@@ -274,12 +274,17 @@
   <div class="pal-ds-label">Releases</div>
   <div class="data-box" id="relInfo"></div>
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshReleases({force:true})">🔄 Refresh releases now</button></div>
+  <div class="pal-ds-label">Artists list</div>
+  <div class="data-box">Export the artists you follow, with their tour status, to a file you can review (for example to check which of them still tour). Import the reviewed file to apply the changes. Only tour status, tour dates and new releases can be changed this way, and you see the changes before anything is applied.</div>
+  <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="exportReview()">⬇ Export artists list</button><button class="btn" type="button" onclick="document.getElementById('reviewFile').click()">⬆ Import reviewed list</button></div>
+  <input type="file" id="reviewFile" accept="application/json,.json" style="display:none" onchange="importReview(event)">
+  <div id="reviewPreview"></div>
   <div class="pal-ds-label">Concerts</div>
   <div class="data-box" id="conInfo"></div>
   <div class="acts" style="margin-top:0"><button class="btn" type="button" onclick="refreshConcerts({})">🔄 Check for concerts now</button></div>
 </div>
 
-<script src="pal-shared.js?v=1.10"></script>
+<script src="pal-shared.js?v=1.11"></script>
 <script>try{if(window.PalShared&&PalShared.ukDateInputs)PalShared.ukDateInputs();}catch(e){}</script>
 
 <script id="musCore">
@@ -355,6 +360,43 @@ window.MusicCore = (function () {
   function daysBetweenIso(a, b) { return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5); }
   function utcDayOfUts(uts) { return new Date(uts * 1000).toISOString().slice(0, 10); }
   function lapsedDaysOf(settings) { var d = settings && settings.lapsedDays; return LAPSED_CHOICES.indexOf(d) >= 0 ? d : 60; }
+  // v1.11: the artists list for review. Pure: reads the parsed file and the live artists, returns what would change. Only tour, tourNote, gigs and releases can be set.
+  var SLOW_AFTER_EMPTY = 6;
+  function reviewPlan(inc, artists) {
+    var list = Array.isArray(inc) ? inc : (inc && typeof inc === 'object' && Array.isArray(inc.artists) ? inc.artists : null);
+    if (!list || (inc && !Array.isArray(inc) && inc.format && inc.format !== 'music-artists-review/1')) throw new Error('This is not an artists list file');
+    if (list.length > 5000) throw new Error('Too many artists in this file');
+    var byId = {}, byName = {};
+    (artists || []).forEach(function (a) { byId[String(a.id)] = a; var k = norm(a.name); (byName[k] = byName[k] || []).push(a); });
+    var plan = { changes: [], unchanged: 0, notFound: [], ambiguous: [], invalid: 0, total: list.length }, seen = {};
+    list.forEach(function (r) {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) { plan.invalid++; return; }
+      var a = r.id != null && Object.prototype.hasOwnProperty.call(byId, String(r.id)) ? byId[String(r.id)] : null;
+      if (!a && typeof r.name === 'string' && r.name.trim()) { var m = byName[norm(r.name)] || []; if (m.length === 1) a = m[0]; else if (m.length > 1) { plan.ambiguous.push(r.name.slice(0, 60)); return; } }
+      if (!a) { plan.notFound.push(String(r.name || r.id || '?').slice(0, 60)); return; }
+      if (seen[a.id]) { plan.invalid++; return; }
+      seen[a.id] = 1;
+      var t = r.tour; if (t === undefined && typeof r.touring === 'boolean') t = r.touring ? 'active' : 'ended';
+      var bad = (t !== undefined && t !== 'ended' && t !== 'active') || (r.gigs !== undefined && typeof r.gigs !== 'boolean') || (r.releases !== undefined && typeof r.releases !== 'boolean') || (r.tourNote !== undefined && typeof r.tourNote !== 'string');
+      if (bad) { plan.invalid++; return; }
+      var curEnded = a.tour === 'ended', wantEnded = t === undefined ? curEnded : t === 'ended', f = {};
+      if (wantEnded !== curEnded) f.tour = wantEnded ? 'ended' : 'active';
+      var curNote = String(a.tourNote || ''), wantNote = wantEnded ? (r.tourNote !== undefined ? r.tourNote.trim().slice(0, 120) : curNote) : '';
+      if (wantNote !== curNote) f.tourNote = wantNote;
+      if (r.gigs !== undefined && r.gigs !== (a.gigs !== false)) f.gigs = r.gigs;
+      if (r.releases !== undefined && r.releases !== (a.releases !== false)) f.releases = r.releases;
+      if (Object.keys(f).length) plan.changes.push({ id: a.id, name: a.name, f: f }); else plan.unchanged++;
+    });
+    return plan;
+  }
+  /** Apply one planned change to an artist (same conventions as the switches: on = field absent, off = false). */
+  function applyReview(a, f) {
+    if (f.tour === 'ended') a.tour = 'ended'; else if (f.tour === 'active') delete a.tour;
+    if (a.tour === 'ended') { if (f.tourNote !== undefined) { if (f.tourNote) a.tourNote = f.tourNote; else delete a.tourNote; } } else delete a.tourNote;
+    if (f.gigs !== undefined) { if (f.gigs) delete a.gigs; else a.gigs = false; }
+    if (f.releases !== undefined) { if (f.releases) delete a.releases; else a.releases = false; }
+    return a;
+  }
   function lapsedRows(artists, L, today, days, dayOf) {
     if (!L || typeof L !== 'object' || !L.artists) return [];
     dayOf = dayOf || utcDayOfUts;
@@ -411,7 +453,7 @@ window.MusicCore = (function () {
     });
     return { items: items, overflow: Math.max(0, cands.length - items.length), eligible: cands.length };
   }
-  return { norm: norm, slug: slug, classify: classify, kindOf: kindOf, artSize: artSize, parseRelease: parseRelease, addDays: addDays, isFollowed: isFollowed, wantsReleases: wantsReleases, wantsGigs: wantsGigs,
+  return { norm: norm, slug: slug, classify: classify, kindOf: kindOf, artSize: artSize, parseRelease: parseRelease, addDays: addDays, isFollowed: isFollowed, wantsReleases: wantsReleases, wantsGigs: wantsGigs, reviewPlan: reviewPlan, applyReview: applyReview, SLOW_AFTER_EMPTY: SLOW_AFTER_EMPTY,
            defaultSettings: defaultSettings, dealtSet: dealtSet, attention: attention, dateLabel: dateLabel, liveConcerts: liveConcerts,
            concertCandidates: concertCandidates, concertUpcoming: concertUpcoming, visibleConcerts: visibleConcerts, saleCandidates: saleCandidates, lapsedRows: lapsedRows, reconnectCandidates: reconnectCandidates, lapsedDaysOf: lapsedDaysOf, LAPSED_CHOICES: LAPSED_CHOICES, SALE_LEAD_DAYS: SALE_LEAD_DAYS, WINDOW_DAYS: WINDOW_DAYS, LIFE_DAYS: LIFE_DAYS, CAP: CAP, CONCERT_NEW_DAYS: CONCERT_NEW_DAYS };
 })();
@@ -419,14 +461,14 @@ window.MusicCore = (function () {
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// MUSIC TRACKER v1.10. v1.10: on a wide screen (1100 px or more) the artist, gig and played-artist panels dock as a card down the right-hand side next to the page, like the other apps, instead of covering it; a gig row on the Concerts tab opens it too; phones keep the bottom sheet. v1.09: (from the v1.08 deployment check) a gig on Home opens a detail panel with the gig's actions instead of leaving Home, and every name in Top this week is tappable (an artist you do not follow opens a panel with Follow, Ignore and Apple Music); panels are a right-hand drawer on a wide screen. v1.08: a Home tab opens first (this week's plays and a 7-day chart, top artists, coming up, new and upcoming releases, one suggestion, artists to reconnect with, quick add); nothing else changes. v1.07: the launcher card gets a reconnect line (a lapsed artist with a gig or release) or a Try suggestion; Needs attention gets a reconnect line for a lapsed artist with a dated gig or sale; the "not played in a while" period is a synced setting (lapsedDays). v1.06: Artists has a Grid / List view; the list has Follow, New releases and Tour dates ticks on every row. v1.05: follow for releases and tour dates separately (optional booleans releases / gigs on the artist record, absent = on), Ignore in Listening (recfb state "ignored"), a Played but not followed list, error toasts that stay until dismissed. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read. v1.04 (Phase 4/5): Artists gets Discover (Last.fm similar-artist suggestions with Follow / Already know / Not for me) and Listening (recent plays, top artists, followed artists not played in a while).
+// MUSIC TRACKER v1.11. v1.11: an artist can be marked "no longer touring" (tour: 'ended'): the server then never looks up their tour dates, which with the server's rolling check (v0.7.0) cuts the outside calls to a fraction. The artist panel shows when their dates were last checked. Sync & Backup gains an artists list for review: Export artists list writes the followed artists with their tour status and listening to a JSON file, and Import reviewed list reads it back (tour, tourNote, gigs, releases only), shows what would change and applies it only after Apply. v1.10: on a wide screen (1100 px or more) the artist, gig and played-artist panels dock as a card down the right-hand side next to the page, like the other apps, instead of covering it; a gig row on the Concerts tab opens it too; phones keep the bottom sheet. v1.09: (from the v1.08 deployment check) a gig on Home opens a detail panel with the gig's actions instead of leaving Home, and every name in Top this week is tappable (an artist you do not follow opens a panel with Follow, Ignore and Apple Music); panels are a right-hand drawer on a wide screen. v1.08: a Home tab opens first (this week's plays and a 7-day chart, top artists, coming up, new and upcoming releases, one suggestion, artists to reconnect with, quick add); nothing else changes. v1.07: the launcher card gets a reconnect line (a lapsed artist with a gig or release) or a Try suggestion; Needs attention gets a reconnect line for a lapsed artist with a dated gig or sale; the "not played in a while" period is a synced setting (lapsedDays). v1.06: Artists has a Grid / List view; the list has Follow, New releases and Tour dates ticks on every row. v1.05: follow for releases and tour dates separately (optional booleans releases / gigs on the artist record, absent = on), Ignore in Listening (recfb state "ignored"), a Played but not followed list, error toasts that stay until dismissed. Phase 1: artists, Apple Music links, new releases, launcher card and Needs attention. v1.01 (Phase 3): Scottish concerts. v1.02: Not interested, on-sale date and ticket-sale alert on a concert; bigger launcher card. v1.03: checked import (bad records skipped and counted), contract app value is the plain version, notice when this device's saved data cannot be opened or read. v1.04 (Phase 4/5): Artists gets Discover (Last.fm similar-artist suggestions with Follow / Already know / Not for me) and Listening (recent plays, top artists, followed artists not played in a while).
 // Data: pal_music rows (this user only): artist_<id>, attn_<releaseId>, gig_<concertId> (link to a Gigs & Trips gig), __settings__ and, written by the
 // server only, concert_<id> (Ticketmaster dates in Scottish cities for followed artists) and __concerts__ (its bookkeeping). The scheduled server function
 // (swift-responder / pal-music-proxy) reads the same rows, so the field names below (following, excluded, releases, gigs, appleArtistId, dealt, attention)
 // are shared with it and must not be renamed. Releases are a cache rebuilt from Apple (IndexedDB mus_db), never synced.
 // v1.04: the server also writes rec_<id> (a Last.fm suggestion), __listening__ (plays summary) and __recmeta__ (cache); the app writes recfb_<id> {id,state:followed|known|dismissed|new} (your feedback).
 // ══════════════════════════════════════════════════════════════════
-const APP_VERSION = '1.10';
+const APP_VERSION = '1.11';
 const SB_TABLE = 'pal_music';
 const STAT_CACHE_KEY = 'pal_mus_stat';
 const UI_KEY = 'mus_ui';
@@ -441,8 +483,8 @@ const _tSettings = window.PalSync.table(SB_TABLE, {});
 const _tRecfb    = window.PalSync.table(SB_TABLE, { prefix: 'recfb_' });     // v1.04: your feedback on a Last.fm suggestion (followed / known / dismissed); the server reads it
 const C = window.MusicCore;
 
-let state = { v: 1, artists: [], attn: [], gigs: [], cst: [], concerts: [], recs: [], recfb: [], listening: null, settings: C.defaultSettings(), lastExported: null };
-let cinfo = { at: null, msg: '', lfm: '' };      // last concert check made from this device (the server's own daily check is not recorded here)
+let state = { v: 1, artists: [], attn: [], gigs: [], cst: [], concerts: [], recs: [], recfb: [], listening: null, conCheck: { fetched: {}, empty: {} }, settings: C.defaultSettings(), lastExported: null };
+let cinfo = { at: null, msg: '', lfm: '', note: '' };      // last concert check made from this device (the server's own daily check is not recorded here)
 let _tok = null, _conBusy = false; const _gigBusy = {}, _gigReq = {};
 let rel = { fetchedAt: null, items: {}, fetched: {} };          // items: collectionId -> release; fetched: appleArtistId -> ISO
 let ui = { aView: 'grid', aKeep: {}, lMin: 3, showIgnored: false, showHidden: false, tab: 'home', range: '90', album: true, single: true, aFilter: 'all', aQuery: '', aSub: 'artists', lRange: '30', lGap: 60, showRecHidden: false };
@@ -511,6 +553,7 @@ function normaliseState(s) {
                 gigs: Array.isArray(o.gigs) ? o.gigs.filter(a => a && a.id) : [], cst: Array.isArray(o.cst) ? o.cst.filter(a => a && a.id) : [], concerts: Array.isArray(o.concerts) ? o.concerts.filter(a => a && a.id) : [],
                 recs: Array.isArray(o.recs) ? o.recs.filter(a => a && a.id) : [], recfb: Array.isArray(o.recfb) ? o.recfb.filter(a => a && a.id) : [],
                 listening: (o.listening && typeof o.listening === 'object' && o.listening.artists && typeof o.listening.artists === 'object') ? o.listening : null,
+                conCheck: (o.conCheck && typeof o.conCheck === 'object' && o.conCheck.fetched && typeof o.conCheck.fetched === 'object') ? { fetched: o.conCheck.fetched, empty: (o.conCheck.empty && typeof o.conCheck.empty === 'object') ? o.conCheck.empty : {} } : { fetched: {}, empty: {} },
                 settings: C.defaultSettings(), lastExported: o.lastExported || null };
   if (o.settings && o.settings.attention) { out.settings.attention = Object.assign(out.settings.attention, o.settings.attention); out.settings.updatedAt = o.settings.updatedAt || ''; if (C.LAPSED_CHOICES.indexOf(o.settings.lapsedDays) >= 0) out.settings.lapsedDays = o.settings.lapsedDays; }
   return out;
@@ -566,6 +609,14 @@ function addArtist(name, hit, level) {
 function setFollow(a, on) { a.following = !!on; touch(a); afterChange(); }
 // v1.05 (MUS-009): on = the key is removed (absent means on), off = false. Older apps and the server read absent as on.
 function setWant(a, key, on) { if (on) delete a[key]; else a[key] = false; touch(a); afterChange(); if (key === 'releases' && on) refreshReleases({ only: [a] }); }
+// v1.11: 'no longer touring'. tour === 'ended' (absent = touring) tells the server to stop looking up this artist's dates; dates already found stay visible.
+const tourEnded = a => !!a && a.tour === 'ended';
+function setTour(a, touring) { if (touring) { delete a.tour; delete a.tourNote; } else a.tour = 'ended'; touch(a); afterChange(); }
+function conCheckLine(a) {
+  if (tourEnded(a)) return '<div class="note" style="padding:0 2px 8px">Not checked while marked as no longer touring.' + (a.tourNote ? ' ' + esc(a.tourNote) : '') + '</div>';
+  const cc = state.conCheck || {}, f = cc.fetched && cc.fetched[a.id], n = (cc.empty && cc.empty[a.id]) || 0;
+  return '<div class="note" style="padding:0 2px 8px">' + (f ? 'Tour dates last checked ' + esc(fmtDate(f)) : 'Tour dates not checked yet') + (n >= C.SLOW_AFTER_EMPTY ? ' · nothing found in ' + n + ' checks, so now checked about every 3 months' : '') + '</div>';
+}
 function confirmMatch(a) { a.match = 'manual'; touch(a); afterChange(); }
 function rematch(a, hit) {
   const oldAid = a.appleArtistId;
@@ -620,7 +671,8 @@ function releasesStale() { return !rel.fetchedAt || Date.now() - Date.parse(rel.
 function setConInfo() {
   const n = liveConcertList().length;
   $('conInfo').innerHTML = '<strong>' + n + '</strong> upcoming Scottish date' + (n === 1 ? '' : 's') + ' for followed artists<br>Last checked from this device <strong>' + (cinfo.at ? esc(ago(cinfo.at)) : 'never') + '</strong>' +
-    '<br><span class="note">Ticketmaster is checked on the server once a day; this device also asks once a day when you open the app.</span>';
+    (cinfo.note ? '<br><span class="note">Last check: ' + esc(cinfo.note) + '</span>' : '') +
+    '<br><span class="note">The server checks a few artists each morning. How often an artist is checked depends on their dates: every 2 days when a gig or ticket sale is close, about weekly with a date later on, every 2 weeks with none, about every 3 months once nothing has been found for a long time. Artists marked as no longer touring, or with tour dates off, are never checked. “Check for concerts now” re-checks anyone not checked today.</span>';
 }
 function setRelInfo() {
   const n = relArtists().filter(hasApple).length;
@@ -668,12 +720,12 @@ async function refreshConcerts(o) {
       cinfo.lfm = lfmMessage(r);
       if (r.ran === false) cinfo.msg = r.reason === 'in-progress' ? 'A check is already running.' : '';
       else if (tm && tm.status === 'error') cinfo.msg = 'Ticketmaster could not be checked: ' + (tm.error || 'error') + '. Showing the last dates found.';
-      else { cinfo.at = new Date().toISOString(); cinfo.msg = ''; }
+      else { cinfo.at = new Date().toISOString(); cinfo.msg = ''; cinfo.note = (tm && tm.note) ? String(tm.note).slice(0, 200) : ''; }
     }
     saveCinfo();
     await syncPull();
     slog('Concert check: ' + (cinfo.msg || 'ok'), cinfo.msg ? 'error' : 'ok');
-    if (!o.silent) toast(o.what === 'music' ? (cinfo.lfm || 'Suggestions and listening updated') : (cinfo.msg || 'Concerts up to date'));
+    if (!o.silent) toast(o.what === 'music' ? (cinfo.lfm || 'Suggestions and listening updated') : (cinfo.msg || (/waiting for the next run/.test(cinfo.note || '') ? 'Checked some artists; the rest are checked next time' : 'Concerts up to date')));
   } catch (e) {
     cinfo.msg = 'Could not reach the concert check (' + ((e && e.message) || 'offline') + '). Showing the last dates found.'; cinfo.lfm = cinfo.msg; saveCinfo();
     slog('Concert check failed: ' + cinfo.msg, 'error'); if (!o.silent) errToast(cinfo.msg);
@@ -1100,7 +1152,7 @@ function renderArtists() {
     const flag = matchFlag(a), art = artFor(a, idx), init = (a.name.trim()[0] || '?').toUpperCase();
     const C0 = C.artSize(art, 300);
     return '<button type="button" class="tile' + (C.isFollowed(a) ? '' : ' off') + '" data-artist="' + esc(a.id) + '"><div class="art">' + esc(init) + (C0 ? '<img src="' + esc(C0) + '" alt="" loading="lazy" onerror="this.remove()">' : '') + (flag ? '<span class="flag">' + flag + '</span>' : '') + '</div>' +
-      '<div class="nm">' + esc(a.name) + '</div><div class="sub">' + (C.isFollowed(a) ? 'Following' + (a.releases === false ? ' · no releases' : '') + (a.gigs === false ? ' · no gigs' : '') : 'Not following') + '</div></button>';
+      '<div class="nm">' + esc(a.name) + '</div><div class="sub">' + (C.isFollowed(a) ? 'Following' + (a.releases === false ? ' · no releases' : '') + (a.gigs === false ? ' · no gigs' : tourEnded(a) ? ' · not touring' : '') : 'Not following') + '</div></button>';
   }).join('') + '</div>';
 }
 function setAFilter(k) { ui.aFilter = k; ui.aKeep = {}; renderArtists(); }
@@ -1162,7 +1214,8 @@ function renderSheet() {
     (flag ? '<div class="data-box">Matched automatically, but another artist shares this name. Is this the right one?<div class="acts"><button class="btn pri sm" type="button" onclick="confirmMatch(_sheetArtist);renderSheet()">Yes, that’s them</button><button class="btn sm" type="button" onclick="_sheetMode=\'match\';renderSheet()">Choose another</button></div></div>' : '') +
     '<label class="sw" style="border-top:0"><span>Follow<small>Choose below what you want to hear about</small></span><input type="checkbox" ' + (C.isFollowed(a) ? 'checked' : '') + ' onchange="setFollow(_sheetArtist,this.checked);renderSheet()"></label>' +
     (C.isFollowed(a) ? '<label class="sw"><span>New releases<small>Show their albums and singles here and in the launcher</small></span><input type="checkbox" ' + (a.releases !== false ? 'checked' : '') + ' onchange="setWant(_sheetArtist,\'releases\',this.checked);renderSheet()"></label>' +
-    '<label class="sw"><span>Tour dates<small>Show their Scottish gigs and ticket alerts</small></span><input type="checkbox" ' + (a.gigs !== false ? 'checked' : '') + ' onchange="setWant(_sheetArtist,\'gigs\',this.checked);renderSheet()"></label>' : '') +
+    '<label class="sw"><span>Tour dates<small>Show their Scottish gigs and ticket alerts</small></span><input type="checkbox" ' + (a.gigs !== false ? 'checked' : '') + ' onchange="setWant(_sheetArtist,\'gigs\',this.checked);renderSheet()"></label>' +
+    (a.gigs !== false ? '<label class="sw"><span>Still touring<small>Turn off if they have stopped touring: Music stops checking for their dates</small></span><input type="checkbox" ' + (tourEnded(a) ? '' : 'checked') + ' onchange="setTour(_sheetArtist,this.checked);renderSheet()"></label>' + conCheckLine(a) : '') : '') +
     '<div class="acts"><button class="btn pri" type="button" onclick="openApple(artistUrl(_sheetArtist))">▶ Open in Apple Music</button>' +
     '<button class="btn" type="button" onclick="_sheetMode=\'match\';renderSheet()">' + (hasApple(a) ? 'Wrong artist? Fix match' : 'Find on Apple Music') + '</button></div>' +
     '<div class="acts"><button class="btn danger" type="button" onclick="removeArtist(_sheetArtist)">Remove from my list</button></div>';
@@ -1257,6 +1310,9 @@ async function syncPull() {
     state.listening = (lr && lr.data && !lr.data._deleted && lr.data.artists && typeof lr.data.artists === 'object') ? lr.data : null;
     // concerts are written by the server only: take them as they are (never pushed back, so a stale copy here cannot overwrite the server's)
     state.concerts = rows.filter(r => r.record_key.indexOf('concert_') === 0 && r.data && r.data.id && !r.data._deleted).map(r => r.data);
+    // the server's concert bookkeeping (when each artist's dates were last looked up): read only, never pushed back
+    const cr = rows.find(r => r.record_key === '__concerts__');
+    state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {} } : { fetched: {}, empty: {} };
     const sr = rows.find(r => r.record_key === '__settings__');
     if (sr && sr.data && sr.data.attention) {
       if ((sr.data.updatedAt || '') > (state.settings.updatedAt || '')) state.settings = normaliseState({ settings: sr.data }).settings;
@@ -1323,6 +1379,72 @@ function importJSON(evt) {
     evt.target.value = '';
   };
   reader.readAsText(file);
+}
+
+// ── artists list for review (v1.11) ───────────────────────────────
+// Export: the followed artists with the switches that matter for outside checks, plus context for judging whether they still tour. Import: parsed by MusicCore.reviewPlan,
+// previewed, and applied only after Apply. Only tour, tourNote, gigs and releases can be changed from a file; nothing is added or removed.
+let _review = null;
+function exportReview() {
+  const L = state.listening, cc = state.conCheck || {}, fetched = cc.fetched || {}, empty = cc.empty || {}, today = todayISO(), cons = allLiveConcerts();
+  const rows = followedArtists().slice().sort((x, y) => String(x.name).localeCompare(String(y.name))).map(a => {
+    const e = L && L.artists ? L.artists[C.norm(a.name)] : null;
+    const next = cons.filter(c => String(c.artistId) === String(a.id) && c.date >= today).map(c => c.date).sort()[0] || '';
+    return { id: a.id, name: a.name, genre: a.genre || '', tour: tourEnded(a) ? 'ended' : 'active', tourNote: a.tourNote || '', gigs: a.gigs !== false, releases: a.releases !== false,
+             plays: e ? (Number(e.t) || 0) : 0, lastPlayed: e && e.l ? localDay(e.l) : '', nextScottishDate: next, tourDatesLastChecked: fetched[a.id] || '', checksWithNothingFound: empty[a.id] || 0 };
+  });
+  const out = { format: 'music-artists-review/1', app: 'music', version: APP_VERSION, exportedAt: new Date().toISOString(),
+    howTo: 'Change only tour ("ended" = no longer tours, "active" = still tours), tourNote (optional reason), gigs (false = no tour dates wanted) and releases (false = no new releases wanted). Leave every other field as it is. Import the file in Music: Sync & Backup > Import reviewed list.',
+    artists: rows };
+  const el = document.createElement('a'); el.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
+  el.download = 'music-artists-review.json'; el.click(); setTimeout(() => URL.revokeObjectURL(el.href), 4000);
+  toast('Exported ' + rows.length + ' artist' + (rows.length === 1 ? '' : 's'));
+}
+function importReview(evt) {
+  const file = evt.target.files[0]; if (!file) return;
+  if (file.size > 2000000) { errToast('That file is too big to be an artists list'); evt.target.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { _review = C.reviewPlan(JSON.parse(reader.result), liveArtists()); renderReview(); }
+    catch (e) { _review = null; renderReview(); errToast('Import failed: ' + (e && e.message ? e.message : e)); }
+    evt.target.value = '';
+  };
+  reader.readAsText(file);
+}
+function renderReview() {
+  const box = $('reviewPreview'); if (!box) return;
+  const p = _review; if (!p) { box.innerHTML = ''; return; }
+  const group = (label, items) => {
+    if (!items.length) return '';
+    const names = items.slice(0, 40).map(c => esc(c.name)).join(', ') + (items.length > 40 ? ' and ' + (items.length - 40) + ' more' : '');
+    return '<div class="kv" style="display:block"><b>' + label + ' (' + items.length + ')</b><br>' + names + '</div>';
+  };
+  const ch = p.changes, has = k => ch.filter(c => c.f[k] !== undefined);
+  const html = group('Marked as no longer touring', ch.filter(c => c.f.tour === 'ended')) + group('Back to touring', ch.filter(c => c.f.tour === 'active')) +
+    group('Tour dates off', has('gigs').filter(c => c.f.gigs === false)) + group('Tour dates on', has('gigs').filter(c => c.f.gigs === true)) +
+    group('New releases off', has('releases').filter(c => c.f.releases === false)) + group('New releases on', has('releases').filter(c => c.f.releases === true)) +
+    group('Note changed', ch.filter(c => c.f.tourNote !== undefined && c.f.tour === undefined));
+  const extra = [p.unchanged ? p.unchanged + ' already match' : '', p.notFound.length ? p.notFound.length + ' not found in your list (' + esc(p.notFound.slice(0, 5).join(', ')) + (p.notFound.length > 5 ? '…' : '') + ')' : '',
+    p.ambiguous.length ? p.ambiguous.length + ' share a name with another artist and were skipped' : '', p.invalid ? p.invalid + ' could not be read and were skipped' : ''].filter(Boolean).join(' · ');
+  box.innerHTML = '<div class="data-box"><strong>' + (ch.length ? ch.length + ' artist' + (ch.length === 1 ? '' : 's') + ' would change' : 'Nothing would change') + '</strong>' + (extra ? '<br>' + extra : '') + '</div>' +
+    (html ? '<div class="data-box">' + html + '</div>' : '') +
+    '<div class="acts" style="margin-top:0">' + (ch.length ? '<button class="btn pri" type="button" onclick="applyReviewNow()">Apply ' + ch.length + ' change' + (ch.length === 1 ? '' : 's') + '</button>' : '') + '<button class="btn" type="button" onclick="cancelReview()">' + (ch.length ? 'Cancel' : 'Close') + '</button></div>';
+}
+function cancelReview() { _review = null; renderReview(); }
+async function applyReviewNow() {
+  if (!_review || !_review.changes.length) return;
+  const now = new Date().toISOString(), changed = [], relOn = [];
+  _review.changes.forEach(c => {
+    const a = liveArtists().find(x => x.id === c.id); if (!a) return;     // looked up again: the list may have synced since the preview
+    C.applyReview(a, c.f); a.updatedAt = now; changed.push(a); if (c.f.releases === true) relOn.push(a);
+  });
+  _review = null; renderReview(); saveState(); afterChange();
+  toast('Updated ' + changed.length + ' artist' + (changed.length === 1 ? '' : 's'));
+  if (window.PalSync.hasSession()) {
+    setSyncStatus('syncing');
+    try { for (const a of changed) await _tArtists.upsert(a.id, a); setSyncStatus('synced'); } catch (e) { slog('Artists list: ' + hint(e), 'error'); setSyncStatus('error'); errToast('Some changes could not be sent to the cloud. Use Push to cloud to retry.'); }
+  }
+  if (relOn.length) refreshReleases({ only: relOn });
 }
 
 // ── Sync & Backup sheet (shared) ──────────────────────────────────
@@ -1431,7 +1553,7 @@ setSyncStatus('connecting');
     if (_readFail.state) _storeBad = 'read';
     storeNotice();
     const r = await kvGet('rel'); if (r && r.items) rel = { fetchedAt: r.fetchedAt || null, items: r.items, fetched: r.fetched || {} };
-    const ci = await kvGet('cinfo'); if (ci && typeof ci === 'object') cinfo = { at: ci.at || null, msg: ci.msg || '', lfm: ci.lfm || '' };
+    const ci = await kvGet('cinfo'); if (ci && typeof ci === 'object') cinfo = { at: ci.at || null, msg: ci.msg || '', lfm: ci.lfm || '', note: ci.note || '' };
     writeStatCache(); switchTab('home');
   } finally { _bootResolve(); }
 })();
