@@ -1,11 +1,11 @@
-/* gat-music.js v1.14 (v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.15 (v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.14', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.15', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -426,16 +426,16 @@
   function chartHtml(view, who) {
     var C = chartData(view, who), mxv = 0; who.forEach(function (w) { C.vals[w].forEach(function (v) { if (v > mxv) mxv = v; }); });
     if (!mxv) return '<div class="note" style="padding:10px 0">No plays recorded for this view yet.</div>';
-    var W = 640, H = 200, pl = 36, pr = 8, pt = 12, pb = 26, iw = W - pl - pr, ih = H - pt - pb, n = C.labels.length, mx = niceMax(mxv), gw = iw / n, bw = Math.max(2, (gw * 0.8) / who.length), s = '', y, i;
+    var sm = window.innerWidth < 700, fs = sm ? 16 : 11, W = 640, H = sm ? 230 : 200, pl = sm ? 44 : 36, pr = 8, pt = 12, pb = sm ? 32 : 26, iw = W - pl - pr, ih = H - pt - pb, n = C.labels.length, mx = niceMax(mxv), gw = iw / n, bw = Math.max(2, (gw * 0.8) / who.length), s = '', y, i;
     var desc = who.map(function (w) { return (WHO[w] || w) + ' ' + C.vals[w].reduce(function (a, b) { return a + b; }, 0) + ' plays'; }).join(', ');
     s += '<svg class="gsvg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Plays ' + (view === 'months' ? 'a month, last 12 months' : view === 'week' ? 'by day of the week' : 'a day, last 30 days') + ': ' + E(desc) + '">';
-    [0, 0.5, 1].forEach(function (f) { y = pt + ih - f * ih; s += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(--sep)" stroke-width="1"/><text x="' + (pl - 6) + '" y="' + (y + 4) + '" text-anchor="end" style="fill:var(--ink3);font:11px var(--f)">' + Math.round(mx * f) + '</text>'; });
+    [0, 0.5, 1].forEach(function (f) { y = pt + ih - f * ih; s += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(--sep)" stroke-width="1"/><text x="' + (pl - 6) + '" y="' + (y + 4) + '" text-anchor="end" style="fill:var(--ink3);font:' + fs + 'px var(--f)">' + Math.round(mx * f) + '</text>'; });
     for (i = 0; i < n; i++) {
       who.forEach(function (w, j) {
         var v = C.vals[w][i], h = v / mx * ih, x = pl + i * gw + gw * 0.1 + j * bw;
         s += '<rect x="' + x.toFixed(1) + '" y="' + (pt + ih - h).toFixed(1) + '" width="' + (bw - 1).toFixed(1) + '" height="' + Math.max(v ? 1.5 : 0, h).toFixed(1) + '" rx="2" style="fill:' + colOf(w) + '"><title>' + E((WHO[w] || w) + ', ' + C.labels[i] + ': ' + v + (v === 1 ? ' play' : ' plays')) + '</title></rect>';
       });
-      if (i % C.tick === 0) s += '<text x="' + (pl + i * gw + gw / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" style="fill:var(--ink3);font:11px var(--f)">' + E(C.labels[i]) + '</text>';
+      if (i % (sm && C.tick === 5 ? 10 : C.tick) === 0) s += '<text x="' + (pl + i * gw + gw / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" style="fill:var(--ink3);font:' + fs + 'px var(--f)">' + E(C.labels[i]) + '</text>';
     }
     return s + '</svg>';
   }
@@ -464,7 +464,8 @@
     return '<div class="card tools" style="margin-top:18px"><h3>Export and import</h3>Export your artists to a JSON file, or import a list of acts (a JSON file, or a text file with one name per line). Names are checked against your list first, so you see the duplicates before anything is added.<div><button type="button" class="btn" data-m="exportart">Export artists</button> <button type="button" class="btn" data-m="importart">Import artists</button></div></div>' +
       secHead('d', 'Diagnostics', '', ui.dOpen) + (ui.dOpen ? '<div class="card tools secbody"><h3>JamBase</h3>Tour dates come from Ticketmaster and JamBase. This test asks both about up to 15 of the artists you follow and shows which one finds Scottish dates. It uses a few of the 900 JamBase calls a month.<div><button type="button" class="btn" data-m="jbtest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test JamBase') + '</button></div></div>' : '');
   }
-  function renderArtistsDesk() {
+  function renderArtists() {
+    if (!ready) return '<div class="empty">Loading Music…</div>';
     var all = live(), q = norm(ui.aQuery), la = listenAge();
     var h = head() + '<input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
       '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
@@ -486,33 +487,6 @@
     }
     return h + toolsHtml();
   }
-  function renderArtists() {
-    if (!ready) return '<div class="empty">Loading Music…</div>';
-    if (paneOn()) return renderArtistsDesk();
-    var all = live(), q = norm(ui.aQuery), notFol = all.filter(function (a) { return !isFollowed(a); }).length;
-    var la = listenAge();
-    var h = head() + '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
-      '<div class="stat"><span role="status">' + (listeners().length ? 'Last.fm plays ' + (la ? 'checked ' + E(la) : 'not checked yet') + '.' : 'No Last.fm plays yet.') + (cinfo.msg ? ' ' + E(cinfo.msg) : '') + '</span>' + checkBtn('Check for new listening') + '</div>' +
-      '<div class="note">Check for new listening brings in your latest Last.fm plays now (it also looks for new tour dates). It runs by itself every day.</div>' +
-      (pendingMatch().length ? '<div class="note">' + (matching ? 'Matching new artists with Apple Music: ' + matchInfo.done + ' of ' + matchInfo.total + '…' : pendingMatch().length + ' new artist' + (pendingMatch().length === 1 ? ' is' : 's are') + ' waiting to be matched with Apple Music.') + (matching ? '' : ' <button type="button" class="lnk" data-m="matchnow">Match now</button>') + '</div>' : '');
-    var pnf = playedNotFollowed();
-    if (listeners().length && !q) {
-      h += '<div class="card"><h3>Played, not followed</h3>' + (listeners().length > 1 ? seg([['Both', !ui.pWho, 'pwho:']].concat(listeners().map(function (w) { return [E(WHO[w] || w), ui.pWho === w, 'pwho:' + w]; }))) : '') +
-        seg([1, 2, 3, 5, 10].map(function (n) { return [n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n]; }));
-      h += pnfBody(pnf);
-      h += '</div>';
-    }
-    h += '<div class="dash-sec">Your artists</div><input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
-      seg([['All ' + all.length, ui.aFilter === 'all', 'afilter:all'], ['Following', ui.aFilter === 'following', 'afilter:following'], ['Not following' + (notFol ? ' ' + notFol : ''), ui.aFilter === 'not', 'afilter:not']]);
-    var rows = all.filter(function (a) { return (!q || norm(a.name).indexOf(q) >= 0) && (ui.aFilter === 'all' || (ui.aFilter === 'following' && isFollowed(a)) || (ui.aFilter === 'not' && !isFollowed(a))); })
-      .sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
-    if (!all.length) return h + '<div class="empty">No artists yet. Add one to start.</div>';
-    if (!rows.length) return h + '<div class="empty">No artists match.</div>';
-    h += rows.map(artRow).join('');
-    h += toolsHtml();
-    return h;
-  }
-
   // ── desktop side panel (v1.12): the host shows it to the right of the list on a wide screen ──
   function paneOn() { return !!(document.body && document.body.classList.contains('pane') && H().tab && H().tab() === 'music'); }
   function selIs(k, id) { return !!sel && sel.k === k && sel.id === id; }
