@@ -1,11 +1,11 @@
-/* gat-music.js v1.09 (v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.10 (v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.09', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.10', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -183,7 +183,7 @@
     busy.con = true; paint();
     return fetch(base + '/functions/v1/swift-responder/refresh', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: '{}' })
       .then(function (res) {
-        if (res.status === 429) return res.json().catch(function () { return {}; }).then(function (j) { cinfo.msg = j.error === 'daily-cap' ? 'Daily limit reached. Try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.'; });
+        if (res.status === 429) return res.json().catch(function () { return {}; }).then(function (j) { cinfo.msg = j.error === 'daily-cap' ? 'You have used today’s manual checks. The automatic daily check still runs; try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.'; });
         if (!res.ok) throw new Error(res.status === 403 ? 'this account is not set up for the scheduled check' : 'HTTP ' + res.status);
         cinfo.at = new Date().toISOString(); cinfo.msg = '';
       })
@@ -413,7 +413,7 @@
     if (!names.length) { say('Follow some artists first'); return; }
     var base = (window.PAL_CONFIG && PAL_CONFIG.SB_URL) || '';
     busy.jb = 1; paint();
-    fetch(base + '/functions/v1/swift-responder/probe-jambase', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: JSON.stringify({ artists: names, scotland: true }) })
+    fetch(base + '/functions/v1/swift-responder/probe-jambase', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: JSON.stringify({ artists: names, scotland: false }) })
       .then(function (res) { return res.json().catch(function () { return {}; }).then(function (j) { return { res: res, j: j }; }); })
       .then(function (r) {
         if (!r.res.ok) throw new Error(r.res.status === 404 ? 'the server has not been updated to v0.10.0 yet' : r.res.status === 403 ? 'this account is not allowed to run it' : (r.j && r.j.error) || 'HTTP ' + r.res.status);
