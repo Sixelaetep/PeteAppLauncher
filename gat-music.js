@@ -1,11 +1,11 @@
-/* gat-music.js v1.06 (v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.07 (v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.06', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.07', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -56,7 +56,7 @@
   // ── state ──
   var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, conCheck: { fetched: {}, empty: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
-  var ui = { sub: 'coming', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false };
+  var ui = { sub: 'coming', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false };
   var cinfo = { at: null, msg: '' };
   var busy = { con: false, rel: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
   var _db = null, _tables = null, tokSet = '';
@@ -79,8 +79,8 @@
   var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
   var followed = function () { return live().filter(isFollowed); };
   var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
-  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; } } catch (e) {} }
-  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, aFilter: ui.aFilter, lMin: ui.lMin })); } catch (e) {} }
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; } } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin })); } catch (e) {} }
 
   // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
   function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
@@ -324,14 +324,15 @@
       '<div class="acts">' + (it.hidden ? '<button class="btn" data-m="rrestore:' + E(it.id) + '">Show again</button>' :
         '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button><button class="btn' + (it.interested ? ' on' : '') + '" data-m="rinterested:' + E(it.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button>') + '</div></div><div class="tl rl" aria-hidden="true">💿</div></div>';
   }
-  function checkBtn() { return '<button type="button" class="chip ghost" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Check now') + '</button>'; }
+  function checkBtn() { return '<button type="button" class="chip ghost" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Check for new dates') + '</button>'; }
   function renderComing() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
-    var items = comingItems(), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
+    var allItems = comingItems(), items = allItems.filter(function (i) { return ui.cFilter === 'all' || (ui.cFilter === 'gigs' ? i.kind === 'con' : i.kind === 'rel'); }), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
     var status = (busy.con ? 'Checking Ticketmaster… ' : cinfo.at ? 'Checked ' + ago(cinfo.at) + '. ' : '') + cinfo.msg + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland.' : '');
-    var h = '<div class="chips">' + checkBtn() + '</div><div class="note" role="status">' + E(status) + '</div>';
+    var nG = allItems.filter(function (i) { return i.kind === 'con' && !i.hidden; }).length, nR = allItems.filter(function (i) { return i.kind === 'rel' && !i.hidden; }).length;
+    var h = '<div class="chips">' + chip('All ' + (nG + nR), ui.cFilter === 'all', 'cfilter:all') + chip('Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs') + chip('Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases') + checkBtn() + '</div><div class="note" role="status">' + E(status) + ' <span>Check for new dates asks Ticketmaster now for tour dates of the artists you follow; it also runs by itself every day.</span></div>';
     if (!followed().length) return h + '<div class="empty">Follow some artists and their Scottish dates and new releases appear here.<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">Go to Artists</button></div></div>';
-    if (!shown.length) h += '<div class="empty">' + (busy.con ? 'Looking for concerts…' : 'No Scottish dates or new releases for the artists you follow right now.') + '</div>';
+    if (!shown.length) h += '<div class="empty">' + (busy.con ? 'Looking for concerts…' : '' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '') + '</div>';
     var month = '';
     shown.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<h3>' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</h3>'; } h += itemRow(it); });
     if (hid.length) h += '<button type="button" class="chip ghost" data-m="togglehidden">' + (ui.showHidden ? 'Hide' : 'Show') + ' ' + hid.length + ' you are not interested in</button>' + (ui.showHidden ? hid.map(itemRow).join('') : '');
@@ -422,7 +423,7 @@
     var h = '<div class="gm-sheet"><h2>Recommendations</h2><div class="note">' + (who.length ? 'Based on what ' + E(who.join(' and ')) + ' follow and play (Last.fm). ' : 'Based on the artists you follow. ') + (recs.length ? recs.length + ' suggestion' + (recs.length === 1 ? '' : 's') + '.' : '') + '</div><div class="acts"><button class="btn" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Check now') + '</button><button class="btn" data-m="closemodal">Close</button></div>';
     h += recs.length ? recs.map(function (r) {
       return '<div class="row"><div class="rb"><div class="rt">' + E(r.name) + '</div><div class="rs">' + E(recReason(r)) + '</div><div class="acts"><button class="btn pri" data-m="recfollow:' + E(r.id) + '"' + (busy.follow[r.name] ? ' disabled' : '') + '>' + (busy.follow[r.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="recapple:' + E(r.id) + '">Apple Music</button><button class="btn" data-m="recknown:' + E(r.id) + '">Already know</button><button class="btn" data-m="recno:' + E(r.id) + '">Not for me</button></div></div></div>';
-    }).join('') : '<div class="empty">No suggestions yet.<div class="note">They are worked out by the server’s daily check from Last.fm’s similar-artist lists. Press Check now to update.</div></div>';
+    }).join('') : '<div class="empty">No suggestions yet.<div class="note">They are worked out by the server’s daily check from Last.fm’s similar-artist lists. Press Check for new dates (Coming up or Artists) to update.</div></div>';
     h += '</div>';
     if (refreshOnly) { var m = document.getElementById('modal'); if (m) m.innerHTML = '<div class="gm gm-sheet-wrap">' + h + '</div>'; } else modal('recs', h);
   }
@@ -435,6 +436,7 @@
     else if (k === 'check') checkNow(false);
     else if (k === 'togglehidden') { ui.showHidden = !ui.showHidden; paint(); }
     else if (k === 'afilter') { ui.aFilter = v; saveUi(); paint(); }
+    else if (k === 'cfilter') { ui.cFilter = v; saveUi(); paint(); }
     else if (k === 'lmin') { ui.lMin = Number(v); saveUi(); paint(); }
     else if (k === 'artist') openArtist(v);
     else if (k === 'addartist') openAdd();
