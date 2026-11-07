@@ -1,11 +1,11 @@
-/* gat-music.js v1.00 (MUS-016 step 2b): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.01 (MUS-016 step 2b; v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.00', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.01', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -265,7 +265,7 @@
   var CSS = '.gm{font-family:var(--f)}.gm .chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px;align-items:center}.gm .chip{border:1px solid var(--bdr);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 14px;font:600 14px var(--f);min-height:44px;cursor:pointer}' +
     '.gm .chip.on{background:var(--lime);color:var(--limeTx);border-color:var(--lime)}.gm .chip.ghost{background:none}.gm .sp{flex:1}' +
     '.gm .row{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--bdr);border-radius:var(--rsm);padding:12px;margin:0 0 10px}.gm .row.dim{opacity:.6}' +
-    '.gm .dt{flex:0 0 46px;text-align:center;border-radius:10px;background:var(--s2);padding:6px 0;line-height:1.1}.gm .dt b{display:block;font-size:20px}.gm .dt span{font-size:11px;color:var(--ink3);text-transform:uppercase}.gm .dt.rl{background:var(--cat-trip);color:#17151C}.gm .dt.rl span{color:#17151C}' +
+    '.gm .dt{flex:0 0 46px;text-align:center;border-radius:10px;background:var(--s2);padding:6px 0;line-height:1.1}.gm .dt b{display:block;font-size:20px}.gm .dt span{font-size:11px;color:var(--ink3);text-transform:uppercase}.gm .dt.gg{background:var(--cat-gig);color:#17151C}.gm .dt.gg span,.gm .dt.rl span{color:#17151C}.gm .dt.rl{background:#B79CFF;color:#17151C}.gm .tl{flex:0 0 38px;height:38px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:19px;background:var(--cat-gig)}.gm .tl.rl{background:#B79CFF}' +
     '.gm .rb{flex:1;min-width:0}.gm .rt{font-weight:700;font-size:16px}.gm .rs{font-size:13px;color:var(--ink3);margin-top:2px}.gm .bd{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}' +
     '.gm .badge{font-size:11px;font-weight:700;border-radius:999px;padding:3px 8px;background:var(--s2);color:var(--ink2)}.gm .badge.sale{background:var(--gold-dim);color:var(--gold)}.gm .badge.int{background:var(--ok-dim);color:var(--ok)}.gm .badge.new{background:var(--lime);color:var(--limeTx)}' +
     '.gm .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.gm .btn{border:1px solid var(--bdr);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 12px;font:600 13px var(--f);min-height:44px;cursor:pointer}.gm .btn.pri{background:var(--ink);color:var(--surf);border-color:var(--ink)}.gm .btn.on{background:var(--ok-dim);color:var(--ok);border-color:var(--ok)}.gm .btn[disabled]{opacity:.5}' +
@@ -296,16 +296,16 @@
     var d = new Date(it.date + 'T00:00:00Z'), mon = dateLabel(it.date).split(' ')[2];
     if (it.kind === 'con') {
       var c = it.c, link = H().gigFor && H().gigFor(c.id), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
-      return '<div class="row' + (it.hidden ? ' dim' : '') + '" id="gm-' + E(c.id) + '" data-item="' + E(c.id) + '"><div class="dt"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(c.artist) + '</div>' +
-        '<div class="rs">' + E(c.venue) + ', ' + E(c.city) + ' · ' + E(dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + E(c.time) : '') + '</div><div class="bd">' +
+      return '<div class="row' + (it.hidden ? ' dim' : '') + '" id="gm-' + E(c.id) + '" data-item="' + E(c.id) + '" data-kind="gig"><div class="dt gg"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(c.artist) + '</div>' +
+        '<div class="rs">' + E(c.venue) + ', ' + E(c.city) + ' · ' + E(dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + E(c.time) : '') + '</div><div class="bd"><span class="badge">Gig</span>' +
         (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
-        (salePending(c) ? '<span class="badge sale">On sale ' + E(saleText(c)) + '</span>' : '') + '</div><div class="acts">' + conActs(it) + '</div></div></div>';
+        (salePending(c) ? '<span class="badge sale">On sale ' + E(saleText(c)) + '</span>' : '') + '</div><div class="acts">' + conActs(it) + '</div></div><div class="tl" aria-hidden="true">🎸</div></div>';
     }
     var r = it.r, t = today(), isNew = r.date <= t;
-    return '<div class="row' + (it.hidden ? ' dim' : '') + '"><div class="dt rl"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(r.artistName) + ': ' + E(r.name) + '</div>' +
-      '<div class="rs">' + (r.kind === 'single' ? 'Single' : r.kind === 'ep' ? 'EP' : 'Album') + ' · ' + (isNew ? 'out ' + E(fmtDate(r.date)) : 'due ' + E(fmtDate(r.date))) + '</div><div class="bd">' + (isNew ? '<span class="badge new">New</span>' : '<span class="badge">Upcoming</span>') + (it.interested ? '<span class="badge int">Interested</span>' : '') + '</div>' +
+    return '<div class="row' + (it.hidden ? ' dim' : '') + '" data-kind="release"><div class="dt rl"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(r.artistName) + ': ' + E(r.name) + '</div>' +
+      '<div class="rs">' + (r.kind === 'single' ? 'Single' : r.kind === 'ep' ? 'EP' : 'Album') + ' · ' + (isNew ? 'out ' + E(fmtDate(r.date)) : 'due ' + E(fmtDate(r.date))) + '</div><div class="bd"><span class="badge">Release</span>' + (isNew ? '<span class="badge new">New</span>' : '<span class="badge">Upcoming</span>') + (it.interested ? '<span class="badge int">Interested</span>' : '') + '</div>' +
       '<div class="acts">' + (it.hidden ? '<button class="btn" data-m="rrestore:' + E(it.id) + '">Show again</button>' :
-        '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button><button class="btn' + (it.interested ? ' on' : '') + '" data-m="rinterested:' + E(it.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button>') + '</div></div></div>';
+        '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button><button class="btn' + (it.interested ? ' on' : '') + '" data-m="rinterested:' + E(it.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button>') + '</div></div><div class="tl rl" aria-hidden="true">💿</div></div>';
   }
   function checkBtn() { return '<button type="button" class="chip ghost" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Check now') + '</button>'; }
   function renderComing() {
