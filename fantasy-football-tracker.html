@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fantasy Football Tracker v1.78</title>
+<title>Fantasy Football Tracker v1.79</title>
 <meta name="theme-color" content="#0E0D12" id="metaThemeColor">
 <script>
 // Apply any explicit global theme preference before first paint —
@@ -665,6 +665,7 @@
   .gwm-row .h { text-align: right; font-weight: 700; } .gwm-row .a { text-align: left; font-weight: 700; }
   .gwm-sc { min-width: 58px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; padding: 1px 6px; border-radius: 8px; background: var(--surface2); }
   .gwm-sc.live { background: rgba(255,106,94,.18); color: var(--accent3); }
+  .gwm-asof { font-size: 11px; color: var(--ink3); margin: 0 0 4px; } .gwm-asof.warn { color: var(--accent5); font-weight: 600; }   /* v1.79 (FF-046) */
   .gwm-sub { grid-column: 1 / -1; text-align: center; font-size: 11px; color: var(--ink3); margin-top: 2px; }
   .gwm-row.mine .h, .gwm-row.mine .a { color: var(--accent); }
   .pl.pl-force, #tab-advice .pl-next { display: inline-flex; gap: 3px; flex-wrap: wrap; justify-content: center; }
@@ -803,7 +804,7 @@
 </div>
 
 <nav>
-  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.78</span></div>
+  <div class="nav-title"><span class="nav-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/><circle cx="12" cy="12" r="2.5"/></svg></span>Fantasy <span class="nav-ver" id="navVer">v1.79</span></div>
   <div class="nav-actions"><span class="sync-chip"><i></i><span id="navSyncTxt">Not loaded</span></span>
     <button type="button" class="nav-refresh" aria-label="Refresh from FPL" onclick="loadSquad()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button></div>
 </nav>
@@ -985,7 +986,8 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=1.78"></script>
+<script src="pal-shared.js?v=1.79"></script>
+<!-- v1.79 (FF-046): live scores keep updating through added time (the 90-minute full-time rule is gone: full time is the final whistle, or 125 minutes after kick-off if FPL never flags it); the live tick runs the moment you return to the app; a match that kicked off up to 12 hours ago and has not been seen finishing is still read; the matches panel says when scores were last read and warns if the proxy sent an old copy. -->
 <!-- v1.78 (FF-045): a football icon for each goal a player has scored this gameweek on the Squad pitch chip (from the fixtures stats), and goals + points passed to the launcher card. -->
 <!-- v1.77 (FF-044): while a match of your gameweek is on, the whole squad (points, bonus, auto-subs) re-reads from FPL quietly every 3 minutes, and once more when a match finishes; no toast, no loading state, other tabs untouched. -->
 <!-- v1.76 (FF-043): live score chips and the matches panel show the match minute the score is from (63') or HT; full time still shows FT. -->
@@ -2310,7 +2312,7 @@ function ffSet(k, v) {   // v1.67 (Suite WP1.4): user-data writes report a refus
   if (window.PalShared && PalShared.safeSet) return PalShared.safeSet(k, v, 'Fantasy Football');
   try { localStorage.setItem(k, v); return true; } catch (e) { return false; }
 }
-const FF_VERSION = '1.78';
+const FF_VERSION = '1.79';
 try { if (window.PalUI && PalUI.pill) PalUI.pill.dock('.sync-chip'); } catch (e) { /* R39.1: chip top right on desktop; never block start-up */ }
 let _lockedPublished = false;
 let _lockedCardOut = null;   // v1.69: the same object ff_locked_card holds (null when nothing is locked in); declared early because ffPublishContract reads it
@@ -4205,7 +4207,7 @@ function ffRenderGwMatches() {
     });
     const day = k => { const d = new Date(k); return isFinite(d.getTime()) ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : ''; };
     const tm = k => { const d = new Date(k); return isFinite(d.getTime()) ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''; };
-    let html = '<h2>Gameweek ' + safeEsc(c.gwId) + ' matches</h2>';
+    let html = '<h2>Gameweek ' + safeEsc(c.gwId) + ' matches</h2>' + ffScoresAsOfHtml();
     list.forEach(f => {
       const n = (mine[f.hn] || 0) + (mine[f.an] || 0);
       const live = f.st === 1, scored = f.st > 0 && f.hs != null && f.as != null;
@@ -4280,7 +4282,27 @@ function ffRefreshOpenDetail() {
     const nu = tmp.querySelector('.pd-stats'); if (nu) old.replaceWith(nu);
   } catch (e) {}
 }
+// v1.79 (FF-046): when the live scores were last read, and whether the proxy sent its old cached copy (header x-pal-cache: stale, readable
+// only once pal-fpl-proxy v1.6 is deployed; until then stale is simply unknown and nothing is warned).
+let _ffScores = null, _ffLiveBusy = false;
+function ffNoteFixturesRead(res) {
+  try {
+    const h = res && res.headers ? res.headers.get('x-pal-cache') : null, age = Number(res && res.headers ? res.headers.get('x-pal-cache-age-ms') : NaN);
+    _ffScores = { at: Date.now(), stale: h === 'stale', ageMs: (h === 'stale' && isFinite(age)) ? age : 0 };
+  } catch (e) {}
+}
+function ffScoresAsOfHtml() {
+  if (!_ffScores) return '';
+  const t = new Date(_ffScores.at - (_ffScores.stale ? _ffScores.ageMs : 0)), sameDay = t.toDateString() === new Date().toDateString();
+  const when = (sameDay ? '' : t.toLocaleDateString('en-GB', { weekday: 'short' }) + ' ') + t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return _ffScores.stale ? '<div class="gwm-asof warn">\u26A0 FPL is not responding. Scores are from ' + when + '</div>' : '<div class="gwm-asof">Scores read ' + when + '</div>';
+}
 async function ffLiveTick() {
+  if (_ffLiveBusy) return;
+  _ffLiveBusy = true;
+  try { await ffLiveTickInner(); } finally { _ffLiveBusy = false; }
+}
+async function ffLiveTickInner() {
   try {
     const c = _lastLiveSquadCache;
     if (!c || !c.matchStateByTeam || document.hidden || _squadLoading) return;
@@ -4290,17 +4312,18 @@ async function ffLiveTick() {
       const m = c.matchStateByTeam[t]; if (!m) return false;
       if (m.started) return !isMatchFullTime(m);
       const k = Date.parse(m.kickoffTime);
-      return isFinite(k) && k - now < 10 * 60000 && now - k < 3 * 3600000;
+      return isFinite(k) && k - now < 10 * 60000 && now - k < 12 * 3600000;   // v1.79: 12 h (was 3 h) so a match missed while the app slept is still caught up
     }) || (Array.isArray(c.gwFixtures) && c.gwFixtures.some(f => {   // v1.74: also a second match of a double gameweek
       if (f.st === 1) return true;
       const k = Date.parse(f.k);
-      return f.st === 0 && isFinite(k) && k - now < 10 * 60000 && now - k < 3 * 3600000;
+      return f.st === 0 && isFinite(k) && k - now < 10 * 60000 && now - k < 12 * 3600000;
     }));
     if (!livish) return;
     // v1.77 (FF-044): every 3 minutes the whole squad (points, bonus, auto-subs) is re-read instead of just the scores
     if (now - _ffLastFullRefresh >= FF_FULL_REFRESH_MS) { await loadSquad({ silent: true }); if (_ffLastFullRefresh >= now) return; }
     const res = await fetch(FF_PROXY_URL + '/fixtures', { headers: proxyHeaders(true) });
     if (!res.ok) return;
+    ffNoteFixturesRead(res);   // v1.79
     const fixtures = await res.json();
     const teamsById = {}; (c.teams || []).forEach(t => { teamsById[t.id] = t; });
     const next = buildMatchStateByTeam(fixtures, teamsById, c.gwId);
@@ -4320,6 +4343,8 @@ async function ffLiveTick() {
   } catch (e) { /* a missed tick is harmless; the next one retries */ }
 }
 setInterval(ffLiveTick, 60000);
+// v1.79 (FF-046): read the scores the moment the app comes back to the front, instead of waiting for the next minute tick
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') ffLiveTick(); });
 let _lastCardProjected = null;
 
 function ffPublishLockedCard(projected) {
@@ -4498,6 +4523,7 @@ async function loadSquad(opts) {
 
     const fixturesRes = await fetch(FF_PROXY_URL + '/fixtures', { headers: proxyHeaders(true) });
     if (!fixturesRes.ok) throw new Error('fixtures fetch failed (HTTP ' + fixturesRes.status + ')');
+    ffNoteFixturesRead(fixturesRes);   // v1.79
     const fixtures = await fixturesRes.json();
 
     const currentEvent = (bootstrap.events || []).find(e => e.is_current) ||
@@ -7133,8 +7159,14 @@ function buildNextFixtureByTeam(fixtures, teamsById, nextGW) {
 // confirmed (often hours after the final whistle), so a game that is
 // really over kept showing as live. `finished_provisional` (set at the
 // final whistle) or 90+ minutes now count as full time too.
+// v1.79 (FF-046): the 90-minute rule is gone. FPL holds `minutes` at 90 through added time, so it called a match over while goals
+// could still be scored, and the live poll stopped. Full time is now the final whistle (finished_provisional) or, only if FPL never
+// sets that flag, 90+ minutes AND 125 minutes since kick-off (45 + 15 interval + 45 + a long added time).
 function isFixtureFullTime(f) {
-  return !!(f && (f.finished || f.finished_provisional || (f.started && (f.minutes || 0) >= 90)));
+  if (!f) return false;
+  if (f.finished || f.finished_provisional) return true;
+  const k = Date.parse(f.kickoff_time);
+  return !!(f.started && (f.minutes || 0) >= 90 && isFinite(k) && Date.now() - k >= 125 * 60000);
 }
 function isMatchFullTime(m) {
   return !!(m && (m.isFull || m.finished));
