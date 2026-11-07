@@ -1,11 +1,11 @@
-/* gat-music.js v1.07 (v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.08 (v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.07', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.08', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -56,7 +56,7 @@
   // ── state ──
   var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, conCheck: { fetched: {}, empty: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
-  var ui = { sub: 'coming', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false };
+  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false };
   var cinfo = { at: null, msg: '' };
   var busy = { con: false, rel: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
   var _db = null, _tables = null, tokSet = '';
@@ -79,8 +79,8 @@
   var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
   var followed = function () { return live().filter(isFollowed); };
   var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
-  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; } } catch (e) {} }
-  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin })); } catch (e) {} }
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; } } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin })); } catch (e) {} }
 
   // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
   function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
@@ -140,9 +140,9 @@
     return n;
   }
   function totalPlays(key, who) { var n = 0; (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) n += Number(e.t) || 0; }); return n; }
-  function lastPlayed(key) { var l = 0; listeners().forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.l > l) l = e.l; }); return l; }
-  function playedName(key) { var nm = ''; listeners().forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.n && !nm) nm = e.n; }); return nm; }
-  function allPlayedKeys() { var k = {}; listeners().forEach(function (w) { Object.keys(state.listBy[w].artists).forEach(function (x) { k[x] = 1; }); }); return Object.keys(k); }
+  function lastPlayed(key, who) { var l = 0; (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.l > l) l = e.l; }); return l; }
+  function playedName(key, who) { var nm = ''; (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.n && !nm) nm = e.n; }); return nm; }
+  function allPlayedKeys(who) { var k = {}; (who ? [who] : listeners()).forEach(function (w) { Object.keys((state.listBy[w] || { artists: {} }).artists).forEach(function (x) { k[x] = 1; }); }); return Object.keys(k); }
   var fbMap = function () { var m = {}; state.recfb.forEach(function (x) { if (x && x.id && !x._deleted) { m[x.id] = x.state; if (x.n && /^rc_/.test(x.id)) m['rc_' + norm(x.n)] = x.state; } }); return m; };   // v1.03: also under the new key for names that start with "The"
 
   // ── Apple (iTunes: free, no key, allows browser requests) ──
@@ -275,7 +275,7 @@
     else if (kind === 'rinterested') { var rid = id, rs = rstMap(); setRst(rid, { interested: !(rs[rid] || {}).interested, ni: false }); }
     else if (kind === 'rnotint') { setRst(id, { ni: true, interested: false }); undoToast('Hidden', function () { setRst(id, { ni: false }); }); }
     else if (kind === 'rrestore') setRst(id, { ni: false });
-    else if (kind === 'rapple') { var r = rel.items[String(id).replace(/^rel_/, '')]; if (r) openLink(releaseUrl(r)); }
+    else if (kind === 'rapple') { var r = rel.items[String(id).replace(/^rel_/, '')]; if (r) { openLink(releaseUrl(r)); setRst(id, { ni: true, interested: false }); undoToast('Opened in Apple Music and removed from the list', function () { setRst(id, { ni: false }); }); } }
   }
 
   // ── rendering ──
@@ -344,7 +344,8 @@
   }
   function playedNotFollowed() {
     var fb = fbMap(), mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
-    return allPlayedKeys().map(function (k) { return { k: k, n: playsIn(k, 30), l: lastPlayed(k), name: playedName(k) || k }; })
+    var who = listeners().indexOf(ui.pWho) >= 0 ? ui.pWho : '';
+    return allPlayedKeys(who).map(function (k) { return { k: k, n: playsIn(k, 30, who), l: lastPlayed(k, who), name: playedName(k, who) || k }; })
       .filter(function (x) { return x.n >= ui.lMin && !(mine[x.k] && isFollowed(mine[x.k])) && fb['rc_' + x.k] !== 'ignored'; })
       .sort(function (a, b) { return (b.l || 0) - (a.l || 0) || b.n - a.n || a.name.localeCompare(b.name); }).slice(0, 15);
   }
@@ -356,7 +357,7 @@
       '<div class="chips">' + chip('All ' + all.length, ui.aFilter === 'all', 'afilter:all') + chip('Following', ui.aFilter === 'following', 'afilter:following') + chip('Not following' + (notFol ? ' ' + notFol : ''), ui.aFilter === 'not', 'afilter:not') + '</div>';
     var pnf = playedNotFollowed();
     if (listeners().length && !q) {
-      h += '<h3>Played, not followed</h3><div class="chips">' + [1, 2, 3, 5, 10].map(function (n) { return chip(n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n); }).join('') + '</div>';
+      h += '<h3>Played, not followed</h3>' + (listeners().length > 1 ? '<div class="chips">' + chip('Both', !ui.pWho, 'pwho:') + listeners().map(function (w) { return chip(WHO[w] || w, ui.pWho === w, 'pwho:' + w); }).join('') + '</div>' : '') + '<div class="chips">' + [1, 2, 3, 5, 10].map(function (n) { return chip(n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n); }).join('') + '</div>';
       h += pnf.length ? pnf.map(function (x) {
         return '<div class="row"><div class="rb"><div class="rt">' + E(x.name) + '</div><div class="rs">' + x.n + ' plays in 30 days · last ' + E(ago(new Date(x.l * 1000).toISOString())) + '</div></div><button class="btn pri" data-m="followname:' + E(x.name) + '"' + (busy.follow[x.name] ? ' disabled' : '') + '>' + (busy.follow[x.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="ignorename:' + E(x.name) + '">Ignore</button></div>';
       }).join('') : '<div class="note">' + (ui.lMin === 1 ? 'Everyone played in the last 30 days is already followed.' : 'Nobody played ' + ui.lMin + ' or more times in 30 days is missing from your follows.') + '</div>';
@@ -437,6 +438,7 @@
     else if (k === 'togglehidden') { ui.showHidden = !ui.showHidden; paint(); }
     else if (k === 'afilter') { ui.aFilter = v; saveUi(); paint(); }
     else if (k === 'cfilter') { ui.cFilter = v; saveUi(); paint(); }
+    else if (k === 'pwho') { ui.pWho = v; saveUi(); paint(); }
     else if (k === 'lmin') { ui.lMin = Number(v); saveUi(); paint(); }
     else if (k === 'artist') openArtist(v);
     else if (k === 'addartist') openAdd();
