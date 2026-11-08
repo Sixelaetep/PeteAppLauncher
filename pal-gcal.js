@@ -1,5 +1,5 @@
 /*
- * pal-gcal.js — PGC-002 (v4.1, R36.1: an automatic renewal never fires without a tap — Google's renewal opens a small window and the browser's popup blocker asks 'allow pop-ups?' when that happens on its own, so a renewal now waits for the next tap or key press and runs inside it; requestTokenRefresh does nothing while the token is still good. v4, R36: fewer sign-in prompts — the token is kept across reloads until it expires, automatic renewals use prompt 'none' so they never show a screen, a manual sign-in only shows the consent screen the first time, an expired token is renewed quietly before an API call and when the app comes back to the foreground, and a renewal that fails is reported through onAuthError; optional init option loginHint. All additive; v3 callers behave as before; v2: updateEvent gains optional expectEtag, GIG-102;
+ * pal-gcal.js — PGC-002 (v5.0, GCAL-AUTH-001: new OPT-IN authMode:'explicit'. In that mode this library NEVER starts a Google sign-in or opens an authentication window by itself — no tap/key listeners, no timers, no lifecycle (visibilitychange) renewals, no renewal from an API call. A stored token is restored while it is valid; when it has expired the library only reports it (onAuthRequired, getAuthState) and signIn() — called from a deliberate tap — is the only thing that starts authentication. A failed or blocked sign-in is reported once and never retried. Added: getAuthState(), diagnostics(), onAuthRequired callback; init() is now idempotent (no second token client, one lifecycle listener). Default mode is unchanged ('quiet' = v4.1 behaviour), so existing apps behave exactly as before; v4.1, R36.1: an automatic renewal never fires without a tap — Google's renewal opens a small window and the browser's popup blocker asks 'allow pop-ups?' when that happens on its own, so a renewal now waits for the next tap or key press and runs inside it; requestTokenRefresh does nothing while the token is still good. v4, R36: fewer sign-in prompts — the token is kept across reloads until it expires, automatic renewals use prompt 'none' so they never show a screen, a manual sign-in only shows the consent screen the first time, an expired token is renewed quietly before an API call and when the app comes back to the foreground, and a renewal that fails is reported through onAuthError; optional init option loginHint. All additive; v3 callers behave as before; v2: updateEvent gains optional expectEtag, GIG-102;
  * v3: listEvents gains singleEvents/showDeleted/updatedMin options and listInstances is added, GIG-115 —
  * all optional, defaults unchanged, so existing callers behave exactly as before)
  * ─────────────────────────────────────────────────────────────────────────
@@ -58,11 +58,30 @@ window.PalGCal = (function () {
   let _initAttempts = 0;
   const INIT_MAX_ATTEMPTS = 20; // ~6s at 300ms apart, then give up loudly
 
+  // v5.0 (GCAL-AUTH-001) — opt-in explicit mode. Everything below is inert unless init({authMode:'explicit'}).
+  const LIB_VERSION = '5.0';
+  let _authMode = 'quiet';            // 'quiet' = v4.1 behaviour (default) | 'explicit' = never authenticate unprompted
+  let _onAuthRequired = function () {};
+  let _expiryTimer = null;            // explicit mode: marks the token expired; it never renews
+  let _signInInFlight = false;        // explicit mode: one authentication window at a time
+  let _signInTimer = null;
+  let _lastError = '';
+  let _initFailed = false;
+  let _tcCfgKey = '';                 // clientId|hint the current token client was built with (init() is idempotent)
+  let _initTimer = null;
+  let _requiredNotified = false;      // onAuthRequired fires once per loss of a usable token
+  let _boot = { storedPresent: false, storedValidSec: 0, storageError: '' };   // what storage held at load (diagnostics)
+
   // ── Init ──────────────────────────────────────────────────────────────
 
   function init(opts) {
     opts = opts || {};
     _clientId = opts.clientId;
+    if (opts.authMode === 'explicit' || opts.authMode === 'quiet') {
+      _authMode = opts.authMode;
+      if (_authMode === 'explicit') _disarmGesture();   // a tap trap armed by an earlier quiet-mode init must not survive
+    }
+    if (opts.onAuthRequired) _onAuthRequired = opts.onAuthRequired;
     if (opts.onAuthChange) _onAuthChange = opts.onAuthChange;
     if (opts.onTokenRefreshed) _onTokenRefreshed = opts.onTokenRefreshed;
     if (opts.onAuthError) _onAuthError = opts.onAuthError;
@@ -78,7 +97,9 @@ window.PalGCal = (function () {
     if (!_visBound) {
       _visBound = true;
       try { document.addEventListener('visibilitychange', function () {
-        if (document.visibilityState !== 'visible' || !_tokenClient) return;
+        if (document.visibilityState !== 'visible') return;
+        if (_authMode === 'explicit') { _checkExpiry(); return; }   // v5.0: report an expired token, never try to renew it
+        if (!_tokenClient) return;
         if (!_accessToken && !_hadToken()) return;     // never signed in on this device: nothing to renew
         if (!hasToken() || (_tokenExpiresAt - Date.now()) < EXPIRY_MARGIN_MS) _renewQuietly();
       }); } catch (e) {}
@@ -95,13 +116,43 @@ window.PalGCal = (function () {
     if (_accessToken) return;
     try {
       const o = JSON.parse(localStorage.getItem(TOK_KEY) || 'null');
+      _boot = { storedPresent: !!o, storedValidSec: (o && o.e) ? Math.floor((o.e - Date.now()) / 1000) : 0, storageError: '' };
       if (o && o.t && o.e && o.e - Date.now() > 60 * 1000) {
         _accessToken = o.t; _tokenExpiresAt = o.e;
+        _requiredNotified = false;
         _scheduleAutoRefresh(Math.floor((o.e - Date.now()) / 1000));
         setTimeout(function () { _onAuthChange(true); }, 0);   // after init() returns, so the caller's callbacks are in place
-      } else if (o) { _clearToken(); }
-    } catch (e) {}
+      } else if (o) { _clearToken(); }                          // an expired token is never kept
+    } catch (e) { _boot.storageError = String((e && e.name) || e); }
+    // v5.0 (explicit): connected before on this device but nothing usable now — report it once, never try to fix it.
+    if (_authMode === 'explicit' && !_accessToken && _hadToken()) setTimeout(function () { _notifyRequired('expired'); }, 0);
   }
+
+  // v5.0 (explicit mode only) — expiry is REPORTED, never renewed.
+  function _notifyRequired(reason) {
+    if (_authMode !== 'explicit' || _requiredNotified || !_hadToken()) return;
+    _requiredNotified = true;
+    try { _onAuthRequired(reason || 'expired'); } catch (e) {}
+  }
+  function _expire(reason) {
+    clearTimeout(_expiryTimer);
+    const had = !!_accessToken;
+    _accessToken = null; _tokenExpiresAt = null;
+    _clearToken();                                // an expired token is never persisted
+    if (had) _onAuthChange(false);
+    _notifyRequired(reason);
+  }
+  function _checkExpiry() {
+    if (!_accessToken || !_tokenExpiresAt) return;
+    if (Date.now() >= _tokenExpiresAt) _expire('expired');
+    else _scheduleExpiry(Math.ceil((_tokenExpiresAt - Date.now()) / 1000));
+  }
+  function _scheduleExpiry(sec) {
+    if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
+    clearTimeout(_expiryTimer);
+    _expiryTimer = setTimeout(_checkExpiry, Math.max(sec * 1000, 1000) + 250);
+  }
+  function _signInDone() { _signInInFlight = false; clearTimeout(_signInTimer); }
 
   // v4: ask for a token without showing anything. prompt 'none' makes Google answer
   // with an error instead of a sign-in or consent screen. Resolves true/false.
@@ -128,7 +179,12 @@ window.PalGCal = (function () {
     document.addEventListener('pointerdown', _onGesture, true);
     document.addEventListener('keydown', _onGesture, true);
   }
+  function _disarmGesture() {
+    try { document.removeEventListener('pointerdown', _onGesture, true); document.removeEventListener('keydown', _onGesture, true); } catch (e) {}
+    _armed = false;
+  }
   function _renewQuietly() {
+    if (_authMode === 'explicit') return Promise.resolve(false);   // v5.0: never opens an authentication window unprompted
     return new Promise(function (resolve) {
       if (!_tokenClient) { resolve(false); return; }
       _pending.push(resolve);
@@ -144,34 +200,44 @@ window.PalGCal = (function () {
   }
 
   function _tryInit() {
+    clearTimeout(_initTimer);                      // v5.0: one polling chain, however often init() is called
     if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+      const key = _clientId + '|' + (_loginHint || '');
+      if (_tokenClient && key === _tcCfgKey) { _initFailed = false; return; }   // v5.0: init() is idempotent — one token client
       const cfg = {
         client_id: _clientId,
         scope: SCOPE,
         callback: _onTokenResponse,
         error_callback: function (err) {          // v4: popup blocked / closed — was silently ignored before
           _settle(false);
-          _onAuthError((err && err.type) || 'popup-error');
+          _signInDone();
+          _lastError = (err && err.type) || 'popup-error';
+          _onAuthError(_lastError);                // reported once; v5.0 explicit mode never retries it
         }
       };
       if (_loginHint) cfg.hint = _loginHint;
       _tokenClient = google.accounts.oauth2.initTokenClient(cfg);
+      _tcCfgKey = key; _initFailed = false;
       return;
     }
     _initAttempts++;
     if (_initAttempts > INIT_MAX_ATTEMPTS) {
+      _initFailed = true;
       _onInitFailed('Google sign-in script never loaded (accounts.google.com/gsi/client) — check for a content blocker/extension, or try a hard refresh.');
       return;
     }
-    setTimeout(_tryInit, 300);
+    _initTimer = setTimeout(_tryInit, 300);
   }
 
   function _onTokenResponse(resp) {
+    _signInDone();
     if (resp.error) {
       _settle(false);
+      _lastError = resp.error;
       _onAuthError(resp.error);
       return;
     }
+    _lastError = ''; _requiredNotified = false;
     _accessToken = resp.access_token;
     const expiresIn = parseInt(resp.expires_in, 10) || 3600;
     _tokenExpiresAt = Date.now() + expiresIn * 1000;
@@ -183,6 +249,7 @@ window.PalGCal = (function () {
   }
 
   function _scheduleAutoRefresh(expiresInSec) {
+    if (_authMode === 'explicit') { _scheduleExpiry(expiresInSec); return; }   // v5.0: mark expiry, do not renew
     if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
     const refreshInMs = Math.max((expiresInSec - 300) * 1000, 5000); // 5 min before expiry
     _autoRefreshTimer = setTimeout(function () {
@@ -197,7 +264,19 @@ window.PalGCal = (function () {
   // ── Auth state ────────────────────────────────────────────────────────
 
   function signIn() {
-    if (!_tokenClient) { _onAuthError('not-initialised'); return; }
+    if (!_tokenClient) { _lastError = 'not-initialised'; _onAuthError('not-initialised'); return; }
+    if (_authMode === 'explicit') {
+      // v5.0: the ONLY thing that starts authentication. Call it directly from a tap handler.
+      if (_signInInFlight) return;                 // a double tap opens one window, not two
+      _signInInFlight = true; _lastError = '';
+      clearTimeout(_signInTimer);
+      _signInTimer = setTimeout(_signInDone, 90 * 1000);   // never stay "in flight" if a window closes without a callback
+      const o = { prompt: _hadToken() ? '' : 'consent' };
+      if (_loginHint) o.hint = _loginHint;
+      try { _tokenClient.requestAccessToken(o); }
+      catch (e) { _signInDone(); _lastError = 'popup-error'; _onAuthError('popup-error'); }
+      return;
+    }
     // v4: the consent screen is only needed the first time; after that Google can sign in without it.
     _tokenClient.requestAccessToken({ prompt: _hadToken() ? '' : 'consent' });
   }
@@ -211,6 +290,7 @@ window.PalGCal = (function () {
     _clearToken();
     try { localStorage.removeItem(CONSENT_KEY); } catch (e) {}   // signing out fully: ask for consent again next time
     if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
+    clearTimeout(_expiryTimer); _signInDone(); _requiredNotified = false;
     _onAuthChange(false);
   }
 
@@ -225,6 +305,7 @@ window.PalGCal = (function () {
   // Force a token refresh attempt right now (silent — no popup unless the
   // browser session itself has gone). Exposed for a UI "Reconnect" button.
   function requestTokenRefresh() {
+    if (_authMode === 'explicit') { _checkExpiry(); return; }   // v5.0: never starts authentication; use signIn() from a tap
     if (!_tokenClient) { _onAuthError('not-initialised'); return; }
     if (hasToken() && (_tokenExpiresAt - Date.now()) > EXPIRY_MARGIN_MS) return;   // v4.1: still good, nothing to do
     _renewQuietly();   // v4: prompt 'none' — quiet, no screen
@@ -253,7 +334,9 @@ window.PalGCal = (function () {
       _accessToken = null;
       _tokenExpiresAt = null;
       _clearToken();
+      clearTimeout(_expiryTimer);
       _onAuthChange(false);
+      _notifyRequired('rejected');                  // v5.0 (explicit mode only): report, never retry
       throw _err('unauthorized', 'Google rejected the token — sign-in required again.');
     }
 
@@ -276,6 +359,35 @@ window.PalGCal = (function () {
     if (status) e.status = status;
     if (data) e.data = data;
     return e;
+  }
+
+  // v5.0 — what the UI needs to show: connected / expired (was connected here before, needs a tap) /
+  // disconnected (never connected on this device) / unavailable (Google's script did not load).
+  function getAuthState() {
+    let state;
+    if (hasToken()) state = 'connected';
+    else if (_initFailed) state = 'unavailable';
+    else if (_hadToken()) state = 'expired';
+    else state = 'disconnected';
+    return { state: state, mode: _authMode, expiresAt: _tokenExpiresAt || null, lastError: _lastError, ready: !!_tokenClient, inFlight: _signInInFlight };
+  }
+  // v5.0 — facts about THIS device/context, for the sync log. Nothing here talks to Google.
+  function diagnostics() {
+    const d = { lib: LIB_VERSION, mode: _authMode, state: getAuthState().state };
+    try { d.embedded = window.parent !== window; } catch (e) { d.embedded = 'unknown'; }
+    try { d.standalone = (window.navigator.standalone === true) || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches); } catch (e) {}
+    try { localStorage.setItem('palgcal_probe', '1'); d.localStorage = localStorage.getItem('palgcal_probe') === '1' ? 'ok' : 'read-failed'; localStorage.removeItem('palgcal_probe'); }
+    catch (e) { d.localStorage = 'blocked:' + ((e && e.name) || 'error'); }
+    d.gisLoaded = !!(window.google && window.google.accounts && window.google.accounts.oauth2);
+    d.tokenClient = !!_tokenClient;
+    d.initFailed = _initFailed;
+    d.consentFlag = _hadToken();
+    d.atLoad = { storedToken: _boot.storedPresent, storedValidSec: _boot.storedValidSec, storageError: _boot.storageError };
+    d.tokenValidSec = hasToken() ? Math.floor((_tokenExpiresAt - Date.now()) / 1000) : 0;
+    d.quietTapTrapArmed = _armed;
+    d.userActivationApi = !!(typeof navigator !== 'undefined' && navigator.userActivation);
+    d.lastError = _lastError || '';
+    return d;
   }
 
   // Same spirit as PalSync.errorHint — a short, human string for a UI to
@@ -457,6 +569,9 @@ window.PalGCal = (function () {
     hasToken: hasToken,
     getTokenExpiry: getTokenExpiry,
     requestTokenRefresh: requestTokenRefresh,
+    getAuthState: getAuthState,
+    diagnostics: diagnostics,
+    version: LIB_VERSION,
     errorHint: errorHint,
     withAppMeta: withAppMeta,
     readAppMeta: readAppMeta,
