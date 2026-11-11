@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F4F0E6" id="metaThemeColor">
-<title>On Budget v3.131</title>
+<title>On Budget v3.132</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
@@ -776,7 +776,7 @@ input.amount-in:focus{border-color:transparent}
     <div class="header">
       <div class="logo">
         <span class="logo-icon" aria-hidden="true">£</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.131</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.132</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -1343,7 +1343,7 @@ input.amount-in:focus{border-color:transparent}
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.131"></script>
+<script src="pal-shared.js?v=3.132"></script>
 <!-- v3.126 (Suite Phase 2 / R25): the launcher contract also carries the quick-add suggestion lists (saved food labels and past bill names; summary.quick, marker summary.ext = 1) so the launcher no longer reads this app's saved copy. Derived cache only; no data, storage, sync or backup change. -->
 <!-- v3.125 (OPP-21): the Bills ledger has the same floating Add transaction button as the dashboard on phone and tablet (it replaces the inline button); no data, storage, sync or backup change. -->
 <!-- v3.124 (Suite Phase 2 / Batch C1): the launcher card figures (the same dashboardSummary the app already works out) now also travel inside the launcher contract (summary.card), so a second device shows them without opening this app. dashboardSummary in the stored data is still written exactly as before (launcher fallback). No data, storage, sync or backup change. -->
@@ -1466,6 +1466,11 @@ input.amount-in:focus{border-color:transparent}
 // launcher's quickAddFood now uses the shop's category (default Food when
 // unknown) and reports it back in OB_QUICKADD_RESULT.category. Launcher
 // quick-adds never create or change a rule.
+// v3.132 (ON--112): the launcher's Needs attention lists each due Bills item as its own alert with a tick. The tick asks this app (OB_ACTION
+//   'clearBillsTx') to clear that one item with the same one-tap clear as the ✓ on an uncleared Bills row (quickClearUncleared), so the Bills
+//   balance, the transaction record and the sync are the app's own. The contract now carries one 'ob-tx:<ref>' alert per bill that is past due
+//   or due in the next 3 days (max 8, then one 'ob-tx-more' line) in place of the two summary alerts 'ob-overdue' / 'ob-due-soon'. No budget maths,
+//   storage key, Supabase record, backup or import change.
 // v3.131: Add transaction sheet — empty Label box shows the most-used shops then the most recent;
 // typing filters the shop pills to matches (display only; no data, storage, sync or backup change).
 // localStorage key: on_budget_v1
@@ -3041,6 +3046,7 @@ document.addEventListener('visibilitychange', function () {
 var _obBootAt = Date.now();
 var _obBootDone = false;          // set at the end of the boot sequence (bottom of this script)
 var _obFirstPullSettled = false;  // first syncPull() finished (ok or error), or no session after the grace period
+var _obClearResults = {};         // v3.132: reqId -> result of a launcher 'clearBillsTx' (replayed for a duplicate reqId)
 var _obQuickResults = {};         // reqId -> { ok, msg, category } (replayed for a duplicate reqId)
 var _obQuickTracked = [];         // [{ kind:'tx'|'bills', mk, entry, at }] quick-added records, for post-pull restore
 function obIsReady() {
@@ -3100,7 +3106,17 @@ window.addEventListener('message', function(e) {
     if (e.data.action === 'ping') {
       // ON--094: readiness probe from the launcher (quick-add waits for ready:true before posting an entry).
       const pongTo = e.source || window.parent;
-      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.131' }, e.origin);
+      if (pongTo && pongTo !== window) pongTo.postMessage({ type: 'OB_PONG', reqId: e.data.reqId, ready: obIsReady(), version: '3.132' }, e.origin);
+    } else if (e.data.action === 'clearBillsTx') {
+      // v3.132 (ON--112): the tick on a due bill in the launcher's Needs attention. Clears that one item and replies OB_CLEAR_RESULT.
+      const cReq = e.data.reqId, cTo = e.source || window.parent;
+      let cRes = cReq && _obClearResults[cReq];
+      if (!cRes) {
+        cRes = obClearDueTx(e.data.ref);
+        if (cReq) _obClearResults[cReq] = cRes;
+        if (!cRes.ok || cRes.already) { try { publishContract(); } catch (_) {} }   // the alert was out of date: refresh it
+      }
+      try { if (cTo && cTo !== window) cTo.postMessage(Object.assign({ type: 'OB_CLEAR_RESULT', reqId: cReq }, cRes), e.origin); } catch (_) {}
     } else if (e.data.action === 'openFoodSheet') {
       switchTab('dashboard');
       setTimeout(openSheet, 120);
@@ -3333,17 +3349,20 @@ function publishContract() {
       attention.push({ id:'ob-below-zero', level:'action', title:'Bills forecast goes below zero',
         sub:'Lowest ' + money(fc.lowest) + (fc.lowestDate ? ' on ' + fc.lowestDate : '') + ' (' + fc.label + ')', due: fc.lowestDate || undefined, open:{ view:'bills' } });
     }
-    const overdue = bills_.filter(it => it.overdue);
-    if (overdue.length) {
-      attention.push({ id:'ob-overdue', level:'action',
-        title: overdue.length + ' bill' + (overdue.length === 1 ? '' : 's') + ' past due and not cleared',
-        sub: money(overdue.reduce((s,it) => s + it.amount, 0)) + ' \u00b7 ' + overdue.slice(0,3).map(it => it.name).join(', '), open:{ view:'bills' } });
-    }
-    const soon = bills_.filter(it => !it.overdue && it.date >= todayIso && it.date <= plus(3));
-    if (soon.length) {
-      attention.push({ id:'ob-due-soon', level:'soon',
-        title: soon.length + ' bill' + (soon.length === 1 ? '' : 's') + ' due in the next 3 days',
-        sub: money(soon.reduce((s,it) => s + it.amount, 0)) + ' \u00b7 ' + soon.slice(0,3).map(it => it.name).join(', '), due: soon[0].date, open:{ view:'bills' } });
+    // v3.132 (ON--112): one alert per due bill (past due, or due in the next 3 days) so the launcher can put a tick on it. The id carries a reference
+    // the clear action understands: 'r~<recurringId>~<schedDate>' (a recurring occurrence) or 't~<txId>' (a planned one-off). Overdue and today are 'action', 1-3 days 'soon'.
+    const dueList = bills_.filter(it => it.overdue || (it.date >= todayIso && it.date <= plus(3)));
+    const MAXTX = 8;
+    const urgent = it => it.overdue || it.date <= todayIso;
+    dueList.slice(0, MAXTX).forEach(it => {
+      const ref = it.recurringId ? 'r~' + it.recurringId + '~' + it.schedDate : 't~' + it.txId;
+      attention.push({ id:'ob-tx:' + ref, level: urgent(it) ? 'action' : 'soon', title: it.name || 'Bill',
+        sub: money(it.amount) + (it.overdue ? ' \u00b7 past due, not cleared' : ''), due: it.date, open:{ view:'bills' } });
+    });
+    if (dueList.length > MAXTX) {
+      const rest = dueList.slice(MAXTX);
+      attention.push({ id:'ob-tx-more', level: rest.some(urgent) ? 'action' : 'soon', title: rest.length + ' more bill' + (rest.length === 1 ? '' : 's') + ' due',
+        sub: money(rest.reduce((t, it) => t + it.amount, 0)) + ' \u00b7 open On Budget to clear them', due: rest[0].date, open:{ view:'bills' } });
     }
     const upcoming = bills_.filter(it => !it.overdue && it.date >= todayIso && it.date <= plus(30)).slice(0, 30).map(it => ({
       id: 'ob-' + (it.recurringId ? it.recurringId + '-' + it.schedDate : it.txId), date: it.date, title: it.name, sub: money(it.amount), kind:'bill', open:{ view:'bills' } }));
@@ -3359,7 +3378,7 @@ function publishContract() {
     // v3.126 (R25): the launcher's quick-add suggestions: saved food labels and past bill names (same lists the launcher used to build from the saved copy)
     let quick; try { quick = obQuickLists(); } catch (e) {}
     const summary = Object.assign({}, card ? { card } : {}, quick ? { quick, ext: 1 } : {});
-    window.PalContract.publish('budget', { upcoming, attention, summary: Object.keys(summary).length ? summary : undefined, app: '3.131', schema: '1' });
+    window.PalContract.publish('budget', { upcoming, attention, summary: Object.keys(summary).length ? summary : undefined, app: '3.132', schema: '1' });
     window.PalContract.publishSearch('budget', search, search.length);   // v3.116: IndexedDB, not localStorage
   } catch (e) {}
 }
@@ -3463,7 +3482,7 @@ function save(trackChange) {
   // v3.118 (Suite WP1.4): a refused write (storage full or blocked) used to throw out of this function and skip the launcher
   // notification and contract publish below, with no message. safeSet reports it once and lets the rest of the save carry on.
   const _obPayload = JSON.stringify({
-    version:'3.131', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
+    version:'3.132', lastUpdated:new Date().toISOString(), lastExported:meta.lastBackupAt||'',
     data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, meta,
     dashboardSummary: computeDashboardSummary()
   });
@@ -3475,7 +3494,7 @@ function save(trackChange) {
 }
 
 function exportJSON() {
-  const blob = new Blob([JSON.stringify({ version:'3.131', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
+  const blob = new Blob([JSON.stringify({ version:'3.132', lastUpdated:new Date().toISOString(), lastExported:new Date().toISOString(), data:{ settings, months, bills, ftLabels, deletedTxLog, deletedBillsTxLog, deletedRecurringLog, deletedOverrideLog, deletedScenarioLog }, dashboardSummary: computeDashboardSummary() },null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'on-budget-backup.json';
@@ -7552,6 +7571,34 @@ function quickClearUncleared(kind, a, b) {
   if (overrideSnapshot) syncTombstoneBillsOverride(overrideSnapshot);
   syncUpsertBillsSettings();
   toast(`Marked cleared — balance £${bills.settings.clearedBalance.toFixed(2)}`);
+}
+// v3.132 (ON--112): clear one due bill on the launcher's request. ref = 'r~<recurringId>~<schedDate>' or 't~<txId>'. Checks the item is still
+// unresolved, then uses quickClearUncleared (the ✓ on an uncleared row) so nothing is re-implemented. Income and transfer items are never cleared
+// this way (the launcher never lists them). Returns { ok, already?, name, amount, balance } or { ok:false, reason }.
+function obClearDueTx(ref) {
+  try {
+    const p = String(ref || '').split('~');
+    let name, amount;
+    if (p[0] === 'r' && p[1] && p[2]) {
+      const item = (bills.recurring || []).find(r => r.id === p[1] && !r._deleted);
+      if (!item) return { ok:false, reason:'missing' };
+      if ((bills.tx || []).some(t => t.recurringId === p[1] && t.schedDate === p[2] && !t._deleted)) return { ok:true, already:true, name:item.name };
+      if (item.type === 'income' || item.xfer) return { ok:false, reason:'not-a-bill' };
+      const ov = findOverride(p[1], p[2]);
+      name = (ov && ov.name) || item.name; amount = ov ? ov.amount : item.amount;
+      quickClearUncleared('recurring', p[1], p[2]);
+      if (!(bills.tx || []).some(t => t.recurringId === p[1] && t.schedDate === p[2] && !t._deleted && t.cleared)) return { ok:false, reason:'failed' };
+    } else if (p[0] === 't' && p[1]) {
+      const t = (bills.tx || []).find(x => x.id === p[1] && !x._deleted);
+      if (!t) return { ok:false, reason:'missing' };
+      if (t.cleared !== false) return { ok:true, already:true, name:t.name };
+      if (t.type === 'income' || t.xfer) return { ok:false, reason:'not-a-bill' };
+      name = t.name; amount = t.amount;
+      quickClearUncleared('adhoc', p[1]);
+      if (t.cleared !== true) return { ok:false, reason:'failed' };
+    } else return { ok:false, reason:'bad-ref' };
+    return { ok:true, name:name, amount:Math.round(amount*100)/100, balance:bills.settings.clearedBalance || 0 };
+  } catch (e) { return { ok:false, reason:'error' }; }
 }
 // v3.87 (ON--081): confirmation wrappers for the ✕ buttons. Native
 // confirm() matches the app's existing prompt() use. Cancel leaves
