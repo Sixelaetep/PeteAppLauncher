@@ -1,11 +1,11 @@
-/* gat-music.js v1.16 (v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.17 (v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.16', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000, CON_STALE_MS = 24 * 3600 * 1000;
+  var VERSION = '1.17', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -54,7 +54,7 @@
   var NEW_REL_DAYS = 21;
 
   // ── state ──
-  var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, conCheck: { fetched: {}, empty: {} } };
+  var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
   var sel = null, paneEl = null, matching = false, matchInfo = { done: 0, total: 0, ok: 0, dup: 0 }, imp = null, fileIn = null;
   var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false };
@@ -127,7 +127,7 @@
       rows.forEach(function (x) { var m = /^__listening(?:_([a-z0-9]+))?__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') lb[m[1] || 'pete'] = rekey(d); });
       state.listBy = lb;
       var cr = rows.find(function (x) { return x.record_key === '__concerts__'; });
-      state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {} } : { fetched: {}, empty: {} };
+      state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {}, jbf: (cr.data.jbf && typeof cr.data.jbf === 'object') ? cr.data.jbf : {}, jb: (cr.data.jb && typeof cr.data.jb === 'object') ? cr.data.jb : null, at: cr.data.updatedAt || '' } : { fetched: {}, empty: {}, jbf: {} };
       lastPull = Date.now(); save(); return true;
     }).catch(function (e) { sayErr('Could not load Music from the cloud: ' + ((e && e.message) || 'error')); return false; }).finally(function () { busy.pull = false; });
   }
@@ -285,7 +285,7 @@
     '.gm .row{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--bdr);border-radius:var(--rsm);padding:12px;margin:0 0 10px}.gm .row.dim{opacity:.6}.gm .row.hl{outline:2px solid var(--lime);outline-offset:2px}' +
     '.gm .dt{flex:0 0 46px;text-align:center;border-radius:10px;background:var(--s2);padding:6px 0;line-height:1.1}.gm .dt b{display:block;font-size:20px}.gm .dt span{font-size:11px;color:var(--ink3);text-transform:uppercase}.gm .dt.gg{background:var(--cat-gig);color:#17151C}.gm .dt.gg span,.gm .dt.rl span{color:#17151C}.gm .dt.rl{background:#B79CFF;color:#17151C}.gm .tl{flex:0 0 38px;height:38px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:19px;background:var(--cat-gig)}.gm .tl.rl{background:#B79CFF}' +
     '.gm .rb{flex:1;min-width:0}.gm .rt{font-weight:700;font-size:16px}.gm .rs{font-size:13px;color:var(--ink3);margin-top:2px}.gm .bd{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}' +
-    '.gm .badge{font-size:11px;font-weight:700;border-radius:999px;padding:3px 8px;background:var(--s2);color:var(--ink2)}.gm .badge.sale{background:var(--gold-dim);color:var(--gold)}.gm .badge.int{background:var(--ok-dim);color:var(--ok)}.gm .badge.new{background:var(--lime);color:var(--limeTx)}' +
+    '.gm .badge{font-size:11px;font-weight:700;border-radius:999px;padding:3px 8px;background:var(--s2);color:var(--ink2)}.gm .badge.src{background:transparent;border:1px solid var(--line,#8884);color:var(--ink2)}.gm .badge.sale{background:var(--gold-dim);color:var(--gold)}.gm .badge.int{background:var(--ok-dim);color:var(--ok)}.gm .badge.new{background:var(--lime);color:var(--limeTx)}' +
     '.gm .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.gm .btn{border:1px solid var(--bdr);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 12px;font:600 13px var(--f);min-height:44px;cursor:pointer}.gm .btn.pri{background:var(--ink);color:var(--surf);border-color:var(--ink)}.gm .btn.on{background:var(--ok-dim);color:var(--ok);border-color:var(--ok)}.gm .btn[disabled]{opacity:.5}' +
     '.gm h3{font:700 13px var(--f);text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);margin:18px 0 8px}.gm .note{font-size:13px;color:var(--ink3);margin:6px 0}.gm .empty{text-align:center;color:var(--ink3);padding:28px 8px}' +
     '.gm input[type=search],.gm input[type=text]{width:100%;font-size:16px;padding:10px 12px;border:1px solid var(--bdr);border-radius:var(--rsm);background:var(--card);color:var(--ink);margin:0 0 10px;box-sizing:border-box}' +
@@ -327,13 +327,14 @@
       (pend ? '<button class="btn' + (it.alert ? ' on' : '') + '" data-m="alert:' + E(c.id) + '" aria-pressed="' + (it.alert ? 'true' : 'false') + '">' + (it.alert ? 'Alert on' : 'Alert me') + '</button>' : '') +
       '<button class="btn" data-m="notint:' + E(c.id) + '">Not interested</button>';
   }
+  function srcName(c) { return c && c.src === 'jambase' ? 'JamBase' : 'Ticketmaster'; }
   function itemRow(it) {
     var d = new Date(it.date + 'T00:00:00Z'), mon = dateLabel(it.date).split(' ')[2];
     if (it.kind === 'con') {
       var c = it.c, link = H().gigFor && H().gigFor(c.id), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
       return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === c.id ? ' hl' : '') + (selIs('gig', c.id) ? ' sel' : '') + '" id="gm-' + E(c.id) + '" data-item="' + E(c.id) + '" data-sel="gig:' + E(c.id) + '" data-kind="gig"><div class="dt gg"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(c.artist) + '</div>' +
         '<div class="rs">' + E(c.venue) + ', ' + E(c.city) + ' · ' + E(dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + E(c.time) : '') + '</div><div class="bd"><span class="badge">Gig</span>' +
-        (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + (c.src === 'jambase' ? '<span class="badge">JamBase</span>' : '') + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
+        (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + '<span class="badge src">' + srcName(c) + '</span>' + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
         (salePending(c) ? '<span class="badge sale">On sale ' + E(saleText(c)) + '</span>' : '') + '</div><div class="acts">' + conActs(it) + '</div></div><div class="tl" aria-hidden="true">🎸</div></div>';
     }
     var r = it.r, t = today(), isNew = r.date <= t;
@@ -342,12 +343,12 @@
       '<div class="acts">' + (it.hidden ? '<button class="btn" data-m="rrestore:' + E(it.id) + '">Show again</button>' :
         '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button><button class="btn' + (it.interested ? ' on' : '') + '" data-m="rinterested:' + E(it.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button>') + '</div></div><div class="tl rl" aria-hidden="true">💿</div></div>';
   }
-  function checkBtn(label) { return '<button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : label || 'Check for new dates') + '</button>'; }
+  function checkBtn(label) { return '<button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : label || 'Check for new listening') + '</button>'; }
   function seg(items) { return '<div class="agenda-filter">' + items.map(function (x) { return '<button type="button" class="' + (x[1] ? 'on' : '') + '" data-m="' + x[2] + '" aria-pressed="' + (x[1] ? 'true' : 'false') + '">' + x[0] + '</button>'; }).join('') + '</div>'; }
   function head() { return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists']]); }
   function heroHtml(c, it) {
     var t = today(), dl = dateLabel(c.date).split(' '), n = Math.round((Date.parse(c.date + 'T00:00:00Z') - Date.parse(t + 'T00:00:00Z')) / 864e5);
-    var chips = [it.interested ? 'Interested ✓' : '', salePending(c) ? 'On sale ' + saleText(c) : '', c.src === 'jambase' ? 'JamBase' : 'Ticketmaster'].filter(Boolean);
+    var chips = [it.interested ? 'Interested ✓' : '', salePending(c) ? 'On sale ' + saleText(c) : '', srcName(c)].filter(Boolean);
     return '<div class="hero"><div class="hero-top"><span class="hero-k">NEXT GIG</span><span class="hero-pill">' + (n <= 0 ? 'Today' : n === 1 ? 'Tomorrow' : 'In ' + n + ' days') + '</span></div>' +
       '<div class="hero-date"><div class="hero-num">' + E(dl[1]) + '</div><div class="hero-mon">' + E(dl[2].toUpperCase()) + '<br>' + E(dl[0].toUpperCase()) + '</div></div>' +
       '<div class="hero-title">' + E(c.artist) + '</div><div class="hero-sub">' + E([c.venue + (c.city ? ', ' + c.city : ''), c.time].filter(Boolean).join(' · ')) + '</div>' +
@@ -356,15 +357,15 @@
   function renderComing() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var allItems = comingItems(), items = allItems.filter(function (i) { return ui.cFilter === 'all' || (ui.cFilter === 'gigs' ? i.kind === 'con' : i.kind === 'rel'); }), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
-    var status = (busy.con ? 'Checking Ticketmaster and JamBase… ' : cinfo.at ? 'Checked ' + ago(cinfo.at) + '. ' : '') + cinfo.msg + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland.' : '');
+    var cat = (state.conCheck && state.conCheck.at) || '', nTm = shown.filter(function (i) { return i.kind === 'con' && i.c.src !== 'jambase'; }).length, nJb = n - nTm;
+    var status = (cat ? 'Tour dates checked ' + ago(cat) + ' (overnight).' : 'Tour dates are checked overnight.') + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland: ' + nTm + ' Ticketmaster' + (nJb ? ' · ' + nJb + ' JamBase' : '') + '.' : '');
     var nG = allItems.filter(function (i) { return i.kind === 'con' && !i.hidden; }).length, nR = allItems.filter(function (i) { return i.kind === 'rel' && !i.hidden; }).length;
-    var hasJb = allItems.some(function (i) { return i.kind === 'con' && i.c && i.c.src === 'jambase'; });
     var h = head() + seg([['All ' + (nG + nR), ui.cFilter === 'all', 'cfilter:all'], ['Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs'], ['Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases']]);
     var nextCon = shown.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0];
     if (nextCon) h += heroHtml(nextCon.c, nextCon);
-    h += '<div class="stat"><span role="status">' + E(status) + '</span>' + checkBtn('Check for new dates') + '</div><div class="note">Check for new dates asks Ticketmaster and JamBase now for tour dates of the artists you follow; it also runs by itself every day.' + (hasJb ? ' Dates marked JamBase come from JamBase.' : '') + '</div>';
+    h += '<div class="stat"><span role="status">' + E(status) + '</span></div><div class="note">A few of the artists you follow are checked each night, so every artist is looked at every week or two. Each date shows whether Ticketmaster or JamBase found it.</div>';
     if (!followed().length) return h + '<div class="empty">Follow some artists and their Scottish dates and new releases appear here.<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">Go to Artists</button></div></div>';
-    if (!shown.length) h += '<div class="empty">' + (busy.con ? 'Looking for concerts…' : '' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '') + '</div>';
+    if (!shown.length) h += '<div class="empty">' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '</div>';
     var month = '';
     shown.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<div class="dash-sec">' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</div>'; } h += itemRow(it); });
     if (hid.length) h += '<button type="button" class="chip ghost" data-m="togglehidden">' + (ui.showHidden ? 'Hide' : 'Show') + ' ' + hid.length + ' you are not interested in</button>' + (ui.showHidden ? hid.map(itemRow).join('') : '');
@@ -460,9 +461,14 @@
       '<div class="note">' + (ui.gView === 'week' ? 'Plays by day of the week, from the days Last.fm has recorded recently.' : ui.gView === 'months' ? 'Plays a month for the last 12 months (history starts when tracking began).' : 'Plays a day for the last 30 days.') + '</div></div>';
   }
   function secHead(key, title, count, open) { return '<button type="button" class="secbtn" data-m="sec:' + key + '" aria-expanded="' + (open ? 'true' : 'false') + '"><span class="chev" aria-hidden="true">' + (open ? '▾' : '▸') + '</span>' + title + ' <span class="cnt">' + count + '</span></button>'; }
+  function jbUsageHtml() {
+    var j = state.conCheck && state.conCheck.jb, q = j && j.q;
+    if (!q || q.used == null) return '<div class="note">JamBase usage is recorded after the first overnight check.</div>';
+    return '<div class="note">JamBase says ' + E(String(q.used)) + ' of ' + E(q.quota == null ? 'no set limit' : String(q.quota)) + ' requests used' + (q.periodEnd ? ' this period (ends ' + E(String(q.periodEnd).slice(0, 10)) + ')' : '') + ', as of ' + E(ago(q.at || state.conCheck.at || '')) + '. The overnight check plans to stay under 600.</div>';
+  }
   function toolsHtml() {
     return '<div class="card tools" style="margin-top:18px"><h3>Export and import</h3>Export your artists to a JSON file, or import a list of acts (a JSON file, or a text file with one name per line). Names are checked against your list first, so you see the duplicates before anything is added.<div><button type="button" class="btn" data-m="exportart">Export artists</button> <button type="button" class="btn" data-m="importart">Import artists</button></div></div>' +
-      secHead('d', 'Diagnostics', '', ui.dOpen) + (ui.dOpen ? '<div class="card tools secbody"><h3>JamBase</h3>Tour dates come from Ticketmaster and JamBase. This test asks both about up to 15 of the artists you follow and shows which one finds Scottish dates. It uses a few of the 900 JamBase calls a month.<div><button type="button" class="btn" data-m="jbtest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test JamBase') + '</button></div></div>' : '');
+      secHead('d', 'Diagnostics', '', ui.dOpen) + (ui.dOpen ? '<div class="card tools secbody"><h3>Connection test</h3>Tour dates come from Ticketmaster and JamBase, checked by the server overnight. This asks each of them for one event, to show the connections and keys are working. It costs one Ticketmaster request and one JamBase request.<div><button type="button" class="btn" data-m="conntest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test connection') + '</button></div>' + jbUsageHtml() + '</div>' : '');
   }
   function renderArtists() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
@@ -527,13 +533,13 @@
   }
   function gigPane(it) {
     var c = it.c, id = E(c.id), link = H().gigFor && H().gigFor(c.id), pend = salePending(c), a = byId(c.artistId), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
-    var chips = [it.interested ? 'Interested ✓' : '', link ? 'In Gigs & Trips' : '', pend ? 'On sale ' + saleText(c) : '', c.src === 'jambase' ? 'JamBase' : 'Ticketmaster'].filter(Boolean);
+    var chips = [it.interested ? 'Interested ✓' : '', link ? 'In Gigs & Trips' : '', pend ? 'On sale ' + saleText(c) : '', srcName(c)].filter(Boolean);
     var acts = it.hidden ? pBtn('restore:' + id, 'Show again') : (c.url ? pBtn('tickets:' + id, 'Tickets', { pri: true }) : '') + pBtn('interested:' + id, it.interested ? 'Interested ✓' : 'Interested', { on: it.interested }) +
       (link ? pBtn('opengig:' + id, 'Open gig') : pBtn('bought:' + id, busy['g' + c.id] ? 'Adding…' : 'Bought', { dis: busy['g' + c.id] })) + (pend ? pBtn('alert:' + id, it.alert ? 'Alert on' : 'Alert me', { on: it.alert }) : '') + pBtn('notint:' + id, 'Not interested');
     return poster('TOUR DATE', daysPill(c.date), c.date, c.artist, [c.venue, c.city].filter(Boolean).join(', '), chips) +
       '<div class="pane-actions" style="margin-bottom:12px">' + acts + '</div>' +
       '<div class="pane-card">' + pRow('Date', E(fmtDate(c.date))) + pRow('Time', E(c.time || '')) + pRow('Venue', E(c.venue)) + pRow('City', E(c.city)) + pRow('Tickets on sale', pend ? E(saleText(c)) : '') + pRow('Status', off ? E(c.status) : '') +
-      pRow('Event', c.name && norm(c.name) !== norm(c.artist) ? E(c.name) : '') + pRow('Found by', c.src === 'jambase' ? 'JamBase' : 'Ticketmaster') + (listeners().length ? pRow('Plays of ' + E(c.artist), totalPlays(norm(c.artist)) + ' (' + playsIn(norm(c.artist), 30) + ' in 30 days)') : '') + '</div>' +
+      pRow('Event', c.name && norm(c.name) !== norm(c.artist) ? E(c.name) : '') + pRow('Found by', srcName(c)) + (listeners().length ? pRow('Plays of ' + E(c.artist), totalPlays(norm(c.artist)) + ' (' + playsIn(norm(c.artist), 30) + ' in 30 days)') : '') + '</div>' +
       (a ? '<div class="pane-actions">' + pBtn('artist:' + E(a.id), 'Artist details') + '</div>' : '');
   }
   function relPane(it) {
@@ -696,41 +702,35 @@
     });
   }
 
-  // ── JamBase test (asks the server's probe with the signed-in session) ──
-  var jbRes = null;
-  function jbTest() {
+  // ── Connection test (one Ticketmaster + one JamBase request, via the server) ──
+  var jbRes = null, connAt = 0;
+  function connTest() {
     if (busy.jb) return;
+    if (Date.now() - connAt < 30000) { say('Tested a moment ago'); return; }
     if (!ensureSession()) { sayErr('Open Gigs & Trips through Pete’s Apps to run the test'); return; }
-    var names = followed().filter(function (a) { return a.gigs !== false && !tourEnded(a); }).sort(function (a, b) { return totalPlays(norm(b.name)) - totalPlays(norm(a.name)); }).map(function (a) { return a.name; }).slice(0, 15);
-    if (!names.length) { say('Follow some artists first'); return; }
     var base = (window.PAL_CONFIG && PAL_CONFIG.SB_URL) || '';
-    busy.jb = 1; paint();
-    fetch(base + '/functions/v1/swift-responder/probe-jambase', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: JSON.stringify({ artists: names, scotland: false }) })
+    busy.jb = 1; connAt = Date.now(); paint();
+    fetch(base + '/functions/v1/swift-responder/test-connection', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: '{}' })
       .then(function (res) { return res.json().catch(function () { return {}; }).then(function (j) { return { res: res, j: j }; }); })
       .then(function (r) {
-        if (!r.res.ok) throw new Error(r.res.status === 404 ? 'the server has not been updated to v0.10.0 yet' : r.res.status === 403 ? 'this account is not allowed to run it' : (r.j && r.j.error) || 'HTTP ' + r.res.status);
-        jbRes = r.j; openJb();
+        if (r.res.status === 429) { say('Tested a moment ago'); return; }
+        if (!r.res.ok) throw new Error(r.res.status === 404 ? 'the server has not been updated to v0.11.0 yet' : r.res.status === 403 ? 'this account is not allowed to run it' : (r.j && r.j.error) || 'HTTP ' + r.res.status);
+        jbRes = r.j; openConn();
       })
-      .catch(function (e) { sayErr('JamBase test failed: ' + ((e && e.message) || 'offline')); })
+      .catch(function (e) { sayErr('Connection test failed: ' + ((e && e.message) || 'offline')); })
       .finally(function () { busy.jb = 0; paint(); });
   }
-  function openJb() {
-    var j = jbRes || {}, h = '<div class="gm-sheet"><h2>JamBase test</h2>';
-    if (j.error) h += '<div class="note">' + E(j.error) + '</div>';
-    else {
-      var sm = j.summary || {};
-      h += '<div class="note">' + E(String(sm.artists || 0)) + ' artists asked. Scottish dates found by JamBase for ' + E(String(sm.jambaseScottish || 0)) + ', by Ticketmaster for ' + E(String(sm.ticketmasterScottish || 0)) + '. Only JamBase: ' + E(String(sm.onlyJambase || 0)) + '. Calls used: JamBase ' + E(String(j.jambaseCalls || 0)) + ', Ticketmaster ' + E(String(j.ticketmasterCalls || 0)) + '.</div>';
-      (j.artists || []).forEach(function (r) {
-        var jb = r.jambase || {}, tm = r.ticketmaster || {};
-        h += '<div class="jbrow"><span>' + E(r.artist) + (r.onlyJambase ? ' <b>(only JamBase)</b>' : '') + '</span><span>Ticketmaster ' + (tm.error ? 'error' : (tm.scottish == null ? '–' : tm.scottish)) + ' · JamBase ' + (jb.error ? 'error ' + E(String(jb.status || '')) : (jb.scottish == null ? '–' : jb.scottish)) + '</span></div>';
-        if (r.onlyJambase && jb.scottishDates) h += '<div class="jbd">' + jb.scottishDates.map(function (d) { return E(d.date + ' ' + (d.venue || '') + ', ' + (d.city || '')); }).join(' · ') + '</div>';
-      });
-      if (j.scotlandList) h += '<div class="note">JamBase lists ' + E(String(j.scotlandList.total == null ? j.scotlandList.returned : j.scotlandList.total)) + ' upcoming events in Scotland in total' + (j.scotlandList.error ? ' (error ' + E(String(j.scotlandList.status || '')) + ')' : '') + '.</div>';
-    }
-    h += '<div class="acts"><button class="btn pri" data-m="jbcopy">Copy result</button><button class="btn" data-m="closemodal">Close</button></div></div>';
+  function openConn() {
+    var j = jbRes || {}, tm = j.ticketmaster || {}, jb = j.jambase || {}, q = jb.quota, h = '<div class="gm-sheet"><h2>Connection test</h2>';
+    function line(name, r) { return '<div class="jbrow"><span>' + name + '</span><span>' + (r.ok ? 'OK' : 'Problem') + (r.status ? ' · HTTP ' + E(String(r.status)) : '') + (r.ms != null ? ' · ' + E(String(r.ms)) + ' ms' : '') + '</span></div>' + (r.ok ? '' : '<div class="jbd">' + E(String(r.error || 'no answer')) + '</div>'); }
+    h += '<div class="note">' + (j.ok ? 'Both connections are working.' : 'At least one connection has a problem.') + '</div>' + line('Ticketmaster', tm) + line('JamBase', jb);
+    if (q) h += '<div class="note">JamBase says ' + E(String(q.used)) + ' of ' + E(q.quota == null ? 'no set limit' : String(q.quota)) + ' requests used' + (q.periodEnd ? ' this period (ends ' + E(String(q.periodEnd).slice(0, 10)) + ')' : '') + '.</div>';
+    else if (jb.quotaError) h += '<div class="note">Usage could not be read (' + E(String(jb.quotaError)) + ').</div>';
+    h += '<div class="note">Requests made by this test: Ticketmaster ' + E(String((j.calls || {}).ticketmaster || 0)) + ', JamBase ' + E(String((j.calls || {}).jambase || 0)) + '.</div>';
+    h += '<div class="acts"><button class="btn pri" data-m="conncopy">Copy result</button><button class="btn" data-m="closemodal">Close</button></div></div>';
     modal('jb', h);
   }
-  function jbCopy() {
+  function connCopy() {
     var t = JSON.stringify(jbRes || {}, null, 1);
     try { navigator.clipboard.writeText(t).then(function () { say('Copied'); }, function () { say('Could not copy'); }); } catch (e) { say('Could not copy'); }
   }
@@ -775,7 +775,7 @@
     var h = '<div class="gm-sheet"><h2>Recommendations</h2><div class="note">' + (who.length ? 'Based on what ' + E(who.join(' and ')) + ' follow and play (Last.fm). ' : 'Based on the artists you follow. ') + (recs.length ? recs.length + ' suggestion' + (recs.length === 1 ? '' : 's') + '.' : '') + '</div><div class="acts"><button class="btn" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Refresh suggestions') + '</button><button class="btn" data-m="closemodal">Close</button></div>';
     h += recs.length ? recs.map(function (r) {
       return '<div class="row"><div class="rb"><div class="rt">' + E(r.name) + '</div><div class="rs">' + E(recReason(r)) + '</div><div class="acts"><button class="btn pri" data-m="recfollow:' + E(r.id) + '"' + (busy.follow[r.name] ? ' disabled' : '') + '>' + (busy.follow[r.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="recapple:' + E(r.id) + '">Apple Music</button><button class="btn" data-m="recknown:' + E(r.id) + '">Already know</button><button class="btn" data-m="recno:' + E(r.id) + '">Not for me</button></div></div></div>';
-    }).join('') : '<div class="empty">No suggestions yet.<div class="note">They are worked out by the server’s daily check from Last.fm’s similar-artist lists. Press Check for new dates (Coming up or Artists) to update.</div></div>';
+    }).join('') : '<div class="empty">No suggestions yet.<div class="note">They are worked out by the server’s daily check from Last.fm’s similar-artist lists. Refresh suggestions (above) updates them.</div></div>';
     h += '</div>';
     if (refreshOnly) { var m = document.getElementById('modal'); if (m) m.innerHTML = '<div class="gm gm-sheet-wrap">' + h + '</div>'; } else modal('recs', h);
   }
@@ -796,8 +796,8 @@
     else if (k === 'cancelimport') { imp = null; H().closeModal(); }
     else if (k === 'matchnow') matchPending();
     else if (k === 'check') checkNow(false);
-    else if (k === 'jbtest') jbTest();
-    else if (k === 'jbcopy') jbCopy();
+    else if (k === 'conntest') connTest();
+    else if (k === 'conncopy') connCopy();
     else if (k === 'togglehidden') { ui.showHidden = !ui.showHidden; paint(); }
     else if (k === 'afilter') { ui.aFilter = v; saveUi(); paint(); }
     else if (k === 'cfilter') { ui.cFilter = v; saveUi(); paint(); }
@@ -879,8 +879,6 @@
       return pull(false).then(function (changed) {
         ready = true; paint();
         refreshReleases({}).then(function () { return null; });
-        var gap = !cinfo.at || Date.now() - Date.parse(cinfo.at) > CON_STALE_MS;
-        if (gap && followed().length && ensureSession() && !render._autoDone) { render._autoDone = true; checkNow(true); }
         if (pendingMatch().length && ensureSession()) matchPending();
       });
     });
