@@ -1,11 +1,11 @@
-/* gat-music.js v1.19 (v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.20 (v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.19', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var VERSION = '1.20', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -57,7 +57,7 @@
   var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, appleBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
   var sel = null, paneEl = null, matching = false, matchInfo = { done: 0, total: 0, ok: 0, dup: 0 }, imp = null, fileIn = null;
-  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false, pPer: '', pLimit: 15 };
+  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false, pPer: '', pLimit: 15, tPer: '30' };
   var cinfo = { at: null, msg: '' };
   var busy = { con: false, rel: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
   var _db = null, _tables = null, tokSet = '';
@@ -80,8 +80,8 @@
   var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
   var followed = function () { return live().filter(isFollowed); };
   var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
-  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; } } catch (e) {} }
-  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer })); } catch (e) {} }
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'allmonths', 'years', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; if (['30', '12', 'all'].indexOf(o.tPer) >= 0) ui.tPer = o.tPer; } } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer, tPer: ui.tPer })); } catch (e) {} }
 
   // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
   function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
@@ -313,6 +313,7 @@
     '.gmx .jbrow{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--sep);font-size:14px}.gmx .jbrow b{font-weight:700}.gmx .jbd{font-size:12px;color:var(--ink3);margin:0 0 6px}' +
     '.gm .secbtn{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--sep);padding:12px 4px;margin-top:18px;min-height:44px;font:700 16px var(--f);color:var(--ink);cursor:pointer}.gm .secbtn .cnt{color:var(--ink3);font-weight:600;font-size:13px}.gm .secbtn .chev{width:16px;display:inline-block}.gm .secbody{padding-top:10px}' +
     '.gm .dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:0 0 14px}.gm .dgrid .card{margin:0}.gm .tb{display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;padding:5px 0;font:600 13px var(--f);color:var(--ink);text-align:left;cursor:pointer}.gm .tb .tn{flex:0 0 38%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gm .tb .tbar{flex:1;height:8px;border-radius:4px;background:var(--s2);overflow:hidden}.gm .tb .tbar i{display:block;height:100%;border-radius:4px}.gm .tb .tc{flex:0 0 34px;text-align:right;color:var(--ink3)}.gm .tb.nf .tn{color:var(--ink3)}' +
+    '.gm .gy{display:flex;align-items:center;gap:10px;margin:6px 0}.gm .gyl{width:40px;font-size:13px;color:var(--ink2)}.gm .gyb{flex:1;display:flex;height:16px;border-radius:4px;overflow:hidden;background:var(--sep)}.gm .gyb i{display:block;height:100%}.gm .gyn{width:48px;text-align:right;font-size:12px;color:var(--ink3)}' +
     '.gm .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink2);margin:4px 0 6px}.gm .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}.gm .gsvg{width:100%;height:auto;display:block}' +
     '.gm .row[data-sel]{cursor:pointer}.gm .row.sel{outline:2px solid var(--ink);outline-offset:-2px}' +
     '#detailPane .pane-poster.rel,#modal .pane-poster.rel{background:#B79CFF;color:#17151C}#detailPane .pane-actions,#modal .pane-actions{flex-wrap:wrap}#detailPane .pane-btn[aria-pressed=true],#modal .pane-btn[aria-pressed=true]{background:var(--ok-dim);color:var(--ok);border-color:var(--ok)}#detailPane .pane-btn[disabled],#modal .pane-btn[disabled]{opacity:.5}' +
@@ -418,8 +419,54 @@
   }
   // ── listening dashboard (v1.13, computer only) ──
   var WCOL = { pete: 'var(--lime)', lex: '#B79CFF' }, colOf = function (w) { return WCOL[w] || 'var(--ink3)'; };
-  function dayTotals(w) { var m = {}, L = state.listBy[w]; if (!L) return m; Object.keys(L.artists).forEach(function (k) { var d = L.artists[k].d || {}; Object.keys(d).forEach(function (x) { m[x] = (m[x] || 0) + (Number(d[x]) || 0); }); }); return m; }
-  function monthTotals(w) { var m = {}, L = state.listBy[w]; if (!L) return m; Object.keys(L.artists).forEach(function (k) { var e = L.artists[k]; Object.keys(e.mo || {}).forEach(function (x) { m[x] = (m[x] || 0) + (Number(e.mo[x]) || 0); }); Object.keys(e.d || {}).forEach(function (x) { var mm = x.slice(0, 7); m[mm] = (m[mm] || 0) + (Number(e.d[x]) || 0); }); }); return m; }
+  // v1.20: every dated count a listener has (Last.fm days and months, plus the Apple Music history), one pass: f(artistKey, 'YYYY-MM', n, 'YYYY-MM-DD' or '')
+  function eachCount(w, f) {
+    [state.listBy[w], state.appleBy[w]].forEach(function (L) {
+      if (!L || !L.artists) return;
+      Object.keys(L.artists).forEach(function (k) { var e = L.artists[k] || {};
+        Object.keys(e.mo || {}).forEach(function (m) { var n = Number(e.mo[m]) || 0; if (n) f(k, m, n, ''); });
+        Object.keys(e.d || {}).forEach(function (x) { var n = Number(e.d[x]) || 0; if (n) f(k, x.slice(0, 7), n, x); });
+      });
+    });
+  }
+  function dayTotals(w) { var m = {}; eachCount(w, function (k, mo, n, day) { if (day) m[day] = (m[day] || 0) + n; }); return m; }
+  function monthTotals(w) { var m = {}; eachCount(w, function (k, mo, n) { m[mo] = (m[mo] || 0) + n; }); return m; }
+  function yearTotals(w) { var m = {}; eachCount(w, function (k, mo, n) { var y = mo.slice(0, 4); m[y] = (m[y] || 0) + n; }); return m; }
+  var TPER = [['30 days', '30'], ['12 months', '12'], ['All time', 'all']];
+  function periodMap(w, per) {
+    var out = {}, t = today(), d0 = new Date(), from12 = (function () { var d = new Date(d0.getFullYear(), d0.getMonth() - 11, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })(), from30 = addDays(t, -29);
+    eachCount(w, function (k, mo, n, day) { if (per === 'all' || (per === '12' && mo >= from12) || (per === '30' && day && day >= from30)) out[k] = (out[k] || 0) + n; });
+    return out;
+  }
+  function genreOf(k, mine) { var a = mine[k]; return a ? (a.genre || 'No genre') : 'Not in your list'; }
+  function genreYears(w, mine) {
+    var Y = {}; eachCount(w, function (k, mo, n) { var y = mo.slice(0, 4), g = genreOf(k, mine); Y[y] = Y[y] || {}; Y[y][g] = (Y[y][g] || 0) + n; }); return Y;
+  }
+  var GCOL = ['#C8F560', '#B79CFF', '#5CC8FF', '#FFB454', '#FF7A90', '#5EEAD4'], GOTH = '#9AA4B2', GNIL = '#4B5563';
+  function genreCard(w) {
+    var mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var pm = periodMap(w, ui.tPer), G = {}, tot = 0, known = 0;
+    Object.keys(pm).forEach(function (k) { var g = genreOf(k, mine); G[g] = (G[g] || 0) + pm[k]; tot += pm[k]; if (g !== 'Not in your list' && g !== 'No genre') known += pm[k]; });
+    var list = Object.keys(G).filter(function (g) { return g !== 'Not in your list' && g !== 'No genre'; }).map(function (g) { return { g: g, n: G[g] }; }).sort(function (a, b) { return b.n - a.n; }), top = list.slice(0, 8), mx = top.length ? top[0].n : 1;
+    var rest = tot - known;
+    return '<div class="card"><h3>' + E(WHO[w] || w) + ': genres, ' + E(tperName()) + '</h3>' + (tot ? '<div class="note" style="margin-top:0">' + tot + ' plays · genre known for ' + Math.round(known / tot * 100) + '% (artists not in your list have no genre yet)</div>' +
+      top.map(function (x, i) { return '<div class="tb" style="cursor:default"><span class="tn" title="' + E(x.g) + '">' + E(x.g) + '</span><span class="tbar"><i style="width:' + Math.max(4, Math.round(x.n / mx * 100)) + '%;background:' + GCOL[i % GCOL.length] + '"></i></span><span class="tc">' + x.n + '</span></div>'; }).join('') +
+      (rest ? '<div class="tb" style="cursor:default"><span class="tn">No genre known</span><span class="tbar"><i style="width:' + Math.max(4, Math.round(rest / mx * 100)) + '%;background:' + GNIL + '"></i></span><span class="tc">' + rest + '</span></div>' : '') + '<div style="height:8px"></div>' : '<div class="note">No plays in this period.</div>') + '</div>';
+  }
+  function genreYearsCard(w) {
+    var mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var Y = genreYears(w, mine), years = Object.keys(Y).sort(); if (years.length < 2) return '';
+    var G = {}; years.forEach(function (y) { Object.keys(Y[y]).forEach(function (g) { if (g !== 'Not in your list' && g !== 'No genre') G[g] = (G[g] || 0) + Y[y][g]; }); });
+    var top = Object.keys(G).sort(function (a, b) { return G[b] - G[a]; }).slice(0, 6), col = function (g) { var i = top.indexOf(g); return i >= 0 ? GCOL[i] : (g === 'Not in your list' || g === 'No genre' ? GNIL : GOTH); };
+    var rows = years.map(function (y) {
+      var tot = 0, seg_ = {}; Object.keys(Y[y]).forEach(function (g) { var k = top.indexOf(g) >= 0 || g === 'Not in your list' || g === 'No genre' ? (g === 'No genre' ? 'Not in your list' : g) : 'Other'; seg_[k] = (seg_[k] || 0) + Y[y][g]; tot += Y[y][g]; });
+      var order = top.concat(['Other', 'Not in your list']).filter(function (g) { return seg_[g]; });
+      return '<div class="gy"><span class="gyl">' + E(y) + '</span><span class="gyb" role="img" aria-label="' + E(y + ': ' + order.map(function (g) { return g + ' ' + Math.round(seg_[g] / tot * 100) + '%'; }).join(', ')) + '">' + order.map(function (g) { return '<i style="width:' + (seg_[g] / tot * 100).toFixed(1) + '%;background:' + col(g) + '" title="' + E(g + ': ' + seg_[g] + ' plays (' + Math.round(seg_[g] / tot * 100) + '%)') + '"></i>'; }).join('') + '</span><span class="gyn">' + tot + '</span></div>';
+    }).join('');
+    return '<div class="card"><h3>' + E(WHO[w] || w) + ': genres over the years</h3><div class="note" style="margin-top:0">Share of each year’s plays by genre (the genre comes from the artists in your list).</div>' + rows +
+      '<div class="legend">' + top.concat(['Other', 'Not in your list']).map(function (g) { return '<span><i style="background:' + (g === 'Other' ? GOTH : g === 'Not in your list' ? GNIL : col(g)) + '"></i>' + E(g) + '</span>'; }).join('') + '</div></div>';
+  }
+  function tperName() { return ui.tPer === '12' ? 'last 12 months' : ui.tPer === 'all' ? 'all time' : '30 days'; }
   function niceMax(v) { if (v <= 4) return 4; var p = Math.pow(10, Math.floor(Math.log(v) / Math.LN10)), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
   var MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], DOWS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   function chartData(view, who) {
@@ -427,6 +474,15 @@
     if (view === 'months') {
       var d0 = new Date(), keys = []; for (i = 11; i >= 0; i--) { d = new Date(d0.getFullYear(), d0.getMonth() - i, 1); keys.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
       labels = keys.map(function (k) { return MONS[Number(k.slice(5)) - 1]; }); who.forEach(function (w) { var m = monthTotals(w); vals[w] = keys.map(function (k) { return m[k] || 0; }); });
+    } else if (view === 'allmonths' || view === 'years') {
+      var mk = {}; who.forEach(function (w) { var m = view === 'years' ? yearTotals(w) : monthTotals(w); mk[w] = m; });
+      var all = []; who.forEach(function (w) { Object.keys(mk[w]).forEach(function (k) { all.push(k); }); }); all.sort();
+      if (all.length) {
+        var first = all[0], keys2 = [];
+        if (view === 'years') { for (i = Number(first); i <= Number(t.slice(0, 4)); i++) keys2.push(String(i)); labels = keys2.slice(); }
+        else { var y = Number(first.slice(0, 4)), mo = Number(first.slice(5)), ey = Number(t.slice(0, 4)), em = Number(t.slice(5, 7)); while (y < ey || (y === ey && mo <= em)) { keys2.push(y + '-' + String(mo).padStart(2, '0')); if (++mo > 12) { mo = 1; y++; } } labels = keys2.map(function (k) { return MON[Number(k.slice(5)) - 1] + ' ' + k.slice(0, 4); }); tick = keys2.length > 96 ? 24 : 12; }
+        who.forEach(function (w) { vals[w] = keys2.map(function (k) { return mk[w][k] || 0; }); });
+      } else who.forEach(function (w) { vals[w] = []; });
     } else if (view === 'week') {
       labels = DOWS.slice(); who.forEach(function (w) { var m = dayTotals(w), v = [0, 0, 0, 0, 0, 0, 0]; Object.keys(m).forEach(function (x) { var wd = (new Date(x + 'T00:00:00Z').getUTCDay() + 6) % 7; v[wd] += m[x]; }); vals[w] = v; });
     } else {
@@ -440,7 +496,7 @@
     if (!mxv) return '<div class="note" style="padding:10px 0">No plays recorded for this view yet.</div>';
     var sm = window.innerWidth < 700, fs = sm ? 16 : 11, W = 640, H = sm ? 230 : 200, pl = sm ? 44 : 36, pr = 8, pt = 12, pb = sm ? 32 : 26, iw = W - pl - pr, ih = H - pt - pb, n = C.labels.length, mx = niceMax(mxv), gw = iw / n, bw = Math.max(2, (gw * 0.8) / who.length), s = '', y, i;
     var desc = who.map(function (w) { return (WHO[w] || w) + ' ' + C.vals[w].reduce(function (a, b) { return a + b; }, 0) + ' plays'; }).join(', ');
-    s += '<svg class="gsvg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Plays ' + (view === 'months' ? 'a month, last 12 months' : view === 'week' ? 'by day of the week' : 'a day, last 30 days') + ': ' + E(desc) + '">';
+    s += '<svg class="gsvg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Plays ' + (view === 'months' ? 'a month, last 12 months' : view === 'allmonths' ? 'a month, all history' : view === 'years' ? 'a year' : view === 'week' ? 'by day of the week' : 'a day, last 30 days') + ': ' + E(desc) + '">';
     [0, 0.5, 1].forEach(function (f) { y = pt + ih - f * ih; s += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(--sep)" stroke-width="1"/><text x="' + (pl - 6) + '" y="' + (y + 4) + '" text-anchor="end" style="fill:var(--ink3);font:' + fs + 'px var(--f)">' + Math.round(mx * f) + '</text>'; });
     for (i = 0; i < n; i++) {
       who.forEach(function (w, j) {
@@ -452,24 +508,31 @@
     return s + '</svg>';
   }
   function topCard(w) {
-    var L = state.listBy[w] || { artists: {} }, mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
-    var list = Object.keys(L.artists).map(function (k) { return { k: k, n: playsIn(k, 30, w) }; }).filter(function (x) { return x.n > 0; }).sort(function (a, b) { return b.n - a.n; }), tot = 0, fol = 0;
+    var mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var pm = periodMap(w, ui.tPer), list = Object.keys(pm).map(function (k) { return { k: k, n: pm[k] }; }).filter(function (x) { return x.n > 0; }).sort(function (a, b) { return b.n - a.n; }), tot = 0, fol = 0;
     list.forEach(function (x) { tot += x.n; var a = mine[x.k]; if (a && isFollowed(a)) fol += x.n; });
     var top = list.slice(0, 8), mx = top.length ? top[0].n : 1;
-    return '<div class="card"><h3>' + E(WHO[w] || w) + ': top artists, 30 days</h3>' +
+    return '<div class="card"><h3>' + E(WHO[w] || w) + ': top artists, ' + E(tperName()) + '</h3>' +
       (list.length ? '<div class="note" style="margin-top:0">' + tot + ' plays · ' + list.length + ' artist' + (list.length === 1 ? '' : 's') + ' · ' + Math.round(fol / tot * 100) + '% from artists you follow</div>' +
         top.map(function (x) {
           var a = mine[x.k], f = a && isFollowed(a), nm = playedName(x.k, w) || x.k, inner = '<span class="tn" title="' + E(nm) + '">' + E(nm) + '</span><span class="tbar"><i style="width:' + Math.max(4, Math.round(x.n / mx * 100)) + '%;background:' + colOf(w) + '"></i></span><span class="tc">' + x.n + '</span>';
           return a ? '<button type="button" class="tb' + (f ? '' : ' nf') + '" data-m="artist:' + E(a.id) + '">' + inner + '</button>' : '<div class="tb nf" style="cursor:default">' + inner + '</div>';
-        }).join('') + '<div style="height:8px"></div>' : '<div class="note">No plays in the last 30 days.</div>') + '</div>';
+        }).join('') + '<div style="height:8px"></div>' : '<div class="note">No plays in this period.</div>') + '</div>';
+  }
+  function gapYears(who) {
+    var ys = {}; who.forEach(function (w) { var A = state.appleBy[w]; if (A) { var y = yearTotals(w); Object.keys(y).forEach(function (k) { ys[k] = 1; }); } });
+    var k = Object.keys(ys).sort(), out = []; if (k.length < 2) return ''; for (var y = Number(k[0]) + 1; y < Number(k[k.length - 1]); y++) if (!ys[y]) out.push(y);
+    return out.length ? 'No plays are recorded for ' + (out.length > 1 ? out[0] + ' to ' + out[out.length - 1] : out[0]) + ': Apple’s export has none for those years.' : '';
   }
   function dashboardHtml() {
-    var who = listeners(); if (!who.length) return '';
-    var views = [['Plays a day', 'days'], ['Plays a month', 'months'], ['By weekday', 'week']];
-    return '<div class="dgrid">' + who.map(topCard).join('') + '</div>' +
+    var who = people(); if (!who.length) return '';
+    var hasHist = Object.keys(state.appleBy).length > 0, views = [['Plays a day', 'days'], ['Plays a month', 'months']].concat(hasHist ? [['All months', 'allmonths'], ['Plays a year', 'years']] : []).concat([['By weekday', 'week']]);
+    var notes = { week: 'Plays by day of the week, from the days with a date recorded (Last.fm days and Apple Music days since May 2026).', months: 'Plays a month for the last 12 months.', allmonths: 'Plays a month for all the history there is (Apple Music history, then Last.fm).', years: 'Plays a year (Apple Music history, then Last.fm).', days: 'Plays a day for the last 30 days.' };
+    return seg(TPER.map(function (v) { return [v[0], ui.tPer === v[1], 'tper:' + v[1]]; })) + '<div class="dgrid">' + who.map(topCard).join('') + '</div>' +
       '<div class="card"><h3>Listening habits</h3>' + seg(views.map(function (v) { return [v[0], ui.gView === v[1], 'gview:' + v[1]]; })) +
-      '<div class="legend">' + who.map(function (w) { return '<span><i style="background:' + colOf(w) + '"></i>' + E(WHO[w] || w) + '</span>'; }).join('') + '</div>' + chartHtml(ui.gView, who) +
-      '<div class="note">' + (ui.gView === 'week' ? 'Plays by day of the week, from the days Last.fm has recorded recently.' : ui.gView === 'months' ? 'Plays a month for the last 12 months (history starts when tracking began).' : 'Plays a day for the last 30 days.') + '</div></div>';
+      '<div class="legend">' + who.map(function (w) { return '<span><i style="background:' + colOf(w) + '"></i>' + E(WHO[w] || w) + '</span>'; }).join('') + '</div>' + chartHtml(hasHist || ['allmonths', 'years'].indexOf(ui.gView) < 0 ? ui.gView : 'days', who) +
+      '<div class="note">' + (notes[ui.gView] || notes.days) + ((ui.gView === 'years' || ui.gView === 'allmonths') && gapYears(who) ? ' ' + gapYears(who) : '') + '</div></div>' +
+      '<div class="dgrid">' + who.map(genreCard).join('') + '</div>' + (hasHist ? '<div class="dgrid">' + who.map(genreYearsCard).join('') + '</div>' : '');
   }
   function secHead(key, title, count, open) { return '<button type="button" class="secbtn" data-m="sec:' + key + '" aria-expanded="' + (open ? 'true' : 'false') + '"><span class="chev" aria-hidden="true">' + (open ? '▾' : '▸') + '</span>' + title + ' <span class="cnt">' + count + '</span></button>'; }
   function jbUsageHtml() {
@@ -534,6 +597,10 @@
     var its = comingItems().filter(function (i) { return !i.hidden; }), g = its.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0] || its[0];
     return g ? { k: g.kind === 'con' ? 'gig' : 'rel', id: g.id } : null;
   }
+  function yearsRow(k) {
+    var Y = {}; people().forEach(function (w) { [state.listBy[w], state.appleBy[w]].forEach(function (L) { var e = L && L.artists && L.artists[k]; if (!e) return; Object.keys(e.mo || {}).forEach(function (m) { Y[m.slice(0, 4)] = (Y[m.slice(0, 4)] || 0) + (Number(e.mo[m]) || 0); }); Object.keys(e.d || {}).forEach(function (d) { Y[d.slice(0, 4)] = (Y[d.slice(0, 4)] || 0) + (Number(e.d[d]) || 0); }); }); });
+    var ys = Object.keys(Y).filter(function (y) { return Y[y] > 0; }).sort(); return ys.length > 1 ? pRow('By year', ys.map(function (y) { return y + ': ' + Y[y]; }).join(' · ')) : '';
+  }
   function appleRow(k) {
     var n = 0, until = ''; people().forEach(function (w) { var ae = appleEntry(w, k); if (ae) { n += Number(ae.t) || 0; until = (state.appleBy[w] && state.appleBy[w].until) || until; } });
     return n ? pRow('Apple Music history', n + (until ? ' (to ' + E(fmtDate(until)) + ')' : '')) : '';
@@ -545,7 +612,7 @@
     var keys = [], d0 = new Date(), i; for (i = 11; i >= 0; i--) { var d = new Date(d0.getFullYear(), d0.getMonth() - i, 1); keys.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
     var mx = Math.max.apply(null, keys.map(function (m) { return months[m] || 0; }).concat([1]));
     var bars = keys.some(function (m) { return months[m]; }) ? '<div class="pbars" aria-hidden="true">' + keys.map(function (m) { return '<i title="' + m + ': ' + (months[m] || 0) + '" style="height:' + Math.max(3, Math.round(((months[m] || 0) / mx) * 100)) + '%"></i>'; }).join('') + '</div><div class="pcap"><span>' + keys[0] + '</span><span>plays a month</span><span>' + keys[11] + '</span></div>' : '';
-    return '<div class="pane-h">Listening</div><div class="pane-card">' + pRow('Plays in total', totalPlays(k)) + appleRow(k) + pRow('Last 7 days', playsIn(k, 7)) + pRow('Last 30 days', playsIn(k, 30)) + per + pRow('Last played', lp ? E(fmtDate(localDay(lp))) : '') + bars + '</div>';
+    return '<div class="pane-h">Listening</div><div class="pane-card">' + pRow('Plays in total', totalPlays(k)) + appleRow(k) + yearsRow(k) + pRow('Last 7 days', playsIn(k, 7)) + pRow('Last 30 days', playsIn(k, 30)) + per + pRow('Last played', lp ? E(fmtDate(localDay(lp))) : '') + bars + '</div>';
   }
   function gigPane(it) {
     var c = it.c, id = E(c.id), link = H().gigFor && H().gigFor(c.id), pend = salePending(c), a = byId(c.artistId), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
@@ -883,6 +950,7 @@
     if (b.disabled) return;
     var s = b.getAttribute('data-m'), i = s.indexOf(':'), k = i < 0 ? s : s.slice(0, i), v = i < 0 ? '' : s.slice(i + 1);
     if (k === 'sub') { ui.sub = v; sel = null; saveUi(); paint(); }
+    else if (k === 'tper') { ui.tPer = ['30', '12', 'all'].indexOf(v) >= 0 ? v : '30'; saveUi(); paint(); }
     else if (k === 'gview') { ui.gView = v; saveUi(); paint(); }
     else if (k === 'sec') { if (v === 'f') ui.fOpen = !ui.fOpen; else if (v === 'd') ui.dOpen = !ui.dOpen; else ui.pOpen = !ui.pOpen; saveUi(); paint(); }
     else if (k === 'shownot') { ui.showNot = !ui.showNot; saveUi(); paint(); }
