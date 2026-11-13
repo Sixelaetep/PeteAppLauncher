@@ -5,7 +5,7 @@
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.17', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var VERSION = '1.18', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -468,6 +468,7 @@
   }
   function toolsHtml() {
     return '<div class="card tools" style="margin-top:18px"><h3>Export and import</h3>Export your artists to a JSON file, or import a list of acts (a JSON file, or a text file with one name per line). Names are checked against your list first, so you see the duplicates before anything is added.<div><button type="button" class="btn" data-m="exportart">Export artists</button> <button type="button" class="btn" data-m="importart">Import artists</button></div></div>' +
+      '<div class="card tools" style="margin-top:12px"><h3>Back up and restore Music</h3>Back up everything in Music to one file: your artists, follow and tour switches, release and tour-date marks, and recommendation answers, with Pete’s and Lex’s listening kept in the file for reference. Restore adds what is missing and updates what is older; it never deletes anything, and shows you the changes before it applies them. Listening and tour dates are not restored, because Last.fm and the overnight checks supply them.<div><button type="button" class="btn" data-m="backupmusic">Back up Music</button> <button type="button" class="btn" data-m="restoremusic">Restore Music</button></div></div>' +
       secHead('d', 'Diagnostics', '', ui.dOpen) + (ui.dOpen ? '<div class="card tools secbody"><h3>Connection test</h3>Tour dates come from Ticketmaster and JamBase, checked by the server overnight. This asks each of them for one event, to show the connections and keys are working. It costs one Ticketmaster request and one JamBase request.<div><button type="button" class="btn" data-m="conntest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test connection') + '</button></div>' + jbUsageHtml() + '</div>' : '');
   }
   function renderArtists() {
@@ -592,14 +593,88 @@
       howTo: 'To add acts, add entries to artists (just a name is enough) and import the file in Music > Artists > Import artists. Names already in your list are recognised and not added twice. Optional per artist: releases (false = no new releases), gigs (false = no tour dates), tour ("ended" = no longer touring), tourNote.', artists: rows }, null, 2));
     say('Exported ' + rows.length + ' artist' + (rows.length === 1 ? '' : 's'));
   }
+  // ── full Music backup and restore (v1.18) ──
+  var BACKUP_FORMAT = 'gigs-music-backup/1', restoreMode = false, rplan = null;
+  function backupObject() {
+    var live_ = function (l) { return (l || []).filter(function (x) { return x && x.id; }); };
+    return { format: BACKUP_FORMAT, app: 'gigs-and-trips-music', version: VERSION, exportedAt: new Date().toISOString(),
+      note: 'Restore this in Gigs & Trips > Music > Artists > Back up and restore Music. Restore adds what is missing and updates what is older; it never deletes. Listening (Last.fm) and tour dates are kept here for reference only.',
+      artists: live_(state.artists), cst: live_(state.cst), rst: live_(state.rst), recfb: live_(state.recfb), recs: live_(state.recs), concerts: live_(state.concerts), listening: state.listBy, conCheck: state.conCheck };
+  }
+  function exportBackup() {
+    return boot().then(function () { return Promise.race([pull(false), sleep(2000)]); }).catch(function () {}).then(function () {
+      var o = backupObject();
+      saveFile('music-backup.json', JSON.stringify(o, null, 2));
+      say('Music backed up: ' + o.artists.filter(function (a) { return !a._deleted; }).length + ' artists');
+      return o;
+    });
+  }
+  function newer(f, l) { return String(f.updatedAt || '') > String(l.updatedAt || ''); }
+  function planRestore(o) {
+    var P = { add: [], update: [], revive: [], same: 0, deletedInFile: 0, sets: { cst: { add: [], update: [] }, rst: { add: [], update: [] }, recfb: { add: [], update: [] } }, skipped: 0 };
+    var byId = {}, byName = {}; state.artists.forEach(function (a) { byId[a.id] = a; byName[norm(a.name)] = byName[norm(a.name)] && !byName[norm(a.name)]._deleted ? byName[norm(a.name)] : a; });
+    var seen = {};
+    (Array.isArray(o.artists) ? o.artists : []).forEach(function (fa) {
+      if (!fa || !fa.id || !fa.name) { P.skipped++; return; }
+      if (fa._deleted) { P.deletedInFile++; return; }
+      var k = norm(fa.name); if (seen[k]) { P.skipped++; return; } seen[k] = 1;
+      var la = byId[fa.id] || byName[k];
+      if (!la) P.add.push(fa);
+      else if (la._deleted) { if (newer(fa, la)) P.revive.push({ a: la, f: fa }); else P.same++; }
+      else if (newer(fa, la)) P.update.push({ a: la, f: fa }); else P.same++;
+    });
+    ['cst', 'rst', 'recfb'].forEach(function (t) {
+      var have = {}; state[t].forEach(function (x) { have[x.id] = x; });
+      (Array.isArray(o[t]) ? o[t] : []).forEach(function (f) {
+        if (!f || !f.id || f._deleted) return; var l = have[f.id];
+        if (!l) P.sets[t].add.push(f); else if (newer(f, l)) P.sets[t].update.push({ l: l, f: f });
+      });
+    });
+    P.total = P.add.length + P.update.length + P.revive.length + ['cst', 'rst', 'recfb'].reduce(function (n, t) { return n + P.sets[t].add.length + P.sets[t].update.length; }, 0);
+    P.src = { artists: (o.artists || []).length, exportedAt: o.exportedAt || '', version: o.version || '' };
+    return P;
+  }
+  function showRestore() {
+    var p = rplan; if (!p) return;
+    var S = p.sets, n = function (t) { return S[t].add.length + S[t].update.length; }, nm = function (l, f) { return l.length ? '<div class="imp-l">' + l.slice(0, 40).map(function (x) { return E(f(x)); }).join(', ') + (l.length > 40 ? ' and ' + (l.length - 40) + ' more' : '') + '</div>' : ''; };
+    modal('restore', '<div class="gm-sheet"><h2>Restore Music</h2><div class="note">Backup made ' + E(p.src.exportedAt ? p.src.exportedAt.slice(0, 10) : 'on an unknown date') + (p.src.version ? ' (Music ' + E(p.src.version) + ')' : '') + ', ' + p.src.artists + ' artists. ' + (p.total ? p.total + ' change' + (p.total === 1 ? '' : 's') + ' ready. Nothing changes until you press Apply, and nothing is deleted.' : 'Nothing to restore: everything in the file is already here and up to date.') + '</div>' +
+      (p.add.length ? '<div class="imp-l"><b>Artists to add (' + p.add.length + ')</b></div>' + nm(p.add, function (a) { return a.name; }) : '') +
+      (p.revive.length ? '<div class="imp-l"><b>Removed artists that come back (' + p.revive.length + ')</b></div>' + nm(p.revive, function (x) { return x.a.name; }) : '') +
+      (p.update.length ? '<div class="imp-l"><b>Artists with newer settings in the file (' + p.update.length + ')</b></div>' + nm(p.update, function (x) { return x.a.name; }) : '') +
+      '<div class="imp-l">Tour-date marks: ' + n('cst') + ' · Release marks: ' + n('rst') + ' · Recommendation answers: ' + n('recfb') + ' · Already up to date: ' + p.same + (p.deletedInFile ? ' · Removed in the file, skipped: ' + p.deletedInFile : '') + '</div>' +
+      '<div class="acts">' + (p.total ? '<button class="btn pri" data-m="applyrestore">Apply ' + p.total + ' change' + (p.total === 1 ? '' : 's') + '</button>' : '') + '<button class="btn" data-m="cancelrestore">' + (p.total ? 'Cancel' : 'Close') + '</button></div></div>');
+  }
+  function pushRows(tb, list) {
+    if (!ensureSession() || !list.length) return Promise.resolve();
+    var fail = 0, i = 0;
+    function next() { if (i >= list.length) return Promise.resolve(); var r = list[i++]; return tables()[tb].upsert(r.id, r).catch(function () { fail++; }).then(next); }
+    return next().then(function () { if (fail) sayErr(fail + ' item' + (fail === 1 ? '' : 's') + ' did not sync. They are saved on this device.'); });
+  }
+  function applyRestore() {
+    var p = rplan; if (!p) return; rplan = null; H().closeModal();
+    var now = new Date().toISOString(), art = [], out = { cst: [], rst: [], recfb: [] }, ids = {}; state.artists.forEach(function (a) { ids[a.id] = 1; });
+    p.add.forEach(function (fa) { var a = Object.assign({}, fa); if (ids[a.id]) a.id = newId('') + Math.random().toString(36).slice(2, 5); ids[a.id] = 1; a._deleted = false; a.updatedAt = now; state.artists.push(a); art.push(a); });
+    p.revive.concat(p.update).forEach(function (x) { var id = x.a.id; Object.keys(x.a).forEach(function (k) { delete x.a[k]; }); Object.assign(x.a, x.f, { id: id, _deleted: false, updatedAt: now }); art.push(x.a); });
+    ['cst', 'rst', 'recfb'].forEach(function (t) {
+      p.sets[t].add.forEach(function (f) { var r = Object.assign({}, f, { updatedAt: now }); state[t].push(r); out[t].push(r); });
+      p.sets[t].update.forEach(function (x) { var id = x.l.id; Object.keys(x.l).forEach(function (k) { delete x.l[k]; }); Object.assign(x.l, x.f, { id: id, updatedAt: now }); out[t].push(x.l); });
+    });
+    save(); saveRel(); paint(); say('Restored: ' + p.total + ' change' + (p.total === 1 ? '' : 's'));
+    return pushRows('art', art).then(function () { return pushRows('cst', out.cst); }).then(function () { return pushRows('rst', out.rst); }).then(function () { return pushRows('fb', out.recfb); })
+      .then(function () { refreshReleases({}); return matchPending(); });
+  }
   function pickImport() {
     if (!fileIn) { fileIn = document.createElement('input'); fileIn.type = 'file'; fileIn.accept = 'application/json,.json,text/plain,.txt,.csv'; fileIn.style.display = 'none'; document.body.appendChild(fileIn); fileIn.addEventListener('change', function () { var f = fileIn.files && fileIn.files[0]; fileIn.value = ''; if (f) readImport(f); }); }
     fileIn.value = ''; fileIn.click();
   }
   function readImport(file) {
-    if (file.size > 2000000) { sayErr('That file is too big to be an artists list'); return; }
+    if (file.size > 25000000) { sayErr('That file is too big'); return; }
     var rd = new FileReader();
-    rd.onload = function () { try { imp = planImport(parseImport(String(rd.result || ''))); showImport(); } catch (e) { imp = null; sayErr('Import failed: ' + ((e && e.message) || e)); } };
+    rd.onload = function () { try {
+        var txt = String(rd.result || ''), bj = null; try { bj = JSON.parse(txt); } catch (e) {}
+        if (bj && bj.format === BACKUP_FORMAT) { restoreMode = false; rplan = planRestore(bj); showRestore(); return; }
+        if (restoreMode) { restoreMode = false; throw new Error('That is not a Music backup file. Use Import artists for a list of acts'); }
+        imp = planImport(parseImport(txt)); showImport(); } catch (e) { imp = null; sayErr('Import failed: ' + ((e && e.message) || e)); } };
     rd.onerror = function () { sayErr('Could not read that file'); };
     rd.readAsText(file);
   }
@@ -791,6 +866,10 @@
     else if (k === 'sec') { if (v === 'f') ui.fOpen = !ui.fOpen; else if (v === 'd') ui.dOpen = !ui.dOpen; else ui.pOpen = !ui.pOpen; saveUi(); paint(); }
     else if (k === 'shownot') { ui.showNot = !ui.showNot; saveUi(); paint(); }
     else if (k === 'exportart') exportArtists();
+    else if (k === 'backupmusic') exportBackup();
+    else if (k === 'restoremusic') { restoreMode = true; pickImport(); }
+    else if (k === 'applyrestore') applyRestore();
+    else if (k === 'cancelrestore') { rplan = null; H().closeModal(); }
     else if (k === 'importart') pickImport();
     else if (k === 'applyimport') applyImport();
     else if (k === 'cancelimport') { imp = null; H().closeModal(); }
@@ -884,7 +963,7 @@
     });
   }
   window.GatMusic = {
-    version: VERSION, pane: pane, render: render, pull: pull, paint: paint, init: init, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, ui: ui, busy: busy, ready: ready }; },
+    version: VERSION, pane: pane, render: render, pull: pull, paint: paint, init: init, exportBackup: exportBackup, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, ui: ui, busy: busy, ready: ready }; },
     // for the rest of Gigs & Trips (next stage): interested items for Upcoming and the timeline
     core: { norm: norm, slug: slug, classify: classify, parseRelease: parseRelease, liveConcerts: liveConcerts }
   };
