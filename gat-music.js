@@ -1,11 +1,11 @@
-/* gat-music.js v1.17 (v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.19 (v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, rstate_rel_<collectionId> {interested, ni}.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.18', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var VERSION = '1.19', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -54,10 +54,10 @@
   var NEW_REL_DAYS = 21;
 
   // ── state ──
-  var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
+  var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, appleBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
   var sel = null, paneEl = null, matching = false, matchInfo = { done: 0, total: 0, ok: 0, dup: 0 }, imp = null, fileIn = null;
-  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false };
+  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false, pPer: '', pLimit: 15 };
   var cinfo = { at: null, msg: '' };
   var busy = { con: false, rel: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
   var _db = null, _tables = null, tokSet = '';
@@ -80,8 +80,8 @@
   var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
   var followed = function () { return live().filter(isFollowed); };
   var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
-  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; } } catch (e) {} }
-  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot })); } catch (e) {} }
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; } } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer })); } catch (e) {} }
 
   // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
   function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
@@ -97,7 +97,7 @@
   function tables() {
     if (_tables) return _tables;
     var P = window.PalSync;
-    _tables = { art: P.table(TBL, { prefix: 'artist_', shared: true }), cst: P.table(TBL, { prefix: 'cstate_', shared: true }), rst: P.table(TBL, { prefix: 'rstate_', shared: true }), fb: P.table(TBL, { prefix: 'recfb_', shared: true }) };
+    _tables = { art: P.table(TBL, { prefix: 'artist_', shared: true }), cst: P.table(TBL, { prefix: 'cstate_', shared: true }), rst: P.table(TBL, { prefix: 'rstate_', shared: true }), fb: P.table(TBL, { prefix: 'recfb_', shared: true }), apple: P.table(TBL, { prefix: '__apple_', shared: true }) };
     return _tables;
   }
   function ensureSession() {
@@ -126,6 +126,9 @@
       var lb = {};
       rows.forEach(function (x) { var m = /^__listening(?:_([a-z0-9]+))?__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') lb[m[1] || 'pete'] = rekey(d); });
       state.listBy = lb;
+      var ab = {}; rows.forEach(function (x) { var m = /^__apple_([a-z0-9]+)__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') ab[m[1]] = d; });
+      Object.keys(state.appleBy).forEach(function (w) { if (!ab[w] && state.appleBy[w] && state.appleBy[w].artists) { ab[w] = state.appleBy[w]; pushRows('apple', [state.appleBy[w]]); } });   // kept on this device and sent again if the cloud lacks it
+      state.appleBy = ab;
       var cr = rows.find(function (x) { return x.record_key === '__concerts__'; });
       state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {}, jbf: (cr.data.jbf && typeof cr.data.jbf === 'object') ? cr.data.jbf : {}, jb: (cr.data.jb && typeof cr.data.jb === 'object') ? cr.data.jb : null, at: cr.data.updatedAt || '' } : { fetched: {}, empty: {}, jbf: {} };
       lastPull = Date.now(); save(); return true;
@@ -135,15 +138,21 @@
   // ── listening (Pete's and Lex's Last.fm are separate rows; plays are added together) ──
   var WHO = { pete: 'Pete', lex: 'Lex' };
   function listeners() { return Object.keys(state.listBy); }
+  // v1.19: Apple Music history (one record a listener, plays up to the day before Last.fm tracking began) is added to the same numbers.
+  function people() { var k = {}; Object.keys(state.listBy).concat(Object.keys(state.appleBy)).forEach(function (w) { k[w] = 1; }); return Object.keys(k); }
+  function appleEntry(w, key) { var A = state.appleBy[w]; return (A && A.artists && A.artists[key]) || null; }
   function playsIn(key, days, who) {
     var from = addDays(today(), -(days - 1)), n = 0;
-    (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) Object.keys(e.d || {}).forEach(function (d) { if (d >= from) n += Number(e.d[d]) || 0; }); });
+    (who ? [who] : people()).forEach(function (w) {
+      var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) Object.keys(e.d || {}).forEach(function (d) { if (d >= from) n += Number(e.d[d]) || 0; });
+      var ae = appleEntry(w, key); if (ae) Object.keys(ae.d || {}).forEach(function (d) { if (d >= from) n += Number(ae.d[d]) || 0; });
+    });
     return n;
   }
-  function totalPlays(key, who) { var n = 0; (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) n += Number(e.t) || 0; }); return n; }
-  function lastPlayed(key, who) { var l = 0; (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.l > l) l = e.l; }); return l; }
-  function playedName(key, who) { var nm = ''; (who ? [who] : listeners()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.n && !nm) nm = e.n; }); return nm; }
-  function allPlayedKeys(who) { var k = {}; (who ? [who] : listeners()).forEach(function (w) { Object.keys((state.listBy[w] || { artists: {} }).artists).forEach(function (x) { k[x] = 1; }); }); return Object.keys(k); }
+  function totalPlays(key, who) { var n = 0; (who ? [who] : people()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) n += Number(e.t) || 0; var ae = appleEntry(w, key); if (ae) n += Number(ae.t) || 0; }); return n; }
+  function lastPlayed(key, who) { var l = 0; (who ? [who] : people()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.l > l) l = e.l; var ae = appleEntry(w, key); if (ae && ae.l > l) l = ae.l; }); return l; }
+  function playedName(key, who) { var nm = ''; (who ? [who] : people()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.n && !nm) nm = e.n; var ae = appleEntry(w, key); if (ae && ae.n && !nm) nm = ae.n; }); return nm; }
+  function allPlayedKeys(who) { var k = {}; (who ? [who] : people()).forEach(function (w) { Object.keys((state.listBy[w] || { artists: {} }).artists).forEach(function (x) { k[x] = 1; }); Object.keys((state.appleBy[w] || { artists: {} }).artists || {}).forEach(function (x) { k[x] = 1; }); }); return Object.keys(k); }
   var fbMap = function () { var m = {}; state.recfb.forEach(function (x) { if (x && x.id && !x._deleted) { m[x.id] = x.state; if (x.n && /^rc_/.test(x.id)) m['rc_' + norm(x.n)] = x.state; } }); return m; };   // v1.03: also under the new key for names that start with "The"
 
   // ── Apple (iTunes: free, no key, allows browser requests) ──
@@ -375,12 +384,13 @@
     var k = norm(a.name), t = totalPlays(k); if (!listeners().length) return '';
     return t ? t + ' play' + (t === 1 ? '' : 's') + (playsIn(k, 30) ? ' · ' + playsIn(k, 30) + ' in 30 days' : '') : 'no plays yet';
   }
+  function pPeriod() { return ui.pPer || (Object.keys(state.appleBy).length ? 'all' : '30'); }
   function playedNotFollowed() {
     var fb = fbMap(), mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
-    var who = listeners().indexOf(ui.pWho) >= 0 ? ui.pWho : '';
-    return allPlayedKeys(who).map(function (k) { return { k: k, n: playsIn(k, 30, who), l: lastPlayed(k, who), name: playedName(k, who) || k }; })
+    var who = people().indexOf(ui.pWho) >= 0 ? ui.pWho : '', all = pPeriod() === 'all';
+    return allPlayedKeys(who).map(function (k) { return { k: k, n: all ? totalPlays(k, who) : playsIn(k, 30, who), l: lastPlayed(k, who), name: playedName(k, who) || k }; })
       .filter(function (x) { return x.n >= ui.lMin && !(mine[x.k] && isFollowed(mine[x.k])) && fb['rc_' + x.k] !== 'ignored'; })
-      .sort(function (a, b) { return (b.l || 0) - (a.l || 0) || b.n - a.n || a.name.localeCompare(b.name); }).slice(0, 15);
+      .sort(all ? function (a, b) { return b.n - a.n || (b.l || 0) - (a.l || 0) || a.name.localeCompare(b.name); } : function (a, b) { return (b.l || 0) - (a.l || 0) || b.n - a.n || a.name.localeCompare(b.name); });
   }
   function listenAge() {
     // The server records the day Last.fm was polled (a date, no time), so a date alone is shown as "today" / the date; this device's own last successful check has a time and wins when it is newer.
@@ -398,12 +408,13 @@
         '<div class="sw">' + sw('follow', 'Follow', fol, true) + sw('releases', 'Releases', fol && a.releases !== false, fol) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div></div>';
   }
   function pnfBody(pnf) {
-    return pnf.length ? pnf.map(function (x) {
-      return '<div class="row"><div class="rb"><div class="rt">' + E(x.name) + '</div><div class="rs">' + x.n + ' plays in 30 days · last ' + E(ago(new Date(x.l * 1000).toISOString())) + '</div><div class="acts"><button class="btn pri" data-m="followname:' + E(x.name) + '"' + (busy.follow[x.name] ? ' disabled' : '') + '>' + (busy.follow[x.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="ignorename:' + E(x.name) + '">Ignore</button></div></div></div>';
-    }).join('') : '<div class="note" style="padding-bottom:10px">' + (ui.aQuery ? 'Nobody played matches the search.' : ui.lMin === 1 ? 'Everyone played in the last 30 days is already followed.' : 'Nobody played ' + ui.lMin + ' or more times in 30 days is missing from your follows.') + '</div>';
+    var all = pPeriod() === 'all', lim = ui.aQuery ? 60 : ui.pLimit, shown = pnf.slice(0, lim);
+    return (pnf.length ? shown.map(function (x) {
+      return '<div class="row"><div class="rb"><div class="rt">' + E(x.name) + '</div><div class="rs">' + x.n + ' plays ' + (all ? 'in total' : 'in 30 days') + ' · last ' + E(ago(new Date(x.l * 1000).toISOString())) + '</div><div class="acts"><button class="btn pri" data-m="followname:' + E(x.name) + '"' + (busy.follow[x.name] ? ' disabled' : '') + '>' + (busy.follow[x.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="ignorename:' + E(x.name) + '">Ignore</button></div></div></div>';
+    }).join('') + (pnf.length > shown.length ? '<div class="acts2"><button type="button" class="chip" data-m="pmore:">Show ' + Math.min(25, pnf.length - shown.length) + ' more (' + (pnf.length - shown.length) + ' left)</button></div>' : '') : '<div class="note" style="padding-bottom:10px">' + (ui.aQuery ? 'Nobody played matches the search.' : ui.lMin === 1 ? (all ? 'Everyone you have played is already followed.' : 'Everyone played in the last 30 days is already followed.') : 'Nobody played ' + ui.lMin + ' or more times ' + (all ? 'in total' : 'in 30 days') + ' is missing from your follows.') + '</div>');
   }
   function pnfSegs() {
-    return (listeners().length > 1 ? seg([['Both', !ui.pWho, 'pwho:']].concat(listeners().map(function (w) { return [E(WHO[w] || w), ui.pWho === w, 'pwho:' + w]; }))) : '') + seg([1, 2, 3, 5, 10].map(function (n) { return [n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n]; }));
+    return (Object.keys(state.appleBy).length ? seg([['Last 30 days', pPeriod() === '30', 'pper:30'], ['All time', pPeriod() === 'all', 'pper:all']]) : '') + (people().length > 1 ? seg([['Both', !ui.pWho, 'pwho:']].concat(people().map(function (w) { return [E(WHO[w] || w), ui.pWho === w, 'pwho:' + w]; }))) : '') + seg([1, 2, 3, 5, 10].map(function (n) { return [n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n]; }));
   }
   // ── listening dashboard (v1.13, computer only) ──
   var WCOL = { pete: 'var(--lime)', lex: '#B79CFF' }, colOf = function (w) { return WCOL[w] || 'var(--ink3)'; };
@@ -487,7 +498,7 @@
       h += !all.length ? '<div class="empty">No artists yet. Add one to start.</div>' : rows.length ? rows.map(artRow).join('') : '<div class="empty">No artists match.</div>';
       h += '</div>';
     }
-    if (listeners().length) {
+    if (people().length) {
       var pnf = playedNotFollowed().filter(function (x) { return !q || norm(x.name).indexOf(q) >= 0; });
       h += secHead('p', 'Played, not followed', pnf.length, ui.pOpen);
       if (ui.pOpen) h += '<div class="secbody">' + pnfSegs() + pnfBody(pnf) + '</div>';
@@ -523,14 +534,18 @@
     var its = comingItems().filter(function (i) { return !i.hidden; }), g = its.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0] || its[0];
     return g ? { k: g.kind === 'con' ? 'gig' : 'rel', id: g.id } : null;
   }
+  function appleRow(k) {
+    var n = 0, until = ''; people().forEach(function (w) { var ae = appleEntry(w, k); if (ae) { n += Number(ae.t) || 0; until = (state.appleBy[w] && state.appleBy[w].until) || until; } });
+    return n ? pRow('Apple Music history', n + (until ? ' (to ' + E(fmtDate(until)) + ')' : '')) : '';
+  }
   function playsBlock(a) {
     var k = norm(a.name), who = listeners(); if (!who.length) return '';
     var per = who.length > 1 ? who.map(function (w) { return pRow('Plays, ' + E(WHO[w] || w), totalPlays(k, w) + ' (' + playsIn(k, 30, w) + ' in 30 days)'); }).join('') : '', lp = lastPlayed(k);
-    var months = {}; who.forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[k]; if (!e) return; Object.keys(e.mo || {}).forEach(function (m) { months[m] = (months[m] || 0) + (Number(e.mo[m]) || 0); }); Object.keys(e.d || {}).forEach(function (d) { var m = d.slice(0, 7); months[m] = (months[m] || 0) + (Number(e.d[d]) || 0); }); });
+    var months = {}; people().forEach(function (w) { var ae = appleEntry(w, k); if (ae) { Object.keys(ae.mo || {}).forEach(function (m) { months[m] = (months[m] || 0) + (Number(ae.mo[m]) || 0); }); Object.keys(ae.d || {}).forEach(function (d) { var m = d.slice(0, 7); months[m] = (months[m] || 0) + (Number(ae.d[d]) || 0); }); } var e = state.listBy[w] && state.listBy[w].artists[k]; if (!e) return; Object.keys(e.mo || {}).forEach(function (m) { months[m] = (months[m] || 0) + (Number(e.mo[m]) || 0); }); Object.keys(e.d || {}).forEach(function (d) { var m = d.slice(0, 7); months[m] = (months[m] || 0) + (Number(e.d[d]) || 0); }); });
     var keys = [], d0 = new Date(), i; for (i = 11; i >= 0; i--) { var d = new Date(d0.getFullYear(), d0.getMonth() - i, 1); keys.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
     var mx = Math.max.apply(null, keys.map(function (m) { return months[m] || 0; }).concat([1]));
     var bars = keys.some(function (m) { return months[m]; }) ? '<div class="pbars" aria-hidden="true">' + keys.map(function (m) { return '<i title="' + m + ': ' + (months[m] || 0) + '" style="height:' + Math.max(3, Math.round(((months[m] || 0) / mx) * 100)) + '%"></i>'; }).join('') + '</div><div class="pcap"><span>' + keys[0] + '</span><span>plays a month</span><span>' + keys[11] + '</span></div>' : '';
-    return '<div class="pane-h">Listening</div><div class="pane-card">' + pRow('Plays in total', totalPlays(k)) + pRow('Last 7 days', playsIn(k, 7)) + pRow('Last 30 days', playsIn(k, 30)) + per + pRow('Last played', lp ? E(fmtDate(localDay(lp))) : '') + bars + '</div>';
+    return '<div class="pane-h">Listening</div><div class="pane-card">' + pRow('Plays in total', totalPlays(k)) + appleRow(k) + pRow('Last 7 days', playsIn(k, 7)) + pRow('Last 30 days', playsIn(k, 30)) + per + pRow('Last played', lp ? E(fmtDate(localDay(lp))) : '') + bars + '</div>';
   }
   function gigPane(it) {
     var c = it.c, id = E(c.id), link = H().gigFor && H().gigFor(c.id), pend = salePending(c), a = byId(c.artistId), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
@@ -599,7 +614,7 @@
     var live_ = function (l) { return (l || []).filter(function (x) { return x && x.id; }); };
     return { format: BACKUP_FORMAT, app: 'gigs-and-trips-music', version: VERSION, exportedAt: new Date().toISOString(),
       note: 'Restore this in Gigs & Trips > Music > Artists > Back up and restore Music. Restore adds what is missing and updates what is older; it never deletes. Listening (Last.fm) and tour dates are kept here for reference only.',
-      artists: live_(state.artists), cst: live_(state.cst), rst: live_(state.rst), recfb: live_(state.recfb), recs: live_(state.recs), concerts: live_(state.concerts), listening: state.listBy, conCheck: state.conCheck };
+      artists: live_(state.artists), cst: live_(state.cst), rst: live_(state.rst), recfb: live_(state.recfb), recs: live_(state.recs), concerts: live_(state.concerts), listening: state.listBy, apple: Object.keys(state.appleBy).length ? state.appleBy : undefined, conCheck: state.conCheck };
   }
   function exportBackup() {
     return boot().then(function () { return Promise.race([pull(false), sleep(2000)]); }).catch(function () {}).then(function () {
@@ -611,7 +626,7 @@
   }
   function newer(f, l) { return String(f.updatedAt || '') > String(l.updatedAt || ''); }
   function planRestore(o) {
-    var P = { add: [], update: [], revive: [], same: 0, deletedInFile: 0, sets: { cst: { add: [], update: [] }, rst: { add: [], update: [] }, recfb: { add: [], update: [] } }, skipped: 0 };
+    var P = { apple: [], add: [], update: [], revive: [], same: 0, deletedInFile: 0, sets: { cst: { add: [], update: [] }, rst: { add: [], update: [] }, recfb: { add: [], update: [] } }, skipped: 0 };
     var byId = {}, byName = {}; state.artists.forEach(function (a) { byId[a.id] = a; byName[norm(a.name)] = byName[norm(a.name)] && !byName[norm(a.name)]._deleted ? byName[norm(a.name)] : a; });
     var seen = {};
     (Array.isArray(o.artists) ? o.artists : []).forEach(function (fa) {
@@ -630,7 +645,11 @@
         if (!l) P.sets[t].add.push(f); else if (newer(f, l)) P.sets[t].update.push({ l: l, f: f });
       });
     });
-    P.total = P.add.length + P.update.length + P.revive.length + ['cst', 'rst', 'recfb'].reduce(function (n, t) { return n + P.sets[t].add.length + P.sets[t].update.length; }, 0);
+    if (o.apple && typeof o.apple === 'object') Object.keys(o.apple).forEach(function (w) {
+      var r = o.apple[w], cur = state.appleBy[w]; if (!r || !r.artists || typeof r.artists !== 'object') return;
+      if (cur && String(cur.builtAt || '') === String(r.builtAt || '')) P.same++; else P.apple.push({ who: w, rec: r, replaces: !!cur });
+    });
+    P.total = P.apple.length + P.add.length + P.update.length + P.revive.length + ['cst', 'rst', 'recfb'].reduce(function (n, t) { return n + P.sets[t].add.length + P.sets[t].update.length; }, 0);
     P.src = { artists: (o.artists || []).length, exportedAt: o.exportedAt || '', version: o.version || '' };
     return P;
   }
@@ -638,6 +657,7 @@
     var p = rplan; if (!p) return;
     var S = p.sets, n = function (t) { return S[t].add.length + S[t].update.length; }, nm = function (l, f) { return l.length ? '<div class="imp-l">' + l.slice(0, 40).map(function (x) { return E(f(x)); }).join(', ') + (l.length > 40 ? ' and ' + (l.length - 40) + ' more' : '') + '</div>' : ''; };
     modal('restore', '<div class="gm-sheet"><h2>Restore Music</h2><div class="note">Backup made ' + E(p.src.exportedAt ? p.src.exportedAt.slice(0, 10) : 'on an unknown date') + (p.src.version ? ' (Music ' + E(p.src.version) + ')' : '') + ', ' + p.src.artists + ' artists. ' + (p.total ? p.total + ' change' + (p.total === 1 ? '' : 's') + ' ready. Nothing changes until you press Apply, and nothing is deleted.' : 'Nothing to restore: everything in the file is already here and up to date.') + '</div>' +
+      p.apple.map(function (x) { return '<div class="imp-l"><b>Apple Music history for ' + E(WHO[x.who] || x.who) + (x.replaces ? ' (replaces the one here)' : '') + '</b><br>' + Object.keys(x.rec.artists).length + ' artists, ' + (x.rec.plays || 0) + ' plays, ' + E(String(x.rec.since || '').slice(0, 4)) + ' to ' + E(fmtDate(x.rec.until)) + '. Added to your Last.fm plays, which carry on from ' + E(fmtDate(addDays(x.rec.until, 1))) + '.</div>'; }).join('') +
       (p.add.length ? '<div class="imp-l"><b>Artists to add (' + p.add.length + ')</b></div>' + nm(p.add, function (a) { return a.name; }) : '') +
       (p.revive.length ? '<div class="imp-l"><b>Removed artists that come back (' + p.revive.length + ')</b></div>' + nm(p.revive, function (x) { return x.a.name; }) : '') +
       (p.update.length ? '<div class="imp-l"><b>Artists with newer settings in the file (' + p.update.length + ')</b></div>' + nm(p.update, function (x) { return x.a.name; }) : '') +
@@ -652,15 +672,16 @@
   }
   function applyRestore() {
     var p = rplan; if (!p) return; rplan = null; H().closeModal();
-    var now = new Date().toISOString(), art = [], out = { cst: [], rst: [], recfb: [] }, ids = {}; state.artists.forEach(function (a) { ids[a.id] = 1; });
+    var now = new Date().toISOString(), art = [], apl = [], out = { cst: [], rst: [], recfb: [] }, ids = {}; state.artists.forEach(function (a) { ids[a.id] = 1; });
     p.add.forEach(function (fa) { var a = Object.assign({}, fa); if (ids[a.id]) a.id = newId('') + Math.random().toString(36).slice(2, 5); ids[a.id] = 1; a._deleted = false; a.updatedAt = now; state.artists.push(a); art.push(a); });
     p.revive.concat(p.update).forEach(function (x) { var id = x.a.id; Object.keys(x.a).forEach(function (k) { delete x.a[k]; }); Object.assign(x.a, x.f, { id: id, _deleted: false, updatedAt: now }); art.push(x.a); });
     ['cst', 'rst', 'recfb'].forEach(function (t) {
       p.sets[t].add.forEach(function (f) { var r = Object.assign({}, f, { updatedAt: now }); state[t].push(r); out[t].push(r); });
       p.sets[t].update.forEach(function (x) { var id = x.l.id; Object.keys(x.l).forEach(function (k) { delete x.l[k]; }); Object.assign(x.l, x.f, { id: id, updatedAt: now }); out[t].push(x.l); });
     });
+    p.apple.forEach(function (x) { var r = JSON.parse(JSON.stringify(x.rec)); r.id = x.who + '__'; r.who = x.who; r.updatedAt = now; state.appleBy[x.who] = r; apl.push(r); });
     save(); saveRel(); paint(); say('Restored: ' + p.total + ' change' + (p.total === 1 ? '' : 's'));
-    return pushRows('art', art).then(function () { return pushRows('cst', out.cst); }).then(function () { return pushRows('rst', out.rst); }).then(function () { return pushRows('fb', out.recfb); })
+    return pushRows('apple', apl).then(function () { return pushRows('art', art); }).then(function () { return pushRows('cst', out.cst); }).then(function () { return pushRows('rst', out.rst); }).then(function () { return pushRows('fb', out.recfb); })
       .then(function () { refreshReleases({}); return matchPending(); });
   }
   function pickImport() {
@@ -881,6 +902,8 @@
     else if (k === 'afilter') { ui.aFilter = v; saveUi(); paint(); }
     else if (k === 'cfilter') { ui.cFilter = v; saveUi(); paint(); }
     else if (k === 'pwho') { ui.pWho = v; saveUi(); paint(); }
+    else if (k === 'pper') { ui.pPer = v === 'all' ? 'all' : '30'; ui.pLimit = 15; saveUi(); paint(); }
+    else if (k === 'pmore') { ui.pLimit += 25; paint(); }
     else if (k === 'lmin') { ui.lMin = Number(v); saveUi(); paint(); }
     else if (k === 'gotogig') { ui.sub = 'coming'; saveUi(); selectItem('gig', v); }
     else if (k === 'artist') { if (paneOn()) selectItem('art', v); else openArtist(v); }
@@ -945,7 +968,7 @@
     try { var ci = JSON.parse(localStorage.getItem('gat_mus_cinfo') || 'null'); if (ci) cinfo = { at: ci.at || null, msg: ci.msg || '' }; } catch (e) {}
     booted = kvOpen().then(function () { return Promise.all([kvGet('state'), kvGet('rel')]); }).then(function (v) {
       var s = v[0]; if (s && typeof s === 'object') ['artists', 'cst', 'rst', 'recfb', 'concerts', 'recs'].forEach(function (k) { if (Array.isArray(s[k])) state[k] = s[k]; });
-      if (s && s.listBy && typeof s.listBy === 'object') { state.listBy = {}; Object.keys(s.listBy).forEach(function (w) { state.listBy[w] = rekey(s.listBy[w]); }); } if (s && s.conCheck) state.conCheck = s.conCheck;
+      if (s && s.listBy && typeof s.listBy === 'object') { state.listBy = {}; Object.keys(s.listBy).forEach(function (w) { state.listBy[w] = rekey(s.listBy[w]); }); } if (s && s.appleBy && typeof s.appleBy === 'object') state.appleBy = s.appleBy; if (s && s.conCheck) state.conCheck = s.conCheck;
       if (v[1] && v[1].items) rel = { fetchedAt: v[1].fetchedAt || null, items: v[1].items, fetched: v[1].fetched || {} };
       if (state.artists.length) ready = true;
     });
