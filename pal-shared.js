@@ -875,6 +875,7 @@ window.PalContract = (function () {
       if (up) o.upcoming = up; if (at) o.attention = at; if (se) o.search = se;
       // v1.2: optional metadata (all additive)
       if (payload.app) o.app = clip(payload.app, 24);
+      else { try { var ai = window.PalShared && window.PalShared.app && window.PalShared.app.get(); if (ai && ai.version) o.app = clip(ai.version, 24); } catch (x) {} }   // 1.10.0: the registered app version when the app passes none
       if (payload.schema != null && payload.schema !== '') o.schema = clip(payload.schema, 24);
       var cp = cleanCaps(payload.caps); if (cp) o.caps = cp;
       try { if (window.PalShared && window.PalShared.VERSION) o.lib = String(window.PalShared.VERSION).slice(0, 12); } catch (x) {}
@@ -1006,7 +1007,8 @@ window.PalBridge = (function () {
         if (!d || d.type !== prefix + '_ACTION' || !ev.source) return;
         var reply = function (m) { try { ev.source.postMessage(m, window.location.origin); } catch (x) {} };
         if (d.action === 'ping') {
-          reply({ type: prefix + '_PONG', reqId: d.reqId, ready: true, app: info.app || '', lib: (window.PalShared && window.PalShared.VERSION) || '' });
+          var ai = null; try { ai = window.PalShared && window.PalShared.app && window.PalShared.app.get(); } catch (x) {}   // 1.10.0: additive appVersion
+          reply({ type: prefix + '_PONG', reqId: d.reqId, ready: true, app: info.app || '', lib: (window.PalShared && window.PalShared.VERSION) || '', appVersion: (ai && ai.version) || '' });
           return;
         }
         var h = handlers[d.action];
@@ -1278,7 +1280,16 @@ window.PalBridge = (function () {
 //   cfg.hidePush / cfg.hideLog  for an app with no push or no sync log (HTML Vault)
 (function () {
   if (!window.PalUI || window.PalUI.dataSheet) return;
-  var mountedCfg = null, root = null, panel = null, prevFocus = null, openState = false;
+  var mountedCfg = null, root = null, panel = null, prevFocus = null, openState = false, aboutBox = null;
+  function fillAbout() {   // 1.10.0: About line, read from PalShared.app each time the sheet opens (parts such as Music register late)
+    if (!aboutBox) return;
+    var lines = [], ai = null; try { ai = window.PalShared && window.PalShared.app && window.PalShared.app.get(); } catch (e) {}
+    if (ai) { lines.push(['About', ai.name + ' v' + ai.version]); ai.parts.forEach(function (p) { lines.push(['', p.name + ' v' + p.version]); }); }
+    var lib = ''; try { lib = window.PalShared && window.PalShared.VERSION || ''; } catch (e) {}
+    if (lib) lines.push([ai ? '' : 'About', 'Library ' + lib]);
+    aboutBox.textContent = '';
+    lines.forEach(function (l) { var d = document.createElement('div'); d.textContent = (l[0] ? l[0] + ': ' : '') + l[1]; aboutBox.appendChild(d); });
+  }
   function el(tag, css, text) { var e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; }
   function rgbOf(c) { var m = /rgba?\(([^)]+)\)/.exec(c || ''); if (!m) return null; var a = m[1].split(',').map(function (x) { return parseFloat(x); }); return a; }
   function palette() {
@@ -1337,6 +1348,8 @@ window.PalBridge = (function () {
     if (cfg.hintId) { var h = el('div', 'font:13px ' + t.font + ';color:' + t.muted + ';margin-top:8px'); h.id = cfg.hintId; panel.appendChild(h); }
     panel.appendChild(slots.afterBackup);
     panel.appendChild(slots.bottom);
+    aboutBox = el('div', 'margin-top:18px;border-top:1px solid ' + t.line + ';padding-top:10px;font:13px/1.6 ' + t.font + ';color:' + t.muted);
+    aboutBox.setAttribute('data-pal-about', '1'); panel.appendChild(aboutBox); fillAbout();   // 1.10.0 (SUITE-19)
     panel.appendChild(el('div', 'font:12px/1.5 ' + t.font + ';color:' + t.muted + ';margin-top:18px', 'Cloud sync works when this app is opened through Pete’s Apps (it needs the launcher login). Opened on its own it runs on this device only, so download a backup regularly.'));
     var s = cfg.slots || {};
     Object.keys(slots).forEach(function (k) { var n = byRef(s[k]); if (n) { n.style.display = ''; slots[k].appendChild(n); } });
@@ -1363,6 +1376,7 @@ window.PalBridge = (function () {
   function open() {
     if (!root) return false;
     try { if (mountedCfg && mountedCfg.onOpen) mountedCfg.onOpen(); } catch (e) { try { console.error(e); } catch (x) {} }
+    try { fillAbout(); } catch (e) {}
     prevFocus = document.activeElement; layout(); root.style.display = 'flex'; openState = true;
     try { panel.scrollTop = 0; panel.setAttribute('tabindex', '-1'); panel.style.outline = 'none'; panel.focus(); } catch (e) {}
     return true;
@@ -1414,6 +1428,7 @@ window.PalBridge = (function () {
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
+ *             1.10.0 (Suite B2a, R41, SUITE-18 / SUITE-19) new PalShared.app (register / addPart / get / label): an app states its version once. PalContract.publish fills `app` from it when the app passes none; the PalBridge ping reply gains `appVersion`; PalUI.dataSheet gains an About block (app, parts, library). Additive; no existing function changed, and an app that does not register behaves as before (the About block then shows only the library).
  *             1.9.0 (Suite Phase 3, R39) new PalUI.dataSheet (one Sync & Backup sheet for the apps) and PalUI.pill.dock (sync pill top right on desktop). Additive; no existing function changed.
  *             1.8.1 (Suite Phase 3, R35.1) guardRestore accepts signedIn (apps with their own session); restorePreview needs no PalSync session when rows are supplied. Fix for R35-T5 (Gigs & Trips said 'not signed in').
  *             1.8.0 (Suite Phase 3, R35) restore 1.1 / ui 1.1: restorePreview now agrees with PalSync.pull (cloud-deleted records stay deleted; stamps from the data field only; opts.tombstoneByStamp for Gigs); opts.rows; PalUI.guardRestore and PalUI.finishRestore used by five apps.
@@ -1641,8 +1656,35 @@ window.PalShared = (function () {
     } catch (e) {}
   }
 
-  api.VERSION = '1.9.0';
-  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.3', bridge: '1.0', restore: '1.1', ui: '1.1' };
+  // ── PalShared.app (bundle 1.10.0, R41 / SUITE-18): the ONE place an app states its own version ──────────────────────────────
+  // An app calls PalShared.app.register({ id, name, version, parts? }) once, from its single VERSION constant. Everything else reads it:
+  // the contract's `app` field (when the app passes none), the PalBridge ping reply (appVersion), the About lines in the Sync & Backup
+  // sheet, and the launcher's Versions list in the Device check. A sub app (for example the Music module inside Gigs & Trips) calls
+  // PalShared.app.addPart({ id, name, version }) when it loads. Stores nothing, changes no data.
+  var _appInfo = null;
+  function clipS(v, n) { return String(v == null ? '' : v).slice(0, n); }
+  function cleanPart(p) {
+    if (!p || !p.id || p.version == null || p.version === '') return null;
+    return { id: clipS(p.id, 24), name: clipS(p.name || p.id, 40), version: clipS(String(p.version).replace(/^v/i, ''), 24) };
+  }
+  function appRegister(info) {
+    if (!info || !info.id || info.version == null || info.version === '') return false;
+    var parts = []; (Array.isArray(info.parts) ? info.parts : []).slice(0, 6).forEach(function (p) { var c = cleanPart(p); if (c) parts.push(c); });
+    _appInfo = { id: clipS(info.id, 24), name: clipS(info.name || info.id, 40), version: clipS(String(info.version).replace(/^v/i, ''), 24), parts: parts };
+    return true;
+  }
+  function appAddPart(p) {
+    var c = cleanPart(p); if (!c || !_appInfo) return false;
+    var done = false; _appInfo.parts = _appInfo.parts.map(function (x) { if (x.id === c.id) { done = true; return c; } return x; });
+    if (!done && _appInfo.parts.length < 6) _appInfo.parts.push(c);
+    return true;
+  }
+  function appGet() { return _appInfo ? { id: _appInfo.id, name: _appInfo.name, version: _appInfo.version, parts: _appInfo.parts.map(function (x) { return { id: x.id, name: x.name, version: x.version }; }) } : null; }
+  function appLabel() { return _appInfo ? _appInfo.name + ' v' + _appInfo.version : ''; }
+
+  api.VERSION = '1.10.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.4', bridge: '1.1', restore: '1.1', ui: '1.2', app: '1.0' };
+  api.app = { register: appRegister, addPart: appAddPart, get: appGet, label: appLabel, VERSION: 1 };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
   return api;

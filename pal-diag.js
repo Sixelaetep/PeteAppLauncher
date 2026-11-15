@@ -3,6 +3,7 @@
  * storage-headroom probe that writes a scratch key and ALWAYS removes it again,
  * and (1.5.0, R32) the 'Old data' sheet, which can delete four known orphaned key
  * families only after a backup file has been downloaded and a second tap confirms.
+ * 1.8.0 (R41, SUITE-20): a 'Versions' section. For every app it compares the version the app registers (PalShared.app, library 1.10.0+), the version in its page title and the version in its contract, and flags a MISMATCH or a missing version; apps that are not open are checked from their contracts, so nothing has to be opened. Parts (Music inside Gigs & Trips) are listed under their app.
  * 1.7.1 (R35): Restore check follows the 1.8.0 preview rules (stamps from the data field only).
  * 1.7.0 (R34): a 'Restore check' sheet that tries the shared dialogs (PalUI) and runs the restore preview and report (PalSync.restorePreview / restoreReport) read-only against live tables.
  * 1.6.0 (R33): a contract marked stale (too large to store) or trimmed by the library is reported as an ISSUE / note in the Contracts section.
@@ -14,7 +15,7 @@
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.7.1';
+  var VERSION = '1.8.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -146,6 +147,7 @@
       row.libVersion = safe(function () { return f.contentWindow.PalShared && f.contentWindow.PalShared.VERSION || ''; }, '');
       var tm = /v?(\d+\.\d+(?:\.\d+)?)\s*$/.exec(row.title || '');
       row.titleVersion = tm ? tm[1] : '';
+      row.appInfo = safe(function () { return f.contentWindow.PalShared.app.get(); }, null);   // 1.8.0
     }
     return { row: row, doc: row.state === 'loaded' ? d : null };
   }
@@ -170,6 +172,32 @@
       if (!r.ok) return { error: 'HTTP ' + r.status };
       return r.json();
     }).catch(function (e) { return { error: String(e && e.message || e) }; });
+  }
+
+  /* -- 1.8.0 (R41, SUITE-20): the Versions section. Pure: frame rows, a contract reader and the app list go in, lines come out. -- */
+  var VER_APPS = [['gigs', 'Gigs & Trips'], ['gym', 'Gym Tracker'], ['budget', 'On Budget'], ['reading', 'Reading Tracker'], ['screen', 'Film & TV'],
+                  ['fortnight', '9-Day Fortnight'], ['claims', 'Claim Tracker'], ['horizon', 'Horizon'], ['vault', 'HTML Vault'], ['fantasy', 'Fantasy Football']];
+  function versionLines(frames, readContract, launcherVersion, apps) {
+    var L = [], bad = 0, noVer = 0, list = apps || VER_APPS;
+    var byId = {}; (frames || []).forEach(function (f) { if (f && f.state === 'loaded' && byId[f.app] == null) byId[f.app] = f; });
+    list.forEach(function (a) {
+      var id = a[0], name = a[1], f = byId[id] || null, c = safe(function () { return readContract(id); }, null);
+      var src = [];
+      var reg = f && f.appInfo && f.appInfo.version ? String(f.appInfo.version) : '';
+      var ttl = f && f.titleVersion ? String(f.titleVersion) : '';
+      var con = c && c.app ? String(c.app).replace(/^v/i, '') : '';
+      if (reg) src.push(['registered', reg]); if (ttl) src.push(['title', ttl]); if (con) src.push(['contract', con]);
+      if (!src.length) { noVer++; L.push('NO VERSION  ' + name + ': ' + (f ? 'open, but no version found in its title, registration or contract' : 'not open and no contract with a version yet')); return; }
+      var vals = {}; src.forEach(function (x) { vals[x[1]] = 1; });
+      var parts = f && f.appInfo && f.appInfo.parts && f.appInfo.parts.length ? ' | parts: ' + f.appInfo.parts.map(function (p) { return p.name + ' ' + p.version; }).join(', ') : '';
+      if (Object.keys(vals).length > 1) { bad++; L.push('MISMATCH  ' + name + ': ' + src.map(function (x) { return x[0] + ' ' + x[1]; }).join(', ') + parts); }
+      else {
+        var miss = []; if (f && !reg) miss.push('not registered yet (older app)'); if (!con) miss.push('no version in contract');
+        L.push((miss.length ? 'OK*  ' : 'OK  ') + name + ' ' + src[0][1] + ' (' + src.map(function (x) { return x[0]; }).join(', ') + ')' + (miss.length ? ' - ' + miss.join('; ') : '') + parts);
+      }
+    });
+    L.unshift('RESULT: ' + (bad ? bad + ' mismatch(es), ' : 'no mismatches, ') + (noVer ? noVer + ' app(s) with no version, ' : '') + list.length + ' apps checked' + (launcherVersion ? '; launcher ' + launcherVersion : '') + '   (OK* = versions agree but something is not set up yet)');
+    return L;
   }
 
   function collect(ctx) {
@@ -266,6 +294,7 @@
     if (lk.length > 1) { bad++; vl.push('LIBRARY SKEW: ' + lk.map(function (k) { return 'PalShared ' + k + ' in ' + libs[k].join(', '); }).join('; ')); }
     vl.unshift(loaded.length ? (bad ? 'RESULT: ' + bad + ' issue(s) - ' : 'RESULT: OK - ') + loaded.length + ' frame(s) loaded' + (lk.length === 1 ? ', all on PalShared ' + lk[0] : '') + (loaded.length < 10 ? ' (frames that are not open yet are not checked)' : '') : 'RESULT: no app frames loaded yet - open apps, then run again');
     sec('Version check', vl);
+    sec('Versions', safe(function () { return versionLines(fv, function (id) { return window.PalContract && window.PalContract.read ? window.PalContract.read(id) : null; }, ctx.launcherVersion, VER_APPS); }, ['Versions: could not be worked out']));   // 1.8.0
 
     return { R: R, standalone: standalone };
   }
@@ -525,12 +554,12 @@
     try { c = collect(ctx); } catch (e) { running = false; show('Device check failed: ' + (e && e.message || e)); return Promise.resolve(); }
     return asyncSections(c.R).then(function () {
       // keep section order stable regardless of async completion order
-      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Fonts', 'Service workers', 'Manifest and install'];
+      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Versions', 'Fonts', 'Service workers', 'Manifest and install'];
       c.R.sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
       show(toText(c.R));
     }).catch(function (e) { show('Device check failed: ' + (e && e.message || e)); })
       .then(function () { running = false; });
   }
 
-  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, _restoreCheck: showRestoreCheck, _runRestoreCheck: runRestoreCheck, run: run, _collect: collect, _probe: probeHeadroom, _text: toText };
+  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, _restoreCheck: showRestoreCheck, _runRestoreCheck: runRestoreCheck, run: run, _collect: collect, _probe: probeHeadroom, _text: toText, _versionLines: versionLines };
 })();
