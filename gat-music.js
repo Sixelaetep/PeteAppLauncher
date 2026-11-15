@@ -1,11 +1,11 @@
-/* gat-music.js v1.21 (v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.22 (v1.22: Recommendations is now a section of its own beside Coming up and Artists (it was a pop-up window): suggestions from Last.fm and followed artists never played sit side by side on a computer, with a detail panel on the right, and in one column with larger buttons on a phone; v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, .nt (no tickets) and .aid (artist id), rstate_rel_<collectionId> {interested, ni}, recfb_rc_<artist>.ip (play count when ignored), artist.tourAsk (Not interested count when the stop-tour question was last answered).
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.21', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var VERSION = '1.22', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -57,7 +57,7 @@
   var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, appleBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
   var sel = null, paneEl = null, matching = false, matchInfo = { done: 0, total: 0, ok: 0, dup: 0 }, imp = null, fileIn = null;
-  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false, pPer: '', pLimit: 15, tPer: '30', rTab: 'new', uLimit: 15 };
+  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false, pPer: '', pLimit: 15, tPer: '30', rTab: 'all', uLimit: 15 };
   var cinfo = { at: null, msg: '' };
   var busy = { con: false, rel: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
   var _db = null, _tables = null, tokSet = '';
@@ -80,8 +80,8 @@
   var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
   var followed = function () { return live().filter(isFollowed); };
   var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
-  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming') ui.sub = o.sub; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'allmonths', 'years', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; if (['30', '12', 'all'].indexOf(o.tPer) >= 0) ui.tPer = o.tPer; } } catch (e) {} }
-  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer, tPer: ui.tPer })); } catch (e) {} }
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming' || o.sub === 'recs') ui.sub = o.sub; if (['all', 'new', 'never'].indexOf(o.rTab) >= 0) ui.rTab = o.rTab; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'allmonths', 'years', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; if (['30', '12', 'all'].indexOf(o.tPer) >= 0) ui.tPer = o.tPer; } } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer, tPer: ui.tPer, rTab: ui.rTab })); } catch (e) {} }
 
   // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
   function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
@@ -359,6 +359,9 @@
     '#detailPane .pane-h,#modal .pane-h{font:700 13px var(--f);text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);margin:18px 4px 8px}#detailPane .pane-row input[type=checkbox],#modal .pane-row input[type=checkbox]{width:22px;height:22px;margin:0}' +
     '#detailPane .pbars,#modal .pbars{display:flex;align-items:flex-end;gap:4px;height:64px;padding:12px 16px 4px}#detailPane .pbars i,#modal .pbars i{flex:1;background:var(--lime);border-radius:3px 3px 0 0;min-height:2px}#detailPane .pcap,#modal .pcap{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);padding:0 16px 12px}#detailPane .pmini,#modal .pmini{width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--sep);padding:10px 16px;font:600 14px var(--f);color:var(--ink);cursor:pointer;min-height:44px}' +
     '.gmx .imp-l{font-size:13px;margin:6px 0;line-height:1.5}.gmx .imp-l b{font-weight:700}' +
+    '.gm .rwrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:4px 22px;align-items:start}.gm .rwrap.one .rlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:0 12px}.gm .rsec h3{display:flex;align-items:center;gap:8px}.gm .rsec h3 .cnt{background:var(--s2);color:var(--ink2);border-radius:999px;padding:2px 9px;font-size:12px}' +
+    '.gm .row.rc{padding:0}.gm .row.rc>.av{margin:12px 0 12px 12px}.gm .row.rc .rb{padding:12px 12px 12px 12px}.gm .row.rc .rt{font-size:16px}.gm .row.rc .acts .btn{min-height:40px}.gm .rwrap.one .rlist .acts2{grid-column:1/-1}' +
+    '@media(max-width:700px){.gm .rwrap,.gm .rwrap.one .rlist{grid-template-columns:minmax(0,1fr)}.gm .row.rc .acts .btn{flex:1 1 calc(50% - 6px);text-align:center;min-height:44px}.gm .row.rc .acts .btn.pri{flex-basis:100%}.gm .rsec h3{margin-top:14px}}' +
     '@media(max-width:420px){.gm .row>.rb{padding:10px}}';
   function ensureCss() { if (document.getElementById('gm-css')) return; var s = document.createElement('style'); s.id = 'gm-css'; s.textContent = CSS; document.head.appendChild(s); }
   function chip(label, on, a) { return '<button type="button" class="chip' + (on ? ' on' : '') + '" data-m="' + a + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>'; }
@@ -395,7 +398,8 @@
   }
   function checkBtn(label) { return '<button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : label || 'Check for new listening') + '</button>'; }
   function seg(items) { return '<div class="agenda-filter">' + items.map(function (x) { return '<button type="button" class="' + (x[1] ? 'on' : '') + '" data-m="' + x[2] + '" aria-pressed="' + (x[1] ? 'true' : 'false') + '">' + x[0] + '</button>'; }).join('') + '</div>'; }
-  function head() { return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists']]); }
+  function recCount() { return visibleRecs().length + neverPlayed().length; }
+  function head() { var rc = recCount(); return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : ui.sub === 'recs' ? 'New artists to try, and followed artists you have not played' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists' && ui.sub !== 'recs', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists'], ['Recommendations' + (rc ? ' ' + rc : ''), ui.sub === 'recs', 'sub:recs']]); }
   function heroHtml(c, it) {
     var t = today(), dl = dateLabel(c.date).split(' '), n = Math.round((Date.parse(c.date + 'T00:00:00Z') - Date.parse(t + 'T00:00:00Z')) / 864e5);
     var chips = [it.interested ? 'Interested ✓' : '', salePending(c) ? 'On sale ' + saleText(c) : '', srcName(c)].filter(Boolean);
@@ -585,11 +589,42 @@
       '<div class="card tools" style="margin-top:12px"><h3>Back up and restore Music</h3>Back up everything in Music to one file: your artists, follow and tour switches, release and tour-date marks, and recommendation answers, with Pete’s and Lex’s listening kept in the file for reference. Restore adds what is missing and updates what is older; it never deletes anything, and shows you the changes before it applies them. Listening and tour dates are not restored, because Last.fm and the overnight checks supply them.<div><button type="button" class="btn" data-m="backupmusic">Back up Music</button> <button type="button" class="btn" data-m="restoremusic">Restore Music</button></div></div>' +
       secHead('d', 'Diagnostics', '', ui.dOpen) + (ui.dOpen ? '<div class="card tools secbody"><h3>Connection test</h3>Tour dates come from Ticketmaster and JamBase, checked by the server overnight. This asks each of them for one event, to show the connections and keys are working. It costs one Ticketmaster request and one JamBase request.<div><button type="button" class="btn" data-m="conntest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test connection') + '</button></div>' + jbUsageHtml() + '</div>' : '');
   }
+  // ── Recommendations section (v1.22) ──
+  function recAv(name) { return '<div class="av">' + E((String(name).trim()[0] || '?').toUpperCase()) + '</div>'; }
+  function recCard(r) {
+    var busyF = busy.follow[r.name];
+    return '<div class="row rc' + (selIs('rec', r.id) ? ' sel' : '') + '" data-sel="rec:' + E(r.id) + '">' + recAv(r.name) + '<div class="rb"><div class="rt">' + E(r.name) + '</div><div class="rs">' + E(recReason(r)) + '</div>' +
+      '<div class="acts"><button class="btn pri" data-m="recfollow:' + E(r.id) + '"' + (busyF ? ' disabled' : '') + '>' + (busyF ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="recapple:' + E(r.id) + '">Listen on Apple Music</button><button class="btn" data-m="recknown:' + E(r.id) + '">Already know</button><button class="btn" data-m="recno:' + E(r.id) + '">Not for me</button></div></div></div>';
+  }
+  function neverCard(a) {
+    return '<div class="row rc' + (selIs('art', a.id) ? ' sel' : '') + '" data-sel="art:' + E(a.id) + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="rt">' + E(a.name) + ' <span class="badge new">Never played</span></div><div class="rs">' + E(a.genre || 'Followed') + '</div></button>' +
+      '<div class="acts"><button class="btn pri" data-m="nplisten:' + E(a.id) + '">Listen on Apple Music</button><button class="btn" data-m="npunfollow:' + E(a.id) + '">Unfollow</button></div></div></div>';
+  }
+  function recSection(title, count, cards, empty, key) {
+    var lim = ui.uLimit, shown = cards.slice(0, lim);
+    return '<section class="rsec" aria-label="' + E(title) + '"><h3>' + E(title) + ' <span class="cnt">' + count + '</span></h3><div class="rlist">' + (cards.length ? shown.join('') + (cards.length > shown.length ? '<div class="acts2"><button type="button" class="chip" data-m="rmore:">Show ' + Math.min(25, cards.length - shown.length) + ' more (' + (cards.length - shown.length) + ' left)</button></div>' : '') : '<div class="note">' + empty + '</div>') + '</div></section>';
+  }
+  function renderRecs() {
+    if (!ready) return '<div class="empty">Loading Music…</div>';
+    var recs = visibleRecs(), never = neverPlayed(), tab = ['all', 'new', 'never'].indexOf(ui.rTab) >= 0 ? ui.rTab : 'all', who = listeners().map(function (w) { return WHO[w] || w; });
+    var h = head() + seg([['All ' + (recs.length + never.length), tab === 'all', 'rtab:all'], ['Suggestions ' + recs.length, tab === 'new', 'rtab:new'], ['Never played ' + never.length, tab === 'never', 'rtab:never']]);
+    h += '<div class="stat"><span role="status">' + (who.length ? 'Suggestions come from what ' + E(who.join(' and ')) + ' follow and play (Last.fm).' : 'Suggestions come from the artists you follow.') + '</span><button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Refresh suggestions') + '</button></div>';
+    var parts = [];
+    if (tab !== 'never') parts.push(recSection('Suggested for you', recs.length, recs.map(recCard), 'No suggestions yet. They are worked out by the server’s daily check from Last.fm’s similar-artist lists; Refresh suggestions updates them.'));
+    if (tab !== 'new') parts.push(recSection('Followed, never played', never.length, never.map(neverCard), people().length ? 'Every artist you follow has at least one play.' : 'This needs your Last.fm listening to be loaded first.'));
+    return h + '<div class="rwrap' + (parts.length === 1 ? ' one' : '') + '">' + parts.join('') + '</div>';
+  }
+  function recPane(r) {
+    var seeds = Array.isArray(r.seeds) ? r.seeds : [], id = E(r.id);
+    return poster('SUGGESTION', '', '', r.name, 'Suggested by Last.fm', seeds.length ? ['Similar to ' + seeds[0].n + (seeds.length > 1 ? ' and ' + ((r.nSeeds || seeds.length) - 1) + ' more' : '')] : []) +
+      '<div class="pane-actions" style="margin-bottom:12px">' + pBtn('recfollow:' + id, busy.follow[r.name] ? 'Adding…' : 'Follow', { pri: true, dis: !!busy.follow[r.name] }) + pBtn('recapple:' + id, 'Listen on Apple Music') + pBtn('recknown:' + id, 'Already know') + pBtn('recno:' + id, 'Not for me') + '</div>' +
+      '<div class="pane-card">' + pRow('Why', E(recReason(r))) + (seeds.length ? seeds.slice(0, 6).map(function (x) { var p30 = playsIn(norm(x.n), 30), pt = totalPlays(norm(x.n)); return pRow('Similar to ' + E(x.n), listeners().length ? pt + ' plays (' + p30 + ' in 30 days)' : ''); }).join('') : '') + '</div>';
+  }
   function renderArtists() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var all = live(), q = norm(ui.aQuery), la = listenAge();
     var h = head() + '<input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
-      '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="recs">Recommendations' + (visibleRecs().length ? ' (' + visibleRecs().length + ')' : '') + '</button></div>' +
+      '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">+ Add artist</button><button type="button" class="chip" data-m="sub:recs">Recommendations' + (recCount() ? ' (' + recCount() + ')' : '') + '</button></div>' +
       '<div class="stat"><span role="status">' + (listeners().length ? 'Last.fm plays ' + (la ? 'checked ' + E(la) : 'not checked yet') + '.' : 'No Last.fm plays yet.') + (cinfo.msg ? ' ' + E(cinfo.msg) : '') + '</span>' + checkBtn('Check for new listening') + '</div>' +
       (pendingMatch().length ? '<div class="note">' + (matching ? 'Matching new artists with Apple Music: ' + matchInfo.done + ' of ' + matchInfo.total + '…' : pendingMatch().length + ' new artist' + (pendingMatch().length === 1 ? ' is' : 's are') + ' waiting to be matched with Apple Music.') + (matching ? '' : ' <button type="button" class="lnk" data-m="matchnow">Match now</button>') + '</div>' : '');
     h += dashboardHtml();
@@ -633,6 +668,8 @@
       if (sel.k === 'art' && byId(sel.id)) return sel;
       if ((sel.k === 'gig' || sel.k === 'rel') && itemById(sel.id)) return sel;
     }
+    if (sel && sel.k === 'rec' && visibleRecs().some(function (r) { return r.id === sel.id; })) return sel;
+    if (ui.sub === 'recs') { var r0 = visibleRecs()[0], n0 = neverPlayed()[0]; return r0 ? { k: 'rec', id: r0.id } : n0 ? { k: 'art', id: n0.id } : null; }
     if (ui.sub === 'artists') return null;
     var its = comingItems().filter(function (i) { return !i.hidden; }), g = its.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0] || its[0];
     return g ? { k: g.kind === 'con' ? 'gig' : 'rel', id: g.id } : null;
@@ -699,7 +736,8 @@
     if (!paneEl || !paneEl.isConnected || !paneOn()) return;
     var s = resolveSel(), h = '';
     if (!ready) h = '<div class="pane-empty">Loading Music…</div>';
-    else if (!s) h = ui.sub === 'artists' ? overviewPane() : '<div class="pane-empty">Select a tour date or release to see it here.</div>';
+    else if (!s) h = ui.sub === 'artists' ? overviewPane() : ui.sub === 'recs' ? '<div class="pane-empty">No suggestions to show.</div>' : '<div class="pane-empty">Select a tour date or release to see it here.</div>';
+    else if (s.k === 'rec') { var rr_ = state.recs.find(function (x) { return x.id === s.id; }); h = rr_ ? recPane(rr_) : '<div class="pane-empty">Select a suggestion to see it here.</div>'; }
     else if (s.k === 'art') h = artistPane(byId(s.id));
     else { var it = itemById(s.id); h = it ? (it.kind === 'con' ? gigPane(it) : relPane(it)) : '<div class="pane-empty">Select a tour date or release to see it here.</div>'; }
     var top = paneEl.scrollTop; paneEl.innerHTML = h; paneEl.scrollTop = top;
@@ -940,9 +978,8 @@
   function paint() {
     if (!root || !root.isConnected) return;
     var keep = document.activeElement && document.activeElement.id === 'gmq' ? document.activeElement.selectionStart : null;
-    root.innerHTML = '<div class="gm">' + (ready ? '' : head()) + (ui.sub === 'artists' ? renderArtists() : renderComing()) + '<div style="height:90px"></div></div>';
+    root.innerHTML = '<div class="gm">' + (ready ? '' : head()) + (ui.sub === 'artists' ? renderArtists() : ui.sub === 'recs' ? renderRecs() : renderComing()) + '<div style="height:90px"></div></div>';
     if (keep != null) { var q = document.getElementById('gmq'); if (q) { q.focus(); try { q.setSelectionRange(keep, keep); } catch (e) {} } }
-    var mo = document.getElementById('modal'); if (mo && mo.dataset.gm === 'recs' && mo.querySelector('.gm-sheet') && document.getElementById('movl').classList.contains('on')) openRecs(true);
     paintPane();
   }
 
@@ -978,24 +1015,6 @@
     if (!people().length) return [];
     return followed().filter(function (a) { return totalPlays(norm(a.name)) === 0; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
   }
-  function openRecs(refreshOnly) {
-    var recs = visibleRecs(), who = listeners().map(function (w) { return WHO[w] || w; }), never = neverPlayed(), tab = ui.rTab === 'never' && never.length ? 'never' : 'new';
-    var tabs = never.length ? '<div class="acts"><button class="btn' + (tab === 'new' ? ' pri' : '') + '" data-m="rtab:new">Suggestions (' + recs.length + ')</button><button class="btn' + (tab === 'never' ? ' pri' : '') + '" data-m="rtab:never">Never played (' + never.length + ')</button></div>' : '';
-    if (tab === 'never') {
-      var hn = '<div class="gm-sheet"><h2>Recommendations</h2>' + tabs + '<div class="note">Artists you follow that have no plays in your listening history. Listen to them on Apple Music, or unfollow.</div>';
-      hn += never.map(function (a) { return '<div class="row"><div class="rb"><div class="rt">' + E(a.name) + ' <span class="badge new">Never played</span></div><div class="rs">' + E(a.genre || 'Followed') + '</div><div class="acts"><button class="btn pri" data-m="nplisten:' + E(a.id) + '">Listen on Apple Music</button><button class="btn" data-m="npunfollow:' + E(a.id) + '">Unfollow</button></div></div></div>'; }).join('');
-      hn += '<div class="acts"><button class="btn" data-m="closemodal">Close</button></div></div>';
-      if (refreshOnly) { var mn = document.getElementById('modal'); if (mn) mn.innerHTML = '<div class="gm gm-sheet-wrap">' + hn + '</div>'; } else modal('recs', hn);
-      return;
-    }
-    var h = '<div class="gm-sheet"><h2>Recommendations</h2>' + tabs + '<div class="note">' + (who.length ? 'Based on what ' + E(who.join(' and ')) + ' follow and play (Last.fm). ' : 'Based on the artists you follow. ') + (recs.length ? recs.length + ' suggestion' + (recs.length === 1 ? '' : 's') + '.' : '') + '</div><div class="acts"><button class="btn" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Refresh suggestions') + '</button><button class="btn" data-m="closemodal">Close</button></div>';
-    h += recs.length ? recs.map(function (r) {
-      return '<div class="row"><div class="rb"><div class="rt">' + E(r.name) + '</div><div class="rs">' + E(recReason(r)) + '</div><div class="acts"><button class="btn pri" data-m="recfollow:' + E(r.id) + '"' + (busy.follow[r.name] ? ' disabled' : '') + '>' + (busy.follow[r.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="recapple:' + E(r.id) + '">Listen on Apple Music</button><button class="btn" data-m="recknown:' + E(r.id) + '">Already know</button><button class="btn" data-m="recno:' + E(r.id) + '">Not for me</button></div></div></div>';
-    }).join('') : '<div class="empty">No suggestions yet.<div class="note">They are worked out by the server’s daily check from Last.fm’s similar-artist lists. Refresh suggestions (above) updates them.</div></div>';
-    h += '</div>';
-    if (refreshOnly) { var m = document.getElementById('modal'); if (m) m.innerHTML = '<div class="gm gm-sheet-wrap">' + h + '</div>'; } else modal('recs', h);
-  }
-
   // ── events ──
   function onClick(e) {
     var b = e.target.closest && e.target.closest('[data-m]');
@@ -1030,12 +1049,12 @@
     else if (k === 'artist') { if (paneOn()) selectItem('art', v); else openArtist(v); }
     else if (k === 'addartist') openAdd();
     else if (k === 'dosearch') doSearch();
-    else if (k === 'recs') openRecs();
     else if (k === 'closemodal') H().closeModal();
     else if (k === 'followname') followByName(v);
     else if (k === 'ignorename') { var key = norm(v); setFb('rc_' + key, 'ignored', v, { ip: totalPlays(key) }); undoToast(v + ' ignored (it comes back if you play them again)', function () { setFb('rc_' + key, 'new', v); }); }
     else if (k === 'recfollow') { var r = state.recs.find(function (x) { return x.id === v; }); if (r) followByName(r.name, v); }
-    else if (k === 'rtab') { ui.rTab = v === 'never' ? 'never' : 'new'; openRecs(true); }
+    else if (k === 'rtab') { ui.rTab = ['all', 'new', 'never'].indexOf(v) >= 0 ? v : 'all'; ui.uLimit = 15; saveUi(); paint(); }
+    else if (k === 'rmore') { ui.uLimit += 25; paint(); }
     else if (k === 'nplisten') { var na = byId(v); if (na) openLink(artistUrl(na)); }
     else if (k === 'npunfollow') { var nu = byId(v); if (nu) { unfollowArtist(nu); } }
     else if (k === 'recapple') { var r2 = state.recs.find(function (x) { return x.id === v; }); if (r2) openLink(macify('https://music.apple.com/gb/search?term=' + encodeURIComponent(r2.name))); }
