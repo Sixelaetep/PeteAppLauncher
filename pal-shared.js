@@ -1046,6 +1046,8 @@ window.PalBridge = (function () {
  * PalUI (small, self-contained, styled from the page's own colours and font so each app keeps its identity):
  *   confirm({ title, message, rows:[{label,value,names?}], okLabel, cancelLabel, danger, hideCancel }) -> Promise<boolean>   (Esc, backdrop or Cancel = false)
  *   notice({ title, message, rows, okLabel }) -> Promise<true>
+ *   prompt({ title, message, input:{value,placeholder,multiline}, okLabel, cancelLabel }) -> Promise<string|null>   (1.11.0)
+ *   choose({ title, message, choices:[{label,value,danger}], cancelLabel }) -> Promise<value|null>   (1.11.0)
  *   toast(message, { ms, action:{label,onClick} })       one at a time, role=status
  *   restoreSummary(counts, noun) -> "Restoring will bring back 4 items, replace 2, and keep 11 added since."
  *   confirmRestore({ app, preview, noun, extra }) -> Promise<boolean>     the warning before a restore; with an { ok:false } preview it says the cloud could not be checked
@@ -1157,28 +1159,45 @@ window.PalBridge = (function () {
         if (r.names && r.names.length) row.appendChild(mk('div', 'font-size:13px;color:' + t.muted + ';margin-top:2px', r.names.join(', ')));
         box.appendChild(row);
       });
+      var inp = null, cancelVal = (o.input || o.choices) ? null : false;   // 1.11.0: prompt() and choose() share this dialog; Cancel / Esc / backdrop give null there
+      if (o.input) {
+        inp = mk(o.input.multiline ? 'textarea' : 'input', 'width:100%;box-sizing:border-box;min-height:44px;margin:2px 0 0;padding:8px 10px;border-radius:10px;border:1px solid ' + t.line + ';background:' + t.soft + ';color:' + t.fg + ';font:16px ' + t.font);
+        if (o.input.multiline) inp.rows = 4; else inp.type = 'text';
+        inp.value = o.input.value == null ? '' : String(o.input.value);
+        if (o.input.placeholder) inp.placeholder = o.input.placeholder;
+        inp.setAttribute('aria-labelledby', id + 't'); box.appendChild(inp);
+      }
       var bar = mk('div', 'display:flex;gap:10px;margin-top:14px;flex-wrap:wrap');
       function done(v) { document.removeEventListener('keydown', onKey, true); wrap.remove(); try { prev && prev.focus && prev.focus(); } catch (e) {} resolve(v); }
       function btn(label, kind, v) {
         var b = mk('button', 'flex:1;min-width:110px;min-height:44px;border-radius:10px;font:600 16px ' + t.font + ';cursor:pointer;padding:8px 14px;' +
           (kind === 'danger' ? 'background:#c62828;color:#fff;border:1px solid #c62828' : kind === 'primary' ? 'background:' + t.fg + ';color:' + t.bg + ';border:1px solid ' + t.fg : 'background:transparent;color:' + t.fg + ';border:1px solid ' + t.line), label);
-        b.type = 'button'; b.addEventListener('click', function () { done(v); }); return b;
+        b.type = 'button'; b.addEventListener('click', function () { done(typeof v === 'function' ? v() : v); }); return b;
       }
-      var cancel = (single || o.hideCancel) ? null : btn(o.cancelLabel || 'Cancel', 'plain', false);
-      var ok = btn(o.okLabel || 'OK', o.danger ? 'danger' : 'primary', true);
-      if (cancel) bar.appendChild(cancel); bar.appendChild(ok); box.appendChild(bar); wrap.appendChild(box);
-      wrap.addEventListener('mousedown', function (e) { if (e.target === wrap && cancel) done(false); });
+      var cancel = (single || o.hideCancel) ? null : btn(o.cancelLabel || 'Cancel', 'plain', cancelVal);
+      var ok = null;
+      if (o.choices && o.choices.length) {
+        bar.style.flexDirection = 'column';
+        o.choices.forEach(function (c, i) { var cb = btn(c.label, c.danger ? 'danger' : (i === 0 ? 'primary' : 'plain'), c.value); cb.style.flex = 'none'; cb.style.width = '100%'; bar.appendChild(cb); if (!ok) ok = cb; });
+        if (cancel) { cancel.style.flex = 'none'; cancel.style.width = '100%'; bar.appendChild(cancel); }
+      } else {
+        ok = btn(o.okLabel || 'OK', o.danger ? 'danger' : 'primary', inp ? function () { return inp.value; } : true);
+        if (cancel) bar.appendChild(cancel); bar.appendChild(ok);
+      }
+      box.appendChild(bar); wrap.appendChild(box);
+      wrap.addEventListener('mousedown', function (e) { if (e.target === wrap && cancel) done(cancelVal); });
       function onKey(e) {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(cancel ? false : true); return; }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(cancel ? cancelVal : true); return; }
+        if (e.key === 'Enter' && inp && !o.input.multiline) { e.preventDefault(); e.stopPropagation(); done(inp.value); return; }
         if (e.key === 'Tab') {
-          var f = [].slice.call(box.querySelectorAll('button')); if (!f.length) return;
+          var f = [].slice.call(box.querySelectorAll('button,input,textarea')); if (!f.length) return;
           var i = f.indexOf(document.activeElement);
           if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
         }
       }
       document.addEventListener('keydown', onKey, true);
       document.body.appendChild(wrap);
-      (o.danger && cancel ? cancel : ok).focus();
+      if (inp) { inp.focus(); try { inp.select(); } catch (e) {} } else (o.danger && cancel ? cancel : ok).focus();
     });
   }
   function enqueue(fn) { var p = queue.then(fn, fn); queue = p.then(function () {}, function () {}); return p; }
@@ -1203,8 +1222,12 @@ window.PalBridge = (function () {
     return rows;
   }
   window.PalUI = {
-    VERSION: 1,
+    VERSION: 2,
     confirm: function (o) { return enqueue(function () { return dialog(o || {}, false); }); },
+    // 1.11.0 (B3 / SUITE-05): prompt({ title, message, input:{ value, placeholder, multiline }, okLabel, cancelLabel }) -> Promise<string|null>   (Cancel, Esc or backdrop = null; Enter submits a single-line box)
+    prompt: function (o) { o = Object.assign({}, o || {}); o.input = o.input || {}; return enqueue(function () { return dialog(o, false); }); },
+    // choose({ title, message, choices:[{ label, value, danger? }], cancelLabel }) -> Promise<value|null>: several named actions instead of typing a word
+    choose: function (o) { return enqueue(function () { return dialog(o || {}, false); }); },
     notice: function (o) { return enqueue(function () { return dialog(o || {}, true); }); },
     toast: function (message, o) {
       o = o || {};
@@ -1428,6 +1451,7 @@ window.PalBridge = (function () {
  *             1.0.0 localISO. 1.1.0 safeSet, writeFailure, fmtDate, fmtDateTime, parseDate. 1.2.0 ukDateInputs. 1.3.0 ukDateInputs gains a calendar button. 1.3.1 calendar button fixes. 1.4.0 (this release) calendar button reworked: a transparent native date input over the icon.
  *             1.5.0 (Suite Phase 2 Batch A) PalContract 1.2: optional app / schema / caps fields and an automatic lib field, a debounced cloud copy in the pal_contracts table, PalContract.pullCloud() for the launcher; new PalBridge 1.0 (listen). Nothing existing changes; no app uses PalBridge yet.
  *             1.6.0 (Suite Phase 3, R33) PalContract 1.3: optional trim ladder (opts.trim), a `stale` marker when a contract cannot be stored, and the cloud copy made from the trimmed contract. Additive; an app that passes nothing behaves as before except that a refused publish now marks the kept contract stale.
+ *             1.11.0 (Suite B3, R43, SUITE-05) PalUI.prompt and PalUI.choose (additive; confirm, notice, toast and the restore dialogs unchanged): a text box and a set of named buttons in the same self-styled dialog, so apps can drop the browser's own prompt() and typed-word choices. PalUI.VERSION 2.
  *             1.10.0 (Suite B2a, R41, SUITE-18 / SUITE-19) new PalShared.app (register / addPart / get / label): an app states its version once. PalContract.publish fills `app` from it when the app passes none; the PalBridge ping reply gains `appVersion`; PalUI.dataSheet gains an About block (app, parts, library). Additive; no existing function changed, and an app that does not register behaves as before (the About block then shows only the library).
  *             1.9.0 (Suite Phase 3, R39) new PalUI.dataSheet (one Sync & Backup sheet for the apps) and PalUI.pill.dock (sync pill top right on desktop). Additive; no existing function changed.
  *             1.8.1 (Suite Phase 3, R35.1) guardRestore accepts signedIn (apps with their own session); restorePreview needs no PalSync session when rows are supplied. Fix for R35-T5 (Gigs & Trips said 'not signed in').
@@ -1682,8 +1706,8 @@ window.PalShared = (function () {
   function appGet() { return _appInfo ? { id: _appInfo.id, name: _appInfo.name, version: _appInfo.version, parts: _appInfo.parts.map(function (x) { return { id: x.id, name: x.name, version: x.version }; }) } : null; }
   function appLabel() { return _appInfo ? _appInfo.name + ' v' + _appInfo.version : ''; }
 
-  api.VERSION = '1.10.0';
-  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.4', bridge: '1.1', restore: '1.1', ui: '1.2', app: '1.0' };
+  api.VERSION = '1.11.0';
+  api.SECTIONS = { config: '1.2', sync: '1.13', utils: 'unversioned', contract: '1.4', bridge: '1.1', restore: '1.1', ui: '1.3', app: '1.0' };
   api.app = { register: appRegister, addPart: appAddPart, get: appGet, label: appLabel, VERSION: 1 };
   api.localISO = localISO; api.safeSet = safeSet; api.writeFailure = writeFailure;
   api.fmtDate = fmtDate; api.fmtDateTime = fmtDateTime; api.parseDate = parseDate; api.ukDateInputs = ukDateInputs;
