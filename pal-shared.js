@@ -26,7 +26,7 @@ window.PAL_CONFIG = {
   // Edge Function. Edit this one value here, once — you do NOT
   // need to re-enter it every time a new fantasy-football-tracker.html
   // is delivered.
-  FF_PROXY_KEY: 'zarsor-0tUsma-vamboj',
+  FF_PROXY_KEY: 'K9v#R2m!X7p@L4q$T8wZ',
 
   // ── Film & TV Tracker — TMDB credentials ─────────────────────
   // TMDB_READ_TOKEN (v4 auth, Bearer token) is what film-tv-tracker.html
