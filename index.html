@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v12.15</title>
+<title>P Apps v12.16</title>
 <link rel="manifest" href="manifest.json">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
      refresh. The real URL still comes from pal-config (PAL_CONFIG.SB_URL); if that ever changes this hint just does nothing. -->
@@ -1892,6 +1892,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (v12.16, FF-049 follow-up): update watch. The launcher compares its own version and the open apps' versions (page title) with the site, bypassing the browser's cached copy, and shows a Reload bar when something running is older (the cause of a long-open desktop tab showing an old Fantasy app); the check also refreshes the browser's copy of every app file. The Liverpool view's empty message states which Fantasy app version last published to the launcher and when. No storage change.
   CHANGED (v12.15, FF-049 follow-up): the Liverpool view's substitutes are stacked in rows (no sideways scroll); it reads kit colours from summary.lfc (kb / kc) as well as per player; its empty message says what to do. Pairs with fantasy-football-tracker.html v1.85, which stops a device without a Liverpool copy from wiping the published line-up. No storage change.
   CHANGED (v12.14, FF-049): the Fantasy card has a My FPL / Liverpool switch. Liverpool shows the team chosen in the Fantasy app's Liverpool tab (or the last match's line-up) with a scrolling bench row, each player's FPL season numbers and an injury marker; the numbers and markers refresh from the launcher's own 15-minute FPL feed. Needs fantasy-football-tracker.html v1.84 for the team. No storage or contract change here (pal_ff_card_view is one new device-only key).
   CHANGED (v12.13): the Gigs & Trips card shows Pete's listening figures (plays this week and in 30 days, artists, days listened, most played, played-not-followed and followed-never-played counts) on the right on a wide desktop screen, for Pete only. They come from the `listen` block that Gigs & Trips v7.149 adds to its card payload; without it, or on phones and tablets, the card is unchanged.
@@ -2341,7 +2342,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=12.15"></script>
+<script src="pal-shared.js?v=12.16"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2352,7 +2353,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v12.15';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
+const LAUNCHER_VERSION = 'v12.16';   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
 let sbSession   = null;   // Supabase session object
 let currentTab  = 'home';
@@ -6205,6 +6206,74 @@ document.addEventListener('visibilitychange', function () { if (!document.hidden
 // PET-147 v11.43: the locked-in squad as a pitch on the Fantasy card. Reads the display summary fantasy-football-tracker.html v1.63
 // writes (ff_locked_card_u_<uid>: gw, lockedAt, 11 starters, 4 bench in order; each id / name / position 1-4 / club / kit colours /
 // armband). Display only; nothing is written. No summary yet (app not opened since v1.63, or nothing locked in) = a short prompt.
+// ── Update watch (v12.16, FF-049 follow-up) ─────────────────────────────────────────────────────────────────────────────────────────
+// A long-open desktop tab keeps running the launcher and every app frame it loaded earlier, and the browser may hand out an older copy of a file for
+// a while after a deploy. So the launcher (1) asks the site, without using the cached copy, which versions are current: its own page and the apps that
+// are open (their page title), (2) does the same for the apps that are not open, which also leaves the fresh copy in the browser cache for when they
+// are opened, and (3) shows a small bar when something running is older than the site: "Fantasy 1.85 available (running 1.83) - Reload". Nothing is
+// stored, nothing is changed without a tap, any failure is silent. Runs 20 s after start, when the tab comes back to the front (at most every 10
+// minutes) and every 30 minutes.
+let PX_VW_AT = 0, PX_VW_BUSY = false;
+function pxVerNum(s) { return String(s || '').split('.').map(function (n) { return parseInt(n, 10) || 0; }); }
+function pxVerNewer(a, b) {   // is a newer than b?
+  const x = pxVerNum(a), y = pxVerNum(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d > 0; }
+  return false;
+}
+function pxVerFromTitle(t) { const m = /v?(\d+\.\d+(?:\.\d+)?)\s*$/.exec(String(t || '').trim()); return m ? m[1] : ''; }
+async function pxVerFetch(url) {
+  const r = await fetch(url, { cache: 'no-cache' });
+  if (!r.ok) return null;
+  return await r.text();
+}
+async function pxVerCheck(force) {
+  if (PX_VW_BUSY || document.hidden || !navigator.onLine) return;
+  if (!force && Date.now() - PX_VW_AT < 600000) return;
+  PX_VW_BUSY = true; PX_VW_AT = Date.now();
+  try {
+    const stale = [];
+    const own = await pxVerFetch(location.pathname.split('/').pop() || 'index.html');
+    if (own) {
+      const m = /const LAUNCHER_VERSION = 'v?([\d.]+)'/.exec(own), cur = String(LAUNCHER_VERSION).replace(/^v/, '');
+      if (m && pxVerNewer(m[1], cur)) stale.push({ name: 'P Apps', site: m[1], run: cur });
+    }
+    const frames = Array.prototype.slice.call(document.querySelectorAll('iframe.app-frame[data-src]'));
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i], src = f.dataset.src;
+      let txt = null; try { txt = await pxVerFetch(src); } catch (e) {}
+      if (!txt) continue;
+      const tm = /<title>([^<]*)<\/title>/i.exec(txt), site = tm ? pxVerFromTitle(tm[1]) : '';
+      let run = ''; try { run = pxVerFromTitle(f.contentDocument && f.contentDocument.title); } catch (e) {}
+      if (site && run && pxVerNewer(site, run)) stale.push({ name: String(f.getAttribute('title') || src).replace(/ Tracker$/, ''), site: site, run: run });
+    }
+    pxVerBar(stale);
+  } catch (e) { /* a missed check is harmless */ }
+  PX_VW_BUSY = false;
+}
+function pxVerBar(stale) {
+  let bar = document.getElementById('pxVerBar');
+  if (!stale.length) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'pxVerBar'; bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:9500;max-width:min(560px,calc(100vw - 24px));display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2,#222);color:var(--ink,#f2f2f2);border:1px solid var(--border,#444);border-radius:14px;font:600 13px var(--f,system-ui,sans-serif);box-shadow:0 6px 24px rgba(0,0,0,.35)';
+    const t = document.createElement('span'); t.id = 'pxVerTxt'; t.style.flex = '1';
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Reload';
+    b.style.cssText = 'min-height:40px;padding:0 14px;border-radius:10px;border:none;background:var(--accent,#CBF55C);color:var(--accTx,#14130A);font:700 13px var(--f,system-ui,sans-serif);cursor:pointer';
+    b.addEventListener('click', function () { location.reload(); });
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Dismiss');
+    x.style.cssText = 'min-width:36px;min-height:40px;border:none;background:none;color:inherit;font:600 18px var(--f,system-ui,sans-serif);cursor:pointer';
+    x.addEventListener('click', function () { bar.remove(); });
+    bar.appendChild(t); bar.appendChild(b); bar.appendChild(x); document.body.appendChild(bar);
+  }
+  bar.querySelector('#pxVerTxt').textContent = 'Update available: ' + stale.map(function (s) { return s.name + ' ' + s.site + ' (running ' + s.run + ')'; }).join(', ');
+}
+function pxVerStart() {
+  setTimeout(function () { pxVerCheck(true); }, 20000);
+  setInterval(function () { pxVerCheck(true); }, 1800000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) pxVerCheck(false); });
+}
+try { pxVerStart(); } catch (e) {}
+
 // ── Fantasy card: My FPL team / Liverpool (v12.14, FF-049) ──────────────────────────────────────────────────────────────────────────
 // The card's two views. 'fpl' is everything the card showed before. 'lfc' shows the Liverpool squad the Fantasy app published in its contract
 // (summary.lfc, fantasy-football-tracker.html v1.84): the team Pete chose in the app's Liverpool tab, or, if none is saved, the last match's
@@ -6228,7 +6297,19 @@ function pxFfLfc() {
 function ffLfcCardHtml() {
   const e = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   const l = pxFfLfc();
-  if (!l) return '<div class="ffp-note">No Liverpool squad has reached the launcher yet. Open the Fantasy app (v1.85 or later) and its Liverpool tab once, then come back here.</div>';
+  if (!l) {
+    let last = '';
+    try {
+      const c = window.PalContract && window.PalContract.read('fantasy');
+      if (c && c.built) {
+        const bt = new Date(c.built), when = isFinite(bt.getTime()) ? bt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' + bt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+        const old = c.app && pxVerNewer('1.85', c.app);
+        last = ' The Fantasy app last updated the launcher' + (c.app ? ' (app v' + e(c.app) + ')' : '') + (when ? ' at ' + e(when) : '') + '.' + (old ? ' That is an older app version: reload the launcher and open the Fantasy app again.' : '') +
+          (c.stale ? ' Its newest update was too large to store (' + e(c.stale.kb) + ' KB, limit 48 KB).' : '');
+      }
+    } catch (x) {}
+    return '<div class="ffp-note">No Liverpool squad has reached the launcher yet. Open the Fantasy app (v1.85 or later) and its Liverpool tab once, then come back here.' + last + '</div>';
+  }
   const pf = function (p) { return Object.assign({ b: l.kb, c: l.kc, tm: l.tm || 'LIV' }, p); };
   const ov = pxFeedRead('fantasy');
   const live = (ov && ov.lfc && ov.lfc.p && Date.parse(ov.fetchedAt) > (Number(l.at) || 0)) ? ov : null;
