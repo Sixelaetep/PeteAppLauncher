@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F4F0E6" id="metaThemeColor">
-<title>On Budget v3.133</title>
+<title>On Budget v3.134</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
@@ -776,7 +776,7 @@ input.amount-in:focus{border-color:transparent}
     <div class="header">
       <div class="logo">
         <span class="logo-icon" aria-hidden="true">£</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.133</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.134</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -1343,11 +1343,38 @@ input.amount-in:focus{border-color:transparent}
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.133"></script>
+<script src="pal-shared.js?v=3.134"></script>
 <script>
 /* v3.133 (SUITE-18, build B2b): the one place this app's version is written in code. VERSION, the contract app field, the bridge and backup read PAL_APP_VERSION; PalShared.app shows it in the Sync & Backup sheet and the launcher Device check. The title, the visible label and the ?v= tag are text and are checked against it by the Device check. */
-var PAL_APP_VERSION='3.133';
+var PAL_APP_VERSION='3.134';
 try{window.PalShared&&PalShared.app&&PalShared.app.register({id:'budget',name:'On Budget',version:PAL_APP_VERSION});}catch(e){}
+
+/* v3.134 (SUITE-05, B3 part 3 / R45): dialogs come from PalUI (pal-shared 1.11.0): an app-styled sheet that names the item, then an Undo bar after a delete where the delete is a clean soft delete. Each helper falls back to the browser's own box if the library on this device is older. Undo is a NEW write (the flag is cleared and the record stamped now), never a rewind, so it syncs like any edit. */
+var _obPending=new Set();
+function obSay(m){ try{ if(typeof showToast==='function') return showToast(m); if(typeof toast==='function') return toast(m); if(typeof setStatus==='function') return setStatus(m); }catch(e){} }
+function obConfirm(title,body,o){
+  o=o||{}; var key=String(title)+'|'+String(body||'');
+  if(_obPending.has(key)) return Promise.resolve(false);
+  try{ if(window.PalUI&&PalUI.confirm){ _obPending.add(key);
+    return Promise.resolve(PalUI.confirm({title:title,message:body||'',rows:o.rows,okLabel:o.okLabel||'OK',danger:!!o.danger}))
+      .then(function(v){_obPending.delete(key);return !!v;},function(){_obPending.delete(key);return false;}); } }catch(e){ _obPending.delete(key); }
+  return Promise.resolve(window.confirm(title+(body?'\n\n'+body:'')));
+}
+function obPrompt(title,value,o){
+  o=o||{};
+  try{ if(window.PalUI&&PalUI.prompt) return Promise.resolve(PalUI.prompt({title:title,message:o.message,input:{value:value==null?'':value,placeholder:o.placeholder},okLabel:o.okLabel||'Save'})); }catch(e){}
+  return Promise.resolve(window.prompt(title+(o.message?'\n'+o.message:''),value==null?'':value));
+}
+function obNotice(title,body){
+  try{ if(window.PalUI&&PalUI.notice) return Promise.resolve(PalUI.notice({title:title,message:body||'',okLabel:'OK'})).then(function(){return true;}); }catch(e){}
+  window.alert(title+(body?'\n\n'+body:'')); return Promise.resolve(true);
+}
+function obUndoToast(msg,undo){
+  var run=async function(){ try{ await undo(); obSay('Restored ✓'); }catch(e){ obSay('Could not undo — '+((e&&e.message)||'try again')); } };
+  try{ if(window.PalUI&&PalUI.toast){ PalUI.toast(msg,{ms:8000,action:{label:'Undo',onClick:run}}); return; } }catch(e){}
+  obSay(msg);
+}
+function obClone(o){ return o==null?o:JSON.parse(JSON.stringify(o)); }
 </script>
 <!-- v3.126 (Suite Phase 2 / R25): the launcher contract also carries the quick-add suggestion lists (saved food labels and past bill names; summary.quick, marker summary.ext = 1) so the launcher no longer reads this app's saved copy. Derived cache only; no data, storage, sync or backup change. -->
 <!-- v3.125 (OPP-21): the Bills ledger has the same floating Add transaction button as the dashboard on phone and tablet (it replaces the inline button); no data, storage, sync or backup change. -->
@@ -3880,7 +3907,7 @@ function carriedUnclearedTx(curK) {
 // Type in what the card actually shows; only the difference is stored,
 // as this month's cardAdjust. Never touches transactions, the spend
 // counter, pot or headroom.
-function setCardBalance() {
+async function setCardBalance() {
   const d = curData();
   if (!d || d.startBalance === null || d.startBalance === undefined) { toast('Start the month first'); return; }
   const k = curKey();
@@ -3889,7 +3916,8 @@ function setCardBalance() {
   // old total-based behaviour; with uncleared items the total then follows.
   const cur  = cardBalanceInfo(k, false, true).balance;
   const base = cardBalanceInfo(k, true, true).balance;
-  const v = prompt(`Actual card balance right now${ftManual() || ((curData().transactions||[]).some(t=>!t._deleted && t.cleared===false) || carriedUnclearedTx(k).length) ? ' (cleared, as your card shows it)' : ''} — currently £${cur.toFixed(2)}:`, cur.toFixed(2));
+  const _uncl = ftManual() || ((curData().transactions||[]).some(t=>!t._deleted && t.cleared===false) || carriedUnclearedTx(k).length);
+  const v = await obPrompt('Actual card balance right now', cur.toFixed(2), { message: `Currently £${cur.toFixed(2)}${_uncl ? ' (cleared, as your card shows it)' : ''}.`, placeholder: 'e.g. 123.45', okLabel: 'Set balance' });
   if (v===null) return;
   const val = parseFloat(String(v).replace(/[£,\s]/g,''));
   if (isNaN(val)) { toast('Invalid amount'); return; }
@@ -4802,12 +4830,10 @@ function startMonth() {
   toast('Month started ✓');
 }
 
-function updateBalance() {
+async function updateBalance() {
   const d = curData();
   const cur = d?.startBalance ?? '';
-  const v = prompt(settings.potDirection==='increasing'
-    ? `Spending limit for this month (current: £${cur}):`
-    : `Starting balance for this month (current: £${cur}):`, cur);
+  const v = await obPrompt(settings.potDirection==='increasing' ? 'Spending limit for this month' : 'Starting balance for this month', cur, { message: `Current: £${cur}.`, placeholder: 'e.g. 1500', okLabel: 'Update' });
   if (v===null) return;
   const val = parseFloat(v);
   if (isNaN(val)||val<0) { toast('Invalid amount'); return; }
@@ -4863,13 +4889,13 @@ function resetMonthAdjust() {
 // ── Delete transaction ─────────────────────────────────────────
 // v3.88 (ON--082): confirmation wrapper for the Spending ✕ / edit-sheet
 // Delete, same style as the Bills confirms (native confirm()).
-function confirmDelTx(mk, id) {
+async function confirmDelTx(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
   if (t.xferSrc) { toast('Transfers are removed from the Bills side'); return; }
   const isIncome = t.type==='income';
   const name = t.label || (isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other'));
-  if (!confirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`)) return;
+  if (!(await obConfirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`, 'It stops counting toward this month.', { okLabel: 'Remove', danger: true }))) return;
   delTx(mk, id);
 }
 function delTx(mk, id) {
@@ -5114,12 +5140,11 @@ function showFtClearedField(show) { document.getElementById('ft-cleared-field').
 
 // One-tap clear from the list's tick button.
 // v3.104 (ON--098): clear / unclear a transfer leg from Spending (the only thing editable on that side).
-function toggleXferLegCleared(mk, id) {
+async function toggleXferLegCleared(mk, id) {
   const m = months[mk]; if (!m) return;
   const t = m.transactions.find(x=>x.id===id && !x._deleted); if (!t) return;
   const wasCleared = t.cleared !== false;
-  if (!confirm(wasCleared ? `Mark "${t.label||'Transfer'}" (£${(t.amount||0).toFixed(2)}) as uncleared? Amount, date and removal are changed in Bills.`
-                          : `Mark "${t.label||'Transfer'}" (£${(t.amount||0).toFixed(2)}) as cleared?`)) return;
+  if (!(await obConfirm(wasCleared ? `Mark "${t.label||'Transfer'}" (£${(t.amount||0).toFixed(2)}) as uncleared?` : `Mark "${t.label||'Transfer'}" (£${(t.amount||0).toFixed(2)}) as cleared?`, wasCleared ? 'Amount, date and removal are changed in Bills.' : '', { okLabel: wasCleared ? 'Mark uncleared' : 'Mark cleared' }))) return;
   t.cleared = !wasCleared;
   t.updated_at = new Date().toISOString();
   save(true); renderDash();
@@ -5513,7 +5538,7 @@ function payoffBalHtml(nt, target) {
     return `<div style="font-size:12px;margin-top:2px;color:var(--ink2)">${r.label}: <strong style="color:${neg?'var(--red)':'var(--ink)'}">${_balFmt(r.val)}</strong>${r.date?` <span style="font-size:11px">(${esc(_balDate(r.date))})</span>`:''}</div>`;
   }).join('');
 }
-function updateNextPayoff() {
+async function updateNextPayoff() {
   const nt = nextTiedOccurrence();
   const d = curData();
   if (!nt || !d || d.startBalance == null) return;
@@ -5521,7 +5546,7 @@ function updateNextPayoff() {
   const target = _payoffProjected(last);
   if (Math.abs(target - nt.amount) <= 0.004) { renderDash(); return; }
   const _bal = payoffBalText(nt, target);
-  if (!confirm(`${_bal?_bal+'\n\n':''}${target>nt.amount?'Raise':'Lower'} the ${fmtFull(nt.shown)} "${nt.ov?.name||nt.item.name}" pay-off from £${nt.amount.toFixed(2)} to £${target.toFixed(2)}? Only that one payment changes.${/⚠/.test(_bal)?'\n\nUpdate anyway?':''}`)) return;
+  if (!(await obConfirm(`${target>nt.amount?'Raise':'Lower'} the ${fmtFull(nt.shown)} "${nt.ov?.name||nt.item.name}" pay-off?`, `${_bal?_bal+' ':''}From £${nt.amount.toFixed(2)} to £${target.toFixed(2)}. Only that one payment changes.${/⚠/.test(_bal)?' Update anyway?':''}`, { okLabel: target>nt.amount?'Raise':'Lower' }))) return;
   const ov = nt.ov;
   if (Math.abs(target - nt.item.amount) <= 0.004) { // back to the standing amount: drop the override
     const snap = consumeOverride(nt.item.id, nt.schedDate);
@@ -5627,9 +5652,10 @@ function saveFtRec() {
   generateFtRecurring();
   toast('Repeating transaction saved ✓');
 }
-function deleteFtRec() {
+async function deleteFtRec() {
   if (!_ftRecEditId) return;
-  if (!confirm('Remove this repeating transaction? Transactions already added stay.')) return;
+  if (!(await obConfirm('Remove this repeating transaction?', 'Transactions already added stay.', { okLabel: 'Remove', danger: true }))) return;
+  if (!_ftRecEditId) return;
   settings = { ...settings, ftRecurring:ftRecList().filter(x=>x.id!==_ftRecEditId), updated_at:new Date().toISOString() };
   save(true); syncUpsertSettings();
   closeFtRecSheet(); renderFtRecList();
@@ -7608,16 +7634,16 @@ function obClearDueTx(ref) {
 // v3.87 (ON--081): confirmation wrappers for the ✕ buttons. Native
 // confirm() matches the app's existing prompt() use. Cancel leaves
 // everything untouched.
-function confirmDeleteBillsTx(id) {
+async function confirmDeleteBillsTx(id) {
   const t = bills.tx.find(x=>x.id===id && !x._deleted);
   if (!t) return;
   const msg = t.skipped
     ? `Remove skipped "${t.name}"? It will show as due again.`
     : `Remove "${t.name}" (${t.type==='income'?'+':'−'}£${t.amount.toFixed(2)})?${t.cleared===false?'':' This reverses it on your cleared balance.'}`;
-  if (!confirm(msg)) return;
+  if (!(await obConfirm(t.skipped ? `Remove skipped "${t.name}"?` : `Remove "${t.name}" (${t.type==='income'?'+':'−'}£${t.amount.toFixed(2)})?`, t.skipped ? 'It will show as due again.' : (t.cleared===false ? '' : 'This reverses it on your cleared balance.'), { okLabel: 'Remove', danger: true }))) return;
   deleteBillsTx(id);
 }
-function confirmRemoveUncleared(kind, a, b) {
+async function confirmRemoveUncleared(kind, a, b) {
   let msg;
   if (kind === 'adhoc') {
     const t = bills.tx.find(x=>x.id===a && !x._deleted);
@@ -7630,7 +7656,7 @@ function confirmRemoveUncleared(kind, a, b) {
     const amt = ov ? ov.amount : item.amount;
     msg = `Skip "${ov?.name||item.name}" (${item.type==='income'?'+':'−'}£${amt.toFixed(2)}) on ${fmtFull(new Date(b+'T00:00:00'))}? The recurring schedule is not changed.`;
   }
-  if (!confirm(msg)) return;
+  if (!(await obConfirm(kind === 'adhoc' ? 'Remove this planned entry?' : 'Skip this payment?', msg, { okLabel: kind === 'adhoc' ? 'Remove' : 'Skip', danger: kind === 'adhoc' }))) return;
   quickDeleteUncleared(kind, a, b);
 }
 function skipClear() {
