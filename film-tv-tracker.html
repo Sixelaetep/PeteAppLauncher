@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v4.18</title>
+<title>Film &amp; TV Tracker v4.19</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23CBF55C' text-anchor='middle'>🎬</text></svg>">
 <style>
@@ -739,7 +739,7 @@
 <body>
 
 <div class="chrome">
-  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.18</span></span></h1>
+  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.19</span></span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -1134,10 +1134,11 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=4.18"></script>
+<script src="pal-shared.js?v=4.19"></script>
 <script>
 /* v4.14 (SUITE-18, build B2b): the one place this app's version is written in code. VERSION, the contract app field, the bridge and backup read PAL_APP_VERSION; PalShared.app shows it in the Sync & Backup sheet and the launcher Device check. The title, the visible label and the ?v= tag are text and are checked against it by the Device check. */
-var PAL_APP_VERSION='4.18';
+var PAL_APP_VERSION='4.19';
+/* v4.19 (FTT-058): a title's detail view shows its director and top cast (fetched from TMDB when the detail is opened, not stored) with a Follow button on each; followed people appear in the People tab. */
 /* v4.18 (FTT-058): People is now a main tab (left menu on desktop, bottom bar on phone) instead of a pop-up window; the content, data and daily check are unchanged. */
 /* v4.17 (FTT-058): follow actors and directors. A Follow button on a person's page in + Add search; a People you follow window (new and upcoming films and series, with + Watchlist / Not interested / Seen, and the list of people with Acting / Directing switches); a daily TMDB check on this device; a Library button and a Needs attention line for anything new. New optional data: state.people (one row each, table prefix person_). Nothing existing changed; older backups and older builds are unaffected. */
 /* v4.16 (R48.1, fix for r48-T2): Delete on a title's detail view showed the sheet but no Undo bar and left the detail open, because deleteFromDetail did not wait for the confirmation. It now waits, and every delete from the Film & TV library (detail, selection or bulk) shows an Undo bar that restores all the titles just removed. */
@@ -2447,6 +2448,7 @@ function detailHtml(t) {
     }
   }
 
+  html += creditsSectionHtml(t);   // v4.19 (FTT-058): director and cast, each with Follow
   if ((t.tags || []).length) html += `<div class="dv-sec"><h3>Tags</h3><div class="svc-chips">${t.tags.map(g => `<button class="ptag-link" data-tag="${esc(g)}" onclick="filterByTag(this.dataset.tag)">${esc(g)}</button>`).join('')}</div></div>`;
   if (t.notes) html += `<div class="dv-sec"><h3>Notes</h3><div class="dv-text">${esc(t.notes)}</div></div>`;
   return html;
@@ -3859,6 +3861,65 @@ async function toggleFollowFromSearch() {
   toast(r && r.errors ? 'Following ' + p.name + ' (could not check TMDB just now; it will be tried again)' : 'Following ' + p.name + (n ? ': ' + n + ' new or upcoming' : ': nothing new or upcoming yet'));
   try { refreshSearch(); } catch (_) {} pfRender(); pfUpdateAddBox();
 }
+// ── Cast and crew on a title's detail view (v4.19 / FTT-058) ──
+// Fetched from TMDB when a detail is opened and kept in memory only (nothing is stored on the title, so no data, backup or sync change).
+// Film: /movie/<id>/credits (director(s) from crew, cast in billing order). TV: /tv/<id>/aggregate_credits (cast by billing, directors by episodes directed).
+const CRED_TOP = 6, CRED_MAX = 20;
+const _cred = {};   // 'film:123' -> { st: 'loading' | 'ok' | 'err', dirs: [], cast: [], all: false }
+function credKey(t) { return (t.type === 'tv' ? 'tv:' : 'film:') + Number(t.externalIds && t.externalIds.tmdb); }
+function credLoad(t, force) {
+  const k = credKey(t), c = _cred[k];
+  if (c && !force && (c.st === 'loading' || c.st === 'ok' || c.st === 'err')) return;
+  const keep = c ? c.all : false;
+  _cred[k] = { st: 'loading', dirs: [], cast: [], all: keep };
+  const id = Number(t.externalIds.tmdb), tv = t.type === 'tv';
+  tmdbFetch(tv ? `/tv/${id}/aggregate_credits?language=en-GB` : `/movie/${id}/credits?language=en-GB`).then(d => {
+    const person = (r, role) => ({ id: Number(r.id), name: String(r.name || '').slice(0, 80), img: r.profile_path || '', role: role });
+    const seen = {};
+    let dirs;
+    if (tv) dirs = (d.crew || []).filter(r => (r.jobs || []).some(j => j.job === 'Director')).sort((a, b) => (b.total_episode_count || 0) - (a.total_episode_count || 0)).slice(0, 2).map(r => person(r, 'Director'));
+    else dirs = (d.crew || []).filter(r => r.job === 'Director').slice(0, 3).map(r => person(r, 'Director'));
+    dirs = dirs.filter(r => r.id > 0 && !seen[r.id] && (seen[r.id] = 1));
+    const cast = (d.cast || []).slice().sort((a, b) => (a.order == null ? 999 : a.order) - (b.order == null ? 999 : b.order)).slice(0, CRED_MAX)
+      .map(r => person(r, tv ? ((r.roles || [])[0] || {}).character || '' : r.character || '')).filter(r => r.id > 0);
+    _cred[k] = { st: 'ok', dirs: dirs, cast: cast, all: keep };
+  }).catch(() => { _cred[k] = { st: 'err', dirs: [], cast: [], all: keep }; })
+    .then(() => { try { if (detailId === t.id) renderDetail(); } catch (_) {} });
+}
+function creditsSectionHtml(t) {
+  if (!(t.externalIds && Number(t.externalIds.tmdb) > 0)) return '';
+  const c = _cred[credKey(t)];
+  if (!c) { credLoad(t); return `<div class="dv-sec"><h3>Cast and crew</h3><div class="dv-muted">Loading…</div></div>`; }
+  if (c.st === 'loading') return `<div class="dv-sec"><h3>Cast and crew</h3><div class="dv-muted">Loading…</div></div>`;
+  if (c.st === 'err') return `<div class="dv-sec"><h3>Cast and crew</h3><div class="dv-muted">Could not load cast and crew from TMDB.</div><div style="margin-top:8px"><button class="small-btn" onclick="credRetry('${esc(t.id)}')">Try again</button></div></div>`;
+  const list = c.dirs.concat(c.cast.filter(r => !c.dirs.some(d => d.id === r.id)));
+  if (!list.length) return '';
+  const shown = c.all ? list : list.slice(0, c.dirs.length + CRED_TOP), nFol = list.filter(r => isFollowingPerson(r.id)).length;
+  const row = r => {
+    const f = isFollowingPerson(r.id), dir = r.role === 'Director';
+    return `<div class="ppl-row">
+      ${r.img ? `<img src="${TMDB_IMG}${esc(r.img)}" alt="">` : '<span class="ac-ph">🎭</span>'}
+      <div class="ppl-name">${esc(r.name)}<small>${dir ? 'Director' : (r.role ? 'as ' + esc(r.role) : 'Actor')}</small></div>
+      <button class="small-btn ppl-follow" aria-pressed="${f}" data-pid="${r.id}" data-name="${esc(r.name)}" data-dept="${dir ? 'Directing' : 'Acting'}" data-img="${esc(r.img)}" onclick="credFollow(this)">${f ? '★ Following' : '☆ Follow'}</button>
+    </div>`;
+  };
+  return `<div class="dv-sec"><h3>Cast and crew${nFol ? ' · ' + nFol + ' followed' : ''}</h3>${shown.map(row).join('')}`
+    + (list.length > shown.length ? `<div style="margin-top:8px"><button class="small-btn" onclick="credShowAll('${esc(t.id)}')">Show all (${list.length})</button></div>` : '') + `</div>`;
+}
+function credTitle(id) { return state.titles.find(x => x.id === id && !x._deleted); }
+function credRetry(id) { const t = credTitle(id); if (t) { credLoad(t, true); renderDetail(); } }
+function credShowAll(id) { const t = credTitle(id); const c = t && _cred[credKey(t)]; if (c) { c.all = true; renderDetail(); } }
+async function credFollow(btn) {
+  const tmdb = Number(btn.dataset.pid); if (!(tmdb > 0)) return;
+  if (isFollowingPerson(tmdb)) { unfollowPerson(tmdb); return; }   // unfollow redraws the detail itself
+  const p = followPerson(tmdb, btn.dataset.name, btn.dataset.dept, btn.dataset.img); if (!p) return;
+  try { renderDetail(); } catch (_) {}
+  const r = await runPeopleCheck(true, p.tmdb);
+  const n = pfGroups().filter(g => g.who.some(w => w.tmdb === p.tmdb)).length;
+  toast(r && r.errors ? 'Following ' + p.name + ' (could not check TMDB just now; it will be tried again)' : 'Following ' + p.name + (n ? ': ' + n + ' new or upcoming' : ': nothing new or upcoming yet'));
+  try { renderDetail(); } catch (_) {} pfRender(); pfUpdateAddBox(); filmPublishContract();
+}
+
 async function pfRole(tmdb, role) {
   const p = personRec(tmdb); if (!p || p._deleted || (role !== 'cast' && role !== 'dir')) return;
   const other = role === 'cast' ? 'dir' : 'cast';
