@@ -1,11 +1,12 @@
-/* gat-music.js v1.24 (v1.24: SUITE-18 / MUS-NEXT-1: registers itself as a part of the host app (PalShared.app.addPart) so its version shows in the Sync & Backup sheet and the Device check; nothing else changes). v1.23: (v1.23: a tour date where the artist is a support act says so (badge, detail panel, Upcoming line: Support for X) when the server (pal-music-proxy v0.12.0) records it, and Coming up has a Hide support slots switch (remembered); dates with no billing information look exactly as before; v1.22: Recommendations is now a section of its own beside Coming up and Artists (it was a pop-up window): suggestions from Last.fm and followed artists never played sit side by side on a computer, with a detail panel on the right, and in one column with larger buttons on a phone; v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* gat-music.js v1.25 (v1.25: COM-1 follow comedians: Add artist has a Musician / Comedian choice; a comedian is found on TMDB and stored in the same artists list (kind 'comedian', tmdb id, optional Specials switch); new and upcoming stand-up specials (comedy films and series where they play themselves) appear in Coming up with a Specials filter, and Add to Film & TV puts one on the Want to Watch list in Film & TV Tracker; comedians are left out of play counts, Never played and the Apple Music release feed; v1.24: SUITE-18 / MUS-NEXT-1: registers itself as a part of the host app (PalShared.app.addPart) so its version shows in the Sync & Backup sheet and the Device check; nothing else changes). v1.23: (v1.23: a tour date where the artist is a support act says so (badge, detail panel, Upcoming line: Support for X) when the server (pal-music-proxy v0.12.0) records it, and Coming up has a Hide support slots switch (remembered); dates with no billing information look exactly as before; v1.22: Recommendations is now a section of its own beside Coming up and Artists (it was a pop-up window): suggestions from Last.fm and followed artists never played sit side by side on a computer, with a detail panel on the right, and in one column with larger buttons on a phone; v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, .nt (no tickets) and .aid (artist id), rstate_rel_<collectionId> {interested, ni}, recfb_rc_<artist>.ip (play count when ignored), artist.tourAsk (Not interested count when the stop-tour question was last answered).
+   v1.25 records (additive): artist.kind ('comedian'), artist.tmdb (TMDB person id), artist.img (TMDB profile path), artist.specials (false = no specials); rstate_sp_<film|tv>_<tmdbId> {ni, ft} for a special hidden or already added to Film & TV. Specials are read from TMDB in the browser and kept on this device only; Add to Film & TV writes one title_ row to the shared pal_film_tracker table.
    Needs from the host (window.GAT_HOST): token(), userId(), addGig(concert), gigFor(conId), openGig(id), showModal(html), closeModal(), toast(msg). */
 (function () {
   'use strict';
-  var VERSION = '1.24', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var VERSION = '1.25', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.GAT_HOST || {}; };
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
@@ -44,6 +45,20 @@
   function isFollowed(a) { return !!a && !a._deleted && a.following === true && !a.excluded; }
   function wantsReleases(a) { return isFollowed(a) && a.releases !== false; }
   function wantsGigs(a) { return isFollowed(a) && a.gigs !== false; }
+  // v1.25 (COM-1): comedians share the artists list. A comedian is an artist with kind 'comedian' and a TMDB person id.
+  function isCom(a) { return !!a && a.kind === 'comedian'; }
+  function hasTmdb(a) { return !!a && /^\d{1,10}$/.test(String(a.tmdb || '')); }
+  function wantsSpecials(a) { return isFollowed(a) && isCom(a) && a.specials !== false && hasTmdb(a); }
+  var SPEC_BACK_DAYS = 45, SPEC_AHEAD_DAYS = 400, SPEC_STALE_MS = 12 * 3600 * 1000, SELF_RE = /^\s*(self|himself|herself|themselves|themself|him\/herself)\b/i;
+  // A stand-up special = a comedy film or series where the comedian plays themselves; talk, news, reality and documentary titles are not specials.
+  function specialOf(r) {
+    if (!r || !r.id || (r.media_type !== 'movie' && r.media_type !== 'tv')) return null;
+    var g = r.genre_ids || []; if (g.indexOf(35) < 0 || [10767, 10763, 10764, 99].some(function (x) { return g.indexOf(x) >= 0; })) return null;
+    if (!SELF_RE.test(String(r.character || ''))) return null;
+    var tv = r.media_type === 'tv', date = String((tv ? r.first_air_date : r.release_date) || '').slice(0, 10), title = String((tv ? r.name : r.title) || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !title) return null;
+    return { id: 'sp_' + (tv ? 'tv' : 'film') + '_' + r.id, tmdb: Number(r.id), type: tv ? 'tv' : 'film', title: title.slice(0, 160), date: date, poster: /^\/[\w.\-]+$/.test(String(r.poster_path || '')) ? r.poster_path : '', aids: [] };
+  }
   var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function dateLabel(iso) { var d = new Date(iso + 'T00:00:00Z'); return DOW[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()]; }
   function liveConcerts(concerts, artists, today) {
@@ -56,10 +71,12 @@
   // ── state ──
   var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, appleBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
   var rel = { fetchedAt: null, items: {}, fetched: {} };
+  var spec = { fetchedAt: null, items: {}, fetched: {} };   // v1.25: comedy specials from TMDB (this device only)
+  var addKind = 'music', lastCom = [];
   var sel = null, paneEl = null, matching = false, matchInfo = { done: 0, total: 0, ok: 0, dup: 0 }, imp = null, fileIn = null;
   var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, showNot: false, pPer: '', pLimit: 15, tPer: '30', rTab: 'all', uLimit: 15, noSup: false };
   var cinfo = { at: null, msg: '' };
-  var busy = { con: false, rel: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
+  var busy = { con: false, rel: false, spec: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
   var _db = null, _tables = null, tokSet = '';
 
   // ── small helpers ──
@@ -80,18 +97,19 @@
   var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
   var followed = function () { return live().filter(isFollowed); };
   var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
-  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming' || o.sub === 'recs') ui.sub = o.sub; if (['all', 'new', 'never'].indexOf(o.rTab) >= 0) ui.rTab = o.rTab; if (o.noSup === true) ui.noSup = true; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'allmonths', 'years', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; if (['30', '12', 'all'].indexOf(o.tPer) >= 0) ui.tPer = o.tPer; } } catch (e) {} }
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming' || o.sub === 'recs') ui.sub = o.sub; if (['all', 'new', 'never'].indexOf(o.rTab) >= 0) ui.rTab = o.rTab; if (o.noSup === true) ui.noSup = true; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases', 'specials'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'allmonths', 'years', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; if (['30', '12', 'all'].indexOf(o.tPer) >= 0) ui.tPer = o.tPer; } } catch (e) {} }
   function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer, tPer: ui.tPer, rTab: ui.rTab, noSup: ui.noSup })); } catch (e) {} }
 
   // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
   function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
   function kvGet(k) { return new Promise(function (res) { if (!_db) return res(null); try { var q = _db.transaction('kv').objectStore('kv').get(k); q.onsuccess = function () { res(q.result == null ? null : q.result); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
   function kvSet(k, v) { return new Promise(function (res) { if (!_db) return res(false); try { var t = _db.transaction('kv', 'readwrite'); t.objectStore('kv').put(JSON.parse(JSON.stringify(v)), k); t.oncomplete = function () { res(true); }; t.onerror = t.onabort = function () { res(false); }; } catch (e) { res(false); } }); }
-  var saveT = null, relT = null;
+  var saveT = null, relT = null, specT = null;
   var subs = [], hl = null;
   function emit() { subs.forEach(function (f) { try { f(); } catch (e) {} }); }
   function save() { clearTimeout(saveT); saveT = setTimeout(function () { kvSet('state', state); emit(); }, 300); }
   function saveRel() { clearTimeout(relT); relT = setTimeout(function () { kvSet('rel', rel); emit(); }, 400); }
+  function saveSpec() { clearTimeout(specT); specT = setTimeout(function () { kvSet('spec', spec); emit(); }, 400); }
 
   // ── sync (PalSync shared mode; the same rows as music-tracker.html) ──
   function tables() {
@@ -195,6 +213,93 @@
     });
   }
 
+  // ── TMDB (v1.25): find a comedian, read their specials, and add a special to Film & TV Tracker ──
+  function tmdbOk() { return !!(window.PAL_CONFIG && PAL_CONFIG.TMDB_READ_TOKEN); }
+  function tmdb(path) {
+    var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 12000);
+    return fetch('https://api.themoviedb.org/3' + path, { signal: ctl.signal, headers: { Authorization: 'Bearer ' + PAL_CONFIG.TMDB_READ_TOKEN, 'Content-Type': 'application/json' } })
+      .then(function (r) { if (!r.ok) { var e = new Error('TMDB returned HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); }).finally(function () { clearTimeout(t); });
+  }
+  function searchComedians(q) {
+    return tmdb('/search/person?query=' + encodeURIComponent(q) + '&include_adult=false&language=en-GB').then(function (j) {
+      var all = (j.results || []).filter(function (x) { return x && x.id && x.name; }), act = all.filter(function (x) { return (x.known_for_department || 'Acting') === 'Acting'; });
+      return (act.length ? act : all).slice(0, 8).map(function (x) {
+        var kn = (x.known_for || []).map(function (k) { return k && (k.title || k.name); }).filter(Boolean).slice(0, 3).join(', ');
+        return { id: String(x.id), name: String(x.name), img: /^\/[\w.\-]+$/.test(String(x.profile_path || '')) ? x.profile_path : '', known: kn ? 'Known for ' + kn : (x.known_for_department || '') };
+      });
+    });
+  }
+  function refreshSpecials(o) {
+    o = o || {};
+    if (busy.spec || !tmdbOk()) return Promise.resolve();
+    var cutoff = Date.now() - SPEC_STALE_MS, targets = (o.only || followed()).filter(wantsSpecials);
+    if (!o.only) targets = targets.filter(function (a) { var f = spec.fetched[String(a.tmdb)]; return !f || Date.parse(f) < cutoff; });
+    if (!targets.length) return Promise.resolve();
+    busy.spec = true; paint();
+    var i = 0, ok = 0, fail = 0;
+    function worker() {
+      if (i >= targets.length) return Promise.resolve();
+      var a = targets[i++];
+      return tmdb('/person/' + a.tmdb + '/combined_credits?language=en-GB').then(function (d) {
+        var from = addDays(today(), -SPEC_BACK_DAYS), to = addDays(today(), SPEC_AHEAD_DAYS), found = {};
+        (d.cast || []).forEach(function (r) { var s = specialOf(r); if (s && s.date >= from && s.date <= to) found[s.id] = s; });
+        Object.keys(spec.items).forEach(function (k) { var s = spec.items[k]; s.aids = (s.aids || []).filter(function (x) { return x !== a.id; }); });
+        Object.keys(found).forEach(function (k) { var cur = spec.items[k] || found[k]; cur.aids = cur.aids || []; if (cur.aids.indexOf(a.id) < 0) cur.aids.push(a.id); spec.items[k] = Object.assign(cur, { title: found[k].title, date: found[k].date, poster: found[k].poster }); });
+        Object.keys(spec.items).forEach(function (k) { if (!(spec.items[k].aids || []).length) delete spec.items[k]; });
+        spec.fetched[String(a.tmdb)] = new Date().toISOString(); ok++;
+      }, function () { fail++; }).then(worker);
+    }
+    return Promise.all([worker(), worker()]).then(function () {
+      if (ok) { spec.fetchedAt = new Date().toISOString(); saveSpec(); }
+      busy.spec = false; if (fail && !ok) sayErr('Could not reach TMDB for comedy specials'); paint();
+    });
+  }
+  // Film & TV Tracker keeps its titles in the shared pal_film_tracker table (title_<id> rows). This writes one in the same shape the Film & TV app uses when it adds a title.
+  var FT_TABLE = 'pal_film_tracker', _ftTitles = null;
+  function ftTable() { if (!_ftTitles) _ftTitles = window.PalSync.table(FT_TABLE, { prefix: 'title_', shared: true }); return _ftTitles; }
+  function ftDates(json) {   // the same date rule as Film & TV Tracker's filmDatesFromJson
+    var cinema = json.release_date || null, cert = null, digital = null, rd = json.release_dates && json.release_dates.results && json.release_dates.results.find(function (r) { return r.iso_3166_1 === 'GB'; });
+    if (rd && rd.release_dates && rd.release_dates.length) {
+      var list = rd.release_dates, pick = function (ty) { return list.filter(function (d) { return d.type === ty && d.release_date; }).sort(function (a, b) { return a.release_date.localeCompare(b.release_date); })[0]; };
+      var th = pick(3) || pick(2) || pick(1) || list[0];
+      if (th) { cinema = th.release_date ? th.release_date.slice(0, 10) : cinema; cert = th.certification || null; }
+      if (!cert) { var cw = list.find(function (d) { return d.type === 3 && d.certification; }); if (cw) cert = cw.certification; }
+      var dg = pick(4); if (dg && dg.release_date) digital = dg.release_date.slice(0, 10);
+    }
+    return { cinema: cinema, cert: cert, digital: digital };
+  }
+  function ftRecord(json, type) {
+    var tv = type === 'tv', now = new Date().toISOString(), ds = String((tv ? json.first_air_date : json.release_date) || ''), av = [];
+    var gb = json['watch/providers'] && json['watch/providers'].results && json['watch/providers'].results.GB;
+    if (gb) [['flatrate', 'subscription'], ['ads', 'free'], ['free', 'free'], ['rent', 'rental'], ['buy', 'purchase']].forEach(function (p) { (gb[p[0]] || []).forEach(function (x) { av.push({ service: x.provider_name, type: p[1] }); }); });
+    var t = { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), type: tv ? 'tv' : 'film', title: tv ? json.name : json.title, originalTitle: tv ? json.original_name : json.original_title,
+      year: ds.slice(0, 4) ? parseInt(ds.slice(0, 4), 10) : null, posterUrl: json.poster_path ? 'https://image.tmdb.org/t/p/w342' + json.poster_path : null, overview: json.overview || '', genres: (json.genres || []).map(function (g) { return g.name; }),
+      externalIds: { tmdb: json.id, imdb: json.imdb_id || null }, availability: av, status: 'watchlist', favourite: false, dateAdded: now, watched: null, notes: '', updatedAt: now };
+    if (tv) {
+      t.seasons = json.number_of_seasons || null; t.episodeCount = json.number_of_episodes || null;
+      t.episodeRuntimeMinutes = (json.episode_run_time && json.episode_run_time[0]) || (json.last_episode_to_air && json.last_episode_to_air.runtime) || null;
+      var rg = json.content_ratings && json.content_ratings.results && json.content_ratings.results.find(function (r) { return r.iso_3166_1 === 'GB'; }); t.contentRating = rg ? rg.rating : null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(json.first_air_date || '')) t.firstAir = json.first_air_date.slice(0, 10);
+    } else {
+      t.runtimeMinutes = json.runtime || null; var fd = ftDates(json); t.cinema = { releaseDate: fd.cinema }; if (fd.digital) t.cinema.digitalDate = fd.digital; t.contentRating = fd.cert;
+    }
+    return t;
+  }
+  function addSpecialToFilm(id) {
+    var it = comingItems().find(function (x) { return x.id === id; }); if (!it || it.kind !== 'sp' || busy['s' + id]) return;
+    if (!tmdbOk()) { sayErr('TMDB is not set up in this app, so this cannot be added'); return; }
+    if (!ensureSession()) { sayErr('Open Gigs & Trips through Pete’s Apps to add to Film & TV'); return; }
+    var s = it.s; busy['s' + id] = true; paint();
+    window.PalSync.fetchTableRows(FT_TABLE, { shared: true }).then(function (rows) {
+      var have = (rows || []).find(function (x) { var d = x && x.data; return String(x.record_key).indexOf('title_') === 0 && d && !d._deleted && d.externalIds && Number(d.externalIds.tmdb) === s.tmdb && d.type === s.type; });
+      if (have) { setRst(id, { ft: true, ni: false }); say('Already in Film & TV'); return null; }
+      return tmdb(s.type === 'tv' ? '/tv/' + s.tmdb + '?language=en-GB&append_to_response=watch/providers,content_ratings' : '/movie/' + s.tmdb + '?language=en-GB&append_to_response=watch/providers,release_dates').then(function (json) {
+        var rec = ftRecord(json, s.type); return ftTable().upsert(rec.id, rec).then(function () { setRst(id, { ft: true, ni: false }); say('Added to Film & TV: Want to Watch'); });
+      });
+    }).catch(function (e) { sayErr('Could not add to Film & TV: ' + ((e && e.message) || 'error')); })
+      .finally(function () { delete busy['s' + id]; paint(); });
+  }
+
   // ── server check (the scheduled function checks concerts and Last.fm; this asks it to do it now) ──
   function checkNow(silent) {
     if (busy.con) return Promise.resolve();
@@ -226,8 +331,19 @@
     save(); push('art', a, 'Artist ' + a.name);
     return { artist: a };
   }
-  function setFollow(a, on) { a.following = !!on; touch(a); if (on) refreshReleases({ only: [a] }); }
-  function setWant(a, key, on) { if (on) delete a[key]; else a[key] = false; touch(a); if (key === 'releases' && on) refreshReleases({ only: [a] }); }
+  function findByTmdb(id) { return live().find(function (a) { return isCom(a) && String(a.tmdb) === String(id); }); }
+  function addComedian(hit) {
+    var ex = findByTmdb(hit.id) || live().find(function (a) { return norm(a.name) === norm(hit.name); }); if (ex) return { dup: ex };
+    var prior = state.artists.find(function (a) { return a._deleted && isCom(a) && String(a.tmdb) === String(hit.id); }), now = new Date().toISOString();
+    var a = prior || { id: 'c' + hit.id, addedAt: now };
+    Object.assign(a, { name: String(hit.name).trim(), kind: 'comedian', tmdb: String(hit.id), img: hit.img || '', appleArtistId: '', appleName: '', genre: 'Comedy', match: 'manual', following: true, excluded: false, _deleted: false, updatedAt: now });
+    delete a.specials;
+    if (!prior) state.artists.push(a);
+    save(); push('art', a, 'Artist ' + a.name);
+    return { artist: a };
+  }
+  function setFollow(a, on) { a.following = !!on; touch(a); if (on) { refreshReleases({ only: [a] }); if (isCom(a)) refreshSpecials({ only: [a] }); } }
+  function setWant(a, key, on) { if (on) delete a[key]; else a[key] = false; touch(a); if (key === 'releases' && on) refreshReleases({ only: [a] }); if (key === 'specials' && on) refreshSpecials({ only: [a] }); }
   function setTour(a, touring) { if (touring) { delete a.tour; delete a.tourNote; } else a.tour = 'ended'; touch(a); }
   var tourEnded = function (a) { return !!a && a.tour === 'ended'; };
   function followByName(name, recId) {
@@ -255,7 +371,7 @@
 
   // ── concerts and releases: Interested / Not interested ──
   var cstMap = function () { var m = {}; state.cst.forEach(function (x) { if (x && x.id && !x._deleted) m[x.id] = { ni: x.ni === true, nt: x.nt === true, alert: x.alert === true, interested: x.interested === true }; }); return m; };
-  var rstMap = function () { var m = {}; state.rst.forEach(function (x) { if (x && x.id && !x._deleted) m[x.id] = { ni: x.ni === true, interested: x.interested === true }; }); return m; };
+  var rstMap = function () { var m = {}; state.rst.forEach(function (x) { if (x && x.id && !x._deleted) m[x.id] = { ni: x.ni === true, interested: x.interested === true, ft: x.ft === true }; }); return m; };
   function setCst(id, patch) {
     var r = state.cst.find(function (x) { return x.id === id; });
     if (!r) { r = { id: id, ni: false, alert: false }; state.cst.push(r); }
@@ -300,6 +416,11 @@
       var r = rel.items[k]; if (!aids[r.aid] || r.date < addDays(t, -NEW_REL_DAYS)) return;
       var f = rs['rel_' + r.id] || {}; out.push({ kind: 'rel', id: 'rel_' + r.id, date: r.date, r: r, hidden: !!f.ni, interested: !!f.interested });
     });
+    var sa = {}; followed().filter(wantsSpecials).forEach(function (a) { sa[a.id] = a; });
+    Object.keys(spec.items).forEach(function (k) {
+      var s = spec.items[k], who = (s.aids || []).filter(function (x) { return sa[x]; }); if (!who.length || s.date < addDays(t, -SPEC_BACK_DAYS) || s.date > addDays(t, SPEC_AHEAD_DAYS)) return;
+      var f = rs[s.id] || {}; out.push({ kind: 'sp', id: s.id, date: s.date, s: s, who: who.map(function (x) { return sa[x].name; }), whoIds: who, hidden: !!f.ni, ft: !!f.ft });
+    });
     return out.sort(function (a, b) { return a.date.localeCompare(b.date) || a.id.localeCompare(b.id); });
   }
   function act(kind, id) {
@@ -324,6 +445,11 @@
     else if (kind === 'rinterested') { var rid = id, rs = rstMap(); setRst(rid, { interested: !(rs[rid] || {}).interested, ni: false }); }
     else if (kind === 'rnotint') { setRst(id, { ni: true, interested: false }); undoToast('Hidden', function () { setRst(id, { ni: false }); }); }
     else if (kind === 'rrestore') setRst(id, { ni: false });
+    else if (kind === 'spadd') addSpecialToFilm(id);
+    else if (kind === 'spnotint') { setRst(id, { ni: true }); undoToast('Hidden', function () { setRst(id, { ni: false }); }); }
+    else if (kind === 'sprestore') setRst(id, { ni: false });
+    else if (kind === 'spstop') { var si = comingItems().find(function (x) { return x.id === id; }), sa_ = si && byId(si.whoIds[0]); if (sa_) { setWant(sa_, 'specials', false); undoToast('Specials for ' + sa_.name + ' stopped', function () { setWant(sa_, 'specials', true); paint(); }); paint(); } }
+    else if (kind === 'spunfollow') { var su = comingItems().find(function (x) { return x.id === id; }), sua = su && byId(su.whoIds[0]); if (sua) unfollowArtist(sua); }
     else if (kind === 'rapple') { var r = rel.items[String(id).replace(/^rel_/, '')]; if (r) { openLink(releaseUrl(r)); setRst(id, { ni: true, interested: false }); undoToast('Opened in Apple Music and removed from the list', function () { setRst(id, { ni: false }); }); } }
   }
 
@@ -363,12 +489,14 @@
     '.gm .row.rc{padding:0}.gm .row.rc>.av{margin:12px 0 12px 12px}.gm .row.rc .rb{padding:12px 12px 12px 12px}.gm .row.rc .rt{font-size:16px}.gm .row.rc .acts .btn{min-height:40px}.gm .rwrap.one .rlist .acts2{grid-column:1/-1}' +
     '@media(max-width:700px){.gm .rwrap,.gm .rwrap.one .rlist{grid-template-columns:minmax(0,1fr)}.gm .row.rc .acts .btn{flex:1 1 calc(50% - 6px);text-align:center;min-height:44px}.gm .row.rc .acts .btn.pri{flex-basis:100%}.gm .rsec h3{margin-top:14px}}' +
     '.gm .badge.sup{background:var(--gold-dim);color:var(--gold)}' +
+    '.gm .dt.sp{background:#5EEAD4;color:#17151C}.gm .dt.sp span{color:#17151C}.gm .tl.sp{background:#5EEAD4}#detailPane .pane-poster.sp,#modal .pane-poster.sp{background:#5EEAD4;color:#17151C}.gm .seg2{display:flex;gap:8px;margin:0 0 12px}' +
     '@media(max-width:420px){.gm .row>.rb{padding:10px}}';
   function ensureCss() { if (document.getElementById('gm-css')) return; var s = document.createElement('style'); s.id = 'gm-css'; s.textContent = CSS; document.head.appendChild(s); }
   function chip(label, on, a) { return '<button type="button" class="chip' + (on ? ' on' : '') + '" data-m="' + a + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>'; }
   function avatar(a) {
     var best = null; Object.keys(rel.items).forEach(function (k) { var r = rel.items[k]; if (hasApple(a) && r.aid === String(a.appleArtistId) && r.art && (!best || r.date > best.date)) best = r; });
     var u = best ? artSize(best.art, 100) : '';
+    if (!u && isCom(a) && /^\/[\w.\-]+$/.test(String(a.img || ''))) u = 'https://image.tmdb.org/t/p/w185' + a.img;   // v1.25
     return '<div class="av">' + E((a.name.trim()[0] || '?').toUpperCase()) + (u ? '<img src="' + E(u) + '" alt="" loading="lazy" onerror="this.remove()">' : '') + '</div>';
   }
   function conActs(it) {
@@ -381,6 +509,12 @@
       '<button class="btn" data-m="notint:' + E(c.id) + '">Not interested</button>' +
       '</div><div class="acts sub"><button class="btn" data-m="notickets:' + E(c.id) + '">No tickets</button><button class="btn" data-m="stoptour:' + E(c.id) + '">Stop tour dates</button><button class="btn" data-m="unfollow:' + E(c.id) + '">Unfollow artist</button>';
   }
+  function spActs(it) {
+    var id = E(it.id);
+    if (it.hidden) return '<button class="btn" data-m="sprestore:' + id + '">Show again</button>';
+    return (it.ft ? '<button class="btn on" disabled>In Film &amp; TV ✓</button>' : '<button class="btn pri" data-m="spadd:' + id + '"' + (busy['s' + it.id] ? ' disabled' : '') + '>' + (busy['s' + it.id] ? 'Adding…' : 'Add to Film &amp; TV') + '</button>') +
+      '<button class="btn" data-m="spnotint:' + id + '">Not interested</button></div><div class="acts sub"><button class="btn" data-m="spstop:' + id + '">Stop specials</button><button class="btn" data-m="spunfollow:' + id + '">Unfollow comedian</button>';
+  }
   function srcName(c) { return c && c.src === 'jambase' ? 'JamBase' : 'Ticketmaster'; }
   function itemRow(it) {
     var d = new Date(it.date + 'T00:00:00Z'), mon = dateLabel(it.date).split(' ')[2];
@@ -390,6 +524,12 @@
         '<div class="rs">' + E(c.venue) + ', ' + E(c.city) + ' · ' + E(dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + E(c.time) : '') + '</div><div class="bd"><span class="badge">Gig</span>' + (it.nt ? '<span class="badge">No tickets</span>' : '') + (it.support ? '<span class="badge sup">Support for ' + E(it.headliner) + '</span>' : '') +
         (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + '<span class="badge src">' + srcName(c) + '</span>' + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
         (salePending(c) ? '<span class="badge sale">On sale ' + E(saleText(c)) + '</span>' : '') + '</div><div class="acts">' + conActs(it) + '</div></div><div class="tl" aria-hidden="true">🎸</div></div>';
+    }
+    if (it.kind === 'sp') {
+      var sp = it.s, out_ = sp.date <= today();
+      return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === it.id ? ' hl' : '') + (selIs('sp', it.id) ? ' sel' : '') + '" id="gm-' + E(it.id) + '" data-sel="sp:' + E(it.id) + '" data-kind="special"><div class="dt sp"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(it.who.join(', ')) + ': ' + E(sp.title) + '</div>' +
+        '<div class="rs">' + (sp.type === 'tv' ? 'Series' : 'Film') + ' · ' + (out_ ? 'out ' : 'due ') + E(fmtDate(sp.date)) + '</div><div class="bd"><span class="badge">Special</span>' + (out_ ? '<span class="badge new">New</span>' : '<span class="badge">Upcoming</span>') + (it.ft ? '<span class="badge int">In Film &amp; TV</span>' : '') + '</div>' +
+        '<div class="acts">' + spActs(it) + '</div></div><div class="tl sp" aria-hidden="true">🎤</div></div>';
     }
     var r = it.r, t = today(), isNew = r.date <= t;
     return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === it.id ? ' hl' : '') + (selIs('rel', it.id) ? ' sel' : '') + '" id="gm-' + E(it.id) + '" data-sel="rel:' + E(it.id) + '" data-kind="release"><div class="dt rl"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(r.artistName) + ': ' + E(r.name) + '</div>' +
@@ -412,16 +552,17 @@
   function renderComing() {
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var allItems = comingItems(), nSup = allItems.filter(function (i) { return i.kind === 'con' && i.support && !i.hidden; }).length; if (ui.noSup) allItems = allItems.filter(function (i) { return !(i.kind === 'con' && i.support); });
-    var items = allItems.filter(function (i) { return ui.cFilter === 'all' || (ui.cFilter === 'gigs' ? i.kind === 'con' : i.kind === 'rel'); }), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
+    var items = allItems.filter(function (i) { return ui.cFilter === 'all' || (ui.cFilter === 'gigs' ? i.kind === 'con' : ui.cFilter === 'specials' ? i.kind === 'sp' : i.kind === 'rel'); }), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
     var cat = (state.conCheck && state.conCheck.at) || '', nTm = shown.filter(function (i) { return i.kind === 'con' && i.c.src !== 'jambase'; }).length, nJb = n - nTm;
-    var status = (cat ? 'Tour dates checked ' + ago(cat) + ' (overnight).' : 'Tour dates are checked overnight.') + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland: ' + nTm + ' Ticketmaster' + (nJb ? ' · ' + nJb + ' JamBase' : '') + '.' : '');
-    var nG = allItems.filter(function (i) { return i.kind === 'con' && !i.hidden; }).length, nR = allItems.filter(function (i) { return i.kind === 'rel' && !i.hidden; }).length;
-    var h = head() + seg([['All ' + (nG + nR), ui.cFilter === 'all', 'cfilter:all'], ['Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs'], ['Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases']]);
+    var spTxt = followed().some(isCom) ? ' Comedy specials ' + (spec.fetchedAt ? 'checked ' + ago(spec.fetchedAt) : 'not checked yet') + ' (TMDB).' : '';
+    var status = (cat ? 'Tour dates checked ' + ago(cat) + ' (overnight).' : 'Tour dates are checked overnight.') + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland: ' + nTm + ' Ticketmaster' + (nJb ? ' · ' + nJb + ' JamBase' : '') + '.' : '') + spTxt;
+    var nG = allItems.filter(function (i) { return i.kind === 'con' && !i.hidden; }).length, nR = allItems.filter(function (i) { return i.kind === 'rel' && !i.hidden; }).length, nS = allItems.filter(function (i) { return i.kind === 'sp' && !i.hidden; }).length, nCom = followed().filter(isCom).length;
+    var h = head() + seg([['All ' + (nG + nR + nS), ui.cFilter === 'all', 'cfilter:all'], ['Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs'], ['Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases']].concat(nS || nCom ? [['Specials ' + nS, ui.cFilter === 'specials', 'cfilter:specials']] : []));
     var nextCon = shown.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0];
     if (nextCon) h += heroHtml(nextCon.c, nextCon);
     h += '<div class="stat"><span role="status">' + E(status) + '</span></div><div class="note">A few of the artists you follow are checked each night, so every artist is looked at every week or two. Each date shows whether Ticketmaster or JamBase found it.</div>';
     if (!followed().length) return h + '<div class="empty">Follow some artists and their Scottish dates and new releases appear here.<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">Go to Artists</button></div></div>';
-    if (!shown.length) h += '<div class="empty">' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '</div>';
+    if (!shown.length) h += '<div class="empty">' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'specials' ? 'No new or upcoming comedy specials for the comedians you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '</div>';
     if (nSup) h += '<div class="chips"><button type="button" class="chip ghost' + (ui.noSup ? ' on' : '') + '" data-m="togglesup" aria-pressed="' + (ui.noSup ? 'true' : 'false') + '">' + (ui.noSup ? 'Showing no support slots (' + nSup + ' hidden)' : 'Hide ' + nSup + ' support slot' + (nSup === 1 ? '' : 's')) + '</button></div>';
     var month = '';
     shown.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<div class="dash-sec">' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</div>'; } h += itemRow(it); });
@@ -451,9 +592,9 @@
   }
   function artRow(a) {
       var fol = isFollowed(a), sw = function (key, label, on, show) { return '<label class="lsw' + (show ? '' : ' na') + '"><input type="checkbox" data-sw="' + key + '" data-id="' + E(a.id) + '" aria-label="' + label + ' for ' + E(a.name) + '"' + (on ? ' checked' : '') + (show ? '' : ' tabindex="-1" aria-hidden="true"') + '>' + label + '</label>'; };
-      var pl = playLine(a);
-      return '<div class="row art' + (fol ? '' : ' dim') + (selIs('art', a.id) ? ' sel' : '') + '" data-sel="art:' + E(a.id) + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="nm">' + E(a.name) + '</div><div class="rs">' + E(pl) + (pl && (fol && a.gigs !== false && tourEnded(a)) ? ' · ' : '') + (fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '') + (!hasApple(a) ? (pl ? ' · ' : '') + 'No Apple match' : '') + '</div></button>' +
-        '<div class="sw">' + sw('follow', 'Follow', fol, true) + sw('releases', 'Releases', fol && a.releases !== false, fol) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div></div>';
+      var com = isCom(a), pl = com ? '' : playLine(a), bits = [pl, fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '', com ? 'Comedian' : (!hasApple(a) ? 'No Apple match' : '')].filter(Boolean);
+      return '<div class="row art' + (fol ? '' : ' dim') + (selIs('art', a.id) ? ' sel' : '') + '" data-sel="art:' + E(a.id) + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="nm">' + E(a.name) + '</div><div class="rs">' + E(bits.join(' · ')) + '</div></button>' +
+        '<div class="sw">' + sw('follow', 'Follow', fol, true) + (com ? sw('specials', 'Specials', fol && a.specials !== false, fol) : sw('releases', 'Releases', fol && a.releases !== false, fol)) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div></div>';
   }
   function pnfBody(pnf) {
     var all = pPeriod() === 'all', lim = ui.aQuery ? 60 : ui.pLimit, shown = pnf.slice(0, lim);
@@ -669,13 +810,13 @@
   function resolveSel() {
     if (sel) {
       if (sel.k === 'art' && byId(sel.id)) return sel;
-      if ((sel.k === 'gig' || sel.k === 'rel') && itemById(sel.id)) return sel;
+      if ((sel.k === 'gig' || sel.k === 'rel' || sel.k === 'sp') && itemById(sel.id)) return sel;
     }
     if (sel && sel.k === 'rec' && visibleRecs().some(function (r) { return r.id === sel.id; })) return sel;
     if (ui.sub === 'recs') { var r0 = visibleRecs()[0], n0 = neverPlayed()[0]; return r0 ? { k: 'rec', id: r0.id } : n0 ? { k: 'art', id: n0.id } : null; }
     if (ui.sub === 'artists') return null;
     var its = comingItems().filter(function (i) { return !i.hidden; }), g = its.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0] || its[0];
-    return g ? { k: g.kind === 'con' ? 'gig' : 'rel', id: g.id } : null;
+    return g ? { k: g.kind === 'con' ? 'gig' : g.kind === 'sp' ? 'sp' : 'rel', id: g.id } : null;
   }
   function yearsRow(k) {
     var Y = {}; people().forEach(function (w) { [state.listBy[w], state.appleBy[w]].forEach(function (L) { var e = L && L.artists && L.artists[k]; if (!e) return; Object.keys(e.mo || {}).forEach(function (m) { Y[m.slice(0, 4)] = (Y[m.slice(0, 4)] || 0) + (Number(e.mo[m]) || 0); }); Object.keys(e.d || {}).forEach(function (d) { Y[d.slice(0, 4)] = (Y[d.slice(0, 4)] || 0) + (Number(e.d[d]) || 0); }); }); });
@@ -714,16 +855,27 @@
       '<div class="pane-card">' + pRow('Release date', E(fmtDate(r.date))) + pRow('Type', kind) + pRow('Tracks', r.tracks ? r.tracks : '') + pRow('Artist', E(r.artistName)) + (listeners().length ? pRow('Plays of ' + E(r.artistName), totalPlays(norm(r.artistName)) + ' (' + playsIn(norm(r.artistName), 30) + ' in 30 days)') : '') + '</div>' +
       (a ? '<div class="pane-actions">' + pBtn('artist:' + E(a.id), 'Artist details') + '</div>' : '');
   }
+  function spPane(it) {
+    var sp = it.s, id = E(it.id), kind = sp.type === 'tv' ? 'Series' : 'Film', u = sp.poster ? 'https://image.tmdb.org/t/p/w342' + sp.poster : '';
+    var acts = it.hidden ? pBtn('sprestore:' + id, 'Show again') : (it.ft ? pBtn('spnone:' + id, 'In Film & TV ✓', { dis: true, on: true }) : pBtn('spadd:' + id, busy['s' + it.id] ? 'Adding…' : 'Add to Film & TV', { pri: true, dis: !!busy['s' + it.id] })) + pBtn('spnotint:' + id, 'Not interested');
+    return poster('SPECIAL', daysPill(sp.date), sp.date, sp.title, it.who.join(', ') + ' · ' + kind, [kind, it.ft ? 'In Film & TV' : ''].filter(Boolean), 'sp') +
+      '<div class="pane-actions" style="margin-bottom:12px">' + acts + '</div>' +
+      (u ? '<div class="pane-card"><img src="' + E(u) + '" alt="" style="width:100%;display:block" onerror="this.parentNode.remove()"></div>' : '') +
+      '<div class="pane-card">' + pRow('Release date', E(fmtDate(sp.date))) + pRow('Type', kind) + pRow('Comedian', E(it.who.join(', '))) + pRow('Found by', 'TMDB') + '</div>' +
+      '<div class="pane-actions">' + it.whoIds.slice(0, 1).map(function (x) { return byId(x) ? pBtn('artist:' + E(x), 'Comedian details') : ''; }).join('') + '</div>';
+  }
   function artistPane(a) {
     var k = norm(a.name), fol = isFollowed(a), cc = state.conCheck || {}, f = cc.fetched && cc.fetched[a.id], n = (cc.empty && cc.empty[a.id]) || 0, id = E(a.id), t = today();
     var sw = function (key, label, on) { return '<div class="pane-row"><b>' + label + '</b><span><input type="checkbox" data-sw="' + key + '" data-id="' + id + '" aria-label="' + label + '"' + (on ? ' checked' : '') + '></span></div>'; };
-    var chips = [fol ? 'Following' : 'Not following', fol && a.gigs !== false && tourEnded(a) ? 'No longer touring' : '', hasApple(a) ? 'Apple Music' : a.pm ? 'Matching…' : 'No Apple Music match', a.match === 'medium' ? 'Check match' : ''].filter(Boolean);
+    var com = isCom(a), chips = [fol ? 'Following' : 'Not following', com ? 'Comedian' : '', fol && a.gigs !== false && tourEnded(a) ? 'No longer touring' : '', com ? '' : hasApple(a) ? 'Apple Music' : a.pm ? 'Matching…' : 'No Apple Music match', a.match === 'medium' ? 'Check match' : ''].filter(Boolean);
+    var sps = com ? Object.keys(spec.items).map(function (x) { return spec.items[x]; }).filter(function (x) { return (x.aids || []).indexOf(a.id) >= 0 && x.date >= addDays(t, -SPEC_BACK_DAYS); }).sort(function (x, y) { return y.date.localeCompare(x.date); }).slice(0, 6) : [];
     var cons = liveConcerts(state.concerts, state.artists, t).filter(function (c) { return String(c.artistId) === String(a.id); }).slice(0, 6);
     var rels = Object.keys(rel.items).map(function (x) { return rel.items[x]; }).filter(function (r) { return hasApple(a) && r.aid === String(a.appleArtistId); }).sort(function (x, y) { return y.date.localeCompare(x.date); }).slice(0, 4);
     return poster('ARTIST', '', '', a.name, a.genre || (hasApple(a) ? 'Apple Music' : ''), chips) +
-      '<div class="pane-actions" style="margin-bottom:12px"><button type="button" class="pane-btn pri" data-m="aapple:' + id + '">Apple Music</button></div>' +
-      '<div class="pane-card">' + sw('follow', 'Following', fol) + (fol ? sw('releases', 'New releases', a.releases !== false) + sw('gigs', 'Tour dates', a.gigs !== false) + (a.gigs !== false ? sw('tour', 'Still touring', !tourEnded(a)) : '') : '') + '</div>' +
-      playsBlock(a) +
+      (com ? '' : '<div class="pane-actions" style="margin-bottom:12px"><button type="button" class="pane-btn pri" data-m="aapple:' + id + '">Apple Music</button></div>') +
+      '<div class="pane-card">' + sw('follow', 'Following', fol) + (fol ? (com ? sw('specials', 'New specials', a.specials !== false) : sw('releases', 'New releases', a.releases !== false)) + sw('gigs', 'Tour dates', a.gigs !== false) + (a.gigs !== false ? sw('tour', 'Still touring', !tourEnded(a)) : '') : '') + '</div>' +
+      (com ? '' : playsBlock(a)) +
+      (com && fol && a.specials !== false ? '<div class="pane-h">Specials</div><div class="pane-card">' + (sps.length ? sps.map(function (x) { return pRow(E(x.title), E(fmtDate(x.date))); }).join('') : pRow('Recent and upcoming', hasTmdb(a) ? (spec.fetched[String(a.tmdb)] ? 'None found' : 'not checked yet') : 'No TMDB match')) + '</div>' : '') +
       (fol && a.gigs !== false ? '<div class="pane-h">Tour dates</div><div class="pane-card">' + (cons.length ? cons.map(function (c) { return '<button type="button" class="pmini" data-m="gotogig:' + E(c.id) + '">' + E(dateLabel(c.date)) + ' · ' + E(c.venue) + ', ' + E(c.city) + '</button>'; }).join('') : pRow('Scottish dates', tourEnded(a) ? 'Not checked (no longer touring)' : 'None found')) +
         pRow('Last checked', tourEnded(a) ? '' : f ? E(fmtDate(f)) + (n >= 6 ? ', nothing found in ' + n + ' checks' : '') : 'not checked yet') + '</div>' : '') +
       (rels.length ? '<div class="pane-h">Recent releases</div><div class="pane-card">' + rels.map(function (r) { return pRow(E(r.name), E(fmtDate(r.date))); }).join('') + '</div>' : '') +
@@ -742,7 +894,7 @@
     else if (!s) h = ui.sub === 'artists' ? overviewPane() : ui.sub === 'recs' ? '<div class="pane-empty">No suggestions to show.</div>' : '<div class="pane-empty">Select a tour date or release to see it here.</div>';
     else if (s.k === 'rec') { var rr_ = state.recs.find(function (x) { return x.id === s.id; }); h = rr_ ? recPane(rr_) : '<div class="pane-empty">Select a suggestion to see it here.</div>'; }
     else if (s.k === 'art') h = artistPane(byId(s.id));
-    else { var it = itemById(s.id); h = it ? (it.kind === 'con' ? gigPane(it) : relPane(it)) : '<div class="pane-empty">Select a tour date or release to see it here.</div>'; }
+    else { var it = itemById(s.id); h = it ? (it.kind === 'con' ? gigPane(it) : it.kind === 'sp' ? spPane(it) : relPane(it)) : '<div class="pane-empty">Select a tour date or release to see it here.</div>'; }
     var top = paneEl.scrollTop; paneEl.innerHTML = h; paneEl.scrollTop = top;
   }
 
@@ -750,7 +902,7 @@
   function saveFile(name, text) { var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
   function exportArtists() {
     var rows = live().slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); }).map(function (a) {
-      var k = norm(a.name); return { name: a.name, following: isFollowed(a), releases: a.releases !== false, gigs: a.gigs !== false, tour: tourEnded(a) ? 'ended' : 'active', tourNote: a.tourNote || '', genre: a.genre || '', appleArtistId: a.appleArtistId || '', plays: totalPlays(k), plays30: playsIn(k, 30) };
+      var k = norm(a.name); return Object.assign({ name: a.name, following: isFollowed(a), releases: a.releases !== false, gigs: a.gigs !== false, tour: tourEnded(a) ? 'ended' : 'active', tourNote: a.tourNote || '', genre: a.genre || '', appleArtistId: a.appleArtistId || '', plays: totalPlays(k), plays30: playsIn(k, 30) }, isCom(a) ? { kind: 'comedian', tmdb: a.tmdb || '', specials: a.specials !== false } : {});
     });
     saveFile('music-artists.json', JSON.stringify({ format: 'music-artists/1', app: 'gigs-and-trips-music', version: VERSION, exportedAt: new Date().toISOString(),
       howTo: 'To add acts, add entries to artists (just a name is enough) and import the file in Music > Artists > Import artists. Names already in your list are recognised and not added twice. Optional per artist: releases (false = no new releases), gigs (false = no tour dates), tour ("ended" = no longer touring), tourNote.', artists: rows }, null, 2));
@@ -860,6 +1012,7 @@
       var f = {}; if (it && typeof it === 'object') {
         if (typeof it.following === 'boolean') f.following = it.following; if (typeof it.releases === 'boolean') f.releases = it.releases;
         var g = typeof it.gigs === 'boolean' ? it.gigs : typeof it.tourDates === 'boolean' ? it.tourDates : undefined; if (g !== undefined) f.gigs = g;
+        if (it.kind === 'comedian' && /^\d{1,10}$/.test(String(it.tmdb || ''))) { f.kind = 'comedian'; f.tmdb = String(it.tmdb); } if (typeof it.specials === 'boolean') f.specials = it.specials;
         if (it.tour === 'ended' || it.tour === 'active') f.tour = it.tour; if (typeof it.tourNote === 'string') f.tourNote = it.tourNote.slice(0, 200);
       }
       out.push({ name: nm.trim().replace(/\s+/g, ' '), f: f });
@@ -868,11 +1021,12 @@
     return { items: out, bad: bad };
   }
   function flagDiff(a, f) {
-    return (f.releases !== undefined && (a.releases !== false) !== f.releases) || (f.gigs !== undefined && (a.gigs !== false) !== f.gigs) || (f.tour !== undefined && tourEnded(a) !== (f.tour === 'ended')) || (f.tourNote !== undefined && tourEnded(a) && (a.tourNote || '') !== f.tourNote);
+    return (f.releases !== undefined && (a.releases !== false) !== f.releases) || (f.gigs !== undefined && (a.gigs !== false) !== f.gigs) || (f.tour !== undefined && tourEnded(a) !== (f.tour === 'ended')) || (f.tourNote !== undefined && tourEnded(a) && (a.tourNote || '') !== f.tourNote) || (f.specials !== undefined && isCom(a) && (a.specials !== false) !== f.specials);
   }
   function applyFlags(a, f) {
     if (f.releases !== undefined) { if (f.releases) delete a.releases; else a.releases = false; }
     if (f.gigs !== undefined) { if (f.gigs) delete a.gigs; else a.gigs = false; }
+    if (f.specials !== undefined && isCom(a)) { if (f.specials) delete a.specials; else a.specials = false; }
     if (f.tour === 'ended') { a.tour = 'ended'; if (f.tourNote) a.tourNote = f.tourNote; } else if (f.tour === 'active') { delete a.tour; delete a.tourNote; } else if (f.tourNote !== undefined && tourEnded(a)) a.tourNote = f.tourNote;
   }
   function planImport(P) {
@@ -912,13 +1066,14 @@
     p.add.forEach(function (it, i) {
       var id = newId('') + i.toString(36); while (ids[id]) id += 'x'; ids[id] = 1;
       var a = { id: id, addedAt: now, name: it.name, appleArtistId: '', appleName: '', genre: '', match: 'none', following: true, excluded: false, _deleted: false, updatedAt: now, pm: true };
+      if (it.f.kind === 'comedian') { delete a.pm; Object.assign(a, { kind: 'comedian', tmdb: it.f.tmdb, genre: 'Comedy', match: 'manual' }); }
       applyFlags(a, it.f); state.artists.push(a); changed.push(a);
     });
     p.refollow.concat(p.restore).forEach(function (e) { var a = e.a; a._deleted = false; a.excluded = false; a.following = true; applyFlags(a, e.it.f); a.updatedAt = now; changed.push(a); });
     p.change.forEach(function (e) { applyFlags(e.a, e.it.f); e.a.updatedAt = now; changed.push(e.a); });
     save(); paint();
     say('Imported: ' + p.add.length + ' added' + (changed.length > p.add.length ? ', ' + (changed.length - p.add.length) + ' updated' : ''));
-    return pushMany(changed).then(function () { refreshReleases({}); return matchPending(); });
+    return pushMany(changed).then(function () { refreshReleases({}); refreshSpecials({}); return matchPending(); });
   }
   // New artists from an import have no Apple Music id yet: match them one at a time, gently (the iTunes search allows roughly 20 a minute).
   function pendingMatch() { return live().filter(function (a) { return a.pm === true; }); }
@@ -993,12 +1148,22 @@
     modal('artist', '<div class="gm-sheet">' + artistPane(a) + '<div class="pane-actions" style="margin-top:10px"><button type="button" class="pane-btn" data-m="closemodal">Close</button></div></div>');
   }
   function openAdd() {
-    modal('add', '<div class="gm-sheet"><h2>Add artist</h2><input type="text" id="gmadd" placeholder="Artist name" autocomplete="off" autocorrect="off" aria-label="Artist name"><div class="acts"><button class="btn pri" data-m="dosearch">Search Apple Music</button><button class="btn" data-m="closemodal">Close</button></div><div id="gmres"></div></div>');
+    var com = addKind === 'com';
+    modal('add', '<div class="gm-sheet"><h2>Add artist</h2>' + seg([['Musician', !com, 'addkind:music'], ['Comedian', com, 'addkind:com']]) + '<input type="text" id="gmadd" placeholder="' + (com ? 'Comedian name' : 'Artist name') + '" autocomplete="off" autocorrect="off" aria-label="' + (com ? 'Comedian name' : 'Artist name') + '"><div class="acts"><button class="btn pri" data-m="dosearch">' + (com ? 'Search TMDB' : 'Search Apple Music') + '</button><button class="btn" data-m="closemodal">Close</button></div>' + (com ? '<div class="note">Comedians are found on TMDB. New and upcoming specials appear in Coming up.</div>' : '') + '<div id="gmres"></div></div>');
     setTimeout(function () { var i = document.getElementById('gmadd'); if (i) i.focus(); }, 50);
   }
   var lastHits = [];
   function doSearch() {
     var q = (document.getElementById('gmadd') || {}).value || ''; q = q.trim(); var out = document.getElementById('gmres'); if (!q || !out) return;
+    if (addKind === 'com') {
+      if (!tmdbOk()) { out.innerHTML = '<div class="note">TMDB is not set up in this app, so comedians cannot be searched.</div>'; return; }
+      out.innerHTML = '<div class="note">Searching…</div>';
+      searchComedians(q).then(function (hits) {
+        lastCom = hits;
+        out.innerHTML = hits.length ? hits.map(function (h, i) { return '<div class="row"><div class="rb"><div class="rt">' + E(h.name) + '</div><div class="rs">' + E(h.known) + '</div></div><button class="btn pri" data-m="pickcom:' + i + '">Follow</button></div>'; }).join('') : '<div class="note">No match on TMDB.</div>';
+      }).catch(function (e) { out.innerHTML = '<div class="note">Could not search: ' + E((e && e.message) || 'error') + '</div>'; });
+      return;
+    }
     out.innerHTML = '<div class="note">Searching…</div>';
     searchArtists(q).then(function (hits) {
       lastHits = hits;
@@ -1016,7 +1181,7 @@
   // v1.21: followed artists with no plays at all (needs some listening history to be loaded, otherwise everyone would look unplayed)
   function neverPlayed() {
     if (!people().length) return [];
-    return followed().filter(function (a) { return totalPlays(norm(a.name)) === 0; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+    return followed().filter(function (a) { return !isCom(a) && totalPlays(norm(a.name)) === 0; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
   }
   // ── events ──
   function onClick(e) {
@@ -1051,7 +1216,8 @@
     else if (k === 'lmin') { ui.lMin = Number(v); saveUi(); paint(); }
     else if (k === 'gotogig') { ui.sub = 'coming'; saveUi(); selectItem('gig', v); }
     else if (k === 'artist') { if (paneOn()) selectItem('art', v); else openArtist(v); }
-    else if (k === 'addartist') openAdd();
+    else if (k === 'addartist') { addKind = 'music'; openAdd(); }
+    else if (k === 'addkind') { addKind = v === 'com' ? 'com' : 'music'; openAdd(); }
     else if (k === 'dosearch') doSearch();
     else if (k === 'closemodal') H().closeModal();
     else if (k === 'followname') followByName(v);
@@ -1064,6 +1230,7 @@
     else if (k === 'recapple') { var r2 = state.recs.find(function (x) { return x.id === v; }); if (r2) openLink(macify('https://music.apple.com/gb/search?term=' + encodeURIComponent(r2.name))); }
     else if (k === 'recknown' || k === 'recno') { var r3 = state.recs.find(function (x) { return x.id === v; }); setFb(v, k === 'recknown' ? 'known' : 'dismissed'); if (r3) undoToast(r3.name + ' hidden', function () { setFb(v, 'new'); }); }
     else if (k === 'pick') { var hit = lastHits[Number(v)]; if (hit) { var res = addArtist(hit.artistName, hit, 'manual'); H().closeModal(); say(res.dup ? hit.artistName + ' is already added' : 'Following ' + hit.artistName); if (res.artist) refreshReleases({ only: [res.artist] }); paint(); } }
+    else if (k === 'pickcom') { var ch = lastCom[Number(v)]; if (ch) { var cr = addComedian(ch); H().closeModal(); say(cr.dup ? ch.name + ' is already in your list' : 'Following ' + ch.name); if (cr.artist) refreshSpecials({ only: [cr.artist] }); paint(); } }
     else if (k === 'addplain') { addArtist(v, null, 'none'); H().closeModal(); say('Added ' + v + ' (no Apple Music match)'); paint(); }
     else if (k === 'aapple') { var a = byId(v); if (a) openLink(artistUrl(a)); }
     else if (k === 'aremove') { var ar = byId(v); if (ar) { ar._deleted = true; touch(ar); H().closeModal(); undoToast(ar.name + ' removed', function () { ar._deleted = false; touch(ar); paint(); }); paint(); } }
@@ -1113,10 +1280,11 @@
     if (booted) return booted;
     loadUi(); ensureCss();
     try { var ci = JSON.parse(localStorage.getItem('gat_mus_cinfo') || 'null'); if (ci) cinfo = { at: ci.at || null, msg: ci.msg || '' }; } catch (e) {}
-    booted = kvOpen().then(function () { return Promise.all([kvGet('state'), kvGet('rel')]); }).then(function (v) {
+    booted = kvOpen().then(function () { return Promise.all([kvGet('state'), kvGet('rel'), kvGet('spec')]); }).then(function (v) {
       var s = v[0]; if (s && typeof s === 'object') ['artists', 'cst', 'rst', 'recfb', 'concerts', 'recs'].forEach(function (k) { if (Array.isArray(s[k])) state[k] = s[k]; });
       if (s && s.listBy && typeof s.listBy === 'object') { state.listBy = {}; Object.keys(s.listBy).forEach(function (w) { state.listBy[w] = rekey(s.listBy[w]); }); } if (s && s.appleBy && typeof s.appleBy === 'object') state.appleBy = s.appleBy; if (s && s.conCheck) state.conCheck = s.conCheck;
       if (v[1] && v[1].items) rel = { fetchedAt: v[1].fetchedAt || null, items: v[1].items, fetched: v[1].fetched || {} };
+      if (v[2] && v[2].items) spec = { fetchedAt: v[2].fetchedAt || null, items: v[2].items, fetched: v[2].fetched || {} };
       if (state.artists.length) ready = true;
     });
     return booted;
@@ -1128,6 +1296,7 @@
       return pull(false).then(function (changed) {
         ready = true; paint();
         refreshReleases({}).then(function () { return null; });
+        refreshSpecials({});
         if (pendingMatch().length && ensureSession()) matchPending();
       });
     });
@@ -1147,8 +1316,8 @@
   try { if (window.PalShared && PalShared.app && PalShared.app.addPart) PalShared.app.addPart({ id: 'music', name: 'Music', version: VERSION }); } catch (e) {}   // v1.24 (MUS-NEXT-1)
   window.GatMusic = {
     listenCard: listenCard,
-    version: VERSION, pane: pane, render: render, pull: pull, paint: paint, init: init, exportBackup: exportBackup, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, ui: ui, busy: busy, ready: ready }; },
+    version: VERSION, pane: pane, render: render, pull: pull, paint: paint, init: init, exportBackup: exportBackup, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, spec: spec, ui: ui, busy: busy, ready: ready }; },
     // for the rest of Gigs & Trips (next stage): interested items for Upcoming and the timeline
-    core: { norm: norm, slug: slug, classify: classify, parseRelease: parseRelease, liveConcerts: liveConcerts }
+    core: { norm: norm, slug: slug, classify: classify, parseRelease: parseRelease, liveConcerts: liveConcerts, specialOf: specialOf, isCom: isCom }
   };
 })();
