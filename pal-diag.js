@@ -3,19 +3,20 @@
  * storage-headroom probe that writes a scratch key and ALWAYS removes it again,
  * and (1.5.0, R32) the 'Old data' sheet, which can delete four known orphaned key
  * families only after a backup file has been downloaded and a second tap confirms.
+ * 1.9.0 (R47, SUITE-22): a 'Refresh coverage' section (how each app's launcher figures are kept fresh, and when each out-of-sight warm-up last ran) and a 'Server jobs' section (the Liverpool database refresh, read through the public lfc_status function: last success and last attempt per category, failed or stale flagged; no key is sent or reported).
  * 1.8.0 (R41, SUITE-20): a 'Versions' section. For every app it compares the version the app registers (PalShared.app, library 1.10.0+), the version in its page title and the version in its contract, and flags a MISMATCH or a missing version; apps that are not open are checked from their contracts, so nothing has to be opened. Parts (Music inside Gigs & Trips) are listed under their app.
  * 1.7.1 (R35): Restore check follows the 1.8.0 preview rules (stamps from the data field only).
  * 1.7.0 (R34): a 'Restore check' sheet that tries the shared dialogs (PalUI) and runs the restore preview and report (PalSync.restorePreview / restoreReport) read-only against live tables.
  * 1.6.0 (R33): a contract marked stale (too large to store) or trimmed by the library is reported as an ISSUE / note in the Contracts section.
  * Produces a copyable plain-text report, format "device-check/1".
- * No network calls except a same-origin fetch of manifest.json. No secrets are
+ * No network calls except a same-origin fetch of manifest.json and (1.9.0) one read-only call to the public lfc_status function (anon key, 8 s limit). No secrets are
  * reported: no tokens, no keys, no email, no record contents.
  */
 (function () {
   'use strict';
   if (window.PalDiag) return;
 
-  var VERSION = '1.8.0';
+  var VERSION = '1.9.0';
   var PROBE_KEY = '__pal_diag_probe';
   var PROBE_CAP = 2500000;     // characters; never write more than this
   var COARSE = 250000, FINE = 10000;
@@ -296,7 +297,59 @@
     sec('Version check', vl);
     sec('Versions', safe(function () { return versionLines(fv, function (id) { return window.PalContract && window.PalContract.read ? window.PalContract.read(id) : null; }, ctx.launcherVersion, VER_APPS); }, ['Versions: could not be worked out']));   // 1.8.0
 
+    sec('Refresh coverage', safe(function () { return refreshLines(ctx.refresh); }, ['Refresh coverage: could not be worked out']));   // 1.9.0
+
     return { R: R, standalone: standalone };
+  }
+
+  /* -- 1.9.0 (SUITE-22): how each app's launcher figures are kept fresh. ctx.refresh is built by the launcher:
+        [{ id, label, how: 'warm-up'|'own warm-up'|'launcher feed'|'inside <app>'|'contract only', at: ISO|'', ok: bool|null, note }] -- */
+  function refreshLines(list) {
+    if (!list || !list.length) return ['no coverage list supplied by the launcher (older launcher?)'];
+    var L = [], gaps = 0;
+    list.forEach(function (a) {
+      var when = '';
+      if (a.at) { var t = Date.parse(a.at); when = isNaN(t) ? '' : ', last ' + (a.ok === false ? 'FAILED ' : 'ran ') + Math.max(0, Math.round((Date.now() - t) / 60000)) + ' min ago'; }
+      else if (a.how === 'warm-up') when = ', not run on this device yet';
+      var gap = a.how === 'contract only';
+      if (gap) gaps++;
+      L.push((gap ? 'NOTE  ' : 'OK  ') + a.label + ': ' + a.how + when + (a.note ? ' (' + a.note + ')' : ''));
+    });
+    L.push(gaps ? gaps + ' app(s) are refreshed only when opened (contract only)' : 'every listed app has a refresh path');
+    return L;
+  }
+
+  /* -- 1.9.0 (SUITE-22): server jobs. Reads the Liverpool refresh status through the public lfc_status function
+        (same anon access the Fantasy app uses). No key is sent, nothing is changed. -- */
+  function serverJobs() {
+    var c = window.PAL_CONFIG || {};
+    if (!c.SB_URL || !c.SB_KEY) return Promise.resolve(['not checked: Supabase is not configured on this page']);
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null, to = ctl ? setTimeout(function () { ctl.abort(); }, 8000) : null;
+    return fetch(c.SB_URL + '/rest/v1/rpc/lfc_status', { method: 'POST', headers: { apikey: c.SB_KEY, Authorization: 'Bearer ' + c.SB_KEY, 'Content-Type': 'application/json' }, body: '{}', signal: ctl ? ctl.signal : undefined })
+      .then(function (r) {
+        if (!r.ok) return ['Liverpool database status: HTTP ' + r.status + (r.status === 404 ? ' (database not set up or lfc_status missing)' : '')];
+        return r.json().then(function (j) { return serverLines(j); });
+      })
+      .catch(function (e) { return ['Liverpool database status: not reachable (' + String(e && e.name === 'AbortError' ? 'timed out after 8 s' : (e && e.message) || e) + ')']; })
+      .then(function (L) { if (to) clearTimeout(to); return L; });
+  }
+  function serverLines(j) {
+    if (j && typeof j === 'object' && !Array.isArray(j) && j.lfc_status) j = j.lfc_status;
+    var root = j && (j.sync || j.categories || j), L = [], bad = 0, stale = 0, n = 0;
+    if (!root || typeof root !== 'object') return ['Liverpool database status: unexpected reply'];
+    if (j && j.schema_version != null) L.push('schema version: ' + j.schema_version);
+    Object.keys(root).sort().forEach(function (k) {
+      var o = root[k]; if (!o || typeof o !== 'object' || !('status' in o || 'last_success_at' in o)) return;
+      n++;
+      var ok = o.last_success_at ? Date.parse(o.last_success_at) : 0, at = o.last_attempt_at ? Date.parse(o.last_attempt_at) : 0;
+      var ago = function (t) { return t ? Math.max(0, Math.round((Date.now() - t) / 3600000)) + ' h ago' : 'never'; };
+      var failed = o.status === 'failed', old = ok && Date.now() - ok > 48 * 3600000;
+      if (failed) bad++; else if (old) stale++;
+      L.push((failed ? 'FAILED  ' : old ? 'STALE  ' : o.status === 'never' ? 'NOTE  ' : 'OK  ') + k + ': ' + (o.status || '?') + ', last success ' + ago(ok) + ', last attempt ' + ago(at) + (failed && o.error ? ' | ' + String(o.error).slice(0, 120) : ''));
+    });
+    if (!n) return ['Liverpool database status: no categories reported'];
+    L.push('Liverpool refresh (lfc-refresh, daily 03:30 UTC): ' + (bad ? bad + ' failed' : stale ? stale + ' stale' : 'all categories current'));
+    return L;
   }
 
   function asyncSections(R) {
@@ -354,6 +407,7 @@
       L.push('meta theme-color: ' + (tc ? tc.getAttribute('content') : 'absent'));
       R.push(['Manifest and install', L]);
     }));
+    jobs.push(serverJobs().then(function (L) { R.push(['Server jobs', L]); }));   // 1.9.0
     return Promise.all(jobs);
   }
 
@@ -554,12 +608,12 @@
     try { c = collect(ctx); } catch (e) { running = false; show('Device check failed: ' + (e && e.message || e)); return Promise.resolve(); }
     return asyncSections(c.R).then(function () {
       // keep section order stable regardless of async completion order
-      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Versions', 'Fonts', 'Service workers', 'Manifest and install'];
+      var order = ['Report', 'Device', 'Time and date', 'localStorage', 'Origin storage', 'Contracts (pal_x_*)', 'Cloud contracts', 'App frames', 'Version check', 'Versions', 'Refresh coverage', 'Server jobs', 'Fonts', 'Service workers', 'Manifest and install'];
       c.R.sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
       show(toText(c.R));
     }).catch(function (e) { show('Device check failed: ' + (e && e.message || e)); })
       .then(function () { running = false; });
   }
 
-  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, _restoreCheck: showRestoreCheck, _runRestoreCheck: runRestoreCheck, run: run, _collect: collect, _probe: probeHeadroom, _text: toText, _versionLines: versionLines };
+  window.PalDiag = { VERSION: VERSION, _orphans: findOrphans, _orphanBackup: orphanBackup, _oldData: showOldData, _restoreCheck: showRestoreCheck, _runRestoreCheck: runRestoreCheck, run: run, _collect: collect, _probe: probeHeadroom, _text: toText, _versionLines: versionLines, _refreshLines: refreshLines, _serverLines: serverLines };
 })();
