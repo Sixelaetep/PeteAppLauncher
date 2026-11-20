@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v4.21</title>
+<title>Film &amp; TV Tracker v4.22</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23CBF55C' text-anchor='middle'>🎬</text></svg>">
 <style>
@@ -414,6 +414,11 @@
   .ne-info span { display:block; font-size:12px; color:var(--ink3); margin-top:2px; }
   .ne-btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
   .ne-btns .small-btn.pri { background:var(--acc); color:var(--accTx); border-color:var(--acc); font-weight:600; }
+  .ep-box { padding:2px 0 8px 22px; }
+  .ep-r { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 0; font-size:13px; border-bottom:1px solid var(--border); cursor:pointer; }
+  .ep-r.dim { opacity:.5; cursor:default; }
+  .ep-r .small-btn, .ep-tg { padding:2px 8px; font-size:11px; }
+  .ep-foot { display:flex; gap:8px; padding-top:8px; }
   .small-btn { background:var(--surface2); border:1px solid var(--border); color:var(--ink2); padding:5px 10px; border-radius:7px; font-size:11.5px; cursor:pointer; }
   .service-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:12.5px; }
   .service-row:last-child { border-bottom:none; }
@@ -755,7 +760,7 @@
 <body>
 
 <div class="chrome">
-  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.21</span></span></h1>
+  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.22</span></span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -1150,10 +1155,11 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=4.21"></script>
+<script src="pal-shared.js?v=4.22"></script>
 <script>
 /* v4.14 (SUITE-18, build B2b): the one place this app's version is written in code. VERSION, the contract app field, the bridge and backup read PAL_APP_VERSION; PalShared.app shows it in the Sync & Backup sheet and the launcher Device check. The title, the visible label and the ?v= tag are text and are checked against it by the Device check. */
-var PAL_APP_VERSION='4.21';
+var PAL_APP_VERSION='4.22';
+/* v4.22 (FTT-061): opening a TV show checks its seasons with TMDB (once per session), so an announced season is corrected straight away without running Check for new seasons. Episode tracking in the detail view: each season has an Episodes button listing its episodes (tap to tick, Up to here, Mark season watched, Clear); episode data is loaded the first time a show is opened (number and air date only) and a Watched show's seasons are ticked in full. Only released episodes can be ticked. No new fields: it uses the existing seasonsProgress record. */
 /* v4.21 (FTT-060): fix for v4.20. Shows added before v4.20 had an announced season stored as a tracked season ('not started'). Checking a show now trims seasons that are not out yet from the tracked count and records the next one as Announced (t.nextSeason). Ended shows count every season as out. */
 /* v4.20 (FTT-059): an announced season (TMDB lists it before it is out) no longer moves a Watched show back to Want to Watch. It shows as Announced with its date, in a new group 'Series working on New Season' under Low interest, is highlighted as it comes due (in the app and as a launcher Needs attention line), and each tile carries a small logo of the streaming service the title is on. New optional field t.nextSeason = { n, date }; nothing is migrated. */
 /* v4.19 (FTT-058): a title's detail view shows its director and top cast (fetched from TMDB when the detail is opened, not stored) with a Follow button on each; followed people appear in the People tab. */
@@ -2375,6 +2381,7 @@ function openDetail(id) {
   renderDetail();
   const el = isDesktop() ? document.getElementById('dpane') : document.getElementById('detailView');
   if (el) el.scrollTop = 0;
+  if (t.type === 'tv') detailAutoRefresh(id);   // v4.22
 }
 function closeDetail() {
   detailId = null;
@@ -2476,7 +2483,9 @@ function detailHtml(t) {
           else if (s.episodeCount) label = `${(s.watchedEpisodes || []).length}/${s.episodeCount} episodes`;
           else label = 'In progress';
         }
-        rows.push(`<div class="dv-row tap" role="button" tabindex="0" onclick="detailToggleSeason('${t.id}',${sn})"><span>${isSeasonWatched(s) ? '✅' : '⬜'} Season ${sn}</span><span>${esc(label)}</span></div>`);
+        const epOpen = !!_epOpen[t.id + ':' + sn];
+        rows.push(`<div class="dv-row tap" role="button" tabindex="0" onclick="detailToggleSeason('${t.id}',${sn})"><span>${isSeasonWatched(s) ? '✅' : '⬜'} Season ${sn} <button class="small-btn ep-tg" onclick="detailToggleEpBox('${t.id}',${sn},event)">Episodes ${epOpen ? '▴' : '▾'}</button></span><span>${esc(label)}</span></div>`);
+        if (epOpen) rows.push(epBoxHtml(t, sn));   // v4.22
       }
       const nx = t.nextSeason;   // v4.20: an announced season
       if (nx) { segs += `<i class="a" title="Season ${nx.n} announced"></i>`; rows.push(`<div class="dv-row"><span>🗓️ Season ${nx.n}</span><span>${esc(nsStatusText(t))}</span></div>`); }
@@ -2485,7 +2494,7 @@ function detailHtml(t) {
       const callout = !ns ? '' : (t.seasons >= ns
         ? `<div class="dv-callout"><span>🆕 Season ${ns} added${t.status === 'watchlist' && t.returningShow ? ' — back on your Want to Watch list' + (t.watched && t.watched.rating ? ' (your ' + t.watched.rating + '/10 rating is kept)' : '') : ''}</span><button class="small-btn" onclick="acknowledgeNewSeasons('${t.id}')">Mark as reviewed</button></div>`
         : `<div class="dv-callout"><span>🆕 TMDB now shows ${ns} seasons</span><button class="small-btn" onclick="acknowledgeNewSeasons('${t.id}')">Update tracked count</button></div>`);
-      html += `<div class="dv-sec" id="dvSeasons"><h3>TV progress${sum ? ' · ' + sum.fully + ' of ' + sum.total + (sum.total === 1 ? ' season' : ' seasons') + ' watched' : ''} <span style="text-transform:none;font-weight:400;letter-spacing:0">· tap a season to tick it</span></h3>`
+      html += `<div class="dv-sec" id="dvSeasons"><h3>TV progress${sum ? ' · ' + sum.fully + ' of ' + sum.total + (sum.total === 1 ? ' season' : ' seasons') + ' watched' : ''} <span style="text-transform:none;font-weight:400;letter-spacing:0">· tap a season to tick it, or open its episodes</span></h3>`
         + callout + nsCallout
         + `<div class="rx-seasons" aria-hidden="true">${segs}</div>`
         + rows.join('') + `</div>`;
@@ -3035,6 +3044,7 @@ function quickSetInterest(id, level) {
   renderDetail();
   toast(`Interest: ${INTEREST_LABEL[interestKey(t)].replace(' interest', '').toLowerCase()}`);
 }
+function epReleased(e) { return !(e && isIsoDate(e.airDate) && e.airDate > todayISO()); }   // v4.22: an episode with a future date cannot be watched yet
 function isSeasonWatched(sn) {
   if (!sn) return false;
   if (sn.manuallyMarkedWatched) return true;
@@ -3045,7 +3055,7 @@ function setSeasonWatched(t, n, on) {
   t.seasonsProgress = t.seasonsProgress || {};
   const sp = t.seasonsProgress, cur = sp[n], hasList = !!(cur && (cur.episodeList || []).length);
   if (on) {
-    if (hasList) { cur.watchedEpisodes = cur.episodeList.map(e => e.number); }
+    if (hasList) { cur.watchedEpisodes = cur.episodeList.filter(epReleased).map(e => e.number); cur.manuallyMarkedWatched = false; }   // v4.22: released episodes only
     else if (cur) { cur.manuallyMarkedWatched = true; }
     else sp[n] = { episodeCount: null, name: 'Season ' + n, episodeList: [], watchedEpisodes: [], manuallyMarkedWatched: true, source: 'manual' };
   } else if (cur) {
@@ -3092,6 +3102,96 @@ function detailToggleSeason(id, n) {
   t.updatedAt = new Date().toISOString();
   checkAutoCompleteSeries(t);
   saveState(); if (window.PalSync.hasSession()) syncPushTitle(t);
+}
+// ── v4.22 (FTT-061): episodes in the detail view ──────────────────────────────────────────────────
+// Uses the existing t.seasonsProgress[n] = { episodeCount, episodeList: [{number, airDate, name?}], watchedEpisodes: [numbers] } record, so nothing is migrated
+// and the edit window, backup and sync read it as before. episodeCount is every episode TMDB lists (an airing season is not complete until
+// its last episode is out and watched); only released episodes can be ticked.
+var _epOpen = {};                 // 'titleId:season' → episode list open in the detail view (this session)
+const _epBusy = new Set(), _epFresh = new Set(), _dvChecked = new Set();
+function epBoxHtml(t, n) {
+  const s = (t.seasonsProgress || {})[n], list = (s && s.episodeList) || [];
+  if (!list.length) return `<div class="ep-box dv-muted">${_epBusy.has(t.id) ? 'Loading episode data…' : (window.PAL_CONFIG.TMDB_READ_TOKEN ? 'No episode data for this season yet. Close and reopen this show to load it.' : 'No TMDB key configured')}</div>`;
+  const w = new Set(s.watchedEpisodes || []);
+  const rows = list.map(e => {
+    const rel = epReleased(e), on = w.has(e.number), when = isIsoDate(e.airDate) ? winShort(e.airDate) : '';
+    return `<div class="ep-r${rel ? '' : ' dim'}"${rel ? ` onclick="detailToggleEp('${t.id}',${n},${e.number})"` : ''}><span>${rel ? (on ? '✅' : '⬜') : '🗓️'} E${e.number}${e.name ? ' ' + esc(e.name) : ''}</span><span>${rel ? (on ? '' : `<button class="small-btn" onclick="detailEpUpTo('${t.id}',${n},${e.number},event)">Up to here</button> `) + esc(when) : 'airs ' + esc(when || 'date to be confirmed')}</span></div>`;
+  }).join('');
+  return `<div class="ep-box">${rows}<div class="ep-foot"><button class="small-btn" onclick="detailMarkSeason('${t.id}',${n},true)">Mark season watched</button><button class="small-btn" onclick="detailMarkSeason('${t.id}',${n},false)">Clear</button></div></div>`;
+}
+function detailToggleEpBox(id, n, ev) { if (ev) ev.stopPropagation(); const k = id + ':' + n; _epOpen[k] = !_epOpen[k]; renderDetail(); }
+function epCommit(t) {
+  t.updatedAt = new Date().toISOString();
+  checkAutoCompleteSeries(t);
+  saveState(); if (window.PalSync.hasSession()) syncPushTitle(t);
+  renderDetail();
+}
+function detailToggleEp(id, n, num) {
+  const t = state.titles.find(x => x.id === id && !x._deleted), s = t && (t.seasonsProgress || {})[n]; if (!s) return;
+  const w = s.watchedEpisodes = s.watchedEpisodes || [], i = w.indexOf(num);
+  if (i >= 0) w.splice(i, 1); else w.push(num);
+  s.manuallyMarkedWatched = false; epCommit(t);
+}
+function detailEpUpTo(id, n, num, ev) {   // tick this episode and every earlier released one
+  if (ev) ev.stopPropagation();
+  const t = state.titles.find(x => x.id === id && !x._deleted), s = t && (t.seasonsProgress || {})[n]; if (!s) return;
+  const set = new Set(s.watchedEpisodes || []);
+  (s.episodeList || []).forEach(e => { if (e.number <= num && epReleased(e)) set.add(e.number); });
+  s.watchedEpisodes = [...set].sort((a, b) => a - b); s.manuallyMarkedWatched = false; epCommit(t);
+}
+function detailMarkSeason(id, n, on) {
+  const t = state.titles.find(x => x.id === id && !x._deleted); if (!t) return;
+  setSeasonWatched(t, n, on); epCommit(t);
+}
+// Loads the episode list of every tracked season that has none (and refreshes a season that still has unreleased episodes, once per session).
+// A Watched show's seasons with no record are ticked in full; a whole-season mark (no episode detail) becomes every released episode ticked;
+// partial progress is kept. Returns true if the title changed.
+async function ensureEpisodes(t) {
+  if (t.type !== 'tv' || !t.seasons || !t.externalIds || !t.externalIds.tmdb || !window.PAL_CONFIG.TMDB_READ_TOKEN) return false;
+  const sp = t.seasonsProgress = t.seasonsProgress || {}, need = [];
+  for (let n = 1; n <= t.seasons; n++) {
+    const s = sp[n], list = (s && s.episodeList) || [], key = t.id + ':' + n;
+    if (_epFresh.has(key)) continue;
+    if (!list.length || list.some(e => !epReleased(e))) need.push(n);
+  }
+  if (!need.length) return false;
+  need.forEach(n => _epFresh.add(t.id + ':' + n));   // one attempt per season per session, success or not
+  const got = await Promise.all(need.map(n => tmdbFetch(`/tv/${t.externalIds.tmdb}/season/${n}?language=en-GB`).then(d => [n, d]).catch(() => null)));
+  let changed = false;
+  got.forEach(g => {
+    if (!g) return;
+    const n = g[0], eps0 = (g[1].episodes || []).filter(e => e && e.episode_number >= 1);
+    if (!eps0.length) return;
+    const old = sp[n], oldBy = {}; ((old && old.episodeList) || []).forEach(e => { oldBy[e.number] = e; });
+    const eps = eps0.map(e => { const o = oldBy[e.episode_number], r = { number: e.episode_number, airDate: e.air_date || null }; if (o && o.name) r.name = o.name; if (o && o.runtime) r.runtime = o.runtime; return r; });
+    const rel = eps.filter(epReleased).map(e => e.number), whole = !!(old && old.manuallyMarkedWatched && !(old.episodeList || []).length);
+    let w;
+    if (whole || (!old && t.status === 'watched')) w = rel;
+    else w = ((old && old.watchedEpisodes) || []).filter(x => eps.some(e => e.number === x));
+    sp[n] = { episodeCount: eps.length, name: (old && old.name) || g[1].name || ('Season ' + n), episodeList: eps, watchedEpisodes: w, source: (old && old.source) || 'tmdb' };
+    changed = true;
+  });
+  return changed;
+}
+// Opening a TV show: its seasons are checked with TMDB once per session (an announced season is corrected straight away, as Check for new
+// seasons would) and its episode data is loaded. One save at the end; the open detail is redrawn.
+async function detailAutoRefresh(id) {
+  const t = state.titles.find(x => x.id === id && !x._deleted);
+  if (!t || t.type !== 'tv' || !t.externalIds || !t.externalIds.tmdb || !window.PAL_CONFIG.TMDB_READ_TOKEN || _epBusy.has(id)) return;
+  _epBusy.add(id); let changed = false, seasonsChanged = false;
+  try {
+    if (!_dvChecked.has(id)) {
+      _dvChecked.add(id);
+      try { const data = await tmdbFetch(`/tv/${t.externalIds.tmdb}?language=en-GB`); if (applyNewSeasonInfo(t, seasonInfoFromJson(data))) { changed = seasonsChanged = true; } } catch (e) { /* offline or no key: nothing to do */ }
+    }
+    if (await ensureEpisodes(t)) changed = true;
+  } finally { _epBusy.delete(id); }
+  if (changed) {
+    t.updatedAt = new Date().toISOString();
+    saveState(); if (window.PalSync.hasSession()) syncPushTitle(t);
+    if (seasonsChanged) toast('Seasons updated for "' + t.title + '"');
+  }
+  if (detailId === id) renderDetail();
 }
 // New-season detection (shared by the + Add check and Update from TMDB). n = TMDB's season count. Returns true if t changed.
 //  · Watched show, n > tracked: moves back to Want to Watch, tracked count adopted, earlier seasons stay watched, rating kept.
@@ -3588,7 +3688,7 @@ function renderSeasonsList() {
       const isWatched = (season.watchedEpisodes || []).includes(ep.number);
       return `<div class="ep-row" onclick="toggleEpisodeWatched(${sn},${ep.number})">
         <span>${isWatched ? '✅' : '⬜'}</span>
-        <span class="ep-title">E${ep.number} ${esc(ep.name || '')}</span>
+        <span class="ep-title">E${ep.number} ${esc(ep.name || (isIsoDate(ep.airDate) ? fmtDate(ep.airDate) : ''))}</span>
         <span class="ep-meta">${ep.runtime ? ep.runtime + 'm' : ''}</span>
       </div>`;
     }).join('');
@@ -3668,7 +3768,7 @@ function markSeasonWatched(seasonNum) {
   const t = currentTitleId ? state.titles.find(x => x.id === currentTitleId) : null;
   if (!t || !t.seasonsProgress) return;
   const season = t.seasonsProgress[seasonNum]; if (!season) return;
-  season.watchedEpisodes = (season.episodeList || []).map(e => e.number);
+  season.watchedEpisodes = (season.episodeList || []).filter(epReleased).map(e => e.number);
   t.updatedAt = new Date().toISOString();
   checkAutoCompleteSeries(t);
   renderSeasonsList();
