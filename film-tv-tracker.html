@@ -13,7 +13,7 @@
 // there is no local toggle any more (FTT-016) — theme is launcher-only.
 (function(){try{if(localStorage.getItem('ftt_theme_pref')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Film &amp; TV Tracker v4.20</title>
+<title>Film &amp; TV Tracker v4.21</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230E0D12'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%23CBF55C' text-anchor='middle'>🎬</text></svg>">
 <style>
@@ -755,7 +755,7 @@
 <body>
 
 <div class="chrome">
-  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.20</span></span></h1>
+  <h1><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg></span><span class="ttl">Film &amp; TV <span class="v">v4.21</span></span></h1>
   <button class="sync-chip state-connecting" id="sync-chip" onclick="openDataModal()" title="Sync status / Backup &amp; data">
     <span class="sync-chip-dot" id="sync-dot"></span>
     <span id="sync-lbl">Connecting…</span>
@@ -1150,10 +1150,11 @@
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=4.20"></script>
+<script src="pal-shared.js?v=4.21"></script>
 <script>
 /* v4.14 (SUITE-18, build B2b): the one place this app's version is written in code. VERSION, the contract app field, the bridge and backup read PAL_APP_VERSION; PalShared.app shows it in the Sync & Backup sheet and the launcher Device check. The title, the visible label and the ?v= tag are text and are checked against it by the Device check. */
-var PAL_APP_VERSION='4.20';
+var PAL_APP_VERSION='4.21';
+/* v4.21 (FTT-060): fix for v4.20. Shows added before v4.20 had an announced season stored as a tracked season ('not started'). Checking a show now trims seasons that are not out yet from the tracked count and records the next one as Announced (t.nextSeason). Ended shows count every season as out. */
 /* v4.20 (FTT-059): an announced season (TMDB lists it before it is out) no longer moves a Watched show back to Want to Watch. It shows as Announced with its date, in a new group 'Series working on New Season' under Low interest, is highlighted as it comes due (in the app and as a launcher Needs attention line), and each tile carries a small logo of the streaming service the title is on. New optional field t.nextSeason = { n, date }; nothing is migrated. */
 /* v4.19 (FTT-058): a title's detail view shows its director and top cast (fetched from TMDB when the detail is opened, not stored) with a Follow button on each; followed people appear in the People tab. */
 /* v4.18 (FTT-058): People is now a main tab (left menu on desktop, bottom bar on phone) instead of a pop-up window; the content, data and daily check are unchanged. */
@@ -3128,7 +3129,8 @@ function seasonInfoFromJson(json) {
   });
   const ne = json && json.next_episode_to_air, nn = ne ? Number(ne.season_number) : 0, nd = ne ? String(ne.air_date || '').slice(0, 10) : '';
   if (nn >= 1 && isIsoDate(nd)) { info.known = true; if (!info.date[nn]) info.date[nn] = nd; }
-  if (!info.known) info.aired = info.total;   // TMDB gave no dates at all: every listed season counts as out, as before v4.20
+  info.ended = !!(json && /^(Ended|Canceled)$/i.test(String(json.status || '')));
+  if (!info.known || info.ended) info.aired = info.total;   // TMDB gave no dates at all, or the show is over (a missing date is then a gap in TMDB's data): every listed season counts as out
   return info;
 }
 // An earlier build moved a Watched show back to Want to Watch for a season that was only announced. Put it back, but only when it is
@@ -3143,11 +3145,30 @@ function revertEarlyReturn(t, info) {
   if (!t.watched) t.watched = { date: todayISO(), rating: null, review: '' };
   return true;
 }
+// v4.21 (FTT-060): a show added before v4.20 has TMDB's whole season count stored as its tracked seasons, an announced season included, so
+// the announced season sat there as 'not started'. When TMDB says fewer seasons are out than are tracked, the extra (unreleased) ones are
+// dropped from the tracked count and from the progress record (nothing can have been watched of a season that is not out). Kept if any
+// individual episode of those seasons is ticked, which would mean TMDB's dates are wrong, not the title.
+function trimUnairedSeasons(t, info) {
+  const tr = t.seasons || 0;
+  if (!(info.known && !info.ended && info.aired >= 1 && tr > info.aired && tr <= info.total)) return false;
+  const sp = t.seasonsProgress || {};
+  for (let k = info.aired + 1; k <= tr; k++) if (sp[k] && (sp[k].watchedEpisodes || []).length) return false;
+  for (let k = info.aired + 1; k <= tr; k++) delete sp[k];
+  t.seasons = info.aired;
+  if (t.newSeasonsDetected && t.newSeasonsDetected > info.aired) delete t.newSeasonsDetected;
+  if (t.status === 'watchlist') {   // every season that is out is already watched: the show is up to date
+    const done = Object.keys(sp).filter(k => +k <= info.aired && isSeasonWatched(sp[k])).length;
+    if (done >= info.aired) { t.status = 'watched'; delete t.returningShow; if (!t.watched) t.watched = { date: todayISO(), rating: null, review: '' }; }
+  }
+  return true;
+}
 // TMDB's answer for one show → the title. Seasons that are out follow the existing rule (applyNewSeasonCount); the next one that is not out
 // is recorded as t.nextSeason. Returns true if the title changed.
 function applyNewSeasonInfo(t, info) {
   if (t.type !== 'tv' || !info || !t.seasons) return false;
   let changed = revertEarlyReturn(t, info);
+  if (trimUnairedSeasons(t, info)) changed = true;   // v4.21
   if (info.aired && applyNewSeasonCount(t, info.aired)) changed = true;
   const n = Math.max(t.seasons || 0, t.newSeasonsDetected || 0, info.aired) + 1;
   if (n <= info.total) {
