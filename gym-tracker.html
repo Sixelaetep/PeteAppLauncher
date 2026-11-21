@@ -9,7 +9,7 @@
 <script>
 (function(){try{if(localStorage.getItem('pal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}})();
 </script>
-<title>Gym Tracker v2.161</title>
+<title>Gym Tracker v2.162</title>
 <!-- v2.157 (GYM-126 follow-up from v2.156-T4): meal is an attribute of the FOOD (saved item .meal); set in the Add form for new foods, brought by saved foods, editable as pills in Saved items. Additive; no migration. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230E0D12'/><text x='16' y='22' font-family='system-ui,sans-serif' font-weight='800' font-size='15' fill='%23CBF55C' text-anchor='middle'>GY</text></svg>">
 <style>
@@ -604,7 +604,7 @@
   <div class="header">
     <div class="logo">
       <span class="icon" aria-hidden="true">🏋️</span>
-      <span>Gym Tracker<div class="ver">v2.161</div></span>
+      <span>Gym Tracker<div class="ver">v2.162</div></span>
     </div>
     <div class="header-actions">
       <button class="sync-chip state-local" id="gymSyncChip" onclick="openDataDrawer()" title="Sync status / Data &amp; Backup"><span class="sync-chip-dot" id="syncDot"></span><span id="syncLbl">Local</span></button>
@@ -1370,10 +1370,11 @@
 <button type="button" class="fab-intake" id="fabIntake" aria-label="Add food or drink" onclick="openIntakeModal(todayISO())"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Food / drink</button>
 <div class="toast" id="toast"></div>
 
-<script src="pal-shared.js?v=2.161"></script>
+<script src="pal-shared.js?v=2.162"></script>
 <script>
 /* v2.159 (SUITE-05, build B3: app-styled confirm / prompt / choice sheets and an Undo bar replace the browser's own boxes; v2.158 SUITE-18, build B2b): the one place this app's version is written in code. VERSION, the contract app field, the bridge and backup read PAL_APP_VERSION; PalShared.app shows it in the Sync & Backup sheet and the launcher Device check. The title, the visible label and the ?v= tag are text and are checked against it by the Device check. */
-var PAL_APP_VERSION='2.161';
+var PAL_APP_VERSION='2.162';
+/* v2.162 (GYM-128): in a live workout a circuit's round folds away when its last set is ticked (tap the round header to reopen it), and "+ Add round" adds another round to every exercise in the circuit. View-only collapse state, nothing new saved except the session's own circuit round count and sets. */
 /* v2.161 (GYM-127): circuits can be searched and added to a live workout as well as a plan, and saved circuits are managed (create, edit, delete) from a Circuits section on the Plans tab. Saved-circuit data shape, sync table and backup are unchanged. */
 /* v2.160 (hover guard, R48): hover highlights apply only on devices with a pointer, so a tap on a phone no longer leaves a card highlighted. No other change. */
 try{window.PalShared&&PalShared.app&&PalShared.app.register({id:'gym',name:'Gym Tracker',version:PAL_APP_VERSION});}catch(e){}
@@ -3135,6 +3136,7 @@ let _circuitsSectionOpen = false;
 let _ceId = null, _ceMembers = [], _ceFrom = 'tab';
 let _activeSession = null;
 let _revealCardKey = null; // GYM-114: card (key object) to scroll into view after the next render
+let _collapsedRounds = new WeakMap(), _roundsSeenDone = new WeakMap(); // GYM-128: per-circuit Sets of round numbers (view-only, like _collapsedCards)
 let _collapsedCards = new WeakSet(); // GYM-111: view-only collapse state, see sessionCardKey()
 let _activeTimer = null;   // { ii, si, endTime, durationSec, paused, remainingMs } — only one runs at a time
 let _timerInterval = null;
@@ -6768,7 +6770,16 @@ function sessionExerciseCardHtml(item, ii) {
 function sessionCircuitBlockHtml(circuit, memberIdxs) {
   const rounds = circuit ? Math.max(1, circuit.rounds||1) : 1;
   const roundBlocks = [];
+  syncRoundCollapse(memberIdxs, rounds);
+  const rKey = sessionCardKey(memberIdxs[0]);
+  const rCollapsedSet = _collapsedRounds.get(rKey) || new Set();
   for (let r=0; r<rounds; r++) {
+    const rItems = memberIdxs.filter(ii => _activeSession.items[ii].actualSets.length > r);
+    const rDone = rItems.length > 0 && rItems.every(ii => _activeSession.items[ii].actualSets[r].done);
+    if (rCollapsedSet.has(r)) {
+      roundBlocks.push(`<div style="margin-bottom:10px;cursor:pointer" onclick="toggleCircuitRound(${memberIdxs[0]},${r})"><div style="font-size:12px;font-weight:700;color:var(--accent5)"><span style="color:var(--ink3);margin-right:4px">▸</span>Round ${r+1} of ${rounds}${rDone ? ' <span style="color:var(--accent3)">✓ done</span>' : ''}</div></div>`);
+      continue;
+    }
     const roundRows = memberIdxs.filter(ii => _activeSession.items[ii].actualSets.length > r).map(ii => {
       const item = _activeSession.items[ii];
       return `<div style="margin-bottom:6px">
@@ -6776,7 +6787,7 @@ function sessionCircuitBlockHtml(circuit, memberIdxs) {
         ${sessionSetRowHtml(item, ii, r, 'Round '+(r+1))}
       </div>`;
     }).join('');
-    roundBlocks.push(`<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:700;color:var(--accent5);margin-bottom:6px">Round ${r+1} of ${rounds}</div>${roundRows}</div>`);
+    roundBlocks.push(`<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:700;color:var(--accent5);margin-bottom:6px;${rDone?'cursor:pointer':''}" ${rDone?`onclick="toggleCircuitRound(${memberIdxs[0]},${r})"`:''}>${rDone?'<span style="color:var(--ink3);margin-right:4px">▾</span>':''}Round ${r+1} of ${rounds}${rDone ? ' <span style="color:var(--accent3)">✓ done</span>' : ''}</div>${roundRows}</div>`);
   }
   // extra sets beyond the circuit's own round count — added ad hoc via a
   // member's own "+Add Extra Set", so grouped per-member rather than
@@ -6816,6 +6827,7 @@ function sessionCircuitBlockHtml(circuit, memberIdxs) {
     ${cHead}
     ${roundBlocks.join('')}
     ${extrasHtml}
+    ${circuit ? `<button class="btn btn-secondary btn-sm" style="margin:2px 0 8px" onclick="addCircuitRound('${circuit.id}')">+ Add round</button>` : ''}
     ${membersFooter}
   </div>`;
 }
@@ -6932,6 +6944,52 @@ function autoCollapseIfCompleted(ii, prevStatus) {
     _collapsedCards.delete(nk);
     _revealCardKey = nk;
   }
+}
+// GYM-128: a round folds away the moment it BECOMES complete (every member's
+// set for that round ticked). _roundsSeenDone remembers which rounds have
+// already been seen complete, so later renders don't re-fold a round the
+// user re-opened; unticking a set forgets it, so it folds again next time.
+// Resuming a session folds rounds that were already complete.
+function syncRoundCollapse(memberIdxs, rounds) {
+  const key = sessionCardKey(memberIdxs[0]);
+  const seen = _roundsSeenDone.get(key) || new Set();
+  const collapsed = _collapsedRounds.get(key) || new Set();
+  for (let r=0; r<rounds; r++) {
+    const rItems = memberIdxs.filter(ii => _activeSession.items[ii].actualSets.length > r);
+    const done = rItems.length > 0 && rItems.every(ii => _activeSession.items[ii].actualSets[r].done);
+    if (done && !seen.has(r)) { seen.add(r); collapsed.add(r); }
+    else if (!done && seen.has(r)) { seen.delete(r); collapsed.delete(r); }
+  }
+  _roundsSeenDone.set(key, seen); _collapsedRounds.set(key, collapsed);
+}
+function toggleCircuitRound(firstIdx, r) {
+  const key = sessionCardKey(firstIdx);
+  const collapsed = _collapsedRounds.get(key) || new Set();
+  if (collapsed.has(r)) collapsed.delete(r); else collapsed.add(r);
+  _collapsedRounds.set(key, collapsed);
+  renderSessionItems();
+}
+// GYM-128: one more round for the whole circuit — every member gets another
+// set (a copy of its last set, not ticked) and the circuit's round count in
+// this session goes up by one, so "Round N of M" and the round rows follow.
+function addCircuitRound(circuitId) {
+  if (!_activeSession) return;
+  const circuit = (_activeSession.circuits||[]).find(c => c.id === circuitId);
+  if (!circuit) return;
+  const rounds = Math.max(1, circuit.rounds||1) + 1;
+  _activeSession.items.filter(it => it.circuitId === circuitId).forEach(item => {
+    while (item.actualSets.length < rounds) {
+      const last = item.actualSets[item.actualSets.length-1];
+      item.actualSets.push(last ? {...last, done:false} : {...buildDefaultSet(item.trackType), done:false});
+    }
+    const doneCount = item.actualSets.filter(a=>a.done).length;
+    item.status = doneCount===0 ? 'skipped' : (doneCount===item.actualSets.length ? 'completed' : 'partial');
+  });
+  circuit.rounds = rounds;
+  const first = _activeSession.items.findIndex(it => it.circuitId === circuitId);
+  if (first >= 0) _collapsedCards.delete(sessionCardKey(first)); // a fully-done, folded circuit reopens
+  cancelAutoFinish(false); _autoFinishDismissed = null;
+  renderSessionItems();
 }
 function toggleSessionCard(ii) {
   const k = sessionCardKey(ii);
