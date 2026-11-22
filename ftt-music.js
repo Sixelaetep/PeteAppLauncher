@@ -1,4 +1,4 @@
-/* ftt-music.js v2.0 (v2.0: MOVED from Gigs & Trips into Film & TV Tracker, where Music and Comedy are two of its four sections (Film, TV, Music, Comedy). The module now takes its host from window.FTT_HOST (window.GAT_HOST is still read as a fallback) and draws one section at a time with renderSection(container, {scope:"music"|"comedy", view:"list"|"following"|"coming"}); the host owns the section heading and the My list / Following / Coming up bar. Music: My list = tour dates and releases marked Interested (and gigs already in Gigs & Trips); Comedy: Following and Coming up show only comedians, tour dates and specials. A release that is already out shows only Apple Music; a release still to come shows Interested, which puts an alert on the release day in the launcher and in Gigs & Trips. An Alert-me / Interested tour date whose tickets went on sale in the last 7 days is listed as on sale now. Bought still makes the gig in Gigs & Trips (through the launcher) and the link is kept on the cstate row (gig), so Open gig works from here and gigs made before the move are linked by one question to Gigs & Trips. A special added from Comedy goes to the Comedy list (title.comedy). No stored field is renamed; the pal_music rows and the gat_mus_db cache are unchanged. v1.30: COM-5 an album Apple lists twice (two catalogue ids with the same title and date, such as an explicit and a clean edition) shows once in Coming up, preferring the explicit one; Recommendations: Listen on Apple Music now removes the suggestion and it is not recommended again (saved as an 'already know' answer, with Undo), as Follow already did; v1.29: COM-4 a special that is in Film & TV Tracker leaves Coming up: straight after Add to Film & TV, and also when the title was already added there some other way (checked against the Film & TV library once each time Music opens); v1.28: COM-3 Followed artists is split into two sub-sections, Music and Comedians, each closed until opened (open on its own while searching, remembered per device); v1.27: COM-2 a comedian's tour date has a microphone tile instead of the guitar (the tour dates themselves come from pal-music-proxy v0.13.0, which looks comedians up on Ticketmaster as comedy); Add artist: Comedian note mentions tour dates; v1.26: COM-1b adding a comedian no longer closes the Add artist sheet: each Follow turns into Following ✓ so several comedians can be added in one go; v1.25: COM-1 follow comedians: Add artist has a Musician / Comedian choice; a comedian is found on TMDB and stored in the same artists list (kind 'comedian', tmdb id, optional Specials switch); new and upcoming stand-up specials (comedy films and series where they play themselves) appear in Coming up with a Specials filter, and Add to Film & TV puts one on the Want to Watch list in Film & TV Tracker; comedians are left out of play counts, Never played and the Apple Music release feed; v1.24: SUITE-18 / MUS-NEXT-1: registers itself as a part of the host app (PalShared.app.addPart) so its version shows in the Sync & Backup sheet and the Device check; nothing else changes). v1.23: (v1.23: a tour date where the artist is a support act says so (badge, detail panel, Upcoming line: Support for X) when the server (pal-music-proxy v0.12.0) records it, and Coming up has a Hide support slots switch (remembered); dates with no billing information look exactly as before; v1.22: Recommendations is now a section of its own beside Coming up and Artists (it was a pop-up window): suggestions from Last.fm and followed artists never played sit side by side on a computer, with a detail panel on the right, and in one column with larger buttons on a phone; v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+/* ftt-music.js v3.0 (v3.0, Media App: Music has three screens again, as the original Music had: Playing (listening history and charts, played-not-followed, Last.fm check), Upcoming (tour dates and releases) and Artists (search and follow, Recommendations, export / import, back up and restore, diagnostics); Comedy uses Upcoming and Following (comedians). Every API call (Apple, TMDB, the tour-date server, cloud sync) is reported to the host run log (FTT_HOST.log) and Status shows it. A comedian row says what is next for them. v2.0: MOVED from Gigs & Trips into Film & TV Tracker, where Music and Comedy are two of its four sections (Film, TV, Music, Comedy). The module now takes its host from window.FTT_HOST (window.GAT_HOST is still read as a fallback) and draws one section at a time with renderSection(container, {scope:"music"|"comedy", view:"list"|"following"|"coming"}); the host owns the section heading and the My list / Following / Coming up bar. Music: My list = tour dates and releases marked Interested (and gigs already in Gigs & Trips); Comedy: Following and Coming up show only comedians, tour dates and specials. A release that is already out shows only Apple Music; a release still to come shows Interested, which puts an alert on the release day in the launcher and in Gigs & Trips. An Alert-me / Interested tour date whose tickets went on sale in the last 7 days is listed as on sale now. Bought still makes the gig in Gigs & Trips (through the launcher) and the link is kept on the cstate row (gig), so Open gig works from here and gigs made before the move are linked by one question to Gigs & Trips. A special added from Comedy goes to the Comedy list (title.comedy). No stored field is renamed; the pal_music rows and the gat_mus_db cache are unchanged. v1.30: COM-5 an album Apple lists twice (two catalogue ids with the same title and date, such as an explicit and a clean edition) shows once in Coming up, preferring the explicit one; Recommendations: Listen on Apple Music now removes the suggestion and it is not recommended again (saved as an 'already know' answer, with Undo), as Follow already did; v1.29: COM-4 a special that is in Film & TV Tracker leaves Coming up: straight after Add to Film & TV, and also when the title was already added there some other way (checked against the Film & TV library once each time Music opens); v1.28: COM-3 Followed artists is split into two sub-sections, Music and Comedians, each closed until opened (open on its own while searching, remembered per device); v1.27: COM-2 a comedian's tour date has a microphone tile instead of the guitar (the tour dates themselves come from pal-music-proxy v0.13.0, which looks comedians up on Ticketmaster as comedy); Add artist: Comedian note mentions tour dates; v1.26: COM-1b adding a comedian no longer closes the Add artist sheet: each Follow turns into Following ✓ so several comedians can be added in one go; v1.25: COM-1 follow comedians: Add artist has a Musician / Comedian choice; a comedian is found on TMDB and stored in the same artists list (kind 'comedian', tmdb id, optional Specials switch); new and upcoming stand-up specials (comedy films and series where they play themselves) appear in Coming up with a Specials filter, and Add to Film & TV puts one on the Want to Watch list in Film & TV Tracker; comedians are left out of play counts, Never played and the Apple Music release feed; v1.24: SUITE-18 / MUS-NEXT-1: registers itself as a part of the host app (PalShared.app.addPart) so its version shows in the Sync & Backup sheet and the Device check; nothing else changes). v1.23: (v1.23: a tour date where the artist is a support act says so (badge, detail panel, Upcoming line: Support for X) when the server (pal-music-proxy v0.12.0) records it, and Coming up has a Hide support slots switch (remembered); dates with no billing information look exactly as before; v1.22: Recommendations is now a section of its own beside Coming up and Artists (it was a pop-up window): suggestions from Last.fm and followed artists never played sit side by side on a computer, with a detail panel on the right, and in one column with larger buttons on a phone; v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
    Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
    Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
    New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, .nt (no tickets) and .aid (artist id), rstate_rel_<collectionId> {interested, ni}, recfb_rc_<artist>.ip (play count when ignored), artist.tourAsk (Not interested count when the stop-tour question was last answered).
@@ -6,8 +6,9 @@
    Needs from the host (window.FTT_HOST): token(), userId(), addGig(concert) -> {gigId, existing}, gigsFor(conIds) -> {conId: gigId}, openGig(gigId), showModal(html) -> the modal's element, closeModal(), modalEl(), modalOpen(), toast(msg), navigate('following'|'coming'|'list'), hasTitle(type, tmdb), addSpecial({tmdb, type}) -> Promise. */
 (function () {
   'use strict';
-  var VERSION = '2.0', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var VERSION = '3.0', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
   var H = function () { return window.FTT_HOST || window.GAT_HOST || {}; };
+  function lg(api, ok, msg) { try { if (H().log) H().log(api, ok, msg); } catch (e) {} }   // v3.0: one line in the Status run log
 
   // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
   // v1.03: a leading "The " is ignored when names are compared ("The Levellers" is "Levellers"), so a played artist matches the followed one.
@@ -155,8 +156,8 @@
       state.appleBy = ab;
       var cr = rows.find(function (x) { return x.record_key === '__concerts__'; });
       state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {}, jbf: (cr.data.jbf && typeof cr.data.jbf === 'object') ? cr.data.jbf : {}, jb: (cr.data.jb && typeof cr.data.jb === 'object') ? cr.data.jb : null, at: cr.data.updatedAt || '' } : { fetched: {}, empty: {}, jbf: {} };
-      lastPull = Date.now(); backfillIgnores(); save(); return true;
-    }).catch(function (e) { sayErr('Could not load Music from the cloud: ' + ((e && e.message) || 'error')); return false; }).finally(function () { busy.pull = false; });
+      lastPull = Date.now(); backfillIgnores(); save(); lg('musicsync', true, 'Music data loaded: ' + rows.length + ' rows'); return true;
+    }).catch(function (e) { lg('musicsync', false, 'Load from the cloud: ' + ((e && e.message) || 'error')); sayErr('Could not load Music from the cloud: ' + ((e && e.message) || 'error')); return false; }).finally(function () { busy.pull = false; });
   }
 
   // ── listening (Pete's and Lex's Last.fm are separate rows; plays are added together) ──
@@ -192,7 +193,8 @@
   // ── Apple (iTunes: free, no key, allows browser requests) ──
   function itunes(path) {
     var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 10000);
-    return fetch('https://itunes.apple.com/' + path, { signal: ctl.signal }).then(function (r) { if (!r.ok) throw new Error('Apple returned HTTP ' + r.status); return r.json(); }).finally(function () { clearTimeout(t); });
+    return fetch('https://itunes.apple.com/' + path, { signal: ctl.signal }).then(function (r) { if (!r.ok) throw new Error('Apple returned HTTP ' + r.status); return r.json(); })
+      .then(function (j) { lg('apple', true, path.split('?')[0] + ' ' + ((path.match(/term=([^&]*)/) || path.match(/id=([^&]*)/) || [])[1] || '')); return j; }, function (e) { lg('apple', false, path.split('?')[0] + ': ' + ((e && e.message) || 'error')); throw e; }).finally(function () { clearTimeout(t); });
   }
   function searchArtists(q) { return itunes('search?term=' + encodeURIComponent(q) + '&entity=musicArtist&limit=8&country=GB').then(function (j) { return (j.results || []).filter(function (x) { return x && x.artistId && x.artistName; }); }); }
   function lookupAlbums(aid) { return itunes('lookup?id=' + encodeURIComponent(aid) + '&entity=album&limit=50&sort=recent').then(function (j) { return (j.results || []).map(function (r) { return parseRelease(r, aid); }).filter(Boolean); }); }
@@ -224,7 +226,8 @@
   function tmdb(path) {
     var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 12000);
     return fetch('https://api.themoviedb.org/3' + path, { signal: ctl.signal, headers: { Authorization: 'Bearer ' + PAL_CONFIG.TMDB_READ_TOKEN, 'Content-Type': 'application/json' } })
-      .then(function (r) { if (!r.ok) { var e = new Error('TMDB returned HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); }).finally(function () { clearTimeout(t); });
+      .then(function (r) { if (!r.ok) { var e = new Error('TMDB returned HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); })
+      .then(function (j) { lg('tmdb', true, path.split('?')[0]); return j; }, function (e) { lg('tmdb', false, path.split('?')[0] + ': ' + ((e && e.message) || 'error')); throw e; }).finally(function () { clearTimeout(t); });
   }
   function searchComedians(q) {
     return tmdb('/search/person?query=' + encodeURIComponent(q) + '&include_adult=false&language=en-GB').then(function (j) {
@@ -338,11 +341,11 @@
       .then(function (res) {
         if (res.status === 429) return res.json().catch(function () { return {}; }).then(function (j) { cinfo.msg = j.error === 'daily-cap' ? 'You have used today’s manual checks. The automatic daily check still runs; try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.'; });
         if (!res.ok) throw new Error(res.status === 403 ? 'this account is not set up for the scheduled check' : 'HTTP ' + res.status);
-        cinfo.at = new Date().toISOString(); cinfo.msg = '';
+        cinfo.at = new Date().toISOString(); cinfo.msg = ''; lg('tours', true, 'Manual check asked the server to look for tour dates');
       })
       .then(function () { return pull(true); })
       .then(function () { if (!silent) say(cinfo.msg || 'Music up to date'); })
-      .catch(function (e) { cinfo.msg = 'Could not reach the check (' + ((e && e.message) || 'offline') + '). Showing what was found.'; if (!silent) sayErr(cinfo.msg); })
+      .catch(function (e) { cinfo.msg = 'Could not reach the check (' + ((e && e.message) || 'offline') + '). Showing what was found.'; lg('tours', false, 'Manual check: ' + ((e && e.message) || 'offline')); if (!silent) sayErr(cinfo.msg); })
       .finally(function () { busy.con = false; try { localStorage.setItem('gat_mus_cinfo', JSON.stringify(cinfo)); } catch (e) {} paint(); });
   }
 
@@ -592,7 +595,7 @@
   function checkBtn(label) { return '<button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : label || 'Check for new listening') + '</button>'; }
   function seg(items) { return '<div class="agenda-filter">' + items.map(function (x) { return '<button type="button" class="' + (x[1] ? 'on' : '') + '" data-m="' + x[2] + '" aria-pressed="' + (x[1] ? 'true' : 'false') + '">' + x[0] + '</button>'; }).join('') + '</div>'; }
   function recCount() { return visibleRecs().length + neverPlayed().length; }
-  function head() { if (ui.hosted) return ui.sub === 'recs' ? '<div class="acts2"><button type="button" class="chip" data-m="sub:artists">← Following</button></div>' : ''; var rc = recCount(); return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : ui.sub === 'recs' ? 'New artists to try, and followed artists you have not played' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists' && ui.sub !== 'recs', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists'], ['Recommendations' + (rc ? ' ' + rc : ''), ui.sub === 'recs', 'sub:recs']]); }
+  function head() { if (ui.hosted) return ui.sub === 'recs' ? '<div class="acts2"><button type="button" class="chip" data-m="sub:artists">← Artists</button></div>' : ''; var rc = recCount(); return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : ui.sub === 'recs' ? 'New artists to try, and followed artists you have not played' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists' && ui.sub !== 'recs', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists'], ['Recommendations' + (rc ? ' ' + rc : ''), ui.sub === 'recs', 'sub:recs']]); }
   function heroHtml(c, it) {
     var t = today(), dl = dateLabel(c.date).split(' '), n = Math.round((Date.parse(c.date + 'T00:00:00Z') - Date.parse(t + 'T00:00:00Z')) / 864e5);
     var chips = [it.interested ? 'Interested ✓' : '', salePending(c) ? 'On sale ' + saleText(c) : '', srcName(c)].filter(Boolean);
@@ -614,7 +617,7 @@
     var nextCon = shown.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0];
     if (nextCon) h += heroHtml(nextCon.c, nextCon);
     h += '<div class="stat"><span role="status">' + E(status) + '</span></div><div class="note">A few of the artists you follow are checked each night, so every artist is looked at every week or two. Each date shows whether Ticketmaster or JamBase found it.</div>';
-    if (!followed().filter(inScope).length) return h + '<div class="empty">' + (ui.scope === 'comedy' ? 'Follow some comedians and their Scottish tour dates and new specials appear here.' : 'Follow some artists and their Scottish dates and new releases appear here.') + '<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">Go to Following</button></div></div>';
+    if (!followed().filter(inScope).length) return h + '<div class="empty">' + (ui.scope === 'comedy' ? 'Follow some comedians and their Scottish tour dates and new specials appear here.' : 'Follow some artists and their Scottish dates and new releases appear here.') + '<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">' + (ui.scope === 'comedy' ? 'Go to Following' : 'Go to Artists') + '</button></div></div>';
     if (!shown.length) h += '<div class="empty">' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'specials' ? 'No new or upcoming comedy specials for the comedians you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '</div>';
     if (nSup) h += '<div class="chips"><button type="button" class="chip ghost' + (ui.noSup ? ' on' : '') + '" data-m="togglesup" aria-pressed="' + (ui.noSup ? 'true' : 'false') + '">' + (ui.noSup ? 'Showing no support slots (' + nSup + ' hidden)' : 'Hide ' + nSup + ' support slot' + (nSup === 1 ? '' : 's')) + '</button></div>';
     var month = '';
@@ -646,6 +649,26 @@
       if (n) { save(); paint(); }
     }).catch(function () { _gl = 0; });
   }
+  // v3.0: for the Media App dashboard: what is coming up for the acts you follow (any scope), soonest first
+  function upcomingAll(days) {
+    var lim = addDays(today(), days || 60), keep = ui.scope; ui.scope = '';
+    try {
+      return comingItems().filter(function (i) { return !i.hidden && i.date <= lim && !(i.kind === 'rel' && i.date < addDays(today(), -3)); }).map(function (i) {
+        var sc = i.kind === 'sp' ? 'comedy' : i.kind === 'rel' ? 'music' : (isCom(byId(i.c.artistId)) ? 'comedy' : 'music');
+        var ttl = i.kind === 'con' ? i.c.artist : i.kind === 'rel' ? i.r.artistName + ': ' + i.r.name : i.s.title;
+        var sub = i.kind === 'con' ? [i.c.venue, i.c.city].filter(Boolean).join(', ') : i.kind === 'rel' ? (i.r.date <= today() ? 'Out now' : 'New release') : (i.s.type === 'tv' ? 'New special (series)' : 'New special');
+        return { id: i.id, scope: sc, kind: i.kind, date: i.date, title: ttl, sub: sub, interested: !!i.interested, sale: i.kind === 'con' && saleLive(i.c) };
+      });
+    } finally { ui.scope = keep; }
+  }
+  // v3.0: figures for Status (what is loaded and when it last ran)
+  function status() {
+    return { version: VERSION, ready: ready, artists: followed().length, concerts: state.concerts.length, releases: Object.keys(rel.items).length, specials: Object.keys(spec.items).length,
+      listeners: listeners().length, listenAge: listenAge(), toursAt: (cinfo && cinfo.at) || '', toursMsg: (cinfo && cinfo.msg) || '', lastErr: lastErr, relAt: rel.fetchedAt || '', specAt: spec.fetchedAt || '', pullAt: lastPull ? new Date(lastPull).toISOString() : '',
+      jb: (state.conCheck && state.conCheck.jb) || null };
+  }
+  function testApple() { return itunes('search?term=radiohead&entity=musicArtist&limit=1&country=GB').then(function (j) { return (j.results || []).length ? 'Apple answered' : 'Apple answered with no results'; }); }
+  function testTmdb() { return tmdbOk() ? tmdb('/configuration').then(function () { return 'TMDB answered'; }) : Promise.reject(new Error('No TMDB key is configured')); }
   function counts(scope) {
     var keep = ui.scope; ui.scope = scope === 'comedy' ? 'comedy' : 'music';
     try {
@@ -655,7 +678,7 @@
   }
   function renderSection(container, o) {
     o = o || {}; ui.hosted = true; ui.scope = o.scope === 'comedy' ? 'comedy' : 'music';
-    ui.sub = o.view === 'following' ? (o.sub === 'recs' && ui.scope === 'music' ? 'recs' : 'artists') : o.view === 'list' ? 'mine' : 'coming';
+    ui.sub = (o.view === 'artists' || o.view === 'following') ? 'artists' : o.view === 'playing' ? (ui.scope === 'music' ? 'playing' : 'artists') : 'coming';   // v3.0: playing | coming | artists (recs opens from Artists)
     if (ui.scope === 'music' && ui.cFilter === 'specials') ui.cFilter = 'all';
     if (ui.scope === 'comedy' && ui.cFilter === 'releases') ui.cFilter = 'all';
     sel = null; return render(container);
@@ -681,9 +704,18 @@
     if (day) return day === today() ? 'today' : fmtDate(day);
     return '';
   }
+  // v3.0: what is next for this act (tour date, release or special), so Following shows what is coming up for each one
+  function nextFor(a) {
+    if (!isFollowed(a)) return '';
+    var t = today(), best = null;
+    liveConcerts(state.concerts, state.artists, t).forEach(function (c) { if (String(c.artistId) === String(a.id) && (!best || c.date < best.date)) best = { date: c.date, txt: c.venue + ', ' + c.city }; });
+    Object.keys(spec.items).forEach(function (k) { var x = spec.items[k]; if ((x.aids || []).map(String).indexOf(String(a.id)) >= 0 && x.date >= t && (!best || x.date < best.date)) best = { date: x.date, txt: x.title }; });
+    if (!isCom(a)) Object.keys(rel.items).forEach(function (k) { var r = rel.items[k]; if (String(r.aid) === String(a.appleArtistId) && r.date >= t && (!best || r.date < best.date)) best = { date: r.date, txt: r.name }; });
+    return best ? 'Next: ' + fmtDate(best.date) + ' · ' + best.txt : 'Nothing coming up yet';
+  }
   function artRow(a) {
       var fol = isFollowed(a), sw = function (key, label, on, show) { return '<label class="lsw' + (show ? '' : ' na') + '"><input type="checkbox" data-sw="' + key + '" data-id="' + E(a.id) + '" aria-label="' + label + ' for ' + E(a.name) + '"' + (on ? ' checked' : '') + (show ? '' : ' tabindex="-1" aria-hidden="true"') + '>' + label + '</label>'; };
-      var com = isCom(a), pl = com ? '' : playLine(a), bits = [pl, fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '', com ? 'Comedian' : (!hasApple(a) ? 'No Apple match' : '')].filter(Boolean);
+      var com = isCom(a), pl = com ? '' : playLine(a), bits = [nextFor(a), pl, fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '', com ? 'Comedian' : (!hasApple(a) ? 'No Apple match' : '')].filter(Boolean);
       return '<div class="row art' + (fol ? '' : ' dim') + (selIs('art', a.id) ? ' sel' : '') + '" data-sel="art:' + E(a.id) + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="nm">' + E(a.name) + '</div><div class="rs">' + E(bits.join(' · ')) + '</div></button>' +
         '<div class="sw">' + sw('follow', 'Follow', fol, true) + (com ? sw('specials', 'Specials', fol && a.specials !== false, fol) : sw('releases', 'Releases', fol && a.releases !== false, fol)) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div></div>';
   }
@@ -855,18 +887,19 @@
       '<div class="pane-actions" style="margin-bottom:12px">' + pBtn('recfollow:' + id, busy.follow[r.name] ? 'Adding…' : 'Follow', { pri: true, dis: !!busy.follow[r.name] }) + pBtn('recapple:' + id, 'Listen on Apple Music') + pBtn('recknown:' + id, 'Already know') + pBtn('recno:' + id, 'Not for me') + '</div>' +
       '<div class="pane-card">' + pRow('Why', E(recReason(r))) + (seeds.length ? seeds.slice(0, 6).map(function (x) { var p30 = playsIn(norm(x.n), 30), pt = totalPlays(norm(x.n)); return pRow('Similar to ' + E(x.n), listeners().length ? pt + ' plays (' + p30 + ' in 30 days)' : ''); }).join('') : '') + '</div>';
   }
-  function renderArtists() {
+  function renderArtists(part) {
+    var pl = part === 'playing', ar = !pl;   // v3.0: Playing = listening; Artists = who you follow
     if (!ready) return '<div class="empty">Loading Music…</div>';
     var all = live().filter(inScope), q = norm(ui.aQuery), la = listenAge(), sc = ui.scope;
-    var h = head() + '<input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
-      '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">' + (sc === 'comedy' ? '+ Follow a comedian' : '+ Follow an artist') + '</button>' + (sc === 'comedy' ? '' : '<button type="button" class="chip" data-m="sub:recs">Recommendations' + (recCount() ? ' (' + recCount() + ')' : '') + '</button>') + '</div>' +
-      (sc === 'comedy' ? '' : '<div class="stat"><span role="status">' + (listeners().length ? 'Last.fm plays ' + (la ? 'checked ' + E(la) : 'not checked yet') + '.' : 'No Last.fm plays yet.') + (cinfo.msg ? ' ' + E(cinfo.msg) : '') + '</span>' + checkBtn('Check for new listening') + '</div>') +
-      (sc !== 'comedy' && pendingMatch().length ? '<div class="note">' + (matching ? 'Matching new artists with Apple Music: ' + matchInfo.done + ' of ' + matchInfo.total + '…' : pendingMatch().length + ' new artist' + (pendingMatch().length === 1 ? ' is' : 's are') + ' waiting to be matched with Apple Music.') + (matching ? '' : ' <button type="button" class="lnk" data-m="matchnow">Match now</button>') + '</div>' : '');
-    if (sc !== 'comedy') h += dashboardHtml();
+    var h = head() + (ar ? '<input type="search" id="gmq" placeholder="' + (sc === 'comedy' ? 'Search comedians' : 'Search artists') + '" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search">' : '') + (!ar ? '' :
+      '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">' + (sc === 'comedy' ? '+ Follow a comedian' : '+ Follow an artist') + '</button>' + (sc === 'comedy' ? '' : '<button type="button" class="chip" data-m="sub:recs">Recommendations' + (recCount() ? ' (' + recCount() + ')' : '') + '</button>') + '</div>') +
+      (sc === 'comedy' || !pl ? '' : '<div class="stat"><span role="status">' + (listeners().length ? 'Last.fm plays ' + (la ? 'checked ' + E(la) : 'not checked yet') + '.' : 'No Last.fm plays yet.') + (cinfo.msg ? ' ' + E(cinfo.msg) : '') + '</span>' + checkBtn('Check for new listening') + '</div>') +
+      (sc !== 'comedy' && pl && pendingMatch().length ? '<div class="note">' + (matching ? 'Matching new artists with Apple Music: ' + matchInfo.done + ' of ' + matchInfo.total + '…' : pendingMatch().length + ' new artist' + (pendingMatch().length === 1 ? ' is' : 's are') + ' waiting to be matched with Apple Music.') + (matching ? '' : ' <button type="button" class="lnk" data-m="matchnow">Match now</button>') + '</div>' : '');
+    if (pl) { h += dashboardHtml(); if (!people().length) h += '<div class="empty">No listening history yet. Plays come from Last.fm and your Apple Music history once they have been loaded.</div>'; }
     var notFol = all.filter(function (a) { return !isFollowed(a); }).length, fol = all.filter(isFollowed);
     var rows = all.filter(function (a) { return (!q || norm(a.name).indexOf(q) >= 0) && (isFollowed(a) || ui.showNot); }).sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
-    h += secHead('f', sc === 'comedy' ? 'Followed comedians' : 'Followed artists', q ? rows.length + ' of ' + fol.length : fol.length, ui.fOpen || !!sc);
-    if (ui.fOpen || sc) {
+    if (ar) h += secHead('f', sc === 'comedy' ? 'Followed comedians' : 'Followed artists', q ? rows.length + ' of ' + fol.length : fol.length, ui.fOpen || !!sc);
+    if (ar && (ui.fOpen || sc)) {
       h += '<div class="secbody">' + (notFol ? '<div class="chips"><button type="button" class="chip ghost' + (ui.showNot ? ' on' : '') + '" data-m="shownot" aria-pressed="' + (ui.showNot ? 'true' : 'false') + '">' + (ui.showNot ? 'Hide' : 'Also show') + ' ' + notFol + ' not following</button></div>' : '');
       if (!all.length) h += '<div class="empty">No artists yet. Add one to start.</div>';
       else {
@@ -882,12 +915,12 @@
       }
       h += '</div>';
     }
-    if (sc !== 'comedy' && people().length) {
+    if (pl && people().length) {
       var pnf = playedNotFollowed().filter(function (x) { return !q || norm(x.name).indexOf(q) >= 0; });
-      h += secHead('p', 'Played, not followed', pnf.length, ui.pOpen);
-      if (ui.pOpen) h += '<div class="secbody">' + pnfSegs() + pnfBody(pnf) + '</div>';
+      h += secHead('p', 'Played, not followed', pnf.length, true);
+      if (true) h += '<div class="secbody">' + pnfSegs() + pnfBody(pnf) + '</div>';
     }
-    return h + (sc === 'comedy' ? '' : toolsHtml());
+    return h + (sc === 'comedy' || !ar ? '' : toolsHtml());
   }
   // ── desktop side panel (v1.12): the host shows it to the right of the list on a wide screen ──
   function paneOn() { return !!(H().paneOn && H().paneOn()); }   // v2.0: Film & TV has no side panel for Music, so details open in a window
@@ -1216,9 +1249,9 @@
       .then(function (r) {
         if (r.res.status === 429) { say('Tested a moment ago'); return; }
         if (!r.res.ok) throw new Error(r.res.status === 404 ? 'the server has not been updated to v0.11.0 yet' : r.res.status === 403 ? 'this account is not allowed to run it' : (r.j && r.j.error) || 'HTTP ' + r.res.status);
-        jbRes = r.j; openConn();
+        jbRes = r.j; lg('tours', true, 'Connection test: Ticketmaster ' + (((r.j || {}).ticketmaster || {}).ok === false ? 'failed' : 'ok') + ', JamBase ' + (((r.j || {}).jambase || {}).ok === false ? 'failed' : 'ok')); openConn();
       })
-      .catch(function (e) { sayErr('Connection test failed: ' + ((e && e.message) || 'offline')); })
+      .catch(function (e) { lg('tours', false, 'Connection test: ' + ((e && e.message) || 'offline')); sayErr('Connection test failed: ' + ((e && e.message) || 'offline')); })
       .finally(function () { busy.jb = 0; paint(); });
   }
   function openConn() {
@@ -1238,7 +1271,7 @@
   function paint() {
     if (!root || !root.isConnected) return;
     var keep = document.activeElement && document.activeElement.id === 'gmq' ? document.activeElement.selectionStart : null;
-    root.innerHTML = '<div class="gm">' + (ready ? '' : head()) + (ui.sub === 'artists' ? renderArtists() : ui.sub === 'recs' ? renderRecs() : ui.sub === 'mine' ? renderMine() : renderComing()) + '<div style="height:90px"></div></div>';
+    root.innerHTML = '<div class="gm">' + (ready ? '' : head()) + (ui.sub === 'playing' ? renderArtists('playing') : ui.sub === 'artists' ? renderArtists() : ui.sub === 'recs' ? renderRecs() : renderComing()) + '<div style="height:90px"></div></div>';
     if (keep != null) { var q = document.getElementById('gmq'); if (q) { q.focus(); try { q.setSelectionRange(keep, keep); } catch (e) {} } }
     paintPane();
   }
@@ -1295,7 +1328,7 @@
     if (!b) { var rw = e.target.closest && e.target.closest('[data-sel]'); if (rw && paneOn() && !(e.target.closest && e.target.closest('input,label,a,button'))) { var sp = rw.getAttribute('data-sel'), ci = sp.indexOf(':'); selectItem(sp.slice(0, ci), sp.slice(ci + 1)); } return; }
     if (b.disabled) return;
     var s = b.getAttribute('data-m'), i = s.indexOf(':'), k = i < 0 ? s : s.slice(0, i), v = i < 0 ? '' : s.slice(i + 1);
-    if (k === 'sub') { if (ui.hosted && (v === 'artists' || v === 'coming') && H().navigate) { H().navigate(v === 'artists' ? 'following' : 'coming'); return; } ui.sub = v; sel = null; saveUi(); paint(); }
+    if (k === 'sub') { if (ui.hosted && H().navigate && !(v === 'recs' || (v === 'artists' && ui.sub === 'recs'))) { H().navigate(v === 'artists' ? 'artists' : v === 'playing' ? 'playing' : 'upcoming'); return; } ui.sub = v; sel = null; saveUi(); paint(); }
     else if (k === 'tper') { ui.tPer = ['30', '12', 'all'].indexOf(v) >= 0 ? v : '30'; saveUi(); paint(); }
     else if (k === 'gview') { ui.gView = v; saveUi(); paint(); }
     else if (k === 'sec') { if (v === 'f') ui.fOpen = !ui.fOpen; else if (v === 'fm') ui.mOpen = !ui.mOpen; else if (v === 'fc') ui.cOpen = !ui.cOpen; else if (v === 'd') ui.dOpen = !ui.dOpen; else ui.pOpen = !ui.pOpen; saveUi(); paint(); }
@@ -1424,7 +1457,7 @@
   try { if (window.PalShared && PalShared.app && PalShared.app.addPart) PalShared.app.addPart({ id: 'music', name: 'Music', version: VERSION }); } catch (e) {}   // v1.24 (MUS-NEXT-1)
   window.FttMusic = window.GatMusic = {
     listenCard: listenCard,
-    version: VERSION, pane: pane, render: render, renderSection: renderSection, counts: counts, addArtist: addArtist, scopeFor: scopeFor, boot: boot, pull: pull, paint: paint, init: init, exportBackup: exportBackup, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, spec: spec, ui: ui, busy: busy, ready: ready }; },
+    version: VERSION, pane: pane, render: render, renderSection: renderSection, counts: counts, upcomingAll: upcomingAll, status: status, testApple: testApple, testTmdb: testTmdb, connTest: connTest, checkNow: function () { return checkNow(false); }, pullNow: function () { return pull(true); }, addArtist: addArtist, scopeFor: scopeFor, boot: boot, pull: pull, paint: paint, init: init, exportBackup: exportBackup, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, spec: spec, ui: ui, busy: busy, ready: ready }; },
     // for the rest of Gigs & Trips (next stage): interested items for Upcoming and the timeline
     core: { norm: norm, slug: slug, classify: classify, parseRelease: parseRelease, liveConcerts: liveConcerts, specialOf: specialOf, isCom: isCom }
   };
