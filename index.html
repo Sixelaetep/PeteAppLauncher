@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>P Apps v12.26</title>
+<title>P Apps v12.27</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <!-- PET-124 v11.20: connection hint only — opens DNS/TLS to Supabase while the page parses, ahead of the session
@@ -1894,6 +1894,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
   ADDED (PET-086, v10.79, FF-001): fantasy-football-tracker.html — new
   app, minimal integration this release (nav icon, home card, iframe,
   PAL_NAV_SLUG_MAP only — no HEALTH_APPS/BACKUP_ROW_MAP yet, see FF-009).
+  CHANGED (v12.27, Pete 22 Nov): Music and Comedy moved into Film & TV Tracker (v5.00; Gigs & Trips 7.160 lost its Music tab). (1) New relay PAL_RELAY: Film & TV asks the launcher to call Gigs & Trips (PalBridge GIG: addGig for Bought, gigsFor to link gigs made earlier) and gets PAL_RELAY_RESULT; PAL_RELAY_OPEN lets Film & TV open a gig and Gigs & Trips open a Music row in Film & TV. Only the Film & TV frame may relay; only the two listed actions are allowed. (2) The Music backup row now targets Film & TV (screen), which answers exportMusicBackup. (3) The Device check note about Music inside Gigs & Trips is updated. Music items in Upcoming / Needs attention now come from the Film & TV contract (Gigs & Trips no longer publishes them). No stored data changed.
   CHANGED (v12.26, WT-001): Fortnight Tracker is now Work Tools (file work-tools.html, toolbox icon). Its nav icon, Home card, backup row, Customize layout row, search / alert label and Device-check label say Work Tools; the app id 'fortnight', the contract, storage keys and backup file are unchanged. HTML Vault is removed from the launcher completely: nav icon, Home card, iframe, backup row, Customize layout row, cloud-contract pull, Device-check row, PAL_NAV_SLUG_MAP entry, backup-file recogniser and stat code. It is now a tab inside Work Tools (needs work-tools.html v4.00 and html-vault.html v1.18). The Claim Tracker card is unchanged. Deploy all three files together.
   CHANGED (v12.25, FTT-063): the Film & TV card shows the streaming service's logo: a small one on each Continue watching row (before S2 E3) and on the bottom-left of each Top favourites poster. The tracker (v4.24) sends the TMDB logo path as `v` in summary.up and topFavourites; the launcher only accepts a plain /name.jpg or .png path and loads it from image.tmdb.org, and removes the image if it will not load. An older tracker sends none and nothing shows. No storage, sync or backup change.
   CHANGED (v12.24, FTT-062): the Film & TV card gets a 'Continue watching' block (needs film-tv-tracker.html v4.23). Up to three shows you are part-way through, one line each: a tick box, the title and the next episode (S2 E3). Tapping the box ticks that episode through the tracker (FTT_ACTION ping / tickEpisode -> FTT_RESULT, the same wait-for-ready and re-send-under-one-reqId pattern as the Claims quick-add; the app sets, never toggles, so a repeat cannot untick) and the row moves to the next episode straight away; tapping the title opens it in Film & TV. Shows that are up to date and waiting on the next episode are one line underneath ('Silo Fri 5 Dec, Andor 9 Dec'). Reads summary.up from the Film & TV contract; an older tracker has none and the block is simply absent. No storage, sync or backup change.
@@ -2353,7 +2354,7 @@ set();[d,t].forEach(function(m){if(m.addEventListener)m.addEventListener('change
      (This comment originally pointed at capturePhaseBreakdown() for a
      related diagnostics update — that whole system was removed at
      PET-092; see the comment left in its place further down.) -->
-<script src="pal-shared.js?v=12.26"></script>
+<script src="pal-shared.js?v=12.27"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SUPABASE AUTH — replaces PIN system
@@ -2364,7 +2365,7 @@ const SB_KEY  = window.PAL_CONFIG.SB_KEY;
 const KNOWN_USERS = window.PAL_CONFIG.KNOWN_USERS;
 
 // ── State ──────────────────────────────────────────────────────────
-const LAUNCHER_VERSION = 'v12.26';
+const LAUNCHER_VERSION = 'v12.27';
 try { window.PalShared && window.PalShared.app && window.PalShared.app.register({ id: 'launcher', name: 'P Apps', version: LAUNCHER_VERSION }); } catch (e) {}   // v12.21 (SUITE-18): the launcher states its own version once, like every app will
 try { document.querySelectorAll('.nav-logo .nav-version').forEach(function (n) { n.textContent = LAUNCHER_VERSION; }); } catch (e) {}   // v12.17: the desktop bar badge follows the constant   // v11.64: single source for the version shown in the menu, the backup manifest and the Device check (keep equal to <title>)
 let currentUser = null;   // KNOWN_USERS entry
@@ -3269,6 +3270,9 @@ window.addEventListener('message', function(e) {
     if (e.data.type === 'GYM_DATA_UPDATED') pxGymTick();   // PET-154 v11.47: a logged meal / drink may clear a reminder
     if (e.data.type === 'RT_DATA_UPDATED') pxReadTick();   // PET-157 v11.50: a logged page / chapter clears the Read today reminder
   }
+  // v12.27: Film & TV (Music) <-> Gigs & Trips hand-over, relayed here because the two apps are separate frames.
+  if (e.data && e.data.type === 'PAL_RELAY' && e.data.reqId) pxRelay(e);
+  if (e.data && e.data.type === 'PAL_RELAY_OPEN' && e.data.open) pxRelayOpen(e);
   // ── PAL_NAVIGATE (GYM-040, PET-051) ─────────────────────────────
   // Any embedded app can request the launcher switch to another app by
   // sending { type:'PAL_NAVIGATE', app:'<canonical-slug>' }. The slug is
@@ -3589,6 +3593,22 @@ function bridgeCall(frame, prefix, action, payload, opts) {
     const ping = function () { post({ type: prefix + '_ACTION', action: 'ping', reqId: rid }); };
     ping(); poll = setInterval(ping, 400);
   });
+}
+// v12.27: relay for Film & TV. Only the Film & TV frame may ask (checked by event.source) and only the listed GIG actions are passed on.
+const PX_RELAY_OK = { gigs: { prefix: 'GIG', actions: ['addGig', 'gigsFor'] } };
+async function pxRelay(e) {
+  const d = e.data, scr = document.getElementById('frame-screen');
+  const reply = function (m) { try { e.source.postMessage(Object.assign({ type: 'PAL_RELAY_RESULT', reqId: d.reqId }, m), window.location.origin); } catch (x) {} };
+  if (!scr || e.source !== scr.contentWindow) return;
+  const r = PX_RELAY_OK[d.app];
+  if (!r || r.prefix !== d.prefix || r.actions.indexOf(d.action) < 0) return reply({ ok: false, error: 'NOT_ALLOWED' });
+  try { const f = await ensureLoaded(d.app); const res = await bridgeCall(f, r.prefix, d.action, d.payload, { readyMs: 15000, resultMs: 60000 }); reply({ ok: true, result: res }); }
+  catch (err) { reply({ ok: false, error: (err && err.message) || 'FAILED' }); }
+}
+function pxRelayOpen(e) {
+  const d = e.data, okSrc = ['frame-screen', 'frame-gigs'].some(function (id) { const f = document.getElementById(id); return f && f.contentWindow === e.source; });
+  if (!okSrc || !(d.app === 'gigs' || d.app === 'screen') || !d.open || typeof d.open !== 'object') return;
+  pxOpen(d.app, { view: String(d.open.view || ''), id: String(d.open.id || '') });
 }
 // v11.95 (MUS-002): Music Tracker -> Gigs & Trips hand-over. Only the Music frame may ask (checked by event.source). The Gigs & Trips frame is loaded in
 // the background if it is not running yet; bridgeCall waits for it to answer its ping (PalBridge GIG). The concert is validated again by Gigs & Trips.
@@ -5088,7 +5108,7 @@ function pxRefreshCoverage() {
   const label = function (id) { return (PX_APPS[id] && PX_APPS[id].label) || id; };
   PX_WARM_ORDER.forEach(function (id) {
     const t = warm(id);
-    out.push({ id: id, label: label(id), how: PX_FEEDS[id] ? 'warm-up + launcher feed' : 'warm-up', at: t.at, ok: t.ok, note: id === 'gigs' ? 'also refreshes Music, which lives inside Gigs & Trips' : '' });
+    out.push({ id: id, label: label(id), how: PX_FEEDS[id] ? 'warm-up + launcher feed' : 'warm-up', at: t.at, ok: t.ok, note: id === 'screen' ? 'also starts Music and Comedy, which live inside Film & TV' : '' });
   });
   out.push({ id: 'gym', label: label('gym'), how: 'own warm-up', at: '', ok: null, note: 'once per session (pxGymWarm)' });
   Object.keys(PX_FEEDS).forEach(function (id) { if (PX_WARM_ORDER.indexOf(id) < 0) out.push({ id: id, label: label(id), how: 'launcher feed', at: '', ok: null, note: PX_FEEDS[id].ttlMin + ' min' }); });
@@ -7795,7 +7815,7 @@ const PX_BACKUPS = [
   { id: 'fantasy',   target: 'fantasy',   label: 'Fantasy Football', fn: 'exportData',   peteOnly: false },
   { id: 'screen',    target: 'screen',    label: 'Film & TV',        fn: 'exportJSON',   peteOnly: false },
   { id: 'liverpool', target: 'fantasy',   label: 'Liverpool database', fn: 'exportLiverpoolBackup', peteOnly: true },   // v12.22 (SUITE-21): the shared Liverpool tables (pal-lfc-data export), made by Fantasy; one copy covers Pete and Lex
-  { id: 'music',     target: 'gigs',      label: 'Music',            fn: 'exportMusicBackup', peteOnly: false }   // v11.94 (MUS-001); v12.12: Music's own full backup, made by Gigs & Trips (gigs-music-backup/1)
+  { id: 'music',     target: 'screen',    label: 'Music',            fn: 'exportMusicBackup', peteOnly: false }   // v11.94 (MUS-001); v12.12: Music's own full backup (gigs-music-backup/1); v12.27: made by Film & TV, where Music now lives
 ];
 function pxBackupList() { return PX_BACKUPS.filter(function (b) { return !b.peteOnly || (currentUser && currentUser.isPete); }); }
 function pxSleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }

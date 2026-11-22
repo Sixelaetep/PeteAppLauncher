@@ -1,0 +1,1431 @@
+/* ftt-music.js v2.0 (v2.0: MOVED from Gigs & Trips into Film & TV Tracker, where Music and Comedy are two of its four sections (Film, TV, Music, Comedy). The module now takes its host from window.FTT_HOST (window.GAT_HOST is still read as a fallback) and draws one section at a time with renderSection(container, {scope:"music"|"comedy", view:"list"|"following"|"coming"}); the host owns the section heading and the My list / Following / Coming up bar. Music: My list = tour dates and releases marked Interested (and gigs already in Gigs & Trips); Comedy: Following and Coming up show only comedians, tour dates and specials. A release that is already out shows only Apple Music; a release still to come shows Interested, which puts an alert on the release day in the launcher and in Gigs & Trips. An Alert-me / Interested tour date whose tickets went on sale in the last 7 days is listed as on sale now. Bought still makes the gig in Gigs & Trips (through the launcher) and the link is kept on the cstate row (gig), so Open gig works from here and gigs made before the move are linked by one question to Gigs & Trips. A special added from Comedy goes to the Comedy list (title.comedy). No stored field is renamed; the pal_music rows and the gat_mus_db cache are unchanged. v1.30: COM-5 an album Apple lists twice (two catalogue ids with the same title and date, such as an explicit and a clean edition) shows once in Coming up, preferring the explicit one; Recommendations: Listen on Apple Music now removes the suggestion and it is not recommended again (saved as an 'already know' answer, with Undo), as Follow already did; v1.29: COM-4 a special that is in Film & TV Tracker leaves Coming up: straight after Add to Film & TV, and also when the title was already added there some other way (checked against the Film & TV library once each time Music opens); v1.28: COM-3 Followed artists is split into two sub-sections, Music and Comedians, each closed until opened (open on its own while searching, remembered per device); v1.27: COM-2 a comedian's tour date has a microphone tile instead of the guitar (the tour dates themselves come from pal-music-proxy v0.13.0, which looks comedians up on Ticketmaster as comedy); Add artist: Comedian note mentions tour dates; v1.26: COM-1b adding a comedian no longer closes the Add artist sheet: each Follow turns into Following ✓ so several comedians can be added in one go; v1.25: COM-1 follow comedians: Add artist has a Musician / Comedian choice; a comedian is found on TMDB and stored in the same artists list (kind 'comedian', tmdb id, optional Specials switch); new and upcoming stand-up specials (comedy films and series where they play themselves) appear in Coming up with a Specials filter, and Add to Film & TV puts one on the Want to Watch list in Film & TV Tracker; comedians are left out of play counts, Never played and the Apple Music release feed; v1.24: SUITE-18 / MUS-NEXT-1: registers itself as a part of the host app (PalShared.app.addPart) so its version shows in the Sync & Backup sheet and the Device check; nothing else changes). v1.23: (v1.23: a tour date where the artist is a support act says so (badge, detail panel, Upcoming line: Support for X) when the server (pal-music-proxy v0.12.0) records it, and Coming up has a Hide support slots switch (remembered); dates with no billing information look exactly as before; v1.22: Recommendations is now a section of its own beside Coming up and Artists (it was a pop-up window): suggestions from Last.fm and followed artists never played sit side by side on a computer, with a detail panel on the right, and in one column with larger buttons on a phone; v1.21: Recommendations has a Never played tab (followed artists with no plays: Listen on Apple Music or Unfollow) and each Last.fm suggestion has a Listen button; Played, not followed: an Ignored artist comes back when their play count goes up; Coming up: Unfollow artist on every gig and release, and on a gig also Stop tour dates and No tickets (hides the date and is not counted as Not interested); marking a second tour date of the same artist Not interested asks whether to stop following their tour dates and then whether to keep following the artist; GatMusic.listenCard() gives the launcher card Pete's listening figures; v1.20: the listening charts and top-artist cards use the whole history (all months, a year, a period switch of 30 days / 12 months / all time), plus genre cards and genres over the years; the artist panel shows plays by year; v1.19: v1.19: Pete's Apple Music history (restored from a backup file) is added to the play numbers, the artist's Listening block and Played, not followed, which can be sorted by All time; v1.18: full Music backup and restore; v1.17: v1.17: every gig shows where it was found (a Ticketmaster or JamBase tag); no more checking for tour dates when Music opens or from a button: the server checks a few artists each night and Coming up says when it last did; Diagnostics has a Connection test (one Ticketmaster and one JamBase request) and shows the JamBase usage; Check for new listening is unchanged; v1.16: the artist window on a phone has the same look and order as the computer's side panel (top card, Apple Music, switches, listening, tour dates, releases, Remove); v1.15: v1.15: the Artists page has the same order on a phone as on a computer: search, listening dashboard, folding Followed artists and Played, not followed; v1.14: v1.14: the side panel puts the main buttons (Apple Music, Tickets, Interested …) straight under the top card; Test JamBase moved into a folded Diagnostics group; Recommendations window says Refresh suggestions; v1.13: v1.13: on a computer the Artists page is search first, then a listening dashboard for Pete and Lex (top artists, plays a day / a month / by weekday), then folding sections for followed artists and played-not-followed; v1.12: v1.12: a side panel on a wide screen (tour date, release or artist details with play numbers), Export and Import of the artists list (JSON, matched against your list before anything is added), new artists are matched with Apple Music in the background; v1.11: v1.11: the Last.fm plays checked line shows today / the date (the server records only the day) and this device's own last check time when newer; v1.10: v1.10: clearer message when the daily manual-check limit is reached; Test JamBase no longer asks for the Scotland-wide list (JamBase rejects that filter); v1.09: the Music tab follows the look of the rest of Gigs & Trips (page heading, segmented tabs, a Next gig card, ticket-style rows, cards for Played not followed); Artists page: Check for new listening, rounded toggles, Test JamBase; JamBase source label; v1.08: opening a release in Apple Music removes it from the list (Undo; Show again under hidden); Played, not followed has Both / Pete / Lex buttons; v1.07: Check now renamed Check for new dates with a plain explanation; Coming up has All / Gigs / Releases filter chips; v1.06: Bought can be cancelled from the venue question without an error; v1.05: v1.05: the artist, add and recommendations windows have proper padding (text no longer touches the left edge on a computer) and evenly sized rows; v1.04: v1.04: Played, not followed gets an All played choice (one play is enough); v1.03: "The Levellers" matches the followed "Levellers" (a leading The is ignored when names are compared; plays under both spellings are added together); Check now is also on the Artists tab; v1.02: agenda() lists interested tour dates, on-sale dates and releases for Upcoming and the desktop timeline in the rest of Gigs & Trips, init() loads in the background, onChange() and focus(); v1.01: gig and release rows look different: pink date block and guitar tile for a gig, purple date block and disc tile for a release, as the gig tile in the rest of Gigs & Trips): the Music section of Gigs & Trips. Loaded on first use of the Music tab.
+   Reads and writes the shared pal_music library (the same rows as music-tracker.html; field names are shared with the scheduled server function and must not be renamed).
+   Trimmed on purpose: Coming up (tour dates and releases), Artists (follow switches, plays, played-not-followed, Add artist), and a Recommendations modal.
+   New records (additive, ignored by the server and the old Music app): cstate_<concertId>.interested, .nt (no tickets) and .aid (artist id), rstate_rel_<collectionId> {interested, ni}, recfb_rc_<artist>.ip (play count when ignored), artist.tourAsk (Not interested count when the stop-tour question was last answered).
+   v1.25 records (additive): artist.kind ('comedian'), artist.tmdb (TMDB person id), artist.img (TMDB profile path), artist.specials (false = no specials); rstate_sp_<film|tv>_<tmdbId> {ni, ft} for a special hidden or already added to Film & TV. Specials are read from TMDB in the browser and kept on this device only; Add to Film & TV writes one title_ row to the shared pal_film_tracker table.
+   Needs from the host (window.FTT_HOST): token(), userId(), addGig(concert) -> {gigId, existing}, gigsFor(conIds) -> {conId: gigId}, openGig(gigId), showModal(html) -> the modal's element, closeModal(), modalEl(), modalOpen(), toast(msg), navigate('following'|'coming'|'list'), hasTitle(type, tmdb), addSpecial({tmdb, type}) -> Promise. */
+(function () {
+  'use strict';
+  var VERSION = '2.0', TBL = 'pal_music', UI_KEY = 'gat_mus_ui', STALE_PULL_MS = 120000, REL_STALE_MS = 6 * 3600 * 1000;
+  var H = function () { return window.FTT_HOST || window.GAT_HOST || {}; };
+
+  // ── pure logic (copied from MusicCore in music-tracker.html; the rules must stay the same) ──
+  // v1.03: a leading "The " is ignored when names are compared ("The Levellers" is "Levellers"), so a played artist matches the followed one.
+  function norm(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/^\s*the\s+(?=\S)/, '').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ''); }
+  // The server keys plays by the full name; merge entries that now share a key ("the levellers" + "levellers").
+  function rekey(L) {
+    if (!L || !L.artists) return L;
+    var A = {}, out = Object.assign({}, L);
+    Object.keys(L.artists).forEach(function (k) {
+      var e = L.artists[k] || {}, nk = norm(typeof e.n === 'string' && e.n ? e.n : k), t = A[nk];
+      if (!t) { A[nk] = Object.assign({}, e, { d: Object.assign({}, e.d || {}), mo: Object.assign({}, e.mo || {}) }); return; }
+      if ((e.t || 0) > (t.t || 0) && typeof e.n === 'string') t.n = e.n;
+      t.t = (t.t || 0) + (e.t || 0); if ((e.l || 0) > (t.l || 0)) t.l = e.l;
+      Object.keys(e.d || {}).forEach(function (d) { t.d[d] = (Number(t.d[d]) || 0) + (Number(e.d[d]) || 0); });
+      Object.keys(e.mo || {}).forEach(function (m) { t.mo[m] = (Number(t.mo[m]) || 0) + (Number(e.mo[m]) || 0); });
+    });
+    out.artists = A; return out;
+  }
+  function slug(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'artist'; }
+  function classify(query, results) {
+    if (!results || !results.length) return { level: 'none', pick: null };
+    var q = norm(query), exact = results.filter(function (r) { return norm(r.artistName) === q; });
+    if (!exact.length) return { level: 'low', pick: results[0] };
+    if (exact.length === 1 && exact[0] === results[0]) return { level: 'high', pick: exact[0] };
+    return { level: 'medium', pick: exact[0] };
+  }
+  function kindOf(name, n) { name = String(name || ''); if (/- single$/i.test(name)) return 'single'; if (/- ep$/i.test(name)) return 'ep'; return n === 1 ? 'single' : 'album'; }
+  function artSize(url, n) { if (typeof url !== 'string' || !/^https:\/\//.test(url)) return ''; return url.replace(/\/\d+x\d+(bb)?\.(jpg|png|webp)$/i, '/' + n + 'x' + n + 'bb.jpg'); }
+  function parseRelease(r, aid) {
+    if (!r || r.wrapperType !== 'collection' || !r.collectionId || !r.releaseDate || !r.collectionName) return null;
+    return { id: String(r.collectionId), aid: String(aid), name: String(r.collectionName), artistName: String(r.artistName || ''), date: String(r.releaseDate).slice(0, 10), kind: kindOf(r.collectionName, r.trackCount),
+             exp: r.collectionExplicitness === 'explicit', art: typeof r.artworkUrl100 === 'string' ? r.artworkUrl100 : '', url: typeof r.collectionViewUrl === 'string' ? r.collectionViewUrl : '', tracks: r.trackCount || 0 };
+  }
+  // v1.30 (COM-5): Apple can list one album under two catalogue ids (explicit and clean editions). Releases with the same artist, title and date are one release: show the explicit edition (else the one with more tracks, else the lower id); a Not interested / Interested mark on any copy counts for the release.
+  function relGroups(items) {
+    var g = {};
+    Object.keys(items).forEach(function (k) { var r = items[k]; (g[norm(r.artistName) + '|' + norm(r.name) + '|' + r.date] = g[norm(r.artistName) + '|' + norm(r.name) + '|' + r.date] || []).push(r); });
+    return Object.keys(g).map(function (k) { var l = g[k].sort(function (a, b) { return (b.exp ? 1 : 0) - (a.exp ? 1 : 0) || (b.tracks || 0) - (a.tracks || 0) || String(a.id).localeCompare(String(b.id)); }); return { rep: l[0], all: l }; });
+  }
+  function addDays(iso, n) { return new Date(Date.parse(iso + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10); }
+  function isFollowed(a) { return !!a && !a._deleted && a.following === true && !a.excluded; }
+  function wantsReleases(a) { return isFollowed(a) && a.releases !== false; }
+  function wantsGigs(a) { return isFollowed(a) && a.gigs !== false; }
+  // v1.25 (COM-1): comedians share the artists list. A comedian is an artist with kind 'comedian' and a TMDB person id.
+  function isCom(a) { return !!a && a.kind === 'comedian'; }
+  function hasTmdb(a) { return !!a && /^\d{1,10}$/.test(String(a.tmdb || '')); }
+  function wantsSpecials(a) { return isFollowed(a) && isCom(a) && a.specials !== false && hasTmdb(a); }
+  var SPEC_BACK_DAYS = 45, SPEC_AHEAD_DAYS = 400, SPEC_STALE_MS = 12 * 3600 * 1000, SELF_RE = /^\s*(self|himself|herself|themselves|themself|him\/herself)\b/i;
+  // A stand-up special = a comedy film or series where the comedian plays themselves; talk, news, reality and documentary titles are not specials.
+  function specialOf(r) {
+    if (!r || !r.id || (r.media_type !== 'movie' && r.media_type !== 'tv')) return null;
+    var g = r.genre_ids || []; if (g.indexOf(35) < 0 || [10767, 10763, 10764, 99].some(function (x) { return g.indexOf(x) >= 0; })) return null;
+    if (!SELF_RE.test(String(r.character || ''))) return null;
+    var tv = r.media_type === 'tv', date = String((tv ? r.first_air_date : r.release_date) || '').slice(0, 10), title = String((tv ? r.name : r.title) || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !title) return null;
+    return { id: 'sp_' + (tv ? 'tv' : 'film') + '_' + r.id, tmdb: Number(r.id), type: tv ? 'tv' : 'film', title: title.slice(0, 160), date: date, poster: /^\/[\w.\-]+$/.test(String(r.poster_path || '')) ? r.poster_path : '', aids: [] };
+  }
+  var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function dateLabel(iso) { var d = new Date(iso + 'T00:00:00Z'); return DOW[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()]; }
+  function liveConcerts(concerts, artists, today) {
+    var ids = {}; (artists || []).forEach(function (a) { if (wantsGigs(a)) ids[String(a.id)] = true; });
+    return (concerts || []).filter(function (c) { return c && !c._deleted && c.id && ids[String(c.artistId)] && String(c.date) >= today; })
+      .sort(function (x, y) { return String(x.date).localeCompare(String(y.date)) || String(x.id).localeCompare(String(y.id)); });
+  }
+  var NEW_REL_DAYS = 21;
+
+  // ── state ──
+  var state = { artists: [], cst: [], rst: [], recfb: [], concerts: [], recs: [], listBy: {}, appleBy: {}, conCheck: { fetched: {}, empty: {}, jbf: {} } };
+  var rel = { fetchedAt: null, items: {}, fetched: {} };
+  var spec = { fetchedAt: null, items: {}, fetched: {} };   // v1.25: comedy specials from TMDB (this device only)
+  var addKind = 'music', lastCom = [];
+  var sel = null, paneEl = null, matching = false, matchInfo = { done: 0, total: 0, ok: 0, dup: 0 }, imp = null, fileIn = null;
+  var ui = { sub: 'coming', pWho: '', cFilter: 'all', aFilter: 'all', aQuery: '', lMin: 3, showHidden: false, dOpen: false, gView: 'days', fOpen: true, pOpen: true, mOpen: false, cOpen: false, showNot: false, pPer: '', pLimit: 15, tPer: '30', rTab: 'all', uLimit: 15, noSup: false, scope: '', hosted: false };
+  var cinfo = { at: null, msg: '' };
+  var busy = { con: false, rel: false, spec: false, pull: false, follow: {} }, lastPull = 0, ready = false, root = null, lastErr = '';
+  var _db = null, _tables = null, tokSet = '';
+
+  // ── small helpers ──
+  function E(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function fmtDate(iso) { try { if (window.PalShared && PalShared.fmtDate) return PalShared.fmtDate(iso) || iso; } catch (e) {} return iso; }
+  function ago(iso) { var t = Date.parse(iso); if (!t) return 'never'; var m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; }
+  function localDay(uts) { var d = new Date(uts * 1000); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  var IS_MAC = /Macintosh/.test(navigator.userAgent) && !(navigator.maxTouchPoints > 1);
+  function macify(u) { return IS_MAC ? u.replace(/^https:\/\//, 'music://') : u; }
+  function artistUrl(a) { return macify(a.appleArtistId ? 'https://music.apple.com/gb/artist/' + slug(a.appleName || a.name) + '/' + a.appleArtistId : 'https://music.apple.com/gb/search?term=' + encodeURIComponent(a.name)); }
+  function releaseUrl(r) { var u = r.url || ''; if (/^https:\/\/music\.apple\.com\//.test(u)) return macify(u.replace(/^(https:\/\/music\.apple\.com\/)[a-z]{2}\//, '$1gb/').replace(/\?.*$/, '')); return macify('https://music.apple.com/gb/search?term=' + encodeURIComponent(r.artistName + ' ' + r.name)); }
+  function openLink(url) { if (!url) return; var a = document.createElement('a'); a.href = url; if (/^https:/.test(url)) { a.target = '_blank'; a.rel = 'noopener'; } document.body.appendChild(a); a.click(); a.remove(); }
+  function say(msg) { try { H().toast ? H().toast(msg) : null; } catch (e) {} }
+  function sayErr(msg) { lastErr = msg; say(msg); }
+  function undoToast(msg, fn) { try { if (window.PalUI && PalUI.toast) { PalUI.toast(msg, { action: { label: 'Undo', onClick: fn } }); return; } } catch (e) {} say(msg); }
+  var hasApple = function (a) { return /^\d{1,12}$/.test(String(a.appleArtistId || '')); };
+  var live = function () { return state.artists.filter(function (a) { return !a._deleted; }); };
+  var followed = function () { return live().filter(isFollowed); };
+  var byId = function (id) { return state.artists.find(function (a) { return a.id === id && !a._deleted; }); };
+  function loadUi() { try { var o = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); if (o) { if (o.sub === 'artists' || o.sub === 'coming' || o.sub === 'recs') ui.sub = o.sub; if (['all', 'new', 'never'].indexOf(o.rTab) >= 0) ui.rTab = o.rTab; if (o.noSup === true) ui.noSup = true; if (['all', 'following', 'not'].indexOf(o.aFilter) >= 0) ui.aFilter = o.aFilter; if (['all', 'gigs', 'releases', 'specials'].indexOf(o.cFilter) >= 0) ui.cFilter = o.cFilter; if (o.pWho === 'pete' || o.pWho === 'lex') ui.pWho = o.pWho; if ([1, 2, 3, 5, 10].indexOf(o.lMin) >= 0) ui.lMin = o.lMin; if (['days', 'months', 'allmonths', 'years', 'week'].indexOf(o.gView) >= 0) ui.gView = o.gView; if (o.fOpen === false) ui.fOpen = false; if (o.mOpen === true) ui.mOpen = true; if (o.cOpen === true) ui.cOpen = true; if (o.pOpen === false) ui.pOpen = false; if (o.showNot === true) ui.showNot = true; if (o.pPer === '30' || o.pPer === 'all') ui.pPer = o.pPer; if (['30', '12', 'all'].indexOf(o.tPer) >= 0) ui.tPer = o.tPer; } } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(UI_KEY, JSON.stringify({ sub: ui.sub, pWho: ui.pWho, cFilter: ui.cFilter, aFilter: ui.aFilter, lMin: ui.lMin, gView: ui.gView, fOpen: ui.fOpen, mOpen: ui.mOpen, cOpen: ui.cOpen, pOpen: ui.pOpen, showNot: ui.showNot, pPer: ui.pPer, tPer: ui.tPer, rTab: ui.rTab, noSup: ui.noSup })); } catch (e) {} }
+
+  // ── local cache (IndexedDB gat_mus_db) so the tab opens at once and works offline ──
+  function kvOpen() { return new Promise(function (res) { try { var r = indexedDB.open('gat_mus_db', 1); r.onupgradeneeded = function () { r.result.createObjectStore('kv'); }; r.onsuccess = function () { _db = r.result; res(true); }; r.onerror = r.onblocked = function () { res(false); }; } catch (e) { res(false); } }); }
+  function kvGet(k) { return new Promise(function (res) { if (!_db) return res(null); try { var q = _db.transaction('kv').objectStore('kv').get(k); q.onsuccess = function () { res(q.result == null ? null : q.result); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
+  function kvSet(k, v) { return new Promise(function (res) { if (!_db) return res(false); try { var t = _db.transaction('kv', 'readwrite'); t.objectStore('kv').put(JSON.parse(JSON.stringify(v)), k); t.oncomplete = function () { res(true); }; t.onerror = t.onabort = function () { res(false); }; } catch (e) { res(false); } }); }
+  var saveT = null, relT = null, specT = null;
+  var subs = [], hl = null;
+  function emit() { subs.forEach(function (f) { try { f(); } catch (e) {} }); }
+  function save() { clearTimeout(saveT); saveT = setTimeout(function () { kvSet('state', state); emit(); }, 300); }
+  function saveRel() { clearTimeout(relT); relT = setTimeout(function () { kvSet('rel', rel); emit(); }, 400); }
+  function saveSpec() { clearTimeout(specT); specT = setTimeout(function () { kvSet('spec', spec); emit(); }, 400); }
+
+  // ── sync (PalSync shared mode; the same rows as music-tracker.html) ──
+  function tables() {
+    if (_tables) return _tables;
+    var P = window.PalSync;
+    _tables = { art: P.table(TBL, { prefix: 'artist_', shared: true }), cst: P.table(TBL, { prefix: 'cstate_', shared: true }), rst: P.table(TBL, { prefix: 'rstate_', shared: true }), fb: P.table(TBL, { prefix: 'recfb_', shared: true }), apple: P.table(TBL, { prefix: '__apple_', shared: true }) };
+    return _tables;
+  }
+  function ensureSession() {
+    var h = H(), tok = h.token && h.token(), uid = h.userId && h.userId();
+    if (!tok || !uid || !window.PalSync) return false;
+    if (!(PalSync.hasSession() && PalSync.getUserId() === uid && tokSet === tok)) { tokSet = tok; PalSync.setSession(tok, uid); }
+    return true;
+  }
+  function push(tb, rec, what) {
+    if (!ensureSession()) return;
+    tables()[tb].upsert(rec.id, rec).catch(function (e) { sayErr(what + ' did not sync: ' + ((e && e.message) || 'error') + '. It is saved on this device.'); });
+  }
+  function pull(force) {
+    if (!ensureSession()) return Promise.resolve(false);
+    if (busy.pull) return Promise.resolve(false);
+    if (!force && Date.now() - lastPull < STALE_PULL_MS) return Promise.resolve(false);
+    busy.pull = true;
+    var T = tables();
+    return window.PalSync.fetchTableRows(TBL, { shared: true }).then(async function (rows) {
+      var a = await T.art.pull(state.artists, 'id', 'updatedAt', rows); state.artists = a.merged;
+      var c = await T.cst.pull(state.cst, 'id', 'updatedAt', rows); state.cst = c.merged;
+      var r = await T.rst.pull(state.rst, 'id', 'updatedAt', rows); state.rst = r.merged;
+      var f = await T.fb.pull(state.recfb, 'id', 'updatedAt', rows); state.recfb = f.merged;
+      var live_ = function (p) { return rows.filter(function (x) { return x.record_key.indexOf(p) === 0 && x.data && x.data.id && !x.data._deleted; }).map(function (x) { return x.data; }); };
+      state.recs = live_('rec_'); state.concerts = live_('concert_');
+      var lb = {};
+      rows.forEach(function (x) { var m = /^__listening(?:_([a-z0-9]+))?__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') lb[m[1] || 'pete'] = rekey(d); });
+      state.listBy = lb;
+      var ab = {}; rows.forEach(function (x) { var m = /^__apple_([a-z0-9]+)__$/.exec(String(x.record_key)); var d = x.data; if (m && d && !d._deleted && d.artists && typeof d.artists === 'object') ab[m[1]] = d; });
+      Object.keys(state.appleBy).forEach(function (w) { if (!ab[w] && state.appleBy[w] && state.appleBy[w].artists) { ab[w] = state.appleBy[w]; pushRows('apple', [state.appleBy[w]]); } });   // kept on this device and sent again if the cloud lacks it
+      state.appleBy = ab;
+      var cr = rows.find(function (x) { return x.record_key === '__concerts__'; });
+      state.conCheck = (cr && cr.data && !cr.data._deleted && cr.data.fetched && typeof cr.data.fetched === 'object') ? { fetched: cr.data.fetched, empty: (cr.data.empty && typeof cr.data.empty === 'object') ? cr.data.empty : {}, jbf: (cr.data.jbf && typeof cr.data.jbf === 'object') ? cr.data.jbf : {}, jb: (cr.data.jb && typeof cr.data.jb === 'object') ? cr.data.jb : null, at: cr.data.updatedAt || '' } : { fetched: {}, empty: {}, jbf: {} };
+      lastPull = Date.now(); backfillIgnores(); save(); return true;
+    }).catch(function (e) { sayErr('Could not load Music from the cloud: ' + ((e && e.message) || 'error')); return false; }).finally(function () { busy.pull = false; });
+  }
+
+  // ── listening (Pete's and Lex's Last.fm are separate rows; plays are added together) ──
+  var WHO = { pete: 'Pete', lex: 'Lex' };
+  function listeners() { return Object.keys(state.listBy); }
+  // v1.19: Apple Music history (one record a listener, plays up to the day before Last.fm tracking began) is added to the same numbers.
+  function people() { var k = {}; Object.keys(state.listBy).concat(Object.keys(state.appleBy)).forEach(function (w) { k[w] = 1; }); return Object.keys(k); }
+  function appleEntry(w, key) { var A = state.appleBy[w]; return (A && A.artists && A.artists[key]) || null; }
+  function playsIn(key, days, who) {
+    var from = addDays(today(), -(days - 1)), n = 0;
+    (who ? [who] : people()).forEach(function (w) {
+      var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) Object.keys(e.d || {}).forEach(function (d) { if (d >= from) n += Number(e.d[d]) || 0; });
+      var ae = appleEntry(w, key); if (ae) Object.keys(ae.d || {}).forEach(function (d) { if (d >= from) n += Number(ae.d[d]) || 0; });
+    });
+    return n;
+  }
+  function totalPlays(key, who) { var n = 0; (who ? [who] : people()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e) n += Number(e.t) || 0; var ae = appleEntry(w, key); if (ae) n += Number(ae.t) || 0; }); return n; }
+  function lastPlayed(key, who) { var l = 0; (who ? [who] : people()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.l > l) l = e.l; var ae = appleEntry(w, key); if (ae && ae.l > l) l = ae.l; }); return l; }
+  function playedName(key, who) { var nm = ''; (who ? [who] : people()).forEach(function (w) { var e = state.listBy[w] && state.listBy[w].artists[key]; if (e && e.n && !nm) nm = e.n; var ae = appleEntry(w, key); if (ae && ae.n && !nm) nm = ae.n; }); return nm; }
+  function allPlayedKeys(who) { var k = {}; (who ? [who] : people()).forEach(function (w) { Object.keys((state.listBy[w] || { artists: {} }).artists).forEach(function (x) { k[x] = 1; }); Object.keys((state.appleBy[w] || { artists: {} }).artists || {}).forEach(function (x) { k[x] = 1; }); }); return Object.keys(k); }
+  var fbMap = function () { var m = {}; state.recfb.forEach(function (x) { if (x && x.id && !x._deleted) { m[x.id] = x.state; if (x.n && /^rc_/.test(x.id)) m['rc_' + norm(x.n)] = x.state; } }); return m; };   // v1.03: also under the new key for names that start with "The"
+  var fbRecMap = function () { var m = {}; state.recfb.forEach(function (x) { if (x && x.id && !x._deleted) { m[x.id] = x; if (x.n && /^rc_/.test(x.id)) m['rc_' + norm(x.n)] = x; } }); return m; };
+  // v1.21: an Ignored artist stays hidden from Played, not followed until their total plays go above the count recorded when they were ignored (`ip`).
+  // An ignore made before v1.21 has no `ip`: it is given one (the plays at that moment) the next time the listening is loaded, so it behaves the same from then on.
+  function ignoreHides(rec, k) { if (!rec || rec.state !== 'ignored') return false; if (rec.ip == null) return true; return totalPlays(k) <= Number(rec.ip); }
+  function backfillIgnores() {
+    if (!people().length) return;
+    var now = new Date().toISOString(), todo = [];
+    state.recfb.forEach(function (x) { if (x && x.id && !x._deleted && /^rc_/.test(x.id) && x.state === 'ignored' && x.ip == null) { x.ip = totalPlays(x.n ? norm(x.n) : x.id.slice(3)); x.updatedAt = now; todo.push(x); } });
+    if (todo.length) { save(); pushRows('fb', todo); }
+  }
+
+  // ── Apple (iTunes: free, no key, allows browser requests) ──
+  function itunes(path) {
+    var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 10000);
+    return fetch('https://itunes.apple.com/' + path, { signal: ctl.signal }).then(function (r) { if (!r.ok) throw new Error('Apple returned HTTP ' + r.status); return r.json(); }).finally(function () { clearTimeout(t); });
+  }
+  function searchArtists(q) { return itunes('search?term=' + encodeURIComponent(q) + '&entity=musicArtist&limit=8&country=GB').then(function (j) { return (j.results || []).filter(function (x) { return x && x.artistId && x.artistName; }); }); }
+  function lookupAlbums(aid) { return itunes('lookup?id=' + encodeURIComponent(aid) + '&entity=album&limit=50&sort=recent').then(function (j) { return (j.results || []).map(function (r) { return parseRelease(r, aid); }).filter(Boolean); }); }
+  function refreshReleases(o) {
+    o = o || {};
+    if (busy.rel) return Promise.resolve();
+    var cutoff = Date.now() - REL_STALE_MS;
+    var targets = (o.only || followed()).filter(wantsReleases).filter(hasApple);
+    if (!o.only) targets = targets.filter(function (a) { var f = rel.fetched[String(a.appleArtistId)]; return !f || Date.parse(f) < cutoff; });
+    if (!targets.length) return Promise.resolve();
+    busy.rel = true; paint();
+    var i = 0, ok = 0, fail = 0;
+    function worker() {
+      if (i >= targets.length) return Promise.resolve();
+      var a = targets[i++], aid = String(a.appleArtistId);
+      return lookupAlbums(aid).then(function (items) {
+        Object.keys(rel.items).forEach(function (k) { if (rel.items[k].aid === aid) delete rel.items[k]; });
+        items.forEach(function (r) { rel.items[r.id] = r; }); rel.fetched[aid] = new Date().toISOString(); ok++;
+      }, function () { fail++; }).then(worker);
+    }
+    return Promise.all([worker(), worker(), worker()]).then(function () {
+      if (ok) { rel.fetchedAt = new Date().toISOString(); saveRel(); }
+      busy.rel = false; if (fail && !ok) sayErr('Could not reach Apple Music for releases'); paint();
+    });
+  }
+
+  // ── TMDB (v1.25): find a comedian, read their specials, and add a special to Film & TV Tracker ──
+  function tmdbOk() { return !!(window.PAL_CONFIG && PAL_CONFIG.TMDB_READ_TOKEN); }
+  function tmdb(path) {
+    var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 12000);
+    return fetch('https://api.themoviedb.org/3' + path, { signal: ctl.signal, headers: { Authorization: 'Bearer ' + PAL_CONFIG.TMDB_READ_TOKEN, 'Content-Type': 'application/json' } })
+      .then(function (r) { if (!r.ok) { var e = new Error('TMDB returned HTTP ' + r.status); e.status = r.status; throw e; } return r.json(); }).finally(function () { clearTimeout(t); });
+  }
+  function searchComedians(q) {
+    return tmdb('/search/person?query=' + encodeURIComponent(q) + '&include_adult=false&language=en-GB').then(function (j) {
+      var all = (j.results || []).filter(function (x) { return x && x.id && x.name; }), act = all.filter(function (x) { return (x.known_for_department || 'Acting') === 'Acting'; });
+      return (act.length ? act : all).slice(0, 8).map(function (x) {
+        var kn = (x.known_for || []).map(function (k) { return k && (k.title || k.name); }).filter(Boolean).slice(0, 3).join(', ');
+        return { id: String(x.id), name: String(x.name), img: /^\/[\w.\-]+$/.test(String(x.profile_path || '')) ? x.profile_path : '', known: kn ? 'Known for ' + kn : (x.known_for_department || '') };
+      });
+    });
+  }
+  function refreshSpecials(o) {
+    o = o || {};
+    if (busy.spec || !tmdbOk()) return Promise.resolve();
+    var cutoff = Date.now() - SPEC_STALE_MS, targets = (o.only || followed()).filter(wantsSpecials);
+    if (!o.only) targets = targets.filter(function (a) { var f = spec.fetched[String(a.tmdb)]; return !f || Date.parse(f) < cutoff; });
+    if (!targets.length) return Promise.resolve();
+    busy.spec = true; paint();
+    var i = 0, ok = 0, fail = 0;
+    function worker() {
+      if (i >= targets.length) return Promise.resolve();
+      var a = targets[i++];
+      return tmdb('/person/' + a.tmdb + '/combined_credits?language=en-GB').then(function (d) {
+        var from = addDays(today(), -SPEC_BACK_DAYS), to = addDays(today(), SPEC_AHEAD_DAYS), found = {};
+        (d.cast || []).forEach(function (r) { var s = specialOf(r); if (s && s.date >= from && s.date <= to) found[s.id] = s; });
+        Object.keys(spec.items).forEach(function (k) { var s = spec.items[k]; s.aids = (s.aids || []).filter(function (x) { return x !== a.id; }); });
+        Object.keys(found).forEach(function (k) { var cur = spec.items[k] || found[k]; cur.aids = cur.aids || []; if (cur.aids.indexOf(a.id) < 0) cur.aids.push(a.id); spec.items[k] = Object.assign(cur, { title: found[k].title, date: found[k].date, poster: found[k].poster }); });
+        Object.keys(spec.items).forEach(function (k) { if (!(spec.items[k].aids || []).length) delete spec.items[k]; });
+        spec.fetched[String(a.tmdb)] = new Date().toISOString(); ok++;
+      }, function () { fail++; }).then(worker);
+    }
+    return Promise.all([worker(), worker()]).then(function () {
+      if (ok) { spec.fetchedAt = new Date().toISOString(); saveSpec(); }
+      busy.spec = false; if (fail && !ok) sayErr('Could not reach TMDB for comedy specials'); paint();
+    });
+  }
+  // Film & TV Tracker keeps its titles in the shared pal_film_tracker table (title_<id> rows). This writes one in the same shape the Film & TV app uses when it adds a title.
+  var FT_TABLE = 'pal_film_tracker', _ftTitles = null;
+  function ftTable() { if (!_ftTitles) _ftTitles = window.PalSync.table(FT_TABLE, { prefix: 'title_', shared: true }); return _ftTitles; }
+  function ftDates(json) {   // the same date rule as Film & TV Tracker's filmDatesFromJson
+    var cinema = json.release_date || null, cert = null, digital = null, rd = json.release_dates && json.release_dates.results && json.release_dates.results.find(function (r) { return r.iso_3166_1 === 'GB'; });
+    if (rd && rd.release_dates && rd.release_dates.length) {
+      var list = rd.release_dates, pick = function (ty) { return list.filter(function (d) { return d.type === ty && d.release_date; }).sort(function (a, b) { return a.release_date.localeCompare(b.release_date); })[0]; };
+      var th = pick(3) || pick(2) || pick(1) || list[0];
+      if (th) { cinema = th.release_date ? th.release_date.slice(0, 10) : cinema; cert = th.certification || null; }
+      if (!cert) { var cw = list.find(function (d) { return d.type === 3 && d.certification; }); if (cw) cert = cw.certification; }
+      var dg = pick(4); if (dg && dg.release_date) digital = dg.release_date.slice(0, 10);
+    }
+    return { cinema: cinema, cert: cert, digital: digital };
+  }
+  function ftRecord(json, type) {
+    var tv = type === 'tv', now = new Date().toISOString(), ds = String((tv ? json.first_air_date : json.release_date) || ''), av = [];
+    var gb = json['watch/providers'] && json['watch/providers'].results && json['watch/providers'].results.GB;
+    if (gb) [['flatrate', 'subscription'], ['ads', 'free'], ['free', 'free'], ['rent', 'rental'], ['buy', 'purchase']].forEach(function (p) { (gb[p[0]] || []).forEach(function (x) { av.push({ service: x.provider_name, type: p[1] }); }); });
+    var t = { id: 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), type: tv ? 'tv' : 'film', title: tv ? json.name : json.title, originalTitle: tv ? json.original_name : json.original_title,
+      year: ds.slice(0, 4) ? parseInt(ds.slice(0, 4), 10) : null, posterUrl: json.poster_path ? 'https://image.tmdb.org/t/p/w342' + json.poster_path : null, overview: json.overview || '', genres: (json.genres || []).map(function (g) { return g.name; }),
+      externalIds: { tmdb: json.id, imdb: json.imdb_id || null }, availability: av, status: 'watchlist', favourite: false, dateAdded: now, watched: null, notes: '', comedy: true, updatedAt: now };
+    if (tv) {
+      t.seasons = json.number_of_seasons || null; t.episodeCount = json.number_of_episodes || null;
+      t.episodeRuntimeMinutes = (json.episode_run_time && json.episode_run_time[0]) || (json.last_episode_to_air && json.last_episode_to_air.runtime) || null;
+      var rg = json.content_ratings && json.content_ratings.results && json.content_ratings.results.find(function (r) { return r.iso_3166_1 === 'GB'; }); t.contentRating = rg ? rg.rating : null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(json.first_air_date || '')) t.firstAir = json.first_air_date.slice(0, 10);
+    } else {
+      t.runtimeMinutes = json.runtime || null; var fd = ftDates(json); t.cinema = { releaseDate: fd.cinema }; if (fd.digital) t.cinema.digitalDate = fd.digital; t.contentRating = fd.cert;
+    }
+    return t;
+  }
+  // v1.29: a special whose title is already in the Film & TV library (added there directly, or from another device before this one had the flag) is marked and leaves Coming up.
+  var _ftChecked = false;
+  function markSpecialsInFilm() {
+    if (H().hasTitle) {   // v2.0: Film & TV is this same page, so its library is read directly
+      Object.keys(spec.items).map(function (k) { return spec.items[k]; }).filter(function (x) { return !(rstMap()[x.id] || {}).ft; }).forEach(function (x) { try { if (H().hasTitle(x.type, x.tmdb)) setRst(x.id, { ft: true, ni: false }); } catch (e) {} });
+      return Promise.resolve();
+    }
+    if (_ftChecked || !tmdbOk() || !window.PalSync || !ensureSession()) return Promise.resolve();
+    var open = Object.keys(spec.items).map(function (k) { return spec.items[k]; }).filter(function (x) { return !(rstMap()[x.id] || {}).ft; });
+    if (!open.length) return Promise.resolve();
+    _ftChecked = true;
+    return window.PalSync.fetchTableRows(FT_TABLE, { shared: true }).then(function (rows) {
+      var have = {}; (rows || []).forEach(function (x) { var d = x && x.data; if (String(x.record_key).indexOf('title_') === 0 && d && !d._deleted && d.externalIds && d.externalIds.tmdb) have[d.type + ':' + Number(d.externalIds.tmdb)] = 1; });
+      open.forEach(function (x) { if (have[x.type + ':' + x.tmdb]) setRst(x.id, { ft: true, ni: false }); });
+    }).catch(function () { _ftChecked = false; });
+  }
+  function addSpecialToFilm(id) {
+    var it = comingItems().find(function (x) { return x.id === id; }); if (!it || it.kind !== 'sp' || busy['s' + id]) return;
+    if (H().addSpecial) {   // v2.0: Film & TV adds it itself (to the Comedy list), so its own screen is current at once
+      busy['s' + id] = true; paint();
+      Promise.resolve(H().addSpecial({ tmdb: it.s.tmdb, type: it.s.type })).then(function (r) { setRst(id, { ft: true, ni: false }); say(r && r.existing ? 'Already in your Comedy list' : 'Added to Comedy: Want to Watch'); })
+        .catch(function (e) { sayErr('Could not add it: ' + ((e && e.message) || 'error')); }).finally(function () { delete busy['s' + id]; paint(); });
+      return;
+    }
+    if (!tmdbOk()) { sayErr('TMDB is not set up in this app, so this cannot be added'); return; }
+    if (!ensureSession()) { sayErr('Open Film & TV through Pete’s Apps to add to Film & TV'); return; }
+    var s = it.s; busy['s' + id] = true; paint();
+    window.PalSync.fetchTableRows(FT_TABLE, { shared: true }).then(function (rows) {
+      var have = (rows || []).find(function (x) { var d = x && x.data; return String(x.record_key).indexOf('title_') === 0 && d && !d._deleted && d.externalIds && Number(d.externalIds.tmdb) === s.tmdb && d.type === s.type; });
+      if (have) { setRst(id, { ft: true, ni: false }); say('Already in Film & TV'); return null; }
+      return tmdb(s.type === 'tv' ? '/tv/' + s.tmdb + '?language=en-GB&append_to_response=watch/providers,content_ratings' : '/movie/' + s.tmdb + '?language=en-GB&append_to_response=watch/providers,release_dates').then(function (json) {
+        var rec = ftRecord(json, s.type); return ftTable().upsert(rec.id, rec).then(function () { setRst(id, { ft: true, ni: false }); say('Added to Film & TV: Want to Watch'); });
+      });
+    }).catch(function (e) { sayErr('Could not add to Film & TV: ' + ((e && e.message) || 'error')); })
+      .finally(function () { delete busy['s' + id]; paint(); });
+  }
+
+  // ── server check (the scheduled function checks concerts and Last.fm; this asks it to do it now) ──
+  function checkNow(silent) {
+    if (busy.con) return Promise.resolve();
+    if (!ensureSession()) { if (!silent) sayErr('Open Film & TV through Pete’s Apps to check for concerts'); return Promise.resolve(); }
+    var base = (window.PAL_CONFIG && PAL_CONFIG.SB_URL) || '';
+    busy.con = true; paint();
+    return fetch(base + '/functions/v1/swift-responder/refresh', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: '{}' })
+      .then(function (res) {
+        if (res.status === 429) return res.json().catch(function () { return {}; }).then(function (j) { cinfo.msg = j.error === 'daily-cap' ? 'You have used today’s manual checks. The automatic daily check still runs; try again tomorrow.' : 'Checked a few minutes ago. Showing what was found.'; });
+        if (!res.ok) throw new Error(res.status === 403 ? 'this account is not set up for the scheduled check' : 'HTTP ' + res.status);
+        cinfo.at = new Date().toISOString(); cinfo.msg = '';
+      })
+      .then(function () { return pull(true); })
+      .then(function () { if (!silent) say(cinfo.msg || 'Music up to date'); })
+      .catch(function (e) { cinfo.msg = 'Could not reach the check (' + ((e && e.message) || 'offline') + '). Showing what was found.'; if (!silent) sayErr(cinfo.msg); })
+      .finally(function () { busy.con = false; try { localStorage.setItem('gat_mus_cinfo', JSON.stringify(cinfo)); } catch (e) {} paint(); });
+  }
+
+  // ── artists ──
+  function touch(a) { a.updatedAt = new Date().toISOString(); save(); push('art', a, 'Artist ' + a.name); }
+  function newId(aid) { return aid ? 'a' + aid : 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function findByApple(aid) { return live().find(function (a) { return String(a.appleArtistId) === String(aid); }); }
+  function addArtist(name, hit, level) {
+    if (hit && findByApple(hit.artistId)) return { dup: findByApple(hit.artistId) };
+    var prior = state.artists.find(function (a) { return a._deleted && hit && String(a.appleArtistId) === String(hit.artistId); }), now = new Date().toISOString();
+    var a = prior || { id: newId(hit && hit.artistId), addedAt: now };
+    Object.assign(a, { name: String(name).trim(), appleArtistId: hit ? String(hit.artistId) : '', appleName: hit ? hit.artistName : '', genre: hit ? (hit.primaryGenreName || '') : '', match: level, following: true, excluded: false, _deleted: false, updatedAt: now });
+    if (!prior) state.artists.push(a);
+    save(); push('art', a, 'Artist ' + a.name);
+    return { artist: a };
+  }
+  function findByTmdb(id) { return live().find(function (a) { return isCom(a) && String(a.tmdb) === String(id); }); }
+  function addComedian(hit) {
+    var ex = findByTmdb(hit.id) || live().find(function (a) { return norm(a.name) === norm(hit.name); }); if (ex) return { dup: ex };
+    var prior = state.artists.find(function (a) { return a._deleted && isCom(a) && String(a.tmdb) === String(hit.id); }), now = new Date().toISOString();
+    var a = prior || { id: 'c' + hit.id, addedAt: now };
+    Object.assign(a, { name: String(hit.name).trim(), kind: 'comedian', tmdb: String(hit.id), img: hit.img || '', appleArtistId: '', appleName: '', genre: 'Comedy', match: 'manual', following: true, excluded: false, _deleted: false, updatedAt: now });
+    delete a.specials;
+    if (!prior) state.artists.push(a);
+    save(); push('art', a, 'Artist ' + a.name);
+    return { artist: a };
+  }
+  function setFollow(a, on) { a.following = !!on; touch(a); if (on) { refreshReleases({ only: [a] }); if (isCom(a)) refreshSpecials({ only: [a] }); } }
+  function setWant(a, key, on) { if (on) delete a[key]; else a[key] = false; touch(a); if (key === 'releases' && on) refreshReleases({ only: [a] }); if (key === 'specials' && on) refreshSpecials({ only: [a] }); }
+  function setTour(a, touring) { if (touring) { delete a.tour; delete a.tourNote; } else a.tour = 'ended'; touch(a); }
+  var tourEnded = function (a) { return !!a && a.tour === 'ended'; };
+  function followByName(name, recId) {
+    if (busy.follow[name]) return Promise.resolve(); busy.follow[name] = 1; paint();
+    var p;
+    var ex = state.artists.find(function (a) { return norm(a.name) === norm(name); });
+    if (ex) { ex._deleted = false; ex.excluded = false; ex.following = true; touch(ex); p = Promise.resolve(ex); }
+    else p = searchArtists(name).then(function (hits) {
+      var c = classify(name, hits), r;
+      if ((c.level === 'high' || c.level === 'medium') && c.pick) { var dup = findByApple(c.pick.artistId); if (dup) { setFollow(dup, true); r = dup; } else r = addArtist(name, c.pick, c.level).artist; }
+      else r = addArtist(name, null, c.level).artist;
+      return r;
+    });
+    return p.then(function (a) { if (recId) setFb(recId, 'followed'); say('Following ' + name); refreshReleases({}); })
+      .catch(function (e) { sayErr('Could not follow ' + name + ': ' + ((e && e.message) || 'error')); })
+      .finally(function () { delete busy.follow[name]; paint(); });
+  }
+  function setFb(id, st, name, extra) {
+    var r = state.recfb.find(function (x) { return x.id === id; });
+    if (!r) { r = { id: id }; state.recfb.push(r); }
+    if (name) r.n = String(name).slice(0, 120);
+    if (extra) Object.keys(extra).forEach(function (k) { r[k] = extra[k]; });
+    r.state = st; r._deleted = false; r.updatedAt = new Date().toISOString(); save(); push('fb', r, 'Suggestion feedback'); paint();
+  }
+
+  // ── concerts and releases: Interested / Not interested ──
+  var cstMap = function () { var m = {}; state.cst.forEach(function (x) { if (x && x.id && !x._deleted) m[x.id] = { ni: x.ni === true, nt: x.nt === true, alert: x.alert === true, interested: x.interested === true }; }); return m; };
+  var rstMap = function () { var m = {}; state.rst.forEach(function (x) { if (x && x.id && !x._deleted) m[x.id] = { ni: x.ni === true, interested: x.interested === true, ft: x.ft === true }; }); return m; };
+  function setCst(id, patch) {
+    var r = state.cst.find(function (x) { return x.id === id; });
+    if (!r) { r = { id: id, ni: false, alert: false }; state.cst.push(r); }
+    Object.assign(r, patch); r.updatedAt = new Date().toISOString(); save(); push('cst', r, 'Concert flag'); paint();
+  }
+  function setRst(id, patch) {
+    var r = state.rst.find(function (x) { return x.id === id; });
+    if (!r) { r = { id: id, ni: false, interested: false }; state.rst.push(r); }
+    Object.assign(r, patch); r.updatedAt = new Date().toISOString(); save(); push('rst', r, 'Release flag'); paint();
+  }
+  function unfollowArtist(a) {
+    setFollow(a, false); paint();
+    undoToast(a.name + ' unfollowed', function () { setFollow(a, true); paint(); });
+  }
+  // v1.21: how many tour dates of this artist are marked Not interested (No tickets is not counted). Older marks have no artist id, so it is found from the tour date while that is still listed.
+  function niCount(aid) {
+    var who = {}; state.concerts.forEach(function (c) { who[c.id] = c.artistId; }); var n = 0;
+    state.cst.forEach(function (x) { if (!x || x._deleted || x.ni !== true) return; var a = x.aid != null && x.aid !== '' ? x.aid : who[x.id]; if (a != null && String(a) === String(aid)) n++; });
+    return n;
+  }
+  // The second Not interested for the same artist asks whether to stop following their tour dates; if yes, whether to still follow the artist. A Keep answer is remembered (artist.tourAsk) so the question comes back only after two more.
+  function askStopTour(a) {
+    if (!a || !isFollowed(a) || a.gigs === false || !window.PalUI || !PalUI.confirm) return;
+    var n = niCount(a.id), asked = Number(a.tourAsk) || 0;
+    if (n < 2 || n < asked + 2) return;
+    PalUI.confirm({ title: 'Stop following ' + a.name + '’s tour dates?', message: 'You have marked ' + n + ' of their tour dates as not interested. Stop following their tour dates?', okLabel: 'Stop tour dates', cancelLabel: 'Keep following' }).then(function (stop) {
+      if (!stop) { a.tourAsk = n; touch(a); return null; }
+      setWant(a, 'gigs', false); paint();
+      return PalUI.confirm({ title: 'Still follow ' + a.name + '?', message: 'Their tour dates are off. You can keep following them for new releases and your listening, or unfollow them completely.', okLabel: 'Unfollow', cancelLabel: 'Keep following', danger: true }).then(function (unf) {
+        if (unf) { unfollowArtist(a); }
+        else undoToast('Tour dates for ' + a.name + ' stopped', function () { setWant(a, 'gigs', true); paint(); });
+      });
+    }).catch(function () {});
+  }
+  var salePending = function (c) { return /^\d{4}-\d{2}-\d{2}$/.test(String(c.saleDay || '')) && c.saleDay >= today(); };
+  var saleText = function (c) { return (c.saleDay === today() ? 'today' : dateLabel(c.saleDay)) + (c.saleTime ? ' ' + c.saleTime : ''); };
+  // v2.0: the host draws one section at a time. scope 'music' = musicians (tour dates, releases); scope 'comedy' = comedians (tour dates, specials).
+  function inScope(a) { return !ui.scope || (ui.scope === 'comedy') === isCom(a); }
+  function scopeOk(it) { if (!ui.scope) return true; if (it.kind === 'sp') return ui.scope === 'comedy'; if (it.kind === 'rel') return ui.scope === 'music'; return inScope(byId(it.c.artistId)); }
+  function gigLink(id) { var r = state.cst.find(function (x) { return x && x.id === id && !x._deleted; }); if (r && r.gig) return String(r.gig); try { return (H().gigFor && H().gigFor(id)) || ''; } catch (e) { return ''; } }
+  var saleLive = function (c) { return /^\d{4}-\d{2}-\d{2}$/.test(String(c.saleDay || '')) && c.saleDay >= addDays(today(), -7); };   // v2.0: on sale in the last 7 days counts as "on sale now"
+  function comingItems() {
+    var t = today(), cs = cstMap(), rs = rstMap(), out = [];
+    liveConcerts(state.concerts, state.artists, t).forEach(function (c) { var f = cs[c.id] || {}; out.push({ kind: 'con', id: c.id, date: c.date, c: c, hidden: !!(f.ni || f.nt), support: c.support === true && !!c.headliner, headliner: c.headliner ? String(c.headliner) : '', ni: !!f.ni, nt: !!f.nt, interested: !!f.interested, alert: !!f.alert }); });
+    var aids = {}; followed().filter(wantsReleases).forEach(function (a) { if (hasApple(a)) aids[String(a.appleArtistId)] = true; });
+    relGroups(rel.items).forEach(function (g) {
+      var r = g.rep; if (!g.all.some(function (x) { return aids[x.aid]; }) || r.date < addDays(t, -NEW_REL_DAYS)) return;
+      var ni = g.all.some(function (x) { return (rs['rel_' + x.id] || {}).ni; }), int = g.all.some(function (x) { return (rs['rel_' + x.id] || {}).interested; });
+      out.push({ kind: 'rel', id: 'rel_' + r.id, date: r.date, r: r, hidden: ni, interested: int });
+    });
+    var sa = {}; followed().filter(wantsSpecials).forEach(function (a) { sa[a.id] = a; });
+    Object.keys(spec.items).forEach(function (k) {
+      var s = spec.items[k], who = (s.aids || []).filter(function (x) { return sa[x]; }); if (!who.length || s.date < addDays(t, -SPEC_BACK_DAYS) || s.date > addDays(t, SPEC_AHEAD_DAYS)) return;
+      var f = rs[s.id] || {}; if (f.ft) return; out.push({ kind: 'sp', id: s.id, date: s.date, s: s, who: who.map(function (x) { return sa[x].name; }), whoIds: who, hidden: !!f.ni, ft: !!f.ft });
+    });
+    return out.filter(scopeOk).sort(function (a, b) { return a.date.localeCompare(b.date) || a.id.localeCompare(b.id); });
+  }
+  function act(kind, id) {
+    var c = state.concerts.find(function (x) { return x.id === id; });
+    if (kind === 'interested') { var on = !(cstMap()[id] || {}).interested; setCst(id, { interested: on, ni: false }); }
+    else if (kind === 'notint') { setCst(id, { ni: true, nt: false, interested: false, alert: false, aid: c ? String(c.artistId) : undefined }); undoToast('Hidden', function () { setCst(id, { ni: false }); }); if (c) askStopTour(byId(c.artistId)); }
+    else if (kind === 'notickets') { setCst(id, { nt: true, ni: false, interested: false, alert: false, aid: c ? String(c.artistId) : undefined }); undoToast('Hidden: no tickets', function () { setCst(id, { nt: false }); }); }
+    else if (kind === 'stoptour') { var sa = c && byId(c.artistId); if (sa) { setWant(sa, 'gigs', false); undoToast('Tour dates for ' + sa.name + ' stopped', function () { setWant(sa, 'gigs', true); paint(); }); paint(); } }
+    else if (kind === 'unfollow') { var ua = c && byId(c.artistId); if (ua) unfollowArtist(ua); }
+    else if (kind === 'runfollow') { var rr = rel.items[String(id).replace(/^rel_/, '')], ra = rr && followed().find(function (x) { return hasApple(x) && String(x.appleArtistId) === rr.aid; }); if (ra) unfollowArtist(ra); }
+    else if (kind === 'restore') setCst(id, { ni: false, nt: false });
+    else if (kind === 'alert') { var al = !(cstMap()[id] || {}).alert; setCst(id, { alert: al }); say(al ? 'You will be alerted when tickets go on sale' : 'Alert removed'); }
+    else if (kind === 'tickets' && c && /^https:\/\//.test(c.url || '')) window.open(c.url, '_blank', 'noopener');
+    else if (kind === 'bought' && c) {
+      if (busy['g' + id]) return; busy['g' + id] = true; paint();
+      Promise.resolve(H().addGig({ id: c.id, tm: c.tm, artist: c.artist, name: c.name, date: c.date, time: c.time || '', venue: c.venue, city: c.city, url: c.url || '' }))
+        .then(function (r) { var p = { interested: true, ni: false }; if (r && r.gigId) p.gig = String(r.gigId); setCst(id, p); say(r && r.existing ? 'Already in Gigs & Trips' : 'Added to Gigs & Trips'); })
+        .catch(function (e) { if (e && e.message === 'CANCELLED') return; sayErr((e && e.message) || 'Could not add the gig'); })
+        .finally(function () { delete busy['g' + id]; paint(); });
+    }
+    else if (kind === 'opengig') { var g = gigLink(id); if (g) { H().closeModal && H().closeModal(); H().openGig && H().openGig(g); } }
+    else if (kind === 'rinterested') { var rid = id, rs = rstMap(); setRst(rid, { interested: !(rs[rid] || {}).interested, ni: false }); }
+    else if (kind === 'rnotint') { setRst(id, { ni: true, interested: false }); undoToast('Hidden', function () { setRst(id, { ni: false }); }); }
+    else if (kind === 'rrestore') setRst(id, { ni: false });
+    else if (kind === 'spadd') addSpecialToFilm(id);
+    else if (kind === 'spnotint') { setRst(id, { ni: true }); undoToast('Hidden', function () { setRst(id, { ni: false }); }); }
+    else if (kind === 'sprestore') setRst(id, { ni: false });
+    else if (kind === 'spstop') { var si = comingItems().find(function (x) { return x.id === id; }), sa_ = si && byId(si.whoIds[0]); if (sa_) { setWant(sa_, 'specials', false); undoToast('Specials for ' + sa_.name + ' stopped', function () { setWant(sa_, 'specials', true); paint(); }); paint(); } }
+    else if (kind === 'spunfollow') { var su = comingItems().find(function (x) { return x.id === id; }), sua = su && byId(su.whoIds[0]); if (sua) unfollowArtist(sua); }
+    else if (kind === 'rapple') { var r = rel.items[String(id).replace(/^rel_/, '')]; if (r) { openLink(releaseUrl(r)); if (r.date <= today()) { setRst(id, { ni: true, interested: false }); undoToast('Opened in Apple Music and removed from the list', function () { setRst(id, { ni: false }); }); } } }
+  }
+
+  // ── rendering ──
+  var CSS = '.gm{font-family:var(--f)}.gm .chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px;align-items:center}.gm .chip{border:1px solid var(--bdr);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 14px;font:600 14px var(--f);min-height:44px;cursor:pointer}' +
+    '.gm .chip.on{background:var(--lime);color:var(--limeTx);border-color:var(--lime)}.gm .chip.ghost{background:none}.gm .sp{flex:1}' +
+    '.gm .row{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--bdr);border-radius:var(--rsm);padding:12px;margin:0 0 10px}.gm .row.dim{opacity:.6}.gm .row.hl{outline:2px solid var(--lime);outline-offset:2px}' +
+    '.gm .dt{flex:0 0 46px;text-align:center;border-radius:10px;background:var(--s2);padding:6px 0;line-height:1.1}.gm .dt b{display:block;font-size:20px}.gm .dt span{font-size:11px;color:var(--ink3);text-transform:uppercase}.gm .dt.gg{background:var(--cat-gig);color:#17151C}.gm .dt.gg span,.gm .dt.rl span{color:#17151C}.gm .dt.rl{background:#B79CFF;color:#17151C}.gm .tl{flex:0 0 38px;height:38px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:19px;background:var(--cat-gig)}.gm .tl.rl{background:#B79CFF}' +
+    '.gm .rb{flex:1;min-width:0}.gm .rt{font-weight:700;font-size:16px}.gm .rs{font-size:13px;color:var(--ink3);margin-top:2px}.gm .bd{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}' +
+    '.gm .badge{font-size:11px;font-weight:700;border-radius:999px;padding:3px 8px;background:var(--s2);color:var(--ink2)}.gm .badge.src{background:transparent;border:1px solid var(--line,#8884);color:var(--ink2)}.gm .badge.sale{background:var(--gold-dim);color:var(--gold)}.gm .badge.int{background:var(--ok-dim);color:var(--ok)}.gm .badge.new{background:var(--lime);color:var(--limeTx)}' +
+    '.gm .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.gm .btn{border:1px solid var(--bdr);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 12px;font:600 13px var(--f);min-height:44px;cursor:pointer}.gm .btn.pri{background:var(--ink);color:var(--surf);border-color:var(--ink)}.gm .btn.on{background:var(--ok-dim);color:var(--ok);border-color:var(--ok)}.gm .btn[disabled]{opacity:.5}' +
+    '.gm h3{font:700 13px var(--f);text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);margin:18px 0 8px}.gm .note{font-size:13px;color:var(--ink3);margin:6px 0}.gm .empty{text-align:center;color:var(--ink3);padding:28px 8px}' +
+    '.gm input[type=search],.gm input[type=text]{width:100%;font-size:16px;padding:10px 12px;border:1px solid var(--bdr);border-radius:var(--rsm);background:var(--card);color:var(--ink);margin:0 0 10px;box-sizing:border-box}' +
+    '.gm .av{flex:0 0 44px;height:44px;border-radius:10px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-weight:700;overflow:hidden;position:relative}.gm .av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}' +
+    '.gm .nmb{flex:1;min-width:0;text-align:left;background:none;border:none;color:var(--ink);padding:0;cursor:pointer;font-family:var(--f)}.gm .nm{font-weight:700;font-size:16px}.gm .sw{display:flex;gap:2px;flex-wrap:wrap;margin-top:4px}' +
+    '.gm .lsw{display:flex;flex-direction:column;align-items:center;font-size:10px;color:var(--ink3);min-width:44px;min-height:44px;justify-content:center;cursor:pointer}.gm .lsw.na{visibility:hidden}.gm .lsw input{width:22px;height:22px;margin:0}' +
+    '.gmx .gm-sheet{padding:20px 22px 22px}.gmx .gm-sheet h2{margin:0 0 4px;font-size:20px}.gmx .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;min-height:44px;box-sizing:border-box;border-bottom:1px solid var(--sep);font-size:14px}.gmx .kv span{color:var(--ink3)}.gmx .kv b{text-align:right}.gmx .kv .lsw{min-height:0}' +
+    '.gm .row{display:flex;gap:0;align-items:stretch;background:var(--card);border:none;border-radius:22px;overflow:hidden;padding:0;margin:0 0 10px}' +
+    '.gm .row>.dt{flex:0 0 64px;border-radius:0;padding:12px 0;display:flex;flex-direction:column;align-items:center;justify-content:center;border-right:2px dashed rgba(14,13,18,.28)}.gm .dt b{font-family:var(--fd);font-size:28px;font-weight:800;line-height:1;letter-spacing:-.03em}.gm .dt span{font-size:11px;font-weight:700;letter-spacing:.08em;margin-top:2px}' +
+    '.gm .row>.rb{padding:12px 12px 12px 14px}.gm .row>.tl{align-self:flex-start;margin:12px 12px 0 0}.gm .row>.av{align-self:flex-start;margin:12px 0 12px 12px}.gm .rt{letter-spacing:-.01em}' +
+    '.gm .row.art .nmb{display:block;width:100%;padding:0}.gm .sw{gap:6px;margin-top:8px}.gm .lsw{flex-direction:row;gap:6px;border:1px solid var(--bdr);border-radius:999px;padding:0 12px;min-height:36px;min-width:0;font-size:12px;font-weight:600;color:var(--ink2)}.gm .lsw input{width:16px;height:16px}.gm .lsw.na{display:none}' +
+    '.gm .hero{cursor:default;margin:2px 0 14px}.gm .hero-open{text-decoration:none;white-space:nowrap}.gm .hero-foot{flex-wrap:wrap}' +
+    '.gm .stat{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;font-size:13px;color:var(--ink3);margin:0 2px 10px}.gm .stat .note{margin:0}.gm .lnk{background:none;border:none;color:var(--ink);font:600 13px var(--f);text-decoration:underline;cursor:pointer;padding:6px 0;min-height:36px}' +
+    '.gm .card{background:var(--card);border-radius:22px;padding:14px 14px 4px;margin:0 0 14px}.gm .card h3{margin:0 0 8px}.gm .card .row{background:var(--s2)}.gm .card .row>.rb{padding:10px 12px}' +
+    '.gm .dash-sec{margin-top:14px}.gm .acts2{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}.gm .tools{font-size:13px;color:var(--ink3)}.gm .tools .btn{margin-top:6px}' +
+    '.gmx .jbrow{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--sep);font-size:14px}.gmx .jbrow b{font-weight:700}.gmx .jbd{font-size:12px;color:var(--ink3);margin:0 0 6px}' +
+    '.gm .secbtn{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--sep);padding:12px 4px;margin-top:18px;min-height:44px;font:700 16px var(--f);color:var(--ink);cursor:pointer}.gm .secbtn .cnt{color:var(--ink3);font-weight:600;font-size:13px}.gm .secbtn .chev{width:16px;display:inline-block}.gm .secbody{padding-top:10px}' +
+    '.gm .dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:0 0 14px}.gm .dgrid .card{margin:0}.gm .tb{display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;padding:5px 0;font:600 13px var(--f);color:var(--ink);text-align:left;cursor:pointer}.gm .tb .tn{flex:0 0 38%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gm .tb .tbar{flex:1;height:8px;border-radius:4px;background:var(--s2);overflow:hidden}.gm .tb .tbar i{display:block;height:100%;border-radius:4px}.gm .tb .tc{flex:0 0 34px;text-align:right;color:var(--ink3)}.gm .tb.nf .tn{color:var(--ink3)}' +
+    '.gm .gy{display:flex;align-items:center;gap:10px;margin:6px 0}.gm .gyl{width:40px;font-size:13px;color:var(--ink2)}.gm .gyb{flex:1;display:flex;height:16px;border-radius:4px;overflow:hidden;background:var(--sep)}.gm .gyb i{display:block;height:100%}.gm .gyn{width:48px;text-align:right;font-size:12px;color:var(--ink3)}' +
+    '.gm .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink2);margin:4px 0 6px}.gm .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}.gm .gsvg{width:100%;height:auto;display:block}' +
+    '.gm .row[data-sel]{cursor:pointer}.gm .row.sel{outline:2px solid var(--ink);outline-offset:-2px}' +
+    '#detailPane .pane-poster.rel,#modal .pane-poster.rel{background:#B79CFF;color:#17151C}#detailPane .pane-actions,#modal .pane-actions{flex-wrap:wrap}#detailPane .pane-btn[aria-pressed=true],#modal .pane-btn[aria-pressed=true]{background:var(--ok-dim);color:var(--ok);border-color:var(--ok)}#detailPane .pane-btn[disabled],#modal .pane-btn[disabled]{opacity:.5}' +
+    '#detailPane .pane-h,#modal .pane-h{font:700 13px var(--f);text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);margin:18px 4px 8px}#detailPane .pane-row input[type=checkbox],#modal .pane-row input[type=checkbox]{width:22px;height:22px;margin:0}' +
+    '#detailPane .pbars,#modal .pbars{display:flex;align-items:flex-end;gap:4px;height:64px;padding:12px 16px 4px}#detailPane .pbars i,#modal .pbars i{flex:1;background:var(--lime);border-radius:3px 3px 0 0;min-height:2px}#detailPane .pcap,#modal .pcap{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);padding:0 16px 12px}#detailPane .pmini,#modal .pmini{width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--sep);padding:10px 16px;font:600 14px var(--f);color:var(--ink);cursor:pointer;min-height:44px}' +
+    '.gmx .imp-l{font-size:13px;margin:6px 0;line-height:1.5}.gmx .imp-l b{font-weight:700}' +
+    '.gm .rwrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:4px 22px;align-items:start}.gm .rwrap.one .rlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:0 12px}.gm .rsec h3{display:flex;align-items:center;gap:8px}.gm .rsec h3 .cnt{background:var(--s2);color:var(--ink2);border-radius:999px;padding:2px 9px;font-size:12px}' +
+    '.gm .row.rc{padding:0}.gm .row.rc>.av{margin:12px 0 12px 12px}.gm .row.rc .rb{padding:12px 12px 12px 12px}.gm .row.rc .rt{font-size:16px}.gm .row.rc .acts .btn{min-height:40px}.gm .rwrap.one .rlist .acts2{grid-column:1/-1}' +
+    '@media(max-width:700px){.gm .rwrap,.gm .rwrap.one .rlist{grid-template-columns:minmax(0,1fr)}.gm .row.rc .acts .btn{flex:1 1 calc(50% - 6px);text-align:center;min-height:44px}.gm .row.rc .acts .btn.pri{flex-basis:100%}.gm .rsec h3{margin-top:14px}}' +
+    '.gm .badge.sup{background:var(--gold-dim);color:var(--gold)}' +
+    '.gm .subsec{margin:2px 0 6px 10px}.gm .subsec>.secbtn{font-size:.95em}' +
+    '.gm .dt.sp{background:#5EEAD4;color:#17151C}.gm .dt.sp span{color:#17151C}.gm .tl.sp{background:#5EEAD4}#detailPane .pane-poster.sp,#modal .pane-poster.sp{background:#5EEAD4;color:#17151C}.gm .seg2{display:flex;gap:8px;margin:0 0 12px}' +
+    '@media(max-width:420px){.gm .row>.rb{padding:10px}}';
+  // v2.0: Film & TV Tracker has its own variable names and none of Gigs & Trips' classes, so the ones this module uses are supplied here, scoped to .gm.
+  var CSS_PRE = '.gm,.gmx,.gm-sheet-wrap{--card:var(--surface);--s2:var(--surface2);--bdr:var(--border);--lime:var(--acc);--limeTx:var(--accTx);--surf:var(--bg);--rsm:12px;--ok:var(--green);--ok-dim:var(--okDim);--gold:var(--orange);--gold-dim:var(--goldDim);--cat-gig:#FF6B9A;--cat-trip:#FFB347;--on:#0E0D12;--hdr-tint-bg:var(--surface2)}';
+  var CSS_POST = '.gm .dash-hdr{padding:2px 2px 10px}.gm .agenda-filter{display:flex;gap:2px;background:var(--hdr-tint-bg);border-radius:9px;padding:2px;margin:0 0 12px;overflow-x:auto;scrollbar-width:none}.gm .agenda-filter::-webkit-scrollbar{display:none}' +
+    '.gm .agenda-filter button{flex:1 0 auto;background:none;border:none;border-radius:7px;padding:7px 10px;min-height:36px;font-size:12px;font-weight:500;color:var(--ink2);cursor:pointer;font-family:inherit;white-space:nowrap}.gm .agenda-filter button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.14)}' +
+    '.gm .dash-sec{font-size:12px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;margin:18px 2px 6px}' +
+    '.gm .hero,.gm .pane-poster{position:relative;background:var(--lime);color:var(--limeTx);border-radius:28px;padding:18px 20px 14px;margin:2px 0 14px}.gm .pane-poster{padding:20px 22px 18px;margin-bottom:12px}.gm .hero-top{display:flex;justify-content:space-between;align-items:center}.gm .hero-k{font-size:12px;font-weight:700;letter-spacing:.12em}' +
+    '.gm .hero-pill{background:var(--on);color:#F5F2EA;border-radius:14px;padding:4px 12px;font-size:12px;font-weight:700}.gm .hero-date{display:flex;align-items:flex-end;gap:12px;margin-top:6px}.gm .hero-num{font-family:var(--fd);font-weight:800;font-size:80px;line-height:.86;letter-spacing:-.04em}.gm .hero-mon{padding-bottom:6px;font-weight:800;font-size:20px;line-height:1.05;letter-spacing:.02em}' +
+    '.gm .hero-title{font-family:var(--fd);font-weight:700;font-size:26px;letter-spacing:-.02em;margin-top:12px;line-height:1.1}.gm .hero-sub{font-size:14px;font-weight:500;margin-top:2px}.gm .hero-perf{position:relative;margin:16px -20px 12px;border-top:2px dashed rgba(14,13,18,.35)}' +
+    '.gm .hero-perf::before,.gm .hero-perf::after{content:"";position:absolute;top:-13px;width:24px;height:24px;border-radius:50%;background:var(--bg)}.gm .hero-perf::before{left:-12px}.gm .hero-perf::after{right:-12px}.gm .hero-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}.gm .hero-chips{display:flex;gap:6px;flex-wrap:wrap}' +
+    '.gm .hero-chip{display:inline-flex;align-items:center;gap:6px;background:var(--on);color:#F5F2EA;border-radius:12px;padding:4px 10px;font-size:12px;font-weight:600}.gm .hero-open{min-height:44px;display:inline-flex;align-items:center;gap:4px;background:var(--on);color:#F5F2EA;border:none;border-radius:18px;padding:0 16px;font-family:var(--f);font-size:14px;font-weight:700;cursor:pointer}' +
+    '.gm .pane-card{background:var(--card);border-radius:20px;overflow:hidden;margin-bottom:12px}.gm .pane-row{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:48px;padding:6px 16px;border-bottom:1px solid var(--sep);font-size:14px}.gm .pane-row:last-child{border-bottom:none}.gm .pane-row b{font-weight:600}.gm .pane-row span{color:var(--ink3);font-weight:600;text-align:right;min-width:0;overflow-wrap:anywhere}' +
+    '.gm .pane-actions{display:flex;gap:10px;flex-wrap:wrap}.gm .pane-btn{flex:1;min-height:48px;border-radius:24px;border:1px solid var(--bdr);background:transparent;color:var(--ink);font-family:var(--f);font-size:14px;font-weight:700;cursor:pointer}.gm .pane-btn.pri{background:var(--ink);color:var(--surf);border-color:var(--ink)}' +
+    '.gm .pane-h{font:700 13px var(--f);text-transform:uppercase;letter-spacing:.04em;color:var(--ink3);margin:18px 4px 8px}.gm .pane-row input[type=checkbox]{width:22px;height:22px;margin:0}.gm .pbars{display:flex;align-items:flex-end;gap:4px;height:64px;padding:12px 16px 4px}.gm .pbars i{flex:1;background:var(--lime);border-radius:3px 3px 0 0;min-height:2px}' +
+    '.gm .pcap{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);padding:0 16px 12px}.gm .pmini{width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--sep);padding:10px 16px;font:600 14px var(--f);color:var(--ink);cursor:pointer;min-height:44px}' +
+    '.gm .pane-poster.rel{background:#B79CFF;color:#17151C}.gm .pane-poster.sp{background:#5EEAD4;color:#17151C}.gm .acts.sub .btn{font-weight:500}.gm .acts2 .chip.pri{font-weight:700}';
+  function ensureCssAll() { if (document.getElementById('gm-css')) return; var s = document.createElement('style'); s.id = 'gm-css'; s.textContent = CSS_PRE + CSS + CSS_POST; document.head.appendChild(s); }
+  function ensureCss() { ensureCssAll(); }
+  function chip(label, on, a) { return '<button type="button" class="chip' + (on ? ' on' : '') + '" data-m="' + a + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>'; }
+  function avatar(a) {
+    var best = null; Object.keys(rel.items).forEach(function (k) { var r = rel.items[k]; if (hasApple(a) && r.aid === String(a.appleArtistId) && r.art && (!best || r.date > best.date)) best = r; });
+    var u = best ? artSize(best.art, 100) : '';
+    if (!u && isCom(a) && /^\/[\w.\-]+$/.test(String(a.img || ''))) u = 'https://image.tmdb.org/t/p/w185' + a.img;   // v1.25
+    return '<div class="av">' + E((a.name.trim()[0] || '?').toUpperCase()) + (u ? '<img src="' + E(u) + '" alt="" loading="lazy" onerror="this.remove()">' : '') + '</div>';
+  }
+  function conActs(it) {
+    var c = it.c, link = gigLink(c.id), pend = salePending(c);
+    if (it.hidden) return '<button class="btn" data-m="restore:' + E(c.id) + '">Show again</button>';
+    return (c.url ? '<button class="btn pri" data-m="tickets:' + E(c.id) + '">Tickets</button>' : '') +
+      '<button class="btn' + (it.interested ? ' on' : '') + '" data-m="interested:' + E(c.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button>' +
+      (link ? '<button class="btn" data-m="opengig:' + E(c.id) + '">Open gig</button>' : '<button class="btn" data-m="bought:' + E(c.id) + '"' + (busy['g' + c.id] ? ' disabled' : '') + '>' + (busy['g' + c.id] ? 'Adding…' : 'Bought') + '</button>') +
+      (pend ? '<button class="btn' + (it.alert ? ' on' : '') + '" data-m="alert:' + E(c.id) + '" aria-pressed="' + (it.alert ? 'true' : 'false') + '">' + (it.alert ? 'Alert on' : 'Alert me') + '</button>' : '') +
+      '<button class="btn" data-m="notint:' + E(c.id) + '">Not interested</button>' +
+      '</div><div class="acts sub"><button class="btn" data-m="notickets:' + E(c.id) + '">No tickets</button><button class="btn" data-m="stoptour:' + E(c.id) + '">Stop tour dates</button><button class="btn" data-m="unfollow:' + E(c.id) + '">Unfollow artist</button>';
+  }
+  function spActs(it) {
+    var id = E(it.id);
+    if (it.hidden) return '<button class="btn" data-m="sprestore:' + id + '">Show again</button>';
+    return (it.ft ? '<button class="btn on" disabled>In Film &amp; TV ✓</button>' : '<button class="btn pri" data-m="spadd:' + id + '"' + (busy['s' + it.id] ? ' disabled' : '') + '>' + (busy['s' + it.id] ? 'Adding…' : 'Add to Film &amp; TV') + '</button>') +
+      '<button class="btn" data-m="spnotint:' + id + '">Not interested</button></div><div class="acts sub"><button class="btn" data-m="spstop:' + id + '">Stop specials</button><button class="btn" data-m="spunfollow:' + id + '">Unfollow comedian</button>';
+  }
+  function srcName(c) { return c && c.src === 'jambase' ? 'JamBase' : 'Ticketmaster'; }
+  function itemRow(it) {
+    var d = new Date(it.date + 'T00:00:00Z'), mon = dateLabel(it.date).split(' ')[2];
+    if (it.kind === 'con') {
+      var c = it.c, link = gigLink(c.id), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
+      return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === c.id ? ' hl' : '') + (selIs('gig', c.id) ? ' sel' : '') + '" id="gm-' + E(c.id) + '" data-item="' + E(c.id) + '" data-sel="gig:' + E(c.id) + '" data-kind="gig"><div class="dt gg"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(c.artist) + '</div>' +
+        '<div class="rs">' + E(c.venue) + ', ' + E(c.city) + ' · ' + E(dateLabel(c.date).split(' ')[0]) + (c.time ? ' ' + E(c.time) : '') + '</div><div class="bd"><span class="badge">Gig</span>' + (it.nt ? '<span class="badge">No tickets</span>' : '') + (it.support ? '<span class="badge sup">Support for ' + E(it.headliner) + '</span>' : '') +
+        (link ? '<span class="badge int">In Gigs &amp; Trips</span>' : it.interested ? '<span class="badge int">Interested</span>' : '') + '<span class="badge src">' + srcName(c) + '</span>' + (off ? '<span class="badge">' + E(c.status) + '</span>' : '') +
+        (salePending(c) ? '<span class="badge sale">On sale ' + E(saleText(c)) + '</span>' : '') + '</div><div class="acts">' + conActs(it) + '</div></div><div class="tl' + (isCom(byId(c.artistId)) ? ' sp' : '') + '" aria-hidden="true">' + (isCom(byId(c.artistId)) ? '🎤' : '🎸') + '</div></div>';
+    }
+    if (it.kind === 'sp') {
+      var sp = it.s, out_ = sp.date <= today();
+      return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === it.id ? ' hl' : '') + (selIs('sp', it.id) ? ' sel' : '') + '" id="gm-' + E(it.id) + '" data-sel="sp:' + E(it.id) + '" data-kind="special"><div class="dt sp"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(it.who.join(', ')) + ': ' + E(sp.title) + '</div>' +
+        '<div class="rs">' + (sp.type === 'tv' ? 'Series' : 'Film') + ' · ' + (out_ ? 'out ' : 'due ') + E(fmtDate(sp.date)) + '</div><div class="bd"><span class="badge">Special</span>' + (out_ ? '<span class="badge new">New</span>' : '<span class="badge">Upcoming</span>') + (it.ft ? '<span class="badge int">In Film &amp; TV</span>' : '') + '</div>' +
+        '<div class="acts">' + spActs(it) + '</div></div><div class="tl sp" aria-hidden="true">🎤</div></div>';
+    }
+    var r = it.r, t = today(), isNew = r.date <= t;
+    return '<div class="row' + (it.hidden ? ' dim' : '') + (hl === it.id ? ' hl' : '') + (selIs('rel', it.id) ? ' sel' : '') + '" id="gm-' + E(it.id) + '" data-sel="rel:' + E(it.id) + '" data-kind="release"><div class="dt rl"><b>' + d.getUTCDate() + '</b><span>' + E(mon) + '</span></div><div class="rb"><div class="rt">' + E(r.artistName) + ': ' + E(r.name) + '</div>' +
+      '<div class="rs">' + (r.kind === 'single' ? 'Single' : r.kind === 'ep' ? 'EP' : 'Album') + ' · ' + (isNew ? 'out ' + E(fmtDate(r.date)) : 'due ' + E(fmtDate(r.date))) + '</div><div class="bd"><span class="badge">Release</span>' + (isNew ? '<span class="badge new">New</span>' : '<span class="badge">Upcoming</span>') + (it.interested ? '<span class="badge int">' + (isNew ? 'Interested' : 'Alert on release day') + '</span>' : '') + '</div>' +
+      '<div class="acts">' + (it.hidden ? '<button class="btn" data-m="rrestore:' + E(it.id) + '">Show again</button>' :
+        (isNew ? '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button></div><div class="acts sub"><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button><button class="btn" data-m="runfollow:' + E(it.id) + '">Unfollow artist</button>' :
+        '<button class="btn pri" data-m="rapple:' + E(it.id) + '">Apple Music</button><button class="btn' + (it.interested ? ' on' : '') + '" data-m="rinterested:' + E(it.id) + '" aria-pressed="' + (it.interested ? 'true' : 'false') + '">' + (it.interested ? 'Interested ✓' : 'Interested') + '</button><button class="btn" data-m="rnotint:' + E(it.id) + '">Not interested</button></div><div class="acts sub"><button class="btn" data-m="runfollow:' + E(it.id) + '">Unfollow artist</button>')) + '</div></div><div class="tl rl" aria-hidden="true">💿</div></div>';
+  }
+  function checkBtn(label) { return '<button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : label || 'Check for new listening') + '</button>'; }
+  function seg(items) { return '<div class="agenda-filter">' + items.map(function (x) { return '<button type="button" class="' + (x[1] ? 'on' : '') + '" data-m="' + x[2] + '" aria-pressed="' + (x[1] ? 'true' : 'false') + '">' + x[0] + '</button>'; }).join('') + '</div>'; }
+  function recCount() { return visibleRecs().length + neverPlayed().length; }
+  function head() { if (ui.hosted) return ui.sub === 'recs' ? '<div class="acts2"><button type="button" class="chip" data-m="sub:artists">← Following</button></div>' : ''; var rc = recCount(); return '<div class="dash-hdr"><h2>Music</h2><p>' + (ui.sub === 'artists' ? 'Who you follow and what you play' : ui.sub === 'recs' ? 'New artists to try, and followed artists you have not played' : 'Tour dates and releases for the artists you follow') + '</p></div>' + seg([['Coming up', ui.sub !== 'artists' && ui.sub !== 'recs', 'sub:coming'], ['Artists', ui.sub === 'artists', 'sub:artists'], ['Recommendations' + (rc ? ' ' + rc : ''), ui.sub === 'recs', 'sub:recs']]); }
+  function heroHtml(c, it) {
+    var t = today(), dl = dateLabel(c.date).split(' '), n = Math.round((Date.parse(c.date + 'T00:00:00Z') - Date.parse(t + 'T00:00:00Z')) / 864e5);
+    var chips = [it.interested ? 'Interested ✓' : '', salePending(c) ? 'On sale ' + saleText(c) : '', srcName(c)].filter(Boolean);
+    return '<div class="hero"><div class="hero-top"><span class="hero-k">NEXT GIG</span><span class="hero-pill">' + (n <= 0 ? 'Today' : n === 1 ? 'Tomorrow' : 'In ' + n + ' days') + '</span></div>' +
+      '<div class="hero-date"><div class="hero-num">' + E(dl[1]) + '</div><div class="hero-mon">' + E(dl[2].toUpperCase()) + '<br>' + E(dl[0].toUpperCase()) + '</div></div>' +
+      '<div class="hero-title">' + E(c.artist) + '</div><div class="hero-sub">' + E([c.venue + (c.city ? ', ' + c.city : ''), c.time].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="hero-perf"></div><div class="hero-foot"><div class="hero-chips">' + chips.map(function (x) { return '<span class="hero-chip">' + E(x) + '</span>'; }).join('') + '</div>' + (c.url ? '<button type="button" class="hero-open" data-m="tickets:' + E(c.id) + '">Tickets ›</button>' : '') + '</div></div>';
+  }
+  function renderComing() {
+    if (!ready) return '<div class="empty">Loading Music…</div>';
+    var allItems = comingItems(), nSup = allItems.filter(function (i) { return i.kind === 'con' && i.support && !i.hidden; }).length; if (ui.noSup) allItems = allItems.filter(function (i) { return !(i.kind === 'con' && i.support); });
+    var items = allItems.filter(function (i) { return ui.cFilter === 'all' || (ui.cFilter === 'gigs' ? i.kind === 'con' : ui.cFilter === 'specials' ? i.kind === 'sp' : i.kind === 'rel'); }), shown = items.filter(function (i) { return !i.hidden; }), hid = items.filter(function (i) { return i.hidden; }), n = shown.filter(function (i) { return i.kind === 'con'; }).length;
+    var cat = (state.conCheck && state.conCheck.at) || '', nTm = shown.filter(function (i) { return i.kind === 'con' && i.c.src !== 'jambase'; }).length, nJb = n - nTm;
+    var spTxt = ui.scope !== 'music' && followed().some(isCom) ? ' Comedy specials ' + (spec.fetchedAt ? 'checked ' + ago(spec.fetchedAt) : 'not checked yet') + ' (TMDB).' : '';
+    var status = (cat ? 'Tour dates checked ' + ago(cat) + ' (overnight).' : 'Tour dates are checked overnight.') + (n ? ' ' + n + ' date' + (n === 1 ? '' : 's') + ' in Scotland: ' + nTm + ' Ticketmaster' + (nJb ? ' · ' + nJb + ' JamBase' : '') + '.' : '') + spTxt;
+    var nG = allItems.filter(function (i) { return i.kind === 'con' && !i.hidden; }).length, nR = allItems.filter(function (i) { return i.kind === 'rel' && !i.hidden; }).length, nS = allItems.filter(function (i) { return i.kind === 'sp' && !i.hidden; }).length, nCom = followed().filter(isCom).length;
+    var h = head() + seg(ui.scope === 'comedy' ? [['All ' + (nG + nS), ui.cFilter === 'all', 'cfilter:all'], ['Tour dates ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs'], ['Specials ' + nS, ui.cFilter === 'specials', 'cfilter:specials']] :
+      [['All ' + (nG + nR + nS), ui.cFilter === 'all', 'cfilter:all'], ['Gigs ' + nG, ui.cFilter === 'gigs', 'cfilter:gigs'], ['Releases ' + nR, ui.cFilter === 'releases', 'cfilter:releases']].concat(!ui.scope && (nS || nCom) ? [['Specials ' + nS, ui.cFilter === 'specials', 'cfilter:specials']] : []));
+    var nextCon = shown.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0];
+    if (nextCon) h += heroHtml(nextCon.c, nextCon);
+    h += '<div class="stat"><span role="status">' + E(status) + '</span></div><div class="note">A few of the artists you follow are checked each night, so every artist is looked at every week or two. Each date shows whether Ticketmaster or JamBase found it.</div>';
+    if (!followed().filter(inScope).length) return h + '<div class="empty">' + (ui.scope === 'comedy' ? 'Follow some comedians and their Scottish tour dates and new specials appear here.' : 'Follow some artists and their Scottish dates and new releases appear here.') + '<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:artists">Go to Following</button></div></div>';
+    if (!shown.length) h += '<div class="empty">' + (ui.cFilter === 'gigs' ? 'No Scottish tour dates for the artists you follow right now.' : ui.cFilter === 'specials' ? 'No new or upcoming comedy specials for the comedians you follow right now.' : ui.cFilter === 'releases' ? 'No new releases for the artists you follow right now.' : 'No Scottish dates or new releases for the artists you follow right now.') + '</div>';
+    if (nSup) h += '<div class="chips"><button type="button" class="chip ghost' + (ui.noSup ? ' on' : '') + '" data-m="togglesup" aria-pressed="' + (ui.noSup ? 'true' : 'false') + '">' + (ui.noSup ? 'Showing no support slots (' + nSup + ' hidden)' : 'Hide ' + nSup + ' support slot' + (nSup === 1 ? '' : 's')) + '</button></div>';
+    var month = '';
+    shown.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<div class="dash-sec">' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</div>'; } h += itemRow(it); });
+    if (hid.length) h += '<button type="button" class="chip ghost" data-m="togglehidden">' + (ui.showHidden ? 'Hide' : 'Show') + ' ' + hid.length + ' hidden (not interested or no tickets)</button>' + (ui.showHidden ? hid.map(itemRow).join('') : '');
+    return h;
+  }
+  // v2.0: My list for Music = what you marked Interested (tour dates and releases still to come) and tour dates that are already gigs in Gigs & Trips.
+  function renderMine() {
+    if (!ready) return '<div class="empty">Loading Music…</div>';
+    var items = comingItems().filter(function (i) { return !i.hidden && (i.interested || (i.kind === 'con' && gigLink(i.id))); });
+    var nG = items.filter(function (i) { return i.kind === 'con'; }).length, nR = items.length - nG, h = head();
+    h += '<div class="stat"><span role="status">' + (items.length ? nG + ' tour date' + (nG === 1 ? '' : 's') + ' and ' + nR + ' release' + (nR === 1 ? '' : 's') + ' you are interested in. Tour dates you have bought are in Gigs &amp; Trips; a release you are interested in is flagged in the launcher and in Gigs &amp; Trips on its release day.' : '') + '</span></div>';
+    if (!items.length) return h + '<div class="empty">Nothing marked yet. Press Interested on a tour date or a release in Coming up and it collects here. Bought puts the gig in Gigs &amp; Trips.<div class="acts" style="justify-content:center"><button class="btn pri" data-m="sub:coming">Go to Coming up</button></div></div>';
+    var month = '';
+    items.forEach(function (it) { var m = it.date.slice(0, 7); if (m !== month) { month = m; var d = new Date(it.date + 'T00:00:00Z'); h += '<div class="dash-sec">' + E(['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear()) + '</div>'; } h += itemRow(it); });
+    return h;
+  }
+  // Tour dates marked Interested before the move (or on another device) have no gig link yet: ask Gigs & Trips, once an hour at most, which of them are already gigs.
+  var _gl = 0;
+  function syncGigLinks() {
+    var h = H(); if (!h.gigsFor || Date.now() - _gl < 3600000) return Promise.resolve();
+    var live_ = {}; state.concerts.forEach(function (c) { if (c && c.id && String(c.date) >= today()) live_[c.id] = 1; });
+    var ids = state.cst.filter(function (x) { return x && !x._deleted && x.interested === true && !x.gig && live_[x.id]; }).map(function (x) { return x.id; });
+    if (!ids.length) return Promise.resolve();
+    _gl = Date.now();
+    return Promise.resolve(h.gigsFor(ids)).then(function (m) {
+      var n = 0; Object.keys(m || {}).forEach(function (id) { var r = state.cst.find(function (x) { return x.id === id; }); if (r && m[id] && !r.gig) { r.gig = String(m[id]); r.updatedAt = new Date().toISOString(); push('cst', r, 'Concert flag'); n++; } });
+      if (n) { save(); paint(); }
+    }).catch(function () { _gl = 0; });
+  }
+  function counts(scope) {
+    var keep = ui.scope; ui.scope = scope === 'comedy' ? 'comedy' : 'music';
+    try {
+      var items = comingItems().filter(function (i) { return !i.hidden; });
+      return { following: followed().filter(inScope).length, coming: items.length, mine: items.filter(function (i) { return i.interested || (i.kind === 'con' && gigLink(i.id)); }).length };
+    } finally { ui.scope = keep; }
+  }
+  function renderSection(container, o) {
+    o = o || {}; ui.hosted = true; ui.scope = o.scope === 'comedy' ? 'comedy' : 'music';
+    ui.sub = o.view === 'following' ? (o.sub === 'recs' && ui.scope === 'music' ? 'recs' : 'artists') : o.view === 'list' ? 'mine' : 'coming';
+    if (ui.scope === 'music' && ui.cFilter === 'specials') ui.cFilter = 'all';
+    if (ui.scope === 'comedy' && ui.cFilter === 'releases') ui.cFilter = 'all';
+    sel = null; return render(container);
+  }
+  function playLine(a) {
+    var k = norm(a.name), t = totalPlays(k); if (!listeners().length) return '';
+    return t ? t + ' play' + (t === 1 ? '' : 's') + (playsIn(k, 30) ? ' · ' + playsIn(k, 30) + ' in 30 days' : '') : 'no plays yet';
+  }
+  function pPeriod() { return ui.pPer || (Object.keys(state.appleBy).length ? 'all' : '30'); }
+  function playedNotFollowed() {
+    var fr = fbRecMap(), mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var who = people().indexOf(ui.pWho) >= 0 ? ui.pWho : '', all = pPeriod() === 'all';
+    return allPlayedKeys(who).map(function (k) { var rc = fr['rc_' + k]; return { k: k, n: all ? totalPlays(k, who) : playsIn(k, 30, who), l: lastPlayed(k, who), name: playedName(k, who) || k, since: rc && rc.state === 'ignored' && rc.ip != null ? Math.max(0, totalPlays(k) - Number(rc.ip)) : 0, rc: rc }; })
+      .filter(function (x) { return x.n >= ui.lMin && !(mine[x.k] && isFollowed(mine[x.k])) && !ignoreHides(x.rc, x.k); })
+      .sort(all ? function (a, b) { return b.n - a.n || (b.l || 0) - (a.l || 0) || a.name.localeCompare(b.name); } : function (a, b) { return (b.l || 0) - (a.l || 0) || b.n - a.n || a.name.localeCompare(b.name); });
+  }
+  function listenAge() {
+    // The server records the day Last.fm was polled (a date, no time), so a date alone is shown as "today" / the date; this device's own last successful check has a time and wins when it is newer.
+    var best = 0, day = '';
+    listeners().forEach(function (w) { var p = String((state.listBy[w] && state.listBy[w].polledAt) || ''); if (/^\d{4}-\d{2}-\d{2}$/.test(p)) { if (p > day) day = p; } else { var v = Date.parse(p); if (v > best) best = v; } });
+    var ca = Date.parse(cinfo.at) || 0, dayMs = day ? Date.parse(day + 'T00:00:00Z') : 0, t = Math.max(best, ca);
+    if (t && t >= dayMs) return ago(new Date(t).toISOString());
+    if (day) return day === today() ? 'today' : fmtDate(day);
+    return '';
+  }
+  function artRow(a) {
+      var fol = isFollowed(a), sw = function (key, label, on, show) { return '<label class="lsw' + (show ? '' : ' na') + '"><input type="checkbox" data-sw="' + key + '" data-id="' + E(a.id) + '" aria-label="' + label + ' for ' + E(a.name) + '"' + (on ? ' checked' : '') + (show ? '' : ' tabindex="-1" aria-hidden="true"') + '>' + label + '</label>'; };
+      var com = isCom(a), pl = com ? '' : playLine(a), bits = [pl, fol && a.gigs !== false && tourEnded(a) ? 'Not touring' : '', com ? 'Comedian' : (!hasApple(a) ? 'No Apple match' : '')].filter(Boolean);
+      return '<div class="row art' + (fol ? '' : ' dim') + (selIs('art', a.id) ? ' sel' : '') + '" data-sel="art:' + E(a.id) + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="nm">' + E(a.name) + '</div><div class="rs">' + E(bits.join(' · ')) + '</div></button>' +
+        '<div class="sw">' + sw('follow', 'Follow', fol, true) + (com ? sw('specials', 'Specials', fol && a.specials !== false, fol) : sw('releases', 'Releases', fol && a.releases !== false, fol)) + sw('gigs', 'Tour', fol && a.gigs !== false, fol) + sw('tour', 'Touring', !tourEnded(a), fol && a.gigs !== false) + '</div></div></div>';
+  }
+  function pnfBody(pnf) {
+    var all = pPeriod() === 'all', lim = ui.aQuery ? 60 : ui.pLimit, shown = pnf.slice(0, lim);
+    return (pnf.length ? shown.map(function (x) {
+      return '<div class="row"><div class="rb"><div class="rt">' + E(x.name) + '</div><div class="rs">' + x.n + ' plays ' + (all ? 'in total' : 'in 30 days') + ' · last ' + E(ago(new Date(x.l * 1000).toISOString())) + (x.since ? ' · <b>' + x.since + ' more since you ignored them</b>' : '') + '</div><div class="acts"><button class="btn pri" data-m="followname:' + E(x.name) + '"' + (busy.follow[x.name] ? ' disabled' : '') + '>' + (busy.follow[x.name] ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="ignorename:' + E(x.name) + '">Ignore</button></div></div></div>';
+    }).join('') + (pnf.length > shown.length ? '<div class="acts2"><button type="button" class="chip" data-m="pmore:">Show ' + Math.min(25, pnf.length - shown.length) + ' more (' + (pnf.length - shown.length) + ' left)</button></div>' : '') : '<div class="note" style="padding-bottom:10px">' + (ui.aQuery ? 'Nobody played matches the search.' : ui.lMin === 1 ? (all ? 'Everyone you have played is already followed.' : 'Everyone played in the last 30 days is already followed.') : 'Nobody played ' + ui.lMin + ' or more times ' + (all ? 'in total' : 'in 30 days') + ' is missing from your follows.') + '</div>');
+  }
+  function pnfSegs() {
+    return (Object.keys(state.appleBy).length ? seg([['Last 30 days', pPeriod() === '30', 'pper:30'], ['All time', pPeriod() === 'all', 'pper:all']]) : '') + (people().length > 1 ? seg([['Both', !ui.pWho, 'pwho:']].concat(people().map(function (w) { return [E(WHO[w] || w), ui.pWho === w, 'pwho:' + w]; }))) : '') + seg([1, 2, 3, 5, 10].map(function (n) { return [n === 1 ? 'All played' : n + '+ plays', ui.lMin === n, 'lmin:' + n]; }));
+  }
+  // ── listening dashboard (v1.13, computer only) ──
+  var WCOL = { pete: 'var(--lime)', lex: '#B79CFF' }, colOf = function (w) { return WCOL[w] || 'var(--ink3)'; };
+  // v1.20: every dated count a listener has (Last.fm days and months, plus the Apple Music history), one pass: f(artistKey, 'YYYY-MM', n, 'YYYY-MM-DD' or '')
+  function eachCount(w, f) {
+    [state.listBy[w], state.appleBy[w]].forEach(function (L) {
+      if (!L || !L.artists) return;
+      Object.keys(L.artists).forEach(function (k) { var e = L.artists[k] || {};
+        Object.keys(e.mo || {}).forEach(function (m) { var n = Number(e.mo[m]) || 0; if (n) f(k, m, n, ''); });
+        Object.keys(e.d || {}).forEach(function (x) { var n = Number(e.d[x]) || 0; if (n) f(k, x.slice(0, 7), n, x); });
+      });
+    });
+  }
+  function dayTotals(w) { var m = {}; eachCount(w, function (k, mo, n, day) { if (day) m[day] = (m[day] || 0) + n; }); return m; }
+  function monthTotals(w) { var m = {}; eachCount(w, function (k, mo, n) { m[mo] = (m[mo] || 0) + n; }); return m; }
+  function yearTotals(w) { var m = {}; eachCount(w, function (k, mo, n) { var y = mo.slice(0, 4); m[y] = (m[y] || 0) + n; }); return m; }
+  var TPER = [['30 days', '30'], ['12 months', '12'], ['All time', 'all']];
+  function periodMap(w, per) {
+    var out = {}, t = today(), d0 = new Date(), from12 = (function () { var d = new Date(d0.getFullYear(), d0.getMonth() - 11, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })(), from30 = addDays(t, -29);
+    eachCount(w, function (k, mo, n, day) { if (per === 'all' || (per === '12' && mo >= from12) || (per === '30' && day && day >= from30)) out[k] = (out[k] || 0) + n; });
+    return out;
+  }
+  function genreOf(k, mine) { var a = mine[k]; return a ? (a.genre || 'No genre') : 'Not in your list'; }
+  function genreYears(w, mine) {
+    var Y = {}; eachCount(w, function (k, mo, n) { var y = mo.slice(0, 4), g = genreOf(k, mine); Y[y] = Y[y] || {}; Y[y][g] = (Y[y][g] || 0) + n; }); return Y;
+  }
+  var GCOL = ['#C8F560', '#B79CFF', '#5CC8FF', '#FFB454', '#FF7A90', '#5EEAD4'], GOTH = '#9AA4B2', GNIL = '#4B5563';
+  function genreCard(w) {
+    var mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var pm = periodMap(w, ui.tPer), G = {}, tot = 0, known = 0;
+    Object.keys(pm).forEach(function (k) { var g = genreOf(k, mine); G[g] = (G[g] || 0) + pm[k]; tot += pm[k]; if (g !== 'Not in your list' && g !== 'No genre') known += pm[k]; });
+    var list = Object.keys(G).filter(function (g) { return g !== 'Not in your list' && g !== 'No genre'; }).map(function (g) { return { g: g, n: G[g] }; }).sort(function (a, b) { return b.n - a.n; }), top = list.slice(0, 8), mx = top.length ? top[0].n : 1;
+    var rest = tot - known;
+    return '<div class="card"><h3>' + E(WHO[w] || w) + ': genres, ' + E(tperName()) + '</h3>' + (tot ? '<div class="note" style="margin-top:0">' + tot + ' plays · genre known for ' + Math.round(known / tot * 100) + '% (artists not in your list have no genre yet)</div>' +
+      top.map(function (x, i) { return '<div class="tb" style="cursor:default"><span class="tn" title="' + E(x.g) + '">' + E(x.g) + '</span><span class="tbar"><i style="width:' + Math.max(4, Math.round(x.n / mx * 100)) + '%;background:' + GCOL[i % GCOL.length] + '"></i></span><span class="tc">' + x.n + '</span></div>'; }).join('') +
+      (rest ? '<div class="tb" style="cursor:default"><span class="tn">No genre known</span><span class="tbar"><i style="width:' + Math.max(4, Math.round(rest / mx * 100)) + '%;background:' + GNIL + '"></i></span><span class="tc">' + rest + '</span></div>' : '') + '<div style="height:8px"></div>' : '<div class="note">No plays in this period.</div>') + '</div>';
+  }
+  function genreYearsCard(w) {
+    var mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var Y = genreYears(w, mine), years = Object.keys(Y).sort(); if (years.length < 2) return '';
+    var G = {}; years.forEach(function (y) { Object.keys(Y[y]).forEach(function (g) { if (g !== 'Not in your list' && g !== 'No genre') G[g] = (G[g] || 0) + Y[y][g]; }); });
+    var top = Object.keys(G).sort(function (a, b) { return G[b] - G[a]; }).slice(0, 6), col = function (g) { var i = top.indexOf(g); return i >= 0 ? GCOL[i] : (g === 'Not in your list' || g === 'No genre' ? GNIL : GOTH); };
+    var rows = years.map(function (y) {
+      var tot = 0, seg_ = {}; Object.keys(Y[y]).forEach(function (g) { var k = top.indexOf(g) >= 0 || g === 'Not in your list' || g === 'No genre' ? (g === 'No genre' ? 'Not in your list' : g) : 'Other'; seg_[k] = (seg_[k] || 0) + Y[y][g]; tot += Y[y][g]; });
+      var order = top.concat(['Other', 'Not in your list']).filter(function (g) { return seg_[g]; });
+      return '<div class="gy"><span class="gyl">' + E(y) + '</span><span class="gyb" role="img" aria-label="' + E(y + ': ' + order.map(function (g) { return g + ' ' + Math.round(seg_[g] / tot * 100) + '%'; }).join(', ')) + '">' + order.map(function (g) { return '<i style="width:' + (seg_[g] / tot * 100).toFixed(1) + '%;background:' + col(g) + '" title="' + E(g + ': ' + seg_[g] + ' plays (' + Math.round(seg_[g] / tot * 100) + '%)') + '"></i>'; }).join('') + '</span><span class="gyn">' + tot + '</span></div>';
+    }).join('');
+    return '<div class="card"><h3>' + E(WHO[w] || w) + ': genres over the years</h3><div class="note" style="margin-top:0">Share of each year’s plays by genre (the genre comes from the artists in your list).</div>' + rows +
+      '<div class="legend">' + top.concat(['Other', 'Not in your list']).map(function (g) { return '<span><i style="background:' + (g === 'Other' ? GOTH : g === 'Not in your list' ? GNIL : col(g)) + '"></i>' + E(g) + '</span>'; }).join('') + '</div></div>';
+  }
+  function tperName() { return ui.tPer === '12' ? 'last 12 months' : ui.tPer === 'all' ? 'all time' : '30 days'; }
+  function niceMax(v) { if (v <= 4) return 4; var p = Math.pow(10, Math.floor(Math.log(v) / Math.LN10)), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+  var MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], DOWS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  function chartData(view, who) {
+    var labels = [], vals = {}, tick = 1, t = today(), i, d;
+    if (view === 'months') {
+      var d0 = new Date(), keys = []; for (i = 11; i >= 0; i--) { d = new Date(d0.getFullYear(), d0.getMonth() - i, 1); keys.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
+      labels = keys.map(function (k) { return MONS[Number(k.slice(5)) - 1]; }); who.forEach(function (w) { var m = monthTotals(w); vals[w] = keys.map(function (k) { return m[k] || 0; }); });
+    } else if (view === 'allmonths' || view === 'years') {
+      var mk = {}; who.forEach(function (w) { var m = view === 'years' ? yearTotals(w) : monthTotals(w); mk[w] = m; });
+      var all = []; who.forEach(function (w) { Object.keys(mk[w]).forEach(function (k) { all.push(k); }); }); all.sort();
+      if (all.length) {
+        var first = all[0], keys2 = [];
+        if (view === 'years') { for (i = Number(first); i <= Number(t.slice(0, 4)); i++) keys2.push(String(i)); labels = keys2.slice(); }
+        else { var y = Number(first.slice(0, 4)), mo = Number(first.slice(5)), ey = Number(t.slice(0, 4)), em = Number(t.slice(5, 7)); while (y < ey || (y === ey && mo <= em)) { keys2.push(y + '-' + String(mo).padStart(2, '0')); if (++mo > 12) { mo = 1; y++; } } labels = keys2.map(function (k) { return MON[Number(k.slice(5)) - 1] + ' ' + k.slice(0, 4); }); tick = keys2.length > 96 ? 24 : 12; }
+        who.forEach(function (w) { vals[w] = keys2.map(function (k) { return mk[w][k] || 0; }); });
+      } else who.forEach(function (w) { vals[w] = []; });
+    } else if (view === 'week') {
+      labels = DOWS.slice(); who.forEach(function (w) { var m = dayTotals(w), v = [0, 0, 0, 0, 0, 0, 0]; Object.keys(m).forEach(function (x) { var wd = (new Date(x + 'T00:00:00Z').getUTCDay() + 6) % 7; v[wd] += m[x]; }); vals[w] = v; });
+    } else {
+      var days = []; for (i = 29; i >= 0; i--) days.push(addDays(t, -i)); tick = 5;
+      labels = days.map(function (x) { return Number(x.slice(8)) + ' ' + MONS[Number(x.slice(5, 7)) - 1]; }); who.forEach(function (w) { var m = dayTotals(w); vals[w] = days.map(function (x) { return m[x] || 0; }); });
+    }
+    return { labels: labels, vals: vals, tick: tick };
+  }
+  function chartHtml(view, who) {
+    var C = chartData(view, who), mxv = 0; who.forEach(function (w) { C.vals[w].forEach(function (v) { if (v > mxv) mxv = v; }); });
+    if (!mxv) return '<div class="note" style="padding:10px 0">No plays recorded for this view yet.</div>';
+    var sm = window.innerWidth < 700, fs = sm ? 16 : 11, W = 640, H = sm ? 230 : 200, pl = sm ? 44 : 36, pr = 8, pt = 12, pb = sm ? 32 : 26, iw = W - pl - pr, ih = H - pt - pb, n = C.labels.length, mx = niceMax(mxv), gw = iw / n, bw = Math.max(2, (gw * 0.8) / who.length), s = '', y, i;
+    var desc = who.map(function (w) { return (WHO[w] || w) + ' ' + C.vals[w].reduce(function (a, b) { return a + b; }, 0) + ' plays'; }).join(', ');
+    s += '<svg class="gsvg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Plays ' + (view === 'months' ? 'a month, last 12 months' : view === 'allmonths' ? 'a month, all history' : view === 'years' ? 'a year' : view === 'week' ? 'by day of the week' : 'a day, last 30 days') + ': ' + E(desc) + '">';
+    [0, 0.5, 1].forEach(function (f) { y = pt + ih - f * ih; s += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(--sep)" stroke-width="1"/><text x="' + (pl - 6) + '" y="' + (y + 4) + '" text-anchor="end" style="fill:var(--ink3);font:' + fs + 'px var(--f)">' + Math.round(mx * f) + '</text>'; });
+    for (i = 0; i < n; i++) {
+      who.forEach(function (w, j) {
+        var v = C.vals[w][i], h = v / mx * ih, x = pl + i * gw + gw * 0.1 + j * bw;
+        s += '<rect x="' + x.toFixed(1) + '" y="' + (pt + ih - h).toFixed(1) + '" width="' + (bw - 1).toFixed(1) + '" height="' + Math.max(v ? 1.5 : 0, h).toFixed(1) + '" rx="2" style="fill:' + colOf(w) + '"><title>' + E((WHO[w] || w) + ', ' + C.labels[i] + ': ' + v + (v === 1 ? ' play' : ' plays')) + '</title></rect>';
+      });
+      if (i % (sm && C.tick === 5 ? 10 : C.tick) === 0) s += '<text x="' + (pl + i * gw + gw / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" style="fill:var(--ink3);font:' + fs + 'px var(--f)">' + E(C.labels[i]) + '</text>';
+    }
+    return s + '</svg>';
+  }
+  function topCard(w) {
+    var mine = {}; state.artists.forEach(function (a) { if (!a._deleted) mine[norm(a.name)] = a; });
+    var pm = periodMap(w, ui.tPer), list = Object.keys(pm).map(function (k) { return { k: k, n: pm[k] }; }).filter(function (x) { return x.n > 0; }).sort(function (a, b) { return b.n - a.n; }), tot = 0, fol = 0;
+    list.forEach(function (x) { tot += x.n; var a = mine[x.k]; if (a && isFollowed(a)) fol += x.n; });
+    var top = list.slice(0, 8), mx = top.length ? top[0].n : 1;
+    return '<div class="card"><h3>' + E(WHO[w] || w) + ': top artists, ' + E(tperName()) + '</h3>' +
+      (list.length ? '<div class="note" style="margin-top:0">' + tot + ' plays · ' + list.length + ' artist' + (list.length === 1 ? '' : 's') + ' · ' + Math.round(fol / tot * 100) + '% from artists you follow</div>' +
+        top.map(function (x) {
+          var a = mine[x.k], f = a && isFollowed(a), nm = playedName(x.k, w) || x.k, inner = '<span class="tn" title="' + E(nm) + '">' + E(nm) + '</span><span class="tbar"><i style="width:' + Math.max(4, Math.round(x.n / mx * 100)) + '%;background:' + colOf(w) + '"></i></span><span class="tc">' + x.n + '</span>';
+          return a ? '<button type="button" class="tb' + (f ? '' : ' nf') + '" data-m="artist:' + E(a.id) + '">' + inner + '</button>' : '<div class="tb nf" style="cursor:default">' + inner + '</div>';
+        }).join('') + '<div style="height:8px"></div>' : '<div class="note">No plays in this period.</div>') + '</div>';
+  }
+  function gapYears(who) {
+    var ys = {}; who.forEach(function (w) { var A = state.appleBy[w]; if (A) { var y = yearTotals(w); Object.keys(y).forEach(function (k) { ys[k] = 1; }); } });
+    var k = Object.keys(ys).sort(), out = []; if (k.length < 2) return ''; for (var y = Number(k[0]) + 1; y < Number(k[k.length - 1]); y++) if (!ys[y]) out.push(y);
+    return out.length ? 'No plays are recorded for ' + (out.length > 1 ? out[0] + ' to ' + out[out.length - 1] : out[0]) + ': Apple’s export has none for those years.' : '';
+  }
+  function dashboardHtml() {
+    var who = people(); if (!who.length) return '';
+    var hasHist = Object.keys(state.appleBy).length > 0, views = [['Plays a day', 'days'], ['Plays a month', 'months']].concat(hasHist ? [['All months', 'allmonths'], ['Plays a year', 'years']] : []).concat([['By weekday', 'week']]);
+    var notes = { week: 'Plays by day of the week, from the days with a date recorded (Last.fm days and Apple Music days since May 2026).', months: 'Plays a month for the last 12 months.', allmonths: 'Plays a month for all the history there is (Apple Music history, then Last.fm).', years: 'Plays a year (Apple Music history, then Last.fm).', days: 'Plays a day for the last 30 days.' };
+    return seg(TPER.map(function (v) { return [v[0], ui.tPer === v[1], 'tper:' + v[1]]; })) + '<div class="dgrid">' + who.map(topCard).join('') + '</div>' +
+      '<div class="card"><h3>Listening habits</h3>' + seg(views.map(function (v) { return [v[0], ui.gView === v[1], 'gview:' + v[1]]; })) +
+      '<div class="legend">' + who.map(function (w) { return '<span><i style="background:' + colOf(w) + '"></i>' + E(WHO[w] || w) + '</span>'; }).join('') + '</div>' + chartHtml(hasHist || ['allmonths', 'years'].indexOf(ui.gView) < 0 ? ui.gView : 'days', who) +
+      '<div class="note">' + (notes[ui.gView] || notes.days) + ((ui.gView === 'years' || ui.gView === 'allmonths') && gapYears(who) ? ' ' + gapYears(who) : '') + '</div></div>' +
+      '<div class="dgrid">' + who.map(genreCard).join('') + '</div>' + (hasHist ? '<div class="dgrid">' + who.map(genreYearsCard).join('') + '</div>' : '');
+  }
+  function secHead(key, title, count, open) { return '<button type="button" class="secbtn" data-m="sec:' + key + '" aria-expanded="' + (open ? 'true' : 'false') + '"><span class="chev" aria-hidden="true">' + (open ? '▾' : '▸') + '</span>' + title + ' <span class="cnt">' + count + '</span></button>'; }
+  function jbUsageHtml() {
+    var j = state.conCheck && state.conCheck.jb, q = j && j.q;
+    if (!q || q.used == null) return '<div class="note">JamBase usage is recorded after the first overnight check.</div>';
+    return '<div class="note">JamBase says ' + E(String(q.used)) + ' of ' + E(q.quota == null ? 'no set limit' : String(q.quota)) + ' requests used' + (q.periodEnd ? ' this period (ends ' + E(String(q.periodEnd).slice(0, 10)) + ')' : '') + ', as of ' + E(ago(q.at || state.conCheck.at || '')) + '. The overnight check plans to stay under 600.</div>';
+  }
+  function toolsHtml() {
+    return '<div class="card tools" style="margin-top:18px"><h3>Export and import</h3>Export your artists to a JSON file, or import a list of acts (a JSON file, or a text file with one name per line). Names are checked against your list first, so you see the duplicates before anything is added.<div><button type="button" class="btn" data-m="exportart">Export artists</button> <button type="button" class="btn" data-m="importart">Import artists</button></div></div>' +
+      '<div class="card tools" style="margin-top:12px"><h3>Back up and restore Music</h3>Back up everything in Music to one file: your artists, follow and tour switches, release and tour-date marks, and recommendation answers, with Pete’s and Lex’s listening kept in the file for reference. Restore adds what is missing and updates what is older; it never deletes anything, and shows you the changes before it applies them. Listening and tour dates are not restored, because Last.fm and the overnight checks supply them.<div><button type="button" class="btn" data-m="backupmusic">Back up Music</button> <button type="button" class="btn" data-m="restoremusic">Restore Music</button></div></div>' +
+      secHead('d', 'Diagnostics', '', ui.dOpen) + (ui.dOpen ? '<div class="card tools secbody"><h3>Connection test</h3>Tour dates come from Ticketmaster and JamBase, checked by the server overnight. This asks each of them for one event, to show the connections and keys are working. It costs one Ticketmaster request and one JamBase request.<div><button type="button" class="btn" data-m="conntest"' + (busy.jb ? ' disabled' : '') + '>' + (busy.jb ? 'Testing…' : 'Test connection') + '</button></div>' + jbUsageHtml() + '</div>' : '');
+  }
+  // ── Recommendations section (v1.22) ──
+  function recAv(name) { return '<div class="av">' + E((String(name).trim()[0] || '?').toUpperCase()) + '</div>'; }
+  function recCard(r) {
+    var busyF = busy.follow[r.name];
+    return '<div class="row rc' + (selIs('rec', r.id) ? ' sel' : '') + '" data-sel="rec:' + E(r.id) + '">' + recAv(r.name) + '<div class="rb"><div class="rt">' + E(r.name) + '</div><div class="rs">' + E(recReason(r)) + '</div>' +
+      '<div class="acts"><button class="btn pri" data-m="recfollow:' + E(r.id) + '"' + (busyF ? ' disabled' : '') + '>' + (busyF ? 'Adding…' : 'Follow') + '</button><button class="btn" data-m="recapple:' + E(r.id) + '">Listen on Apple Music</button><button class="btn" data-m="recknown:' + E(r.id) + '">Already know</button><button class="btn" data-m="recno:' + E(r.id) + '">Not for me</button></div></div></div>';
+  }
+  function neverCard(a) {
+    return '<div class="row rc' + (selIs('art', a.id) ? ' sel' : '') + '" data-sel="art:' + E(a.id) + '">' + avatar(a) + '<div class="rb"><button type="button" class="nmb" data-m="artist:' + E(a.id) + '"><div class="rt">' + E(a.name) + ' <span class="badge new">Never played</span></div><div class="rs">' + E(a.genre || 'Followed') + '</div></button>' +
+      '<div class="acts"><button class="btn pri" data-m="nplisten:' + E(a.id) + '">Listen on Apple Music</button><button class="btn" data-m="npunfollow:' + E(a.id) + '">Unfollow</button></div></div></div>';
+  }
+  function recSection(title, count, cards, empty, key) {
+    var lim = ui.uLimit, shown = cards.slice(0, lim);
+    return '<section class="rsec" aria-label="' + E(title) + '"><h3>' + E(title) + ' <span class="cnt">' + count + '</span></h3><div class="rlist">' + (cards.length ? shown.join('') + (cards.length > shown.length ? '<div class="acts2"><button type="button" class="chip" data-m="rmore:">Show ' + Math.min(25, cards.length - shown.length) + ' more (' + (cards.length - shown.length) + ' left)</button></div>' : '') : '<div class="note">' + empty + '</div>') + '</div></section>';
+  }
+  function renderRecs() {
+    if (!ready) return '<div class="empty">Loading Music…</div>';
+    var recs = visibleRecs(), never = neverPlayed(), tab = ['all', 'new', 'never'].indexOf(ui.rTab) >= 0 ? ui.rTab : 'all', who = listeners().map(function (w) { return WHO[w] || w; });
+    var h = head() + seg([['All ' + (recs.length + never.length), tab === 'all', 'rtab:all'], ['Suggestions ' + recs.length, tab === 'new', 'rtab:new'], ['Never played ' + never.length, tab === 'never', 'rtab:never']]);
+    h += '<div class="stat"><span role="status">' + (who.length ? 'Suggestions come from what ' + E(who.join(' and ')) + ' follow and play (Last.fm).' : 'Suggestions come from the artists you follow.') + '</span><button type="button" class="lnk" data-m="check"' + (busy.con ? ' disabled' : '') + '>' + (busy.con ? 'Checking…' : 'Refresh suggestions') + '</button></div>';
+    var parts = [];
+    if (tab !== 'never') parts.push(recSection('Suggested for you', recs.length, recs.map(recCard), 'No suggestions yet. They are worked out by the server’s daily check from Last.fm’s similar-artist lists; Refresh suggestions updates them.'));
+    if (tab !== 'new') parts.push(recSection('Followed, never played', never.length, never.map(neverCard), people().length ? 'Every artist you follow has at least one play.' : 'This needs your Last.fm listening to be loaded first.'));
+    return h + '<div class="rwrap' + (parts.length === 1 ? ' one' : '') + '">' + parts.join('') + '</div>';
+  }
+  function recPane(r) {
+    var seeds = Array.isArray(r.seeds) ? r.seeds : [], id = E(r.id);
+    return poster('SUGGESTION', '', '', r.name, 'Suggested by Last.fm', seeds.length ? ['Similar to ' + seeds[0].n + (seeds.length > 1 ? ' and ' + ((r.nSeeds || seeds.length) - 1) + ' more' : '')] : []) +
+      '<div class="pane-actions" style="margin-bottom:12px">' + pBtn('recfollow:' + id, busy.follow[r.name] ? 'Adding…' : 'Follow', { pri: true, dis: !!busy.follow[r.name] }) + pBtn('recapple:' + id, 'Listen on Apple Music') + pBtn('recknown:' + id, 'Already know') + pBtn('recno:' + id, 'Not for me') + '</div>' +
+      '<div class="pane-card">' + pRow('Why', E(recReason(r))) + (seeds.length ? seeds.slice(0, 6).map(function (x) { var p30 = playsIn(norm(x.n), 30), pt = totalPlays(norm(x.n)); return pRow('Similar to ' + E(x.n), listeners().length ? pt + ' plays (' + p30 + ' in 30 days)' : ''); }).join('') : '') + '</div>';
+  }
+  function renderArtists() {
+    if (!ready) return '<div class="empty">Loading Music…</div>';
+    var all = live().filter(inScope), q = norm(ui.aQuery), la = listenAge(), sc = ui.scope;
+    var h = head() + '<input type="search" id="gmq" placeholder="Search artists" value="' + E(ui.aQuery) + '" autocomplete="off" autocorrect="off" aria-label="Search artists">' +
+      '<div class="acts2"><button type="button" class="chip pri on" data-m="addartist">' + (sc === 'comedy' ? '+ Follow a comedian' : '+ Follow an artist') + '</button>' + (sc === 'comedy' ? '' : '<button type="button" class="chip" data-m="sub:recs">Recommendations' + (recCount() ? ' (' + recCount() + ')' : '') + '</button>') + '</div>' +
+      (sc === 'comedy' ? '' : '<div class="stat"><span role="status">' + (listeners().length ? 'Last.fm plays ' + (la ? 'checked ' + E(la) : 'not checked yet') + '.' : 'No Last.fm plays yet.') + (cinfo.msg ? ' ' + E(cinfo.msg) : '') + '</span>' + checkBtn('Check for new listening') + '</div>') +
+      (sc !== 'comedy' && pendingMatch().length ? '<div class="note">' + (matching ? 'Matching new artists with Apple Music: ' + matchInfo.done + ' of ' + matchInfo.total + '…' : pendingMatch().length + ' new artist' + (pendingMatch().length === 1 ? ' is' : 's are') + ' waiting to be matched with Apple Music.') + (matching ? '' : ' <button type="button" class="lnk" data-m="matchnow">Match now</button>') + '</div>' : '');
+    if (sc !== 'comedy') h += dashboardHtml();
+    var notFol = all.filter(function (a) { return !isFollowed(a); }).length, fol = all.filter(isFollowed);
+    var rows = all.filter(function (a) { return (!q || norm(a.name).indexOf(q) >= 0) && (isFollowed(a) || ui.showNot); }).sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
+    h += secHead('f', sc === 'comedy' ? 'Followed comedians' : 'Followed artists', q ? rows.length + ' of ' + fol.length : fol.length, ui.fOpen || !!sc);
+    if (ui.fOpen || sc) {
+      h += '<div class="secbody">' + (notFol ? '<div class="chips"><button type="button" class="chip ghost' + (ui.showNot ? ' on' : '') + '" data-m="shownot" aria-pressed="' + (ui.showNot ? 'true' : 'false') + '">' + (ui.showNot ? 'Hide' : 'Also show') + ' ' + notFol + ' not following</button></div>' : '');
+      if (!all.length) h += '<div class="empty">No artists yet. Add one to start.</div>';
+      else {
+        // v1.28 (COM-3): Music and Comedians, each closed until opened; a search opens the ones that have a match
+        var mus = rows.filter(function (a) { return !isCom(a); }), cos = rows.filter(isCom), nM = fol.filter(function (a) { return !isCom(a); }).length, nC = fol.length - nM;
+        var sub = function (key, title, list, nAll, open) {
+          var isOpen = open || (!!q && list.length > 0);
+          return '<div class="subsec">' + secHead(key, title, q ? list.length + ' of ' + nAll : nAll, isOpen) + (isOpen ? '<div class="secbody">' + (list.length ? list.map(artRow).join('') : '<div class="empty">No artists match.</div>') + '</div>' : '') + '</div>';
+        };
+        if (sc === 'comedy') h += (cos.length ? cos.map(artRow).join('') : '<div class="empty">No comedians match.</div>');
+        else if (sc === 'music') h += (mus.length ? mus.map(artRow).join('') : '<div class="empty">No artists match.</div>');
+        else { h += sub('fm', 'Music', mus, nM, ui.mOpen); if (nC || cos.length) h += sub('fc', 'Comedians', cos, nC, ui.cOpen); }
+      }
+      h += '</div>';
+    }
+    if (sc !== 'comedy' && people().length) {
+      var pnf = playedNotFollowed().filter(function (x) { return !q || norm(x.name).indexOf(q) >= 0; });
+      h += secHead('p', 'Played, not followed', pnf.length, ui.pOpen);
+      if (ui.pOpen) h += '<div class="secbody">' + pnfSegs() + pnfBody(pnf) + '</div>';
+    }
+    return h + (sc === 'comedy' ? '' : toolsHtml());
+  }
+  // ── desktop side panel (v1.12): the host shows it to the right of the list on a wide screen ──
+  function paneOn() { return !!(H().paneOn && H().paneOn()); }   // v2.0: Film & TV has no side panel for Music, so details open in a window
+  function selIs(k, id) { return !!sel && sel.k === k && sel.id === id; }
+  function selectItem(k, id) { sel = { k: k, id: id }; paint(); }
+  function pane(el) {
+    paneEl = el;
+    if (el && !el._gm) { el._gm = 1; el.addEventListener('click', onClick); el.addEventListener('change', onChange); }
+    return boot().then(function () { paintPane(); });
+  }
+  function pRow(l, v) { return v === '' || v == null ? '' : '<div class="pane-row"><b>' + l + '</b><span>' + v + '</span></div>'; }
+  function pBtn(m, label, o) { o = o || {}; return '<button type="button" class="pane-btn' + (o.pri ? ' pri' : '') + '" style="flex:1 1 44%" data-m="' + m + '"' + (o.dis ? ' disabled' : '') + (o.on ? ' aria-pressed="true"' : '') + '>' + label + '</button>'; }
+  function poster(kind, pill, dt, title, sub, chips, cls) {
+    var dl = dt ? dateLabel(dt).split(' ') : null;
+    return '<div class="pane-poster' + (cls ? ' ' + cls : '') + '"><div class="hero-top"><span class="hero-k">' + E(kind) + '</span>' + (pill ? '<span class="hero-pill">' + E(pill) + '</span>' : '') + '</div>' +
+      (dl ? '<div class="hero-date"><div class="hero-num">' + E(dl[1]) + '</div><div class="hero-mon">' + E(dl[2].toUpperCase()) + '<br>' + E(dl[0].toUpperCase()) + '</div></div>' : '') +
+      '<div class="hero-title">' + E(title) + '</div>' + (sub ? '<div class="hero-sub">' + E(sub) + '</div>' : '') +
+      (chips.length ? '<div class="hero-chips" style="margin-top:14px">' + chips.map(function (x) { return '<span class="hero-chip">' + E(x) + '</span>'; }).join('') + '</div>' : '') + '</div>';
+  }
+  function daysPill(dt) { var n = Math.round((Date.parse(dt + 'T00:00:00Z') - Date.parse(today() + 'T00:00:00Z')) / 864e5); return n < 0 ? 'Out now' : n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : 'In ' + n + ' days'; }
+  function itemById(id) { return comingItems().find(function (x) { return x.id === id; }); }
+  function resolveSel() {
+    if (sel) {
+      if (sel.k === 'art' && byId(sel.id)) return sel;
+      if ((sel.k === 'gig' || sel.k === 'rel' || sel.k === 'sp') && itemById(sel.id)) return sel;
+    }
+    if (sel && sel.k === 'rec' && visibleRecs().some(function (r) { return r.id === sel.id; })) return sel;
+    if (ui.sub === 'recs') { var r0 = visibleRecs()[0], n0 = neverPlayed()[0]; return r0 ? { k: 'rec', id: r0.id } : n0 ? { k: 'art', id: n0.id } : null; }
+    if (ui.sub === 'artists') return null;
+    var its = comingItems().filter(function (i) { return !i.hidden; }), g = its.filter(function (i) { return i.kind === 'con' && i.date >= today(); })[0] || its[0];
+    return g ? { k: g.kind === 'con' ? 'gig' : g.kind === 'sp' ? 'sp' : 'rel', id: g.id } : null;
+  }
+  function yearsRow(k) {
+    var Y = {}; people().forEach(function (w) { [state.listBy[w], state.appleBy[w]].forEach(function (L) { var e = L && L.artists && L.artists[k]; if (!e) return; Object.keys(e.mo || {}).forEach(function (m) { Y[m.slice(0, 4)] = (Y[m.slice(0, 4)] || 0) + (Number(e.mo[m]) || 0); }); Object.keys(e.d || {}).forEach(function (d) { Y[d.slice(0, 4)] = (Y[d.slice(0, 4)] || 0) + (Number(e.d[d]) || 0); }); }); });
+    var ys = Object.keys(Y).filter(function (y) { return Y[y] > 0; }).sort(); return ys.length > 1 ? pRow('By year', ys.map(function (y) { return y + ': ' + Y[y]; }).join(' · ')) : '';
+  }
+  function appleRow(k) {
+    var n = 0, until = ''; people().forEach(function (w) { var ae = appleEntry(w, k); if (ae) { n += Number(ae.t) || 0; until = (state.appleBy[w] && state.appleBy[w].until) || until; } });
+    return n ? pRow('Apple Music history', n + (until ? ' (to ' + E(fmtDate(until)) + ')' : '')) : '';
+  }
+  function playsBlock(a) {
+    var k = norm(a.name), who = listeners(); if (!who.length) return '';
+    var per = who.length > 1 ? who.map(function (w) { return pRow('Plays, ' + E(WHO[w] || w), totalPlays(k, w) + ' (' + playsIn(k, 30, w) + ' in 30 days)'); }).join('') : '', lp = lastPlayed(k);
+    var months = {}; people().forEach(function (w) { var ae = appleEntry(w, k); if (ae) { Object.keys(ae.mo || {}).forEach(function (m) { months[m] = (months[m] || 0) + (Number(ae.mo[m]) || 0); }); Object.keys(ae.d || {}).forEach(function (d) { var m = d.slice(0, 7); months[m] = (months[m] || 0) + (Number(ae.d[d]) || 0); }); } var e = state.listBy[w] && state.listBy[w].artists[k]; if (!e) return; Object.keys(e.mo || {}).forEach(function (m) { months[m] = (months[m] || 0) + (Number(e.mo[m]) || 0); }); Object.keys(e.d || {}).forEach(function (d) { var m = d.slice(0, 7); months[m] = (months[m] || 0) + (Number(e.d[d]) || 0); }); });
+    var keys = [], d0 = new Date(), i; for (i = 11; i >= 0; i--) { var d = new Date(d0.getFullYear(), d0.getMonth() - i, 1); keys.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
+    var mx = Math.max.apply(null, keys.map(function (m) { return months[m] || 0; }).concat([1]));
+    var bars = keys.some(function (m) { return months[m]; }) ? '<div class="pbars" aria-hidden="true">' + keys.map(function (m) { return '<i title="' + m + ': ' + (months[m] || 0) + '" style="height:' + Math.max(3, Math.round(((months[m] || 0) / mx) * 100)) + '%"></i>'; }).join('') + '</div><div class="pcap"><span>' + keys[0] + '</span><span>plays a month</span><span>' + keys[11] + '</span></div>' : '';
+    return '<div class="pane-h">Listening</div><div class="pane-card">' + pRow('Plays in total', totalPlays(k)) + appleRow(k) + yearsRow(k) + pRow('Last 7 days', playsIn(k, 7)) + pRow('Last 30 days', playsIn(k, 30)) + per + pRow('Last played', lp ? E(fmtDate(localDay(lp))) : '') + bars + '</div>';
+  }
+  function gigPane(it) {
+    var c = it.c, id = E(c.id), link = gigLink(c.id), pend = salePending(c), a = byId(c.artistId), off = /^(postponed|rescheduled|offsale)$/.test(String(c.status || ''));
+    var chips = [it.support ? 'Support for ' + it.headliner : '', it.interested ? 'Interested ✓' : '', link ? 'In Gigs & Trips' : '', pend ? 'On sale ' + saleText(c) : '', srcName(c)].filter(Boolean);
+    var acts = it.hidden ? pBtn('restore:' + id, 'Show again') : (c.url ? pBtn('tickets:' + id, 'Tickets', { pri: true }) : '') + pBtn('interested:' + id, it.interested ? 'Interested ✓' : 'Interested', { on: it.interested }) +
+      (link ? pBtn('opengig:' + id, 'Open gig') : pBtn('bought:' + id, busy['g' + c.id] ? 'Adding…' : 'Bought', { dis: busy['g' + c.id] })) + (pend ? pBtn('alert:' + id, it.alert ? 'Alert on' : 'Alert me', { on: it.alert }) : '') + pBtn('notint:' + id, 'Not interested');
+    return poster('TOUR DATE', daysPill(c.date), c.date, c.artist, [c.venue, c.city].filter(Boolean).join(', '), chips) +
+      '<div class="pane-actions" style="margin-bottom:12px">' + acts + '</div>' +
+      '<div class="pane-card">' + pRow('Date', E(fmtDate(c.date))) + pRow('Time', E(c.time || '')) + pRow('Venue', E(c.venue)) + pRow('City', E(c.city)) + pRow('Tickets on sale', pend ? E(saleText(c)) : '') + pRow('Status', off ? E(c.status) : '') +
+      pRow('Billing', it.support ? 'Support for ' + E(it.headliner) : '') + pRow('Event', c.name && norm(c.name) !== norm(c.artist) ? E(c.name) : '') + pRow('Found by', srcName(c)) + (listeners().length ? pRow('Plays of ' + E(c.artist), totalPlays(norm(c.artist)) + ' (' + playsIn(norm(c.artist), 30) + ' in 30 days)') : '') + '</div>' +
+      (a ? '<div class="pane-actions">' + pBtn('artist:' + E(a.id), 'Artist details') + '</div>' : '');
+  }
+  function relPane(it) {
+    var r = it.r, id = E(it.id), a = followed().find(function (x) { return hasApple(x) && String(x.appleArtistId) === r.aid; }), u = artSize(r.art, 400), kind = r.kind === 'single' ? 'Single' : r.kind === 'ep' ? 'EP' : 'Album';
+    var acts = it.hidden ? pBtn('rrestore:' + id, 'Show again') : pBtn('rapple:' + id, 'Apple Music', { pri: true }) + pBtn('rinterested:' + id, it.interested ? 'Interested ✓' : 'Interested', { on: it.interested }) + pBtn('rnotint:' + id, 'Not interested');
+    return poster('RELEASE', daysPill(r.date), r.date, r.name, r.artistName + ' · ' + kind, [kind, it.interested ? 'Interested ✓' : ''].filter(Boolean), 'rel') +
+      '<div class="pane-actions" style="margin-bottom:12px">' + acts + '</div>' +
+      (u ? '<div class="pane-card"><img src="' + E(u) + '" alt="" style="width:100%;display:block" onerror="this.parentNode.remove()"></div>' : '') +
+      '<div class="pane-card">' + pRow('Release date', E(fmtDate(r.date))) + pRow('Type', kind) + pRow('Tracks', r.tracks ? r.tracks : '') + pRow('Artist', E(r.artistName)) + (listeners().length ? pRow('Plays of ' + E(r.artistName), totalPlays(norm(r.artistName)) + ' (' + playsIn(norm(r.artistName), 30) + ' in 30 days)') : '') + '</div>' +
+      (a ? '<div class="pane-actions">' + pBtn('artist:' + E(a.id), 'Artist details') + '</div>' : '');
+  }
+  function spPane(it) {
+    var sp = it.s, id = E(it.id), kind = sp.type === 'tv' ? 'Series' : 'Film', u = sp.poster ? 'https://image.tmdb.org/t/p/w342' + sp.poster : '';
+    var acts = it.hidden ? pBtn('sprestore:' + id, 'Show again') : (it.ft ? pBtn('spnone:' + id, 'In Film & TV ✓', { dis: true, on: true }) : pBtn('spadd:' + id, busy['s' + it.id] ? 'Adding…' : 'Add to Film & TV', { pri: true, dis: !!busy['s' + it.id] })) + pBtn('spnotint:' + id, 'Not interested');
+    return poster('SPECIAL', daysPill(sp.date), sp.date, sp.title, it.who.join(', ') + ' · ' + kind, [kind, it.ft ? 'In Film & TV' : ''].filter(Boolean), 'sp') +
+      '<div class="pane-actions" style="margin-bottom:12px">' + acts + '</div>' +
+      (u ? '<div class="pane-card"><img src="' + E(u) + '" alt="" style="width:100%;display:block" onerror="this.parentNode.remove()"></div>' : '') +
+      '<div class="pane-card">' + pRow('Release date', E(fmtDate(sp.date))) + pRow('Type', kind) + pRow('Comedian', E(it.who.join(', '))) + pRow('Found by', 'TMDB') + '</div>' +
+      '<div class="pane-actions">' + it.whoIds.slice(0, 1).map(function (x) { return byId(x) ? pBtn('artist:' + E(x), 'Comedian details') : ''; }).join('') + '</div>';
+  }
+  function artistPane(a) {
+    var k = norm(a.name), fol = isFollowed(a), cc = state.conCheck || {}, f = cc.fetched && cc.fetched[a.id], n = (cc.empty && cc.empty[a.id]) || 0, id = E(a.id), t = today();
+    var sw = function (key, label, on) { return '<div class="pane-row"><b>' + label + '</b><span><input type="checkbox" data-sw="' + key + '" data-id="' + id + '" aria-label="' + label + '"' + (on ? ' checked' : '') + '></span></div>'; };
+    var com = isCom(a), chips = [fol ? 'Following' : 'Not following', com ? 'Comedian' : '', fol && a.gigs !== false && tourEnded(a) ? 'No longer touring' : '', com ? '' : hasApple(a) ? 'Apple Music' : a.pm ? 'Matching…' : 'No Apple Music match', a.match === 'medium' ? 'Check match' : ''].filter(Boolean);
+    var sps = com ? Object.keys(spec.items).map(function (x) { return spec.items[x]; }).filter(function (x) { return (x.aids || []).indexOf(a.id) >= 0 && x.date >= addDays(t, -SPEC_BACK_DAYS); }).sort(function (x, y) { return y.date.localeCompare(x.date); }).slice(0, 6) : [];
+    var cons = liveConcerts(state.concerts, state.artists, t).filter(function (c) { return String(c.artistId) === String(a.id); }).slice(0, 6);
+    var rels = Object.keys(rel.items).map(function (x) { return rel.items[x]; }).filter(function (r) { return hasApple(a) && r.aid === String(a.appleArtistId); }).sort(function (x, y) { return y.date.localeCompare(x.date); }).slice(0, 4);
+    return poster('ARTIST', '', '', a.name, a.genre || (hasApple(a) ? 'Apple Music' : ''), chips) +
+      (com ? '' : '<div class="pane-actions" style="margin-bottom:12px"><button type="button" class="pane-btn pri" data-m="aapple:' + id + '">Apple Music</button></div>') +
+      '<div class="pane-card">' + sw('follow', 'Following', fol) + (fol ? (com ? sw('specials', 'New specials', a.specials !== false) : sw('releases', 'New releases', a.releases !== false)) + sw('gigs', 'Tour dates', a.gigs !== false) + (a.gigs !== false ? sw('tour', 'Still touring', !tourEnded(a)) : '') : '') + '</div>' +
+      (com ? '' : playsBlock(a)) +
+      (com && fol && a.specials !== false ? '<div class="pane-h">Specials</div><div class="pane-card">' + (sps.length ? sps.map(function (x) { return pRow(E(x.title), E(fmtDate(x.date))); }).join('') : pRow('Recent and upcoming', hasTmdb(a) ? (spec.fetched[String(a.tmdb)] ? 'None found' : 'not checked yet') : 'No TMDB match')) + '</div>' : '') +
+      (fol && a.gigs !== false ? '<div class="pane-h">Tour dates</div><div class="pane-card">' + (cons.length ? cons.map(function (c) { return '<button type="button" class="pmini" data-m="gotogig:' + E(c.id) + '">' + E(dateLabel(c.date)) + ' · ' + E(c.venue) + ', ' + E(c.city) + '</button>'; }).join('') : pRow('Scottish dates', tourEnded(a) ? 'Not checked (no longer touring)' : 'None found')) +
+        pRow('Last checked', tourEnded(a) ? '' : f ? E(fmtDate(f)) + (n >= 6 ? ', nothing found in ' + n + ' checks' : '') : 'not checked yet') + '</div>' : '') +
+      (rels.length ? '<div class="pane-h">Recent releases</div><div class="pane-card">' + rels.map(function (r) { return pRow(E(r.name), E(fmtDate(r.date))); }).join('') + '</div>' : '') +
+      '<div class="pane-actions"><button type="button" class="pane-btn" data-m="aremove:' + id + '">Remove artist</button></div>';
+  }
+  function overviewPane() {
+    var who = listeners(), keys = who.length ? allPlayedKeys('') : [];
+    var per = who.map(function (w) { var n = 0; Object.keys((state.listBy[w] || { artists: {} }).artists).forEach(function (k) { n += playsIn(k, 30, w); }); return pRow('Plays, ' + E(WHO[w] || w) + ', 30 days', n); }).join('');
+    return poster('MUSIC', '', '', 'Your artists', 'Choose an artist to see its details here', []) +
+      '<div class="pane-card">' + pRow('Following', followed().length) + pRow('Not following', live().length - followed().length) + pRow('Artists played, 30 days', keys.filter(function (k) { return playsIn(k, 30) > 0; }).length) + per + '</div>';
+  }
+  function paintPane() {
+    if (!paneEl || !paneEl.isConnected || !paneOn()) return;
+    var s = resolveSel(), h = '';
+    if (!ready) h = '<div class="pane-empty">Loading Music…</div>';
+    else if (!s) h = ui.sub === 'artists' ? overviewPane() : ui.sub === 'recs' ? '<div class="pane-empty">No suggestions to show.</div>' : '<div class="pane-empty">Select a tour date or release to see it here.</div>';
+    else if (s.k === 'rec') { var rr_ = state.recs.find(function (x) { return x.id === s.id; }); h = rr_ ? recPane(rr_) : '<div class="pane-empty">Select a suggestion to see it here.</div>'; }
+    else if (s.k === 'art') h = artistPane(byId(s.id));
+    else { var it = itemById(s.id); h = it ? (it.kind === 'con' ? gigPane(it) : it.kind === 'sp' ? spPane(it) : relPane(it)) : '<div class="pane-empty">Select a tour date or release to see it here.</div>'; }
+    var top = paneEl.scrollTop; paneEl.innerHTML = h; paneEl.scrollTop = top;
+  }
+
+  // ── export and import of the artists list (v1.12) ──
+  function saveFile(name, text) { var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
+  function exportArtists() {
+    var rows = live().slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); }).map(function (a) {
+      var k = norm(a.name); return Object.assign({ name: a.name, following: isFollowed(a), releases: a.releases !== false, gigs: a.gigs !== false, tour: tourEnded(a) ? 'ended' : 'active', tourNote: a.tourNote || '', genre: a.genre || '', appleArtistId: a.appleArtistId || '', plays: totalPlays(k), plays30: playsIn(k, 30) }, isCom(a) ? { kind: 'comedian', tmdb: a.tmdb || '', specials: a.specials !== false } : {});
+    });
+    saveFile('music-artists.json', JSON.stringify({ format: 'music-artists/1', app: 'gigs-and-trips-music', version: VERSION, exportedAt: new Date().toISOString(),
+      howTo: 'To add acts, add entries to artists (just a name is enough) and import the file in Music > Artists > Import artists. Names already in your list are recognised and not added twice. Optional per artist: releases (false = no new releases), gigs (false = no tour dates), tour ("ended" = no longer touring), tourNote.', artists: rows }, null, 2));
+    say('Exported ' + rows.length + ' artist' + (rows.length === 1 ? '' : 's'));
+  }
+  // ── full Music backup and restore (v1.18) ──
+  var BACKUP_FORMAT = 'gigs-music-backup/1', restoreMode = false, rplan = null;
+  function backupObject() {
+    var live_ = function (l) { return (l || []).filter(function (x) { return x && x.id; }); };
+    return { format: BACKUP_FORMAT, app: 'gigs-and-trips-music', version: VERSION, exportedAt: new Date().toISOString(),
+      note: 'Restore this in Gigs & Trips > Music > Artists > Back up and restore Music. Restore adds what is missing and updates what is older; it never deletes. Listening (Last.fm) and tour dates are kept here for reference only.',
+      artists: live_(state.artists), cst: live_(state.cst), rst: live_(state.rst), recfb: live_(state.recfb), recs: live_(state.recs), concerts: live_(state.concerts), listening: state.listBy, apple: Object.keys(state.appleBy).length ? state.appleBy : undefined, conCheck: state.conCheck };
+  }
+  function exportBackup() {
+    return boot().then(function () { return Promise.race([pull(false), sleep(2000)]); }).catch(function () {}).then(function () {
+      var o = backupObject();
+      saveFile('music-backup.json', JSON.stringify(o, null, 2));
+      say('Music backed up: ' + o.artists.filter(function (a) { return !a._deleted; }).length + ' artists');
+      return o;
+    });
+  }
+  function newer(f, l) { return String(f.updatedAt || '') > String(l.updatedAt || ''); }
+  function planRestore(o) {
+    var P = { apple: [], add: [], update: [], revive: [], same: 0, deletedInFile: 0, sets: { cst: { add: [], update: [] }, rst: { add: [], update: [] }, recfb: { add: [], update: [] } }, skipped: 0 };
+    var byId = {}, byName = {}; state.artists.forEach(function (a) { byId[a.id] = a; byName[norm(a.name)] = byName[norm(a.name)] && !byName[norm(a.name)]._deleted ? byName[norm(a.name)] : a; });
+    var seen = {};
+    (Array.isArray(o.artists) ? o.artists : []).forEach(function (fa) {
+      if (!fa || !fa.id || !fa.name) { P.skipped++; return; }
+      if (fa._deleted) { P.deletedInFile++; return; }
+      var k = norm(fa.name); if (seen[k]) { P.skipped++; return; } seen[k] = 1;
+      var la = byId[fa.id] || byName[k];
+      if (!la) P.add.push(fa);
+      else if (la._deleted) { if (newer(fa, la)) P.revive.push({ a: la, f: fa }); else P.same++; }
+      else if (newer(fa, la)) P.update.push({ a: la, f: fa }); else P.same++;
+    });
+    ['cst', 'rst', 'recfb'].forEach(function (t) {
+      var have = {}; state[t].forEach(function (x) { have[x.id] = x; });
+      (Array.isArray(o[t]) ? o[t] : []).forEach(function (f) {
+        if (!f || !f.id || f._deleted) return; var l = have[f.id];
+        if (!l) P.sets[t].add.push(f); else if (newer(f, l)) P.sets[t].update.push({ l: l, f: f });
+      });
+    });
+    if (o.apple && typeof o.apple === 'object') Object.keys(o.apple).forEach(function (w) {
+      var r = o.apple[w], cur = state.appleBy[w]; if (!r || !r.artists || typeof r.artists !== 'object') return;
+      if (cur && String(cur.builtAt || '') === String(r.builtAt || '')) P.same++; else P.apple.push({ who: w, rec: r, replaces: !!cur });
+    });
+    P.total = P.apple.length + P.add.length + P.update.length + P.revive.length + ['cst', 'rst', 'recfb'].reduce(function (n, t) { return n + P.sets[t].add.length + P.sets[t].update.length; }, 0);
+    P.src = { artists: (o.artists || []).length, exportedAt: o.exportedAt || '', version: o.version || '' };
+    return P;
+  }
+  function showRestore() {
+    var p = rplan; if (!p) return;
+    var S = p.sets, n = function (t) { return S[t].add.length + S[t].update.length; }, nm = function (l, f) { return l.length ? '<div class="imp-l">' + l.slice(0, 40).map(function (x) { return E(f(x)); }).join(', ') + (l.length > 40 ? ' and ' + (l.length - 40) + ' more' : '') + '</div>' : ''; };
+    modal('restore', '<div class="gm-sheet"><h2>Restore Music</h2><div class="note">Backup made ' + E(p.src.exportedAt ? p.src.exportedAt.slice(0, 10) : 'on an unknown date') + (p.src.version ? ' (Music ' + E(p.src.version) + ')' : '') + ', ' + p.src.artists + ' artists. ' + (p.total ? p.total + ' change' + (p.total === 1 ? '' : 's') + ' ready. Nothing changes until you press Apply, and nothing is deleted.' : 'Nothing to restore: everything in the file is already here and up to date.') + '</div>' +
+      p.apple.map(function (x) { return '<div class="imp-l"><b>Apple Music history for ' + E(WHO[x.who] || x.who) + (x.replaces ? ' (replaces the one here)' : '') + '</b><br>' + Object.keys(x.rec.artists).length + ' artists, ' + (x.rec.plays || 0) + ' plays, ' + E(String(x.rec.since || '').slice(0, 4)) + ' to ' + E(fmtDate(x.rec.until)) + '. Added to your Last.fm plays, which carry on from ' + E(fmtDate(addDays(x.rec.until, 1))) + '.</div>'; }).join('') +
+      (p.add.length ? '<div class="imp-l"><b>Artists to add (' + p.add.length + ')</b></div>' + nm(p.add, function (a) { return a.name; }) : '') +
+      (p.revive.length ? '<div class="imp-l"><b>Removed artists that come back (' + p.revive.length + ')</b></div>' + nm(p.revive, function (x) { return x.a.name; }) : '') +
+      (p.update.length ? '<div class="imp-l"><b>Artists with newer settings in the file (' + p.update.length + ')</b></div>' + nm(p.update, function (x) { return x.a.name; }) : '') +
+      '<div class="imp-l">Tour-date marks: ' + n('cst') + ' · Release marks: ' + n('rst') + ' · Recommendation answers: ' + n('recfb') + ' · Already up to date: ' + p.same + (p.deletedInFile ? ' · Removed in the file, skipped: ' + p.deletedInFile : '') + '</div>' +
+      '<div class="acts">' + (p.total ? '<button class="btn pri" data-m="applyrestore">Apply ' + p.total + ' change' + (p.total === 1 ? '' : 's') + '</button>' : '') + '<button class="btn" data-m="cancelrestore">' + (p.total ? 'Cancel' : 'Close') + '</button></div></div>');
+  }
+  function pushRows(tb, list) {
+    if (!ensureSession() || !list.length) return Promise.resolve();
+    var fail = 0, i = 0;
+    function next() { if (i >= list.length) return Promise.resolve(); var r = list[i++]; return tables()[tb].upsert(r.id, r).catch(function () { fail++; }).then(next); }
+    return next().then(function () { if (fail) sayErr(fail + ' item' + (fail === 1 ? '' : 's') + ' did not sync. They are saved on this device.'); });
+  }
+  function applyRestore() {
+    var p = rplan; if (!p) return; rplan = null; H().closeModal();
+    var now = new Date().toISOString(), art = [], apl = [], out = { cst: [], rst: [], recfb: [] }, ids = {}; state.artists.forEach(function (a) { ids[a.id] = 1; });
+    p.add.forEach(function (fa) { var a = Object.assign({}, fa); if (ids[a.id]) a.id = newId('') + Math.random().toString(36).slice(2, 5); ids[a.id] = 1; a._deleted = false; a.updatedAt = now; state.artists.push(a); art.push(a); });
+    p.revive.concat(p.update).forEach(function (x) { var id = x.a.id; Object.keys(x.a).forEach(function (k) { delete x.a[k]; }); Object.assign(x.a, x.f, { id: id, _deleted: false, updatedAt: now }); art.push(x.a); });
+    ['cst', 'rst', 'recfb'].forEach(function (t) {
+      p.sets[t].add.forEach(function (f) { var r = Object.assign({}, f, { updatedAt: now }); state[t].push(r); out[t].push(r); });
+      p.sets[t].update.forEach(function (x) { var id = x.l.id; Object.keys(x.l).forEach(function (k) { delete x.l[k]; }); Object.assign(x.l, x.f, { id: id, updatedAt: now }); out[t].push(x.l); });
+    });
+    p.apple.forEach(function (x) { var r = JSON.parse(JSON.stringify(x.rec)); r.id = x.who + '__'; r.who = x.who; r.updatedAt = now; state.appleBy[x.who] = r; apl.push(r); });
+    save(); saveRel(); paint(); say('Restored: ' + p.total + ' change' + (p.total === 1 ? '' : 's'));
+    return pushRows('apple', apl).then(function () { return pushRows('art', art); }).then(function () { return pushRows('cst', out.cst); }).then(function () { return pushRows('rst', out.rst); }).then(function () { return pushRows('fb', out.recfb); })
+      .then(function () { refreshReleases({}); return matchPending(); });
+  }
+  function pickImport() {
+    if (!fileIn) { fileIn = document.createElement('input'); fileIn.type = 'file'; fileIn.accept = 'application/json,.json,text/plain,.txt,.csv'; fileIn.style.display = 'none'; document.body.appendChild(fileIn); fileIn.addEventListener('change', function () { var f = fileIn.files && fileIn.files[0]; fileIn.value = ''; if (f) readImport(f); }); }
+    fileIn.value = ''; fileIn.click();
+  }
+  function readImport(file) {
+    if (file.size > 25000000) { sayErr('That file is too big'); return; }
+    var rd = new FileReader();
+    rd.onload = function () { try {
+        var txt = String(rd.result || ''), bj = null; try { bj = JSON.parse(txt); } catch (e) {}
+        if (bj && bj.format === BACKUP_FORMAT) { restoreMode = false; rplan = planRestore(bj); showRestore(); return; }
+        if (restoreMode) { restoreMode = false; throw new Error('That is not a Music backup file. Use Import artists for a list of acts'); }
+        imp = planImport(parseImport(txt)); showImport(); } catch (e) { imp = null; sayErr('Import failed: ' + ((e && e.message) || e)); } };
+    rd.onerror = function () { sayErr('Could not read that file'); };
+    rd.readAsText(file);
+  }
+  // Accepts: this app's export, the old Music Tracker review file, { artists: [...] }, a list of names or of { name } objects, or a text file with one name a line.
+  function parseImport(text) {
+    var j = null; try { j = JSON.parse(text); } catch (e) { j = null; }
+    var list;
+    if (j === null || typeof j !== 'object') list = text.split(/\r?\n/).map(function (x) { return x.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim(); }).filter(Boolean);
+    else if (Array.isArray(j)) list = j; else if (Array.isArray(j.artists)) list = j.artists; else if (Array.isArray(j.acts)) list = j.acts; else throw new Error('No list of artists found in that file');
+    var out = [], bad = 0;
+    list.forEach(function (it) {
+      var nm = typeof it === 'string' ? it : it && typeof it === 'object' ? (it.name || it.artist || it.artistName) : '';
+      if (typeof nm !== 'string' || !nm.trim() || nm.length > 120) { bad++; return; }
+      var f = {}; if (it && typeof it === 'object') {
+        if (typeof it.following === 'boolean') f.following = it.following; if (typeof it.releases === 'boolean') f.releases = it.releases;
+        var g = typeof it.gigs === 'boolean' ? it.gigs : typeof it.tourDates === 'boolean' ? it.tourDates : undefined; if (g !== undefined) f.gigs = g;
+        if (it.kind === 'comedian' && /^\d{1,10}$/.test(String(it.tmdb || ''))) { f.kind = 'comedian'; f.tmdb = String(it.tmdb); } if (typeof it.specials === 'boolean') f.specials = it.specials;
+        if (it.tour === 'ended' || it.tour === 'active') f.tour = it.tour; if (typeof it.tourNote === 'string') f.tourNote = it.tourNote.slice(0, 200);
+      }
+      out.push({ name: nm.trim().replace(/\s+/g, ' '), f: f });
+    });
+    if (!out.length) throw new Error('No artist names found in that file');
+    return { items: out, bad: bad };
+  }
+  function flagDiff(a, f) {
+    return (f.releases !== undefined && (a.releases !== false) !== f.releases) || (f.gigs !== undefined && (a.gigs !== false) !== f.gigs) || (f.tour !== undefined && tourEnded(a) !== (f.tour === 'ended')) || (f.tourNote !== undefined && tourEnded(a) && (a.tourNote || '') !== f.tourNote) || (f.specials !== undefined && isCom(a) && (a.specials !== false) !== f.specials);
+  }
+  function applyFlags(a, f) {
+    if (f.releases !== undefined) { if (f.releases) delete a.releases; else a.releases = false; }
+    if (f.gigs !== undefined) { if (f.gigs) delete a.gigs; else a.gigs = false; }
+    if (f.specials !== undefined && isCom(a)) { if (f.specials) delete a.specials; else a.specials = false; }
+    if (f.tour === 'ended') { a.tour = 'ended'; if (f.tourNote) a.tourNote = f.tourNote; } else if (f.tour === 'active') { delete a.tour; delete a.tourNote; } else if (f.tourNote !== undefined && tourEnded(a)) a.tourNote = f.tourNote;
+  }
+  function planImport(P) {
+    var seen = {}, p = { add: [], have: [], refollow: [], restore: [], change: [], same: [], dupInFile: [], skipped: [], bad: P.bad };
+    P.items.forEach(function (it) {
+      var k = norm(it.name); if (!k) { p.bad++; return; }
+      if (seen[k]) { p.dupInFile.push(it.name); return; } seen[k] = 1;
+      var ex = state.artists.filter(function (a) { return norm(a.name) === k || (a.appleName && norm(a.appleName) === k); }), a = ex.find(function (x) { return !x._deleted; }) || ex[0];
+      if (!a) { if (it.f.following === false) p.skipped.push(it.name); else p.add.push(it); return; }
+      if (a._deleted) { if (it.f.following === false) p.skipped.push(it.name); else p.restore.push({ a: a, it: it }); return; }
+      if (!isFollowed(a)) { if (it.f.following === false) p.same.push(a.name); else p.refollow.push({ a: a, it: it }); return; }
+      if (flagDiff(a, it.f)) p.change.push({ a: a, it: it }); else p.have.push(a.name);
+    });
+    return p;
+  }
+  function names(list, f) { var n = list.map(f || function (x) { return x; }); return E(n.slice(0, 40).join(', ')) + (n.length > 40 ? ' and ' + (n.length - 40) + ' more' : ''); }
+  function showImport() {
+    var p = imp; if (!p) return;
+    var total = p.add.length + p.refollow.length + p.restore.length + p.change.length, line = function (label, list, f) { return list.length ? '<div class="imp-l"><b>' + label + ' (' + list.length + ')</b><br>' + names(list, f) + '</div>' : ''; };
+    var nm = function (x) { return x.a.name; };
+    modal('import', '<div class="gm-sheet"><h2>Import artists</h2><div class="note">' + (total ? total + ' change' + (total === 1 ? '' : 's') + ' ready. Nothing is added until you press Apply.' : 'Nothing to add or change: everything in the file is already in your list.') + '</div>' +
+      line('New, will be added and followed', p.add, function (x) { return x.name; }) + line('Not following now, will be followed', p.refollow, nm) + line('Removed earlier, will come back', p.restore, nm) + line('Already in your list, settings will change', p.change, nm) +
+      line('Already followed, no change', p.have) + line('Repeated in the file, counted once', p.dupInFile) + line('Marked not followed in the file, skipped', p.skipped) +
+      (p.bad ? '<div class="imp-l"><b>' + p.bad + ' line' + (p.bad === 1 ? '' : 's') + ' could not be read</b> and were skipped.</div>' : '') +
+      (p.add.length ? '<div class="note">New artists are added straight away, then matched with Apple Music in the background (about 3 seconds each, so ' + p.add.length + ' takes about ' + Math.max(1, Math.round(p.add.length * 3.2 / 60)) + ' min). The same artist found twice is merged. Tour dates are looked up by name by the daily check.</div>' : '') +
+      '<div class="acts">' + (total ? '<button class="btn pri" data-m="applyimport">Apply ' + total + ' change' + (total === 1 ? '' : 's') + '</button>' : '') + '<button class="btn" data-m="cancelimport">' + (total ? 'Cancel' : 'Close') + '</button></div></div>');
+  }
+  function pushMany(list) {
+    if (!ensureSession() || !list.length) return Promise.resolve();
+    var fail = 0, i = 0;
+    function next() { if (i >= list.length) return Promise.resolve(); var a = list[i++]; return tables().art.upsert(a.id, a).catch(function () { fail++; }).then(next); }
+    return next().then(function () { if (fail) sayErr(fail + ' artist' + (fail === 1 ? '' : 's') + ' did not sync. They are saved on this device.'); });
+  }
+  function applyImport() {
+    var p = imp; if (!p) return; imp = null; H().closeModal();
+    var now = new Date().toISOString(), changed = [], ids = {}; state.artists.forEach(function (a) { ids[a.id] = 1; });
+    p.add.forEach(function (it, i) {
+      var id = newId('') + i.toString(36); while (ids[id]) id += 'x'; ids[id] = 1;
+      var a = { id: id, addedAt: now, name: it.name, appleArtistId: '', appleName: '', genre: '', match: 'none', following: true, excluded: false, _deleted: false, updatedAt: now, pm: true };
+      if (it.f.kind === 'comedian') { delete a.pm; Object.assign(a, { kind: 'comedian', tmdb: it.f.tmdb, genre: 'Comedy', match: 'manual' }); }
+      applyFlags(a, it.f); state.artists.push(a); changed.push(a);
+    });
+    p.refollow.concat(p.restore).forEach(function (e) { var a = e.a; a._deleted = false; a.excluded = false; a.following = true; applyFlags(a, e.it.f); a.updatedAt = now; changed.push(a); });
+    p.change.forEach(function (e) { applyFlags(e.a, e.it.f); e.a.updatedAt = now; changed.push(e.a); });
+    save(); paint();
+    say('Imported: ' + p.add.length + ' added' + (changed.length > p.add.length ? ', ' + (changed.length - p.add.length) + ' updated' : ''));
+    return pushMany(changed).then(function () { refreshReleases({}); refreshSpecials({}); return matchPending(); });
+  }
+  // New artists from an import have no Apple Music id yet: match them one at a time, gently (the iTunes search allows roughly 20 a minute).
+  function pendingMatch() { return live().filter(function (a) { return a.pm === true; }); }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function matchPending() {
+    if (matching) return Promise.resolve(); var todo = pendingMatch(); if (!todo.length) return Promise.resolve();
+    matching = true; matchInfo = { done: 0, total: todo.length, ok: 0, dup: 0 }; paint();
+    var i = 0, stopped = false;
+    function one() {
+      if (i >= todo.length || stopped) return Promise.resolve();
+      var a = todo[i++]; if (a._deleted || a.pm !== true) return one();
+      return searchArtists(a.name).then(function (hits) {
+        var c = classify(a.name, hits);
+        if ((c.level === 'high' || c.level === 'medium') && c.pick) {
+          var dup = findByApple(c.pick.artistId);
+          if (dup && dup !== a) { a._deleted = true; delete a.pm; matchInfo.dup++; if (!isFollowed(dup)) { dup.following = true; dup.excluded = false; touch(dup); } }
+          else { Object.assign(a, { appleArtistId: String(c.pick.artistId), appleName: c.pick.artistName, genre: c.pick.primaryGenreName || '', match: c.level }); delete a.pm; matchInfo.ok++; }
+        } else { a.match = c.level || 'none'; delete a.pm; }
+        touch(a); matchInfo.done++; paint(); return sleep(3200).then(one);
+      }, function (e) { stopped = true; sayErr('Apple Music matching paused (' + ((e && e.message) || 'error') + '). It continues the next time Music opens, or press Match now.'); });
+    }
+    return one().then(function () {
+      matching = false; paint();
+      if (!stopped) { say('Apple Music matching done: ' + matchInfo.ok + ' matched' + (matchInfo.dup ? ', ' + matchInfo.dup + ' already in your list' : '') + ', ' + (matchInfo.done - matchInfo.ok - matchInfo.dup) + ' left as added by name'); if (matchInfo.ok) refreshReleases({}); }
+    });
+  }
+
+  // ── Connection test (one Ticketmaster + one JamBase request, via the server) ──
+  var jbRes = null, connAt = 0;
+  function connTest() {
+    if (busy.jb) return;
+    if (Date.now() - connAt < 30000) { say('Tested a moment ago'); return; }
+    if (!ensureSession()) { sayErr('Open Film & TV through Pete’s Apps to run the test'); return; }
+    var base = (window.PAL_CONFIG && PAL_CONFIG.SB_URL) || '';
+    busy.jb = 1; connAt = Date.now(); paint();
+    fetch(base + '/functions/v1/swift-responder/test-connection', { method: 'POST', headers: { authorization: 'Bearer ' + H().token(), 'content-type': 'application/json' }, body: '{}' })
+      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (j) { return { res: res, j: j }; }); })
+      .then(function (r) {
+        if (r.res.status === 429) { say('Tested a moment ago'); return; }
+        if (!r.res.ok) throw new Error(r.res.status === 404 ? 'the server has not been updated to v0.11.0 yet' : r.res.status === 403 ? 'this account is not allowed to run it' : (r.j && r.j.error) || 'HTTP ' + r.res.status);
+        jbRes = r.j; openConn();
+      })
+      .catch(function (e) { sayErr('Connection test failed: ' + ((e && e.message) || 'offline')); })
+      .finally(function () { busy.jb = 0; paint(); });
+  }
+  function openConn() {
+    var j = jbRes || {}, tm = j.ticketmaster || {}, jb = j.jambase || {}, q = jb.quota, h = '<div class="gm-sheet"><h2>Connection test</h2>';
+    function line(name, r) { return '<div class="jbrow"><span>' + name + '</span><span>' + (r.ok ? 'OK' : 'Problem') + (r.status ? ' · HTTP ' + E(String(r.status)) : '') + (r.ms != null ? ' · ' + E(String(r.ms)) + ' ms' : '') + '</span></div>' + (r.ok ? '' : '<div class="jbd">' + E(String(r.error || 'no answer')) + '</div>'); }
+    h += '<div class="note">' + (j.ok ? 'Both connections are working.' : 'At least one connection has a problem.') + '</div>' + line('Ticketmaster', tm) + line('JamBase', jb);
+    if (q) h += '<div class="note">JamBase says ' + E(String(q.used)) + ' of ' + E(q.quota == null ? 'no set limit' : String(q.quota)) + ' requests used' + (q.periodEnd ? ' this period (ends ' + E(String(q.periodEnd).slice(0, 10)) + ')' : '') + '.</div>';
+    else if (jb.quotaError) h += '<div class="note">Usage could not be read (' + E(String(jb.quotaError)) + ').</div>';
+    h += '<div class="note">Requests made by this test: Ticketmaster ' + E(String((j.calls || {}).ticketmaster || 0)) + ', JamBase ' + E(String((j.calls || {}).jambase || 0)) + '.</div>';
+    h += '<div class="acts"><button class="btn pri" data-m="conncopy">Copy result</button><button class="btn" data-m="closemodal">Close</button></div></div>';
+    modal('jb', h);
+  }
+  function connCopy() {
+    var t = JSON.stringify(jbRes || {}, null, 1);
+    try { navigator.clipboard.writeText(t).then(function () { say('Copied'); }, function () { say('Could not copy'); }); } catch (e) { say('Could not copy'); }
+  }
+  function paint() {
+    if (!root || !root.isConnected) return;
+    var keep = document.activeElement && document.activeElement.id === 'gmq' ? document.activeElement.selectionStart : null;
+    root.innerHTML = '<div class="gm">' + (ready ? '' : head()) + (ui.sub === 'artists' ? renderArtists() : ui.sub === 'recs' ? renderRecs() : ui.sub === 'mine' ? renderMine() : renderComing()) + '<div style="height:90px"></div></div>';
+    if (keep != null) { var q = document.getElementById('gmq'); if (q) { q.focus(); try { q.setSelectionRange(keep, keep); } catch (e) {} } }
+    paintPane();
+  }
+
+  // ── modals: artist details, add artist, recommendations ──
+  function modal(kind, html) { var m = H().showModal('<div class="gm gm-sheet-wrap">' + html + '</div>') || document.getElementById('modal'); if (m) { m.dataset.gm = kind; m.classList.add('gmx'); wireEl(m); } }
+  function openArtist(id) {
+    var a = byId(id); if (!a) return;
+    modal('artist', '<div class="gm-sheet">' + artistPane(a) + '<div class="pane-actions" style="margin-top:10px"><button type="button" class="pane-btn" data-m="closemodal">Close</button></div></div>');
+  }
+  function paintComRes() {
+    var out = document.getElementById('gmres'); if (!out) return;
+    out.innerHTML = lastCom.length ? lastCom.map(function (h, i) { var on = !!findByTmdb(h.id); return '<div class="row"><div class="rb"><div class="rt">' + E(h.name) + '</div><div class="rs">' + E(h.known) + '</div></div>' + (on ? '<button class="btn on" disabled>Following ✓</button>' : '<button class="btn pri" data-m="pickcom:' + i + '">Follow</button>') + '</div>'; }).join('') : '<div class="note">No match on TMDB.</div>';
+  }
+  function openAdd() {
+    var com = addKind === 'com';
+    modal('add', '<div class="gm-sheet"><h2>' + (ui.scope === 'comedy' ? 'Follow a comedian' : ui.scope === 'music' ? 'Follow an artist' : 'Add artist') + '</h2>' + (ui.scope ? '' : seg([['Musician', !com, 'addkind:music'], ['Comedian', com, 'addkind:com']])) + '<input type="text" id="gmadd" placeholder="' + (com ? 'Comedian name' : 'Artist name') + '" autocomplete="off" autocorrect="off" aria-label="' + (com ? 'Comedian name' : 'Artist name') + '"><div class="acts"><button class="btn pri" data-m="dosearch">' + (com ? 'Search TMDB' : 'Search Apple Music') + '</button><button class="btn" data-m="closemodal">Close</button></div>' + (com ? '<div class="note">Comedians are found on TMDB. Their Scottish tour dates and new specials appear in Coming up.</div>' : '') + '<div id="gmres"></div></div>');
+    setTimeout(function () { var i = document.getElementById('gmadd'); if (i) i.focus(); }, 50);
+  }
+  var lastHits = [];
+  function doSearch() {
+    var q = (document.getElementById('gmadd') || {}).value || ''; q = q.trim(); var out = document.getElementById('gmres'); if (!q || !out) return;
+    if (addKind === 'com') {
+      if (!tmdbOk()) { out.innerHTML = '<div class="note">TMDB is not set up in this app, so comedians cannot be searched.</div>'; return; }
+      out.innerHTML = '<div class="note">Searching…</div>';
+      searchComedians(q).then(function (hits) {
+        lastCom = hits;
+        paintComRes();
+      }).catch(function (e) { out.innerHTML = '<div class="note">Could not search: ' + E((e && e.message) || 'error') + '</div>'; });
+      return;
+    }
+    out.innerHTML = '<div class="note">Searching…</div>';
+    searchArtists(q).then(function (hits) {
+      lastHits = hits;
+      out.innerHTML = (hits.length ? hits.map(function (h, i) { return '<div class="row"><div class="rb"><div class="rt">' + E(h.artistName) + '</div><div class="rs">' + E(h.primaryGenreName || '') + '</div></div><button class="btn pri" data-m="pick:' + i + '">Follow</button></div>'; }).join('') : '<div class="note">No match on Apple Music.</div>') +
+        '<div class="acts"><button class="btn" data-m="addplain:' + E(q) + '">Add “' + E(q) + '” without a match</button></div>';
+    }).catch(function (e) { out.innerHTML = '<div class="note">Could not search: ' + E((e && e.message) || 'error') + '</div>'; });
+  }
+  var REC_GONE = ['followed', 'known', 'dismissed', 'ignored'];
+  function visibleRecs() { var fb = fbMap(), have = new Set(state.artists.filter(function (a) { return !a._deleted; }).map(function (a) { return norm(a.name); })); return state.recs.filter(function (r) { return r && r.name && REC_GONE.indexOf(fb[r.id]) < 0 && !have.has(norm(r.name)); }).sort(function (a, b) { return (b.score || 0) - (a.score || 0); }); }
+  function recReason(r) {
+    var sd = Array.isArray(r.seeds) ? r.seeds : []; if (!sd.length) return 'Suggested by Last.fm';
+    var t = 'Last.fm lists them as similar to ' + sd[0].n, more = (r.nSeeds || sd.length) - 1; if (more > 0) t += ' and ' + more + ' other' + (more === 1 ? '' : 's') + ' you follow or play';
+    var pl = playsIn(norm(sd[0].n), 30); if (pl > 0) t += '. ' + pl + (pl === 1 ? ' play' : ' plays') + ' of ' + sd[0].n + ' in the last 30 days'; return t;
+  }
+  // v1.21: followed artists with no plays at all (needs some listening history to be loaded, otherwise everyone would look unplayed)
+  function neverPlayed() {
+    if (!people().length) return [];
+    return followed().filter(function (a) { return !isCom(a) && totalPlays(norm(a.name)) === 0; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+  }
+  // ── events ──
+  function onClick(e) {
+    var b = e.target.closest && e.target.closest('[data-m]');
+    if (!b) { var rw = e.target.closest && e.target.closest('[data-sel]'); if (rw && paneOn() && !(e.target.closest && e.target.closest('input,label,a,button'))) { var sp = rw.getAttribute('data-sel'), ci = sp.indexOf(':'); selectItem(sp.slice(0, ci), sp.slice(ci + 1)); } return; }
+    if (b.disabled) return;
+    var s = b.getAttribute('data-m'), i = s.indexOf(':'), k = i < 0 ? s : s.slice(0, i), v = i < 0 ? '' : s.slice(i + 1);
+    if (k === 'sub') { if (ui.hosted && (v === 'artists' || v === 'coming') && H().navigate) { H().navigate(v === 'artists' ? 'following' : 'coming'); return; } ui.sub = v; sel = null; saveUi(); paint(); }
+    else if (k === 'tper') { ui.tPer = ['30', '12', 'all'].indexOf(v) >= 0 ? v : '30'; saveUi(); paint(); }
+    else if (k === 'gview') { ui.gView = v; saveUi(); paint(); }
+    else if (k === 'sec') { if (v === 'f') ui.fOpen = !ui.fOpen; else if (v === 'fm') ui.mOpen = !ui.mOpen; else if (v === 'fc') ui.cOpen = !ui.cOpen; else if (v === 'd') ui.dOpen = !ui.dOpen; else ui.pOpen = !ui.pOpen; saveUi(); paint(); }
+    else if (k === 'shownot') { ui.showNot = !ui.showNot; saveUi(); paint(); }
+    else if (k === 'exportart') exportArtists();
+    else if (k === 'backupmusic') exportBackup();
+    else if (k === 'restoremusic') { restoreMode = true; pickImport(); }
+    else if (k === 'applyrestore') applyRestore();
+    else if (k === 'cancelrestore') { rplan = null; H().closeModal(); }
+    else if (k === 'importart') pickImport();
+    else if (k === 'applyimport') applyImport();
+    else if (k === 'cancelimport') { imp = null; H().closeModal(); }
+    else if (k === 'matchnow') matchPending();
+    else if (k === 'check') checkNow(false);
+    else if (k === 'conntest') connTest();
+    else if (k === 'conncopy') connCopy();
+    else if (k === 'togglesup') { ui.noSup = !ui.noSup; saveUi(); paint(); }
+    else if (k === 'togglehidden') { ui.showHidden = !ui.showHidden; paint(); }
+    else if (k === 'afilter') { ui.aFilter = v; saveUi(); paint(); }
+    else if (k === 'cfilter') { ui.cFilter = v; saveUi(); paint(); }
+    else if (k === 'pwho') { ui.pWho = v; saveUi(); paint(); }
+    else if (k === 'pper') { ui.pPer = v === 'all' ? 'all' : '30'; ui.pLimit = 15; saveUi(); paint(); }
+    else if (k === 'pmore') { ui.pLimit += 25; paint(); }
+    else if (k === 'lmin') { ui.lMin = Number(v); saveUi(); paint(); }
+    else if (k === 'gotogig') { ui.sub = 'coming'; saveUi(); selectItem('gig', v); }
+    else if (k === 'artist') { if (paneOn()) selectItem('art', v); else openArtist(v); }
+    else if (k === 'addartist') { addKind = ui.scope === 'comedy' ? 'com' : 'music'; openAdd(); }
+    else if (k === 'addkind') { addKind = v === 'com' ? 'com' : 'music'; openAdd(); }
+    else if (k === 'dosearch') doSearch();
+    else if (k === 'closemodal') H().closeModal();
+    else if (k === 'followname') followByName(v);
+    else if (k === 'ignorename') { var key = norm(v); setFb('rc_' + key, 'ignored', v, { ip: totalPlays(key) }); undoToast(v + ' ignored (it comes back if you play them again)', function () { setFb('rc_' + key, 'new', v); }); }
+    else if (k === 'recfollow') { var r = state.recs.find(function (x) { return x.id === v; }); if (r) followByName(r.name, v); }
+    else if (k === 'rtab') { ui.rTab = ['all', 'new', 'never'].indexOf(v) >= 0 ? v : 'all'; ui.uLimit = 15; saveUi(); paint(); }
+    else if (k === 'rmore') { ui.uLimit += 25; paint(); }
+    else if (k === 'nplisten') { var na = byId(v); if (na) openLink(artistUrl(na)); }
+    else if (k === 'npunfollow') { var nu = byId(v); if (nu) { unfollowArtist(nu); } }
+    else if (k === 'recapple') { var r2 = state.recs.find(function (x) { return x.id === v; }); if (r2) { openLink(macify('https://music.apple.com/gb/search?term=' + encodeURIComponent(r2.name))); setFb(v, 'known', r2.name); undoToast(r2.name + ' opened in Apple Music and removed from suggestions', function () { setFb(v, 'new'); }); } }
+    else if (k === 'recknown' || k === 'recno') { var r3 = state.recs.find(function (x) { return x.id === v; }); setFb(v, k === 'recknown' ? 'known' : 'dismissed'); if (r3) undoToast(r3.name + ' hidden', function () { setFb(v, 'new'); }); }
+    else if (k === 'pick') { var hit = lastHits[Number(v)]; if (hit) { var res = addArtist(hit.artistName, hit, 'manual'); H().closeModal(); say(res.dup ? hit.artistName + ' is already added' : 'Following ' + hit.artistName); if (res.artist) refreshReleases({ only: [res.artist] }); paint(); } }
+    else if (k === 'pickcom') { var ch = lastCom[Number(v)]; if (ch) { var cr = addComedian(ch); say(cr.dup ? ch.name + ' is already in your list' : 'Following ' + ch.name); if (cr.artist) refreshSpecials({ only: [cr.artist] }); paintComRes(); paint(); } }
+    else if (k === 'addplain') { addArtist(v, null, 'none'); H().closeModal(); say('Added ' + v + ' (no Apple Music match)'); paint(); }
+    else if (k === 'aapple') { var a = byId(v); if (a) openLink(artistUrl(a)); }
+    else if (k === 'aremove') { var ar = byId(v); if (ar) { ar._deleted = true; touch(ar); H().closeModal(); undoToast(ar.name + ' removed', function () { ar._deleted = false; touch(ar); paint(); }); paint(); } }
+    else act(k, v);
+  }
+  function onChange(e) {
+    var el = e.target; if (!el || !el.getAttribute || !el.getAttribute('data-sw')) return;
+    var a = byId(el.getAttribute('data-id')); if (!a) return; var k = el.getAttribute('data-sw'), on = el.checked;
+    if (k === 'follow') setFollow(a, on); else if (k === 'tour') setTour(a, on); else setWant(a, k, on);
+    paint(); var m = H().modalEl ? H().modalEl() : document.getElementById('modal'); if (m && m.dataset.gm === 'artist' && m.querySelector('.gm-sheet') && (H().modalOpen ? H().modalOpen() : true)) openArtist(a.id);
+  }
+  function onInput(e) { if (e.target && e.target.id === 'gmq') { ui.aQuery = e.target.value; paint(); } }
+  function onKey(e) { if (e.key === 'Enter' && e.target && e.target.id === 'gmadd') doSearch(); }
+  function wireEl(el) { if (!el || el._gmw) return; el._gmw = 1; el.addEventListener('click', onClick); el.addEventListener('change', onChange); el.addEventListener('input', onInput); el.addEventListener('keydown', onKey); }
+  function wire() { wireEl(root); }
+
+  // ── for the rest of Gigs & Trips: interested items in Upcoming and the desktop timeline ──
+  function agenda() {
+    var t = today(), cs = cstMap(), rs = rstMap(), out = [], gf = gigLink;
+    liveConcerts(state.concerts, state.artists, t).forEach(function (c) {
+      var f = cs[c.id] || {}; if (f.ni || gf(c.id)) return;       // hidden, or already a gig (Bought)
+      if (f.interested) out.push({ id: c.id, kind: 'con', date: c.date, time: c.time || '', title: c.artist, sub: [c.time, c.venue + ', ' + c.city, c.support && c.headliner ? 'support for ' + c.headliner : ''].filter(Boolean).join(' · '), tag: 'Tour date' });
+      if ((f.interested || f.alert) && saleLive(c)) out.push({ id: 'sale_' + c.id, focus: c.id, kind: 'sale', date: c.saleDay, time: c.saleTime || '', title: c.artist + (c.saleDay <= t ? ': tickets on sale now' : ': tickets on sale'), sub: c.venue + ', ' + c.city, tag: c.saleDay <= t ? 'On sale now' : 'On sale' });
+    });
+    var aids = {}; followed().filter(wantsReleases).forEach(function (a) { if (hasApple(a)) aids[String(a.appleArtistId)] = true; });
+    relGroups(rel.items).forEach(function (g) {
+      var r = g.rep, fl = g.all.map(function (x) { return rs['rel_' + x.id] || {}; }); if (!fl.some(function (f) { return f.interested; }) || fl.some(function (f) { return f.ni; }) || !g.all.some(function (x) { return aids[x.aid]; }) || r.date < addDays(t, -7)) return;
+      out.push({ id: 'rel_' + r.id, focus: 'rel_' + r.id, kind: 'rel', date: r.date, time: '', title: r.artistName + ': ' + r.name, sub: (r.kind === 'single' ? 'Single' : r.kind === 'ep' ? 'EP' : 'Album') + (r.date <= t ? ' · out now' : ''), tag: 'Release' });
+    });
+    return out.sort(function (a, b) { return a.date.localeCompare(b.date) || a.id.localeCompare(b.id); });
+  }
+  function addArtist(scope) { ui.hosted = true; ui.scope = scope === 'comedy' ? 'comedy' : 'music'; addKind = ui.scope === 'comedy' ? 'com' : 'music'; openAdd(); }
+  function scopeFor(id) {
+    var keep = ui.scope; ui.scope = '';
+    try { var it = comingItems().find(function (x) { return x.id === id; }) || comingItems().find(function (x) { return 'sale_' + x.id === id; }); if (!it) return ''; return it.kind === 'sp' ? 'comedy' : it.kind === 'rel' ? 'music' : (isCom(byId(it.c.artistId)) ? 'comedy' : 'music'); }
+    finally { ui.scope = keep; }
+  }
+  function focus(id) {
+    ui.sub = 'coming'; saveUi(); var it = comingItems().find(function (x) { return x.id === id; }); if (it && it.hidden) ui.showHidden = true;
+    hl = id; paint();
+    setTimeout(function () { var el = document.getElementById('gm-' + id); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); }, 150);
+    setTimeout(function () { hl = null; paint(); }, 4000);
+  }
+  function init() { return boot().then(function () { emit(); return pull(false); }).then(function (c) { try { markSpecialsInFilm(); syncGigLinks(); } catch (e) {} if (c) emit(); }); }
+
+  // ── public ──
+  var booted = null;
+  function boot() {
+    if (booted) return booted;
+    loadUi(); ensureCss();
+    try { var ci = JSON.parse(localStorage.getItem('gat_mus_cinfo') || 'null'); if (ci) cinfo = { at: ci.at || null, msg: ci.msg || '' }; } catch (e) {}
+    booted = kvOpen().then(function () { return Promise.all([kvGet('state'), kvGet('rel'), kvGet('spec')]); }).then(function (v) {
+      var s = v[0]; if (s && typeof s === 'object') ['artists', 'cst', 'rst', 'recfb', 'concerts', 'recs'].forEach(function (k) { if (Array.isArray(s[k])) state[k] = s[k]; });
+      if (s && s.listBy && typeof s.listBy === 'object') { state.listBy = {}; Object.keys(s.listBy).forEach(function (w) { state.listBy[w] = rekey(s.listBy[w]); }); } if (s && s.appleBy && typeof s.appleBy === 'object') state.appleBy = s.appleBy; if (s && s.conCheck) state.conCheck = s.conCheck;
+      if (v[1] && v[1].items) rel = { fetchedAt: v[1].fetchedAt || null, items: v[1].items, fetched: v[1].fetched || {} };
+      if (v[2] && v[2].items) spec = { fetchedAt: v[2].fetchedAt || null, items: v[2].items, fetched: v[2].fetched || {} };
+      if (state.artists.length) ready = true;
+    });
+    return booted;
+  }
+  function render(container) {
+    root = container; wire();
+    return boot().then(function () {
+      paint();
+      return pull(false).then(function (changed) {
+        ready = true; paint();
+        refreshReleases({}).then(function () { return null; });
+        refreshSpecials({}).then(markSpecialsInFilm); markSpecialsInFilm(); syncGigLinks();
+        if (pendingMatch().length && ensureSession()) matchPending();
+      });
+    });
+  }
+  // v1.21: figures for the launcher card (Pete only; returns null until his listening is loaded)
+  function listenCard(who) {
+    who = who || 'pete'; if (!state.listBy[who] && !(state.appleBy[who])) return null;
+    var keys = allPlayedKeys(who); if (!keys.length) return null;
+    var d30 = 0, d7 = 0, rows = [];
+    keys.forEach(function (k) { var a = playsIn(k, 30, who), b = playsIn(k, 7, who); d30 += a; d7 += b; if (a) rows.push({ n: playedName(k, who) || k, p: a }); });
+    rows.sort(function (x, y) { return y.p - x.p; });
+    var mine = {}; followed().forEach(function (a) { mine[norm(a.name)] = 1; });
+    var fresh = 0; keys.forEach(function (k) { if (!mine[k] && playsIn(k, 30, who) >= 3) fresh++; });
+    var days = {}; keys.forEach(function (k) { var e = state.listBy[who] && state.listBy[who].artists[k]; if (e && e.d) Object.keys(e.d).forEach(function (dk) { days[dk] = 1; }); });
+    return { p7: d7, p30: d30, top: rows.slice(0, 3), artists30: rows.length, unfollowed: fresh, never: neverPlayed().length, days30: Object.keys(days).filter(function (dk) { return dk >= new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10); }).length };
+  }
+  try { if (window.PalShared && PalShared.app && PalShared.app.addPart) PalShared.app.addPart({ id: 'music', name: 'Music', version: VERSION }); } catch (e) {}   // v1.24 (MUS-NEXT-1)
+  window.FttMusic = window.GatMusic = {
+    listenCard: listenCard,
+    version: VERSION, pane: pane, render: render, renderSection: renderSection, counts: counts, addArtist: addArtist, scopeFor: scopeFor, boot: boot, pull: pull, paint: paint, init: init, exportBackup: exportBackup, agenda: agenda, focus: focus, onChange: function (f) { subs.push(f); }, _state: function () { return { state: state, rel: rel, spec: spec, ui: ui, busy: busy, ready: ready }; },
+    // for the rest of Gigs & Trips (next stage): interested items for Upcoming and the timeline
+    core: { norm: norm, slug: slug, classify: classify, parseRelease: parseRelease, liveConcerts: liveConcerts, specialOf: specialOf, isCom: isCom }
+  };
+})();
