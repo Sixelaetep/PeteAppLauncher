@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#F4F0E6" id="metaThemeColor">
-<title>On Budget v3.136</title>
+<title>On Budget v3.137</title>
 <link rel="stylesheet" href="fonts/pal-fonts.css?v=1.0.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f4f6f8'/><text x='16' y='23' font-family='system-ui,sans-serif' font-weight='700' font-size='18' fill='%235a8a00' text-anchor='middle'>£</text></svg>">
 <style>
@@ -791,7 +791,7 @@ input.amount-in:focus{border-color:transparent}
     <div class="header">
       <div class="logo">
         <span class="logo-icon" aria-hidden="true">£</span>
-        <div><div>On Budget</div><div class="logo-ver">v3.136</div></div>
+        <div><div>On Budget</div><div class="logo-ver">v3.137</div></div>
       </div>
       <div class="badge state-local" id="sync-badge" role="button" aria-label="Sync status and backup" onclick="openSyncDrawer()" title="Sync status / Sync &amp; Backup"><span class="badge-dot"></span><span id="sync-badge-label">Local</span></div>
     </div>
@@ -849,7 +849,7 @@ input.amount-in:focus{border-color:transparent}
           <button class="toggle-opt" id="pd-down" onclick="setPotDirection('decreasing')">Decreasing</button>
           <button class="toggle-opt" id="pd-up" onclick="setPotDirection('increasing')">Increasing</button>
         </div>
-        <div class="settings-hint">Decreasing: money left, draining from your pot to £0 — for a debit account. Increasing: spend counter climbing from £0 towards your pot, plus an actual card balance you can set — for a credit card. Income logged in this mode counts as a payment to the card and also adds to what you can afford (budget and headroom).</div>
+        <div class="settings-hint">Decreasing: money left, draining from your pot to £0 — for a debit account. Increasing: spend counter climbing from £0 towards your pot, plus an actual card balance you can set — for a credit card. Money in (income, refunds, transfers from Bills) lowers the card balance only. It never changes the budget, so the budget shows what you really spent.</div>
       </div>
       <div class="field-group">
         <label class="field-label">Transaction clearing</label>
@@ -966,6 +966,7 @@ input.amount-in:focus{border-color:transparent}
       <button class="type-btn sel outgoing" id="fttx-type-outgoing" onclick="pickFtType('outgoing')">↓ Outgoing</button>
       <button class="type-btn income" id="fttx-type-income" onclick="pickFtType('income')">↑ Income</button>
     </div>
+    <div class="settings-hint" id="fttx-income-hint" style="display:none;margin:0 0 10px">Lowers the card balance. It does not change the budget.</div>
 
     <div class="cat-grid" id="cat-grid-wrap">
       <button class="cat-btn sel weekly" id="cat-weekly" onclick="pickCat('weekly',true)"><span class="ci-dot weekly"></span>Food</button>
@@ -1358,10 +1359,10 @@ input.amount-in:focus{border-color:transparent}
 
 <div id="toast"></div>
 
-<script src="pal-shared.js?v=3.136"></script>
+<script src="pal-shared.js?v=3.137"></script>
 <script>
 /* v3.133 (SUITE-18, build B2b): the one place this app's version is written in code. VERSION, the contract app field, the bridge and backup read PAL_APP_VERSION; PalShared.app shows it in the Sync & Backup sheet and the launcher Device check. The title, the visible label and the ?v= tag are text and are checked against it by the Device check. */
-var PAL_APP_VERSION='3.136';
+var PAL_APP_VERSION='3.137';
 try{window.PalShared&&PalShared.app&&PalShared.app.register({id:'budget',name:'On Budget',version:PAL_APP_VERSION});}catch(e){}
 
 /* v3.134 (SUITE-05, B3 part 3 / R45): dialogs come from PalUI (pal-shared 1.11.0): an app-styled sheet that names the item, then an Undo bar after a delete where the delete is a clean soft delete. Each helper falls back to the browser's own box if the library on this device is older. Undo is a NEW write (the flag is cleared and the record stamped now), never a rewind, so it syncs like any edit. */
@@ -1399,6 +1400,9 @@ function obClone(o){ return o==null?o:JSON.parse(JSON.stringify(o)); }
 <script>
 // ══════════════════════════════════════════════════════════════
 // On Budget v3.122
+// v3.137 (ON--114): credit card mode: money into the card (Spending income, any Bills transfer) lowers the card balance only and never
+//   changes the budget, headroom, % used, History left-over or launcher figures. Replaces ON--093 and the ON--105 choice in this mode
+//   (the Bills option is hidden). budgetIncome() is the single rule. Debit (Decreasing) mode unchanged. No stored data rewritten.
 // v3.136 (ON--113): Spending (Increasing mode) hero tracks two figures separately: the month's budget (spent, left, projected spend) and
 //   the credit card (balance now, projected before next income). Replaces the Balance | Left toggle. An opening pay-off not yet recorded in
 //   Bills is taken off the card projection. The pay-off alert offers the full clearing amount and, if Bills cannot afford it, the Bills max.
@@ -3453,10 +3457,10 @@ function computeDashboardSummary() {
       const weeks     = getWeeks(last, next, monthWeeklyFood, d.weeklyFoodAdjustment ?? null);
       const reserveBd = calcReserve(weeks, tx, monthTravelBudget);
       const spent  = tx.filter(isSpendTx).reduce((s, t) => s + (t.amount || 0), 0);
-      const income = tx.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0);
+      const income = budgetIncome(tx); // v3.137: 0 in credit card mode
       // v3.78 (ON--072): in Increasing mode income is a card payment, not
       // pot funding, so it's left out — same rule as the dashboard.
-      const incFunds = income; // v3.99 (ON--093): income counts toward the budget in both directions
+      const incFunds = income;
       pot      = Math.round((d.startBalance + incFunds - spent) * 100) / 100;
       headroom = Math.round((pot - reserveBd.total) * 100) / 100;
       food     = Math.round(reserveBd.food * 100) / 100;
@@ -4356,11 +4360,11 @@ function renderDash() {
   const reserveBd= calcReserve(weeks, tx, monthTravelBudget);
   const reserve  = reserveBd.total;
   const spent    = tx.filter(isSpendTx).reduce((s,t)=>s+(t.amount||0),0);
-  const incomeTot= tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const incomeTot= budgetIncome(tx); // v3.137 (ON--114): 0 in credit card mode
   // v3.78 (ON--072): in Increasing mode income is a payment to the card,
   // not pot funding, so it doesn't raise the pot/headroom there.
   const potDirection = settings.potDirection === 'increasing' ? 'increasing' : 'decreasing';
-  const pot      = d.startBalance + incomeTot - spent; // v3.99 (ON--093): income counts in both directions
+  const pot      = d.startBalance + incomeTot - spent;
   const headroom = pot - reserve;
   // ON--088: spent so far + remaining Food/Travel budgets. ON--092 (v3.98):
   // now NET of income/payments added to Spending, so it matches what the hero
@@ -4594,7 +4598,6 @@ function renderDash() {
   //     fixed sizing. No calculation logic changed anywhere below. ──
   // v3.136 (ON--113): Increasing mode hero = the month's budget and the credit card, side by side (stacked on a phone).
   const hasLimit = d.startBalance > 0;
-  const budgetAvail = Math.round((d.startBalance + incomeTot)*100)/100;
   const budgetProj  = Math.round((spent + reserve)*100)/100;
   const toneOf = c => c==='warn'?'red':c==='amber'?'amber':'accent';
   const nextShort = next.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
@@ -4605,10 +4608,10 @@ function renderDash() {
         <div class="hero-label">Budget spent</div>
         <div class="hero-value" id="hero-value">${fmtGbp(spent)}</div>
         ${hasLimit
-          ? `<div class="duo-sub">of ${fmtGbp(d.startBalance)} budget${incomeTot>0?` + ${fmtGbp(incomeTot)} added`:''} · <strong style="color:var(--${toneOf(potCls)})">${pot>=0?fmtGbp(pot)+' left':fmtGbp(-pot)+' over'}</strong></div>`
+          ? `<div class="duo-sub">of ${fmtGbp(d.startBalance)} budget · <strong style="color:var(--${toneOf(potCls)})">${pot>=0?fmtGbp(pot)+' left':fmtGbp(-pot)+' over'}</strong></div>`
           : `<div class="duo-sub" style="color:var(--amber)">No spending limit set — use Update spending limit below</div>`}
         <div class="duo-proj"><div class="duo-proj-k">Projected spend</div><div class="duo-proj-v" id="duo-proj-spend">${fmtGbp(budgetProj)}</div>
-          ${hasLimit ? `<div class="duo-proj-s" style="color:var(--${headroom<0?'red':'ink2'})">${headroom>=0?fmtGbp(headroom)+' under':fmtGbp(-headroom)+' over'} ${incomeTot>0?'the '+fmtGbp(budgetAvail)+' available':'budget'}</div>` : ''}</div>
+          ${hasLimit ? `<div class="duo-proj-s" style="color:var(--${headroom<0?'red':'ink2'})">${headroom>=0?fmtGbp(headroom)+' under':fmtGbp(-headroom)+' over'} budget</div>` : ''}</div>
       </div>
       <div class="duo-col" id="duo-card">
         <div class="hero-label">Credit card balance</div>
@@ -4815,7 +4818,7 @@ function renderDash() {
       const isXfer   = !!t.xferSrc;
       const isIncome = t.type==='income' && !isXfer;
       const catEmoji = isXfer ? '⇄' : isIncome ? '💰' : (t.category==='weekly'?'🛒':t.category==='travel'?'🚗':'📦');
-      const catLabel = isXfer ? 'Transfer from Bills' : isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other');
+      const catLabel = isXfer ? 'Transfer from Bills' : isIncome ? (potDirection==='increasing'?'Paid to card':'Income') : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other');
       const dotClass = (isIncome||isXfer) ? 'income' : t.category;
       const name     = t.label||'';
       const dateFmt  = new Date(t.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
@@ -4845,7 +4848,7 @@ function renderDash() {
       const clearedSpend = clearedRows.reduce((s,t)=>s+((t.type==='income'||t.type==='transfer')?-1:1)*(t.amount||0),0);
       html += `<div class="tx-cleared-total">
         <div><div class="tx-cleared-label">Cleared · ${potLabel}</div><div class="tx-cleared-val">${fmtGbp(potClearedShown)}</div></div>
-        <div class="tx-cleared-side">${clearedRows.length ? `${clearedRows.length} cleared · ${clearedSpend<0?'+':''}${fmtGbp(Math.abs(clearedSpend))} ${clearedSpend<0?'net in':'spent'}<br>` : ''}<strong class="tx-uncleared-fig">${unclearedRows.length} uncleared · ${unclearedDiff<0?'−':'+'}${fmtGbp(Math.abs(unclearedDiff))}</strong></div>
+        <div class="tx-cleared-side">${clearedRows.length ? `${clearedRows.length} cleared · ${clearedSpend<0?'+':''}${fmtGbp(Math.abs(clearedSpend))} ${potDirection==='increasing' ? (clearedSpend<0?'net off card':'net on card') : (clearedSpend<0?'net in':'spent')}<br>` : ''}<strong class="tx-uncleared-fig">${unclearedRows.length} uncleared · ${unclearedDiff<0?'−':'+'}${fmtGbp(Math.abs(unclearedDiff))}</strong></div>
       </div>`;
       clearedRows.forEach(t => { html += txRow(t); });
     } else {
@@ -4948,7 +4951,7 @@ async function confirmDelTx(mk, id) {
   if (t.xferSrc) { toast('Transfers are removed from the Bills side'); return; }
   const isIncome = t.type==='income';
   const name = t.label || (isIncome ? 'Income' : (t.category==='weekly'?'Food':t.category==='travel'?'Travel':'Other'));
-  if (!(await obConfirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`, 'It stops counting toward this month.', { okLabel: 'Remove', danger: true }))) return;
+  if (!(await obConfirm(`Remove "${name}" (${isIncome?'+':'−'}£${(t.amount||0).toFixed(2)})?`, (isIncome && settings.potDirection==='increasing') ? 'It stops lowering the card balance. The budget is not affected.' : 'It stops counting toward this month.', { okLabel: 'Remove', danger: true }))) return;
   delTx(mk, id);
 }
 function delTx(mk, id) {
@@ -5297,6 +5300,7 @@ function pickFtType(t) {
   _ftType = t;
   document.getElementById('fttx-type-outgoing').classList.toggle('sel', t==='outgoing');
   document.getElementById('fttx-type-income').classList.toggle('sel', t==='income');
+  document.getElementById('fttx-income-hint').style.display = (t==='income' && settings.potDirection==='increasing') ? '' : 'none'; // v3.137
   document.getElementById('cat-grid-wrap').style.display = t==='outgoing' ? 'grid' : 'none';
   syncNextWeekField();
 }
@@ -5461,6 +5465,12 @@ function ftRecDueDates(item, cycleStart, cycleEnd, today) {
 // Spending rows with type 'transfer' are legs of a Bills transaction flagged `xfer`.
 // isSpendTx(): the "counts as spend" test used wherever the code used type!=='income'.
 function isSpendTx(t) { return t.type !== 'income' && t.type !== 'transfer'; }
+// v3.137 (ON--114): the ONE rule for whether money in changes the budget. Credit card (Increasing) mode: never. It only lowers the
+// card balance (cardBalanceInfo), so budget figures show what was really spent. Decreasing (debit account) mode: it adds, as before.
+function budgetIncome(tx) {
+  if (settings.potDirection === 'increasing') return 0;
+  return (tx||[]).filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
+}
 function xferLegId(billsTxId) { return 'xf_' + billsTxId; }
 function tiedItems() { return (bills.recurring||[]).filter(r => !r._deleted && r.active !== false && r.tiedToSpend); }
 
@@ -5496,7 +5506,8 @@ function reconcileXferLegs() {
     const toKey = cycleKeyForDate(bt.date);
     const label = bt.name || 'Transfer from Bills';
     const amt = Math.round(bt.amount*100)/100;
-    const legType = (bt.tied || bt.xferNoHead) ? 'transfer' : 'income'; // v3.103: the tied pay-off is budget-neutral; v3.111 (ON--105): so is a one-off transfer marked 'does not count towards headroom'
+    const cardOnly = settings.potDirection === 'increasing'; // v3.137 (ON--114)
+    let legType = (cardOnly || bt.tied || bt.xferNoHead) ? 'transfer' : 'income'; // v3.103: the tied pay-off is budget-neutral; v3.111 (ON--105): so is a one-off transfer marked 'does not count towards headroom'
     const f = found[id];
     const now = new Date().toISOString();
     if (!f) {
@@ -5510,6 +5521,8 @@ function reconcileXferLegs() {
       return;
     }
     let t = f.t, mk = f.mk;
+    // v3.137: in credit card mode both types count the same, so an existing row keeps its type (no bulk rewrite or re-sync)
+    if (cardOnly && !t._deleted) legType = t.type;
     if (t._deleted) { // source flagged again after being un-flagged: revive
       if (bt.date > today) return;
       delete t._deleted; delete deletedTxLog[id]; t.cleared = false; t.updated_at = now; syncUpsertTx(mk, t); changed++;
@@ -5937,6 +5950,7 @@ function monthAgg(k) {
   const cat = c => tx.filter(t=>isSpendTx(t) && t.category===c).reduce((s,t)=>s+(t.amount||0),0);
   const food = cat('weekly'), travel = cat('travel'), other = cat('other');
   const income = tx.filter(t=>t.type==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const counted = budgetIncome(tx); // v3.137
   const spend  = food + travel + other;
   const shops = {};
   tx.filter(t=>isSpendTx(t) && (t.label||'').trim()).forEach(t=>{
@@ -5948,12 +5962,12 @@ function monthAgg(k) {
   return { food, travel, other, income, spend,
            // v3.78 (ON--072): Increasing mode leaves income out (it's a
            // card payment, not pot funding) — matches the dashboard.
-           remainder: (d.startBalance??0) + income - spend, // v3.99 (ON--093): income counts in both directions
+           remainder: (d.startBalance??0) + counted - spend,
            // v3.67 (ON--065): running total for a month, used instead of
            // `remainder` when Settings > Pot tracking direction is
            // 'increasing' — same underlying spend/income, just the other
            // side of the same number (startBalance − remainder = this).
-           cardTotal: spend - income, // v3.99 (ON--093): net of income so startBalance − remainder = cardTotal again
+           cardTotal: spend - counted, // startBalance − remainder = cardTotal
            hasStart: d.startBalance !== null && d.startBalance !== undefined,
            shops, topShop };
 }
@@ -6095,7 +6109,7 @@ function renderHist() {
     html += `<div class="stat-card hc-left" style="margin-bottom:14px;padding:13px 14px">
       <div class="stat-card-label">Left over each pay cycle</div>
       ${histRemainderSvg(pastAsc.slice(-12), aggs)}
-      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">Start balance + income − spend, Food &amp; Travel pot only — Bills run on their own cleared balance. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
+      <div style="font-size:10.5px;color:var(--ink3);margin-top:4px">${settings.potDirection==='increasing' ? 'Budget − spend (money paid into the card is not counted)' : 'Start balance + income − spend'}, Food &amp; Travel pot only — Bills run on their own cleared balance. Live headroom only exists mid-month, so this is the completed-month equivalent.</div>
     </div>`;
   }
 
@@ -6129,7 +6143,7 @@ function renderHist() {
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--weekly)"></div><div class="hist-label">🛒 Food</div><div class="hist-amt">£${weekly.toFixed(2)}</div></div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--travel)"></div><div class="hist-label">🚗 Travel</div><div class="hist-amt">£${trav.toFixed(2)}</div></div>
       <div class="hist-cat-row"><div class="hist-dot" style="background:var(--other)"></div><div class="hist-label">📦 Other</div><div class="hist-amt">£${oth.toFixed(2)}</div></div>
-      ${inc>0 ? `<div class="hist-cat-row"><div class="hist-dot" style="background:var(--accent)"></div><div class="hist-label">💰 Income</div><div class="hist-amt" style="color:var(--accent)">+£${inc.toFixed(2)}</div></div>` : ''}
+      ${inc>0 ? `<div class="hist-cat-row"><div class="hist-dot" style="background:var(--accent)"></div><div class="hist-label">${potDirNow==='increasing' ? '💰 Paid to card (not in budget)' : '💰 Income'}</div><div class="hist-amt" style="color:var(--accent)">+£${inc.toFixed(2)}</div></div>` : ''}
       ${a.hasStart ? `<div class="hist-cat-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:7px"><div class="hist-label">${remLabel}</div><div class="hist-amt" style="color:${remClr}">£${remVal.toFixed(2)}</div></div>` : ''}
       ${a.topShop ? `<div class="hist-cat-row"><div class="hist-label">Top shop</div><div class="hist-amt" style="font-weight:500">${esc(a.topShop.name)} <span style="color:var(--ink3)">· £${a.topShop.total.toFixed(2)}</span></div></div>` : ''}
     </div>`;
@@ -6291,8 +6305,10 @@ function saveSettings() {
   // v3.85 (ON--079): clearMode must be carried explicitly too (same reason).
   const cm = _pendingClearMode !== null ? _pendingClearMode : (settings.clearMode === 'manual' ? 'manual' : 'auto');
   _pendingClearMode = null;
+  const _dirWas = settings.potDirection;
   settings = { weeklyFood:food, monthlyTravel:travel, monthlyPot:pot, payinDay:day, weekStartDay:wsd, potDirection:pd, clearMode:cm, ftRecurring:(settings.ftRecurring||[]), payinOverrides:(settings.payinOverrides||{}), updated_at:new Date().toISOString() };
   syncTiedAmounts(); // v3.102 (ON--096): tied pay-off bills follow the monthly pot
+  if (_dirWas !== pd) reconcileXferLegs(); // v3.137
   save(true); renderDash(); populateSettings();
   document.getElementById('info-food').textContent = food;
   syncUpsertSettings();
@@ -6670,7 +6686,7 @@ function billsRowHtml(it) {
     const rowOnclick = it.skipped ? '' : ` onclick="openBtxSheet('${it.id}')"`;
     return `<div class="ledger-row cleared" style="${it.skipped?'':'cursor:pointer'}"${rowOnclick}>
       ${obStub(it.date, it.type==='income'?'income':'bills')}<div class="ledger-body">
-        <div class="ledger-name">${it.skipped?'Skipped — ':''}${esc(it.name)}<span class="recur-badge" style="margin-left:6px">Cleared</span>${it.xfer?` <span class="recur-badge" title="Transfer to Spending">⇄ Spending${it.xferNoHead&&!it.tied?' · no headroom':''}</span>`:''}</div>
+        <div class="ledger-name">${it.skipped?'Skipped — ':''}${esc(it.name)}<span class="recur-badge" style="margin-left:6px">Cleared</span>${it.xfer?` <span class="recur-badge" title="Transfer to Spending">⇄ Spending${it.xferNoHead&&!it.tied&&settings.potDirection!=='increasing'?' · no headroom':''}</span>`:''}</div>
         <div class="ledger-date">${fmtFull(new Date(it.date+'T00:00:00'))}</div>
         ${it.note?`<div class="ledger-date" style="color:var(--ink3)">${esc(it.note)}</div>`:''}
       </div>
@@ -6693,7 +6709,7 @@ function billsRowHtml(it) {
     : `quickClearUncleared('adhoc','${it.txId}')`;
   return `<div class="ledger-row ${overdraft?'overdraft':''} ${it.overdue?'overdue':''}" onclick="${onclick}">
     ${obStub(it.date, it.type==='income'?'income':'bills')}<div class="ledger-body">
-      <div class="ledger-name">${esc(it.name)}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.xfer?` <span class="recur-badge" title="Transfer to Spending">⇄ Spending${it.xferNoHead?' · no headroom':''}</span>`:''}${it.overridden?' <span class="recur-badge">Edited</span>':''}${it.overdue?' <span class="recur-badge overdue-badge">Overdue</span>':''}</div>
+      <div class="ledger-name">${esc(it.name)}${it.kind==='adhoc'?' <span class="recur-badge">Planned</span>':''}${it.xfer?` <span class="recur-badge" title="Transfer to Spending">⇄ Spending${it.xferNoHead&&settings.potDirection!=='increasing'?' · no headroom':''}</span>`:''}${it.overridden?' <span class="recur-badge">Edited</span>':''}${it.overdue?' <span class="recur-badge overdue-badge">Overdue</span>':''}</div>
       <div class="ledger-date">${fmtFull(new Date(it.date+'T00:00:00'))}</div>
       ${it.note?`<div class="ledger-date" style="color:var(--ink3)">${esc(it.note)}</div>`:''}
     </div>
@@ -7356,7 +7372,7 @@ function setBtxXferUI() {
   // v3.111 (ON--105): the headroom choice only applies to a one-off (non-tied) transfer
   const hf = document.getElementById('btx-xfer-head-field');
   if (hf) {
-    hf.style.display = (_btxXfer && _btxType!=='income' && !_btxTied) ? '' : 'none';
+    hf.style.display = (_btxXfer && _btxType!=='income' && !_btxTied && settings.potDirection !== 'increasing') ? '' : 'none'; // v3.137: no choice in credit card mode
     document.getElementById('btx-xfer-head-switch').classList.toggle('on', !!_btxXferHead);
     document.getElementById('btx-xfer-head-label').textContent = _btxXferHead ? 'Counts towards headroom' : 'Does not count towards headroom';
     document.getElementById('btx-xfer-head-hint').textContent = _btxXferHead
